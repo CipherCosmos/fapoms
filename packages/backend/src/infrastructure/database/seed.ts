@@ -23,8 +23,51 @@ import { ValidationCaseEntity } from '../../modules/validation/validation-case.e
 import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
 
+/**
+ * How this run is allowed to treat data that is already here.
+ *
+ * `seed()` TRUNCATES twenty-one tables — users, organisations, clients, assayers, branches,
+ * projects, assignments — and until this existed it did so unconditionally, on any database it
+ * was pointed at. The README tells a new operator to run it immediately after first boot, so the
+ * documented first-install command was one mistyped `DB_HOST` away from emptying a live system,
+ * and nothing in it would have paused.
+ *
+ *   --if-empty  Seed only when there is nothing to lose. Exits 0 and does nothing otherwise, so
+ *               it is safe to call unconditionally from a bootstrap script or a container start
+ *               hook — which is the whole reason it exists.
+ *   --force     The old behaviour: truncate and reseed whatever is there. For rebuilding a
+ *               development database on purpose.
+ *   (default)   Refuse a populated database, name what would have been destroyed, and exit 1.
+ *
+ * The default is refusal rather than `--if-empty` deliberately: somebody typing `npm run seed` by
+ * hand on a populated database has almost certainly made a mistake, and the useful response is to
+ * say so, not to quietly do nothing and let them believe it worked.
+ */
+type SeedMode = 'if-empty' | 'force' | 'refuse-if-populated';
+
+function seedMode(): SeedMode {
+  const argv = process.argv.slice(2);
+  const env = (process.env.SEED_MODE || '').trim();
+  if (argv.includes('--force') || env === 'force') return 'force';
+  if (argv.includes('--if-empty') || env === 'if-empty') return 'if-empty';
+  return 'refuse-if-populated';
+}
+
+/** Tables that already hold rows, out of the ones a seed would truncate. */
+async function populatedTables(candidates: string[]): Promise<{ table: string; rows: number }[]> {
+  const found: { table: string; rows: number }[] = [];
+  for (const table of candidates) {
+    // Identifier, so it cannot be parameterised; every name comes from the hardcoded list and has
+    // already been matched against information_schema by the caller.
+    const [{ count }] = await AppDataSource.query(`SELECT count(*)::int AS count FROM "${table}"`);
+    if (Number(count) > 0) found.push({ table, rows: Number(count) });
+  }
+  return found;
+}
+
 async function seed() {
-  console.log('Starting database seeding...');
+  const mode = seedMode();
+  console.log(`Starting database seeding (mode: ${mode})...`);
   await AppDataSource.initialize();
   console.log('Database connection initialized.');
 
@@ -72,6 +115,38 @@ async function seed() {
       console.log(`  skipping ${skipped.length} table(s) not in this schema: ${skipped.join(', ')}`);
     }
     const toTruncate = TRUNCATE_CANDIDATES.filter((t) => presentNames.has(t));
+
+    /**
+     * The gate. Everything above only decided WHICH tables a truncate would reach; this decides
+     * whether it is allowed to happen at all.
+     */
+    const occupied = await populatedTables(toTruncate);
+    if (occupied.length > 0 && mode !== 'force') {
+      const inventory = occupied
+        .sort((a, b) => b.rows - a.rows)
+        .map((t) => `      ${t.rows.toLocaleString()} × ${t.table}`)
+        .join('\n');
+
+      if (mode === 'if-empty') {
+        console.log(
+          'Database already has data — nothing to do.\n'
+          + `  ${occupied.length} of the tables this would truncate are populated; leaving them alone.`,
+        );
+        return;
+      }
+
+      throw new Error(
+        'Refusing to seed: this database already holds data, and seeding TRUNCATES it.\n\n'
+        + '    Would have destroyed:\n' + inventory + '\n\n'
+        + '    If you meant to reset a development database, say so:\n'
+        + '      npm run seed -- --force\n\n'
+        + '    If you are bootstrapping and only want to seed an empty one:\n'
+        + '      npm run seed -- --if-empty\n\n'
+        + `    Connected to ${process.env.DB_HOST ?? 'localhost'}/${process.env.DB_DATABASE ?? 'fapoms'} `
+        + `as ${process.env.DB_USERNAME ?? 'fapoms'}. Check that is the database you meant.`,
+      );
+    }
+
     if (toTruncate.length) {
       // Identifiers cannot be parameterised, so they are quoted individually. Every value comes
       // from the hardcoded list above and is matched against information_schema, never from input.
@@ -1503,7 +1578,16 @@ async function seed() {
 
     console.log('Seeding completed successfully!');
   } catch (error) {
+    /**
+     * Rethrown, not swallowed.
+     *
+     * This used to log and fall through, so the process exited 0 whatever happened. A bootstrap
+     * script or a container start hook calling this could not tell a completed seed from one that
+     * died halfway through leaving the tables truncated and empty — which is the single worst
+     * state this file can produce and the one an automated caller most needs to hear about.
+     */
     console.error('Seeding failed:', error);
+    throw error;
   } finally {
     await AppDataSource.destroy();
   }

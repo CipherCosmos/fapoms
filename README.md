@@ -33,27 +33,29 @@ Supporting directories: `deploy/` (production compose, the auto-deploy unit, bac
 
 ## Running it locally
 
-Everything comes up in Docker. You need Docker with Compose; nothing else is installed on the host.
+Everything comes up in Docker. You need Docker with Compose (or Podman) and `openssl`; nothing else
+is installed on the host, and no file in this repository needs editing.
 
 ```bash
-cp .env.production.example .env.docker   # then fill in — see "Configuration" below
-docker compose --env-file .env.docker up -d
+./setup.sh
 ```
+
+That is the whole first-time setup. It generates `.env.docker` with real entropy for every secret
+the API refuses to start without, wires compose so `${VAR}` always resolves, builds and starts the
+stack, waits for migrations, seeds reference data, and prints a generated administrator password
+once. Point it at a real hostname with `./setup.sh --public-url https://audit.example.com`.
+
+**Re-running it is safe.** It never overwrites an existing `.env.docker`, never reseeds a database
+that already has rows, and never rotates a password it did not just create. So it is also the
+right thing to run when you are not sure what state a machine is in.
 
 Postgres must be **PostGIS** — the compose file pins `postgis/postgis:16-3.4`. Three columns are
 `geometry(Point,4326)` and the planning and coverage engines are built on `ST_*` distance queries;
 a stock `postgres` image will not start the app.
 
-On first boot the backend creates its extensions, applies every pending migration (the baseline
-builds all 80 tables), and starts serving. Then seed the first administrator and the reference data:
-
-```bash
-docker compose exec backend sh -c 'cd /app/packages/backend && npm run seed:prod'
-```
-
-Sign in as `admin` / `admin123` and **change that password immediately**.
-
-Check it worked:
+On first boot the backend creates its extensions and applies every pending migration (the baseline
+builds all 80 tables). `setup.sh` waits for that, watching for the half of the health payload that
+proves it:
 
 ```bash
 curl localhost:3000/api/v1/health
@@ -62,11 +64,37 @@ curl localhost:3000/api/v1/health
 `{"status":"ok","database":"up"}` — the `database: up` half is the part that matters, because it
 means migrations ran.
 
+<details>
+<summary>What <code>setup.sh</code> does, if you would rather do it by hand</summary>
+
+Four steps, three of which have a way to go wrong that gives no useful signal — which is why the
+script exists rather than this list.
+
+1. `cp .env.production.example .env.docker`, then set `JWT_SECRET` and `PII_ENCRYPTION_KEY`
+   (`openssl rand -hex 32` each), a `DB_PASSWORD` and `MINIO_ROOT_PASSWORD` that are not the burned
+   dev literals, `CORS_ORIGINS`, `STORAGE_DRIVER=s3`, `FILE_SCAN_REQUIRED=true`,
+   `DB_SYNCHRONIZE=false` and `DB_MIGRATIONS_RUN=true`. Miss one and the API refuses to boot, which
+   is correct, but you find out after a build and a container start.
+2. `ln -s .env.docker .env` and `ln -s ../.env.docker deploy/.env` — see the warning under
+   *Configuration*. Skipping this is the step that has actually taken this deployment down.
+3. `docker compose -f deploy/docker-compose.prod.yml up -d --build`, then wait for `database: up`.
+4. `docker compose exec backend sh -c 'cd /app/packages/backend && node dist/infrastructure/database/seed.js --if-empty'`,
+   then change the seeded `admin` / `admin123` password before anything else — it is in this
+   repository and in its git history.
+
+The seed **truncates 21 tables**, so it has three modes and the default is the cautious one:
+`--if-empty` seeds an empty database and is a silent no-op on a populated one; with no flag it
+refuses a populated database, printing what it would have destroyed; only `--force` truncates.
+`npm run seed:prod` passes no flag, so it is safe but will fail the step on a database with rows.
+`setup.sh` uses `--if-empty`, which is why re-running it is a no-op rather than a catastrophe.
+
+</details>
+
 **Port already taken?** `docker-compose.localports.yml` moves or withdraws FAPOMS' own host
 bindings without disturbing whatever else is on your machine:
 
 ```bash
-docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.localports.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.localports.yml up -d
 ```
 
 ### Working outside Docker
@@ -80,7 +108,7 @@ npm run dev:mobile      # Expo
 ```
 
 You still need Postgres+PostGIS and Redis reachable; bring just those up with
-`docker compose --env-file .env.docker up -d postgres redis minio`. The backend reads the same
+`docker compose up -d postgres redis minio`. The backend reads the same
 `.env.docker` on the host as it does in the container, so set `DB_HOST=localhost` there (inside
 Docker it is the service name `postgres`) — that is the one value the two paths cannot share.
 
@@ -89,23 +117,34 @@ Docker it is the service name `postgres`) — that is the one value the two path
 ## Configuration
 
 **One file: `.env.docker`, at the repository root.** Not one per package, not a `.env.local`
-beside it, not a `.env` next to the compose file. Everything reads that single file:
+beside it. `.env` and `deploy/.env` exist, but they are symlinks to this file, not copies of it —
+there is still exactly one place a value is written. Everything reads that single file:
 
 | Reader | How |
 |---|---|
 | Backend in Docker (dev + prod) | `env_file: .env.docker` on the service |
 | Backend run on the host | `app.module.ts` loads it **by absolute path**, so a host run and a container run cannot disagree |
-| Compose itself (`${VAR}` for the Postgres / MinIO / LiveKit credentials) | `--env-file .env.docker` |
+| Compose itself (`${VAR}` for the Postgres / MinIO / LiveKit credentials) | `.env` and `deploy/.env`, both symlinks to it — see below |
 | The LiveKit container | compose builds `LIVEKIT_KEYS` from the same two keys |
 | Mobile packager host | same `LAN_HOST_IP` |
 
 `.env.production.example` is the template — every key documented, required ones marked.
 
-> **Run compose with the file:** `docker compose --env-file .env.docker up -d`. Compose resolves
-> `${VAR}` from the shell or `--env-file`, *not* from a service's own `env_file:` entry — this is
-> what `deploy/auto-deploy.sh` already does in production. Every `${VAR}` keeps its previous
-> hardcoded value as a default, so plain `docker compose up` still works; passing the file is what
-> makes `.env.docker` authoritative for the credentials too.
+> **The two symlinks are load-bearing.** Compose resolves `${VAR}` from the shell, from
+> `--env-file`, or from a `.env` beside the compose file — *never* from a service's own `env_file:`
+> entry. So `.env` → `.env.docker` and `deploy/.env` → `../.env.docker` are what make plain
+> `docker compose up -d` correct in either directory. `setup.sh` creates them; they are gitignored,
+> so a fresh clone has neither until you run it.
+>
+> Without them each compose file fails differently, and the dev one is the dangerous one:
+>
+> | | Missing `.env` |
+> |---|---|
+> | `deploy/docker-compose.prod.yml` | No fallbacks. Values go empty and compose says so — including the Postgres healthcheck, which becomes `pg_isready -U` with no username and can never pass, so every container waiting on it stays down. This has happened here. |
+> | `docker-compose.yml` (dev) | Has fallbacks, which is worse. Comes up **silently** on `POSTGRES_PASSWORD=fapoms_dev` and `MINIO_ROOT_PASSWORD=fapoms_minio_secret` — both in this repository's git history, both refused by name in production. No warning. The volume then keeps that password until it is destroyed. |
+>
+> Do not "fix" a missing-variable warning by adding a default to a compose file. The default is the
+> bug; the link is the fix.
 
 **If a second env file appears, it is not being read** — fold its values in and delete it. The one
 that shows up on its own is `.env.local`: `neon env pull` (and `neon link` / `checkout` / `deploy`)
