@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Info, ShieldAlert } from 'lucide-react';
-import { AssayerLifecycleStatus, assayerLifecycleLabel } from '@fapoms/shared';
+import { AssayerLifecycleStatus, assayerLifecycleLabel, LIFECYCLE_REASON_MAX_LENGTH } from '@fapoms/shared';
 import { Modal } from '../../../components/ui';
 import { STAGE_CONSEQUENCE } from '../AssayerRecord';
 import { REHIRE_REASON } from '../lifecycle-reason-vocabulary';
@@ -175,6 +175,14 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
               rows={3}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
+              /*
+               * The server's own ceiling, not a number chosen here — the service enforces
+               * LIFECYCLE_REASON_MAX_LENGTH at the authority boundary and rejects anything longer.
+               * Without it the limit was invisible until the rejection: somebody could write
+               * several paragraphs justifying a termination and have the whole thing bounced on
+               * submit, with the length mentioned for the first time in the error.
+               */
+              maxLength={LIFECYCLE_REASON_MAX_LENGTH}
               placeholder="State the operational or compliance reason for this status change..."
               style={{
                 width: '100%',
@@ -188,6 +196,27 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
                 resize: 'vertical',
               }}
             />
+            {/*
+              * Silent until it is nearly relevant. A counter sitting under every reason box is
+              * noise for the two-line reasons that make up almost all of them; it appears once
+              * somebody is within a couple of hundred characters of losing text, which is the
+              * only moment the number helps.
+              */}
+            {reason.length > LIFECYCLE_REASON_MAX_LENGTH - 200 && (
+              <div
+                aria-live="polite"
+                style={{
+                  marginTop: 4,
+                  fontSize: 11.5,
+                  textAlign: 'right',
+                  color: reason.length >= LIFECYCLE_REASON_MAX_LENGTH ? 'var(--danger)' : 'var(--text-muted)',
+                }}
+              >
+                {reason.length >= LIFECYCLE_REASON_MAX_LENGTH
+                  ? `Maximum length reached — ${LIFECYCLE_REASON_MAX_LENGTH.toLocaleString()} characters`
+                  : `${(LIFECYCLE_REASON_MAX_LENGTH - reason.length).toLocaleString()} characters left`}
+              </div>
+            )}
           </div>
         )}
 

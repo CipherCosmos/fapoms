@@ -328,3 +328,26 @@ export function hasLeftWorkforce(person: {
   return lifecycle === AssayerLifecycleStatus.INACTIVE
     && String(person.unavailableReason ?? '').toUpperCase() === 'DECEASED';
 }
+
+/**
+ * How long a lifecycle reason may be.
+ *
+ * Lives here because three places need the same number and no two of them may import each other:
+ * the controller decorates `TransitionLifecycleDto` with it, `AssayerService` enforces it again at
+ * the authority boundary — where the recovery routes and any in-process caller arrive without
+ * having passed a DTO — and the transition modals now stop the operator at the same point rather
+ * than letting the server be the first to mention it.
+ *
+ * That last one is why it moved out of the backend. The frontend could not import a backend
+ * module, so it did not know there was a limit at all: somebody could write several pages of
+ * justification for a termination and have the whole thing rejected on submit, with the length
+ * named for the first time in the error.
+ *
+ * Two thousand characters, which is several paragraphs and the ceiling this codebase already uses
+ * for free text of this kind. Before there was one, `reason` was `@IsOptional() @IsString()`
+ * against a 50 MB body limit: a 200,000-character reason was accepted in 92 ms and stored in FULL
+ * twice — once in `audit_events.remarks`, once in `assayer_activities.remarks` — and a
+ * one-megabyte one did the same. `audit_events` is append-only by database trigger, so none of it
+ * could ever be reclaimed. Any holder of `assayer:edit:organization` could do it in a loop.
+ */
+export const LIFECYCLE_REASON_MAX_LENGTH = 2000;

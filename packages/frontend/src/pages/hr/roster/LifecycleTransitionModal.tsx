@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   AssayerLifecycleStatus,
   assayerLifecycleLabel,
+  LIFECYCLE_REASON_MAX_LENGTH,
 } from '@fapoms/shared';
 import { Modal } from '../../../components/ui/Modal';
 import { Select } from '../../../components/ui/Select';
@@ -207,22 +208,41 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
             />
 
             {isOther && (
-              <textarea
-                rows={2}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="State specific reason for the permanent employment record…"
-                aria-label="Specific reason"
-                style={{
-                  padding: '8px 10px',
-                  fontSize: '12.5px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--border-color)',
-                  background: 'var(--bg-page)',
-                  color: 'inherit',
-                  resize: 'vertical',
-                }}
-              />
+              <>
+                <textarea
+                  rows={2}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  /* The server's ceiling, shared so this cannot drift from what it will accept. */
+                  maxLength={LIFECYCLE_REASON_MAX_LENGTH}
+                  placeholder="State specific reason for the permanent employment record…"
+                  aria-label="Specific reason"
+                  style={{
+                    padding: '8px 10px',
+                    fontSize: '12.5px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border-color)',
+                    background: 'var(--bg-page)',
+                    color: 'inherit',
+                    resize: 'vertical',
+                  }}
+                />
+                {/* Quiet until somebody is close enough to the ceiling for the number to matter. */}
+                {reason.length > LIFECYCLE_REASON_MAX_LENGTH - 200 && (
+                  <div
+                    aria-live="polite"
+                    style={{
+                      fontSize: 11.5,
+                      textAlign: 'right',
+                      color: reason.length >= LIFECYCLE_REASON_MAX_LENGTH ? 'var(--danger)' : 'var(--text-muted)',
+                    }}
+                  >
+                    {reason.length >= LIFECYCLE_REASON_MAX_LENGTH
+                      ? `Maximum length reached — ${LIFECYCLE_REASON_MAX_LENGTH.toLocaleString()} characters`
+                      : `${(LIFECYCLE_REASON_MAX_LENGTH - reason.length).toLocaleString()} characters left`}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
