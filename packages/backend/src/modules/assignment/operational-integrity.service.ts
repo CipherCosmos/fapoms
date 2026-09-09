@@ -9,12 +9,25 @@ export interface IntegrityViolation {
   description: string;
 }
 
+export interface RuleFailure {
+  rule: string;
+  error: string;
+}
+
 export interface IntegrityScanReport {
   timestamp: string;
+  /**
+   * Rules that ran to completion — NOT the number attempted. A rule whose statement throws is
+   * excluded here and named in `failedRules`, so `scannedRules + failedRules.length` is always the
+   * number of rules the scanner defines. Read the two together: `totalViolations: 0` only means a
+   * clean database when `failedRules` is empty.
+   */
   scannedRules: number;
   totalViolations: number;
   summary: Record<string, number>;
   violations: IntegrityViolation[];
+  /** Rules that could not be evaluated, with the database error that stopped each one. */
+  failedRules: RuleFailure[];
 }
 
 @Injectable()
@@ -29,9 +42,33 @@ export class OperationalIntegrityService {
    */
   async scan(): Promise<IntegrityScanReport> {
     const violations: IntegrityViolation[] = [];
+    const failedRules: RuleFailure[] = [];
+    let answeredRules = 0;
+
+    /**
+     * Runs one rule's statement. A failure is still contained to that rule — one broken statement
+     * must not deny an auditor the other eight — but it is now recorded under the rule's own id
+     * instead of being flattened into an empty result set that reads as "nothing found".
+     *
+     * The tally is kept here rather than as a rule-count constant so that it cannot drift: a tenth
+     * rule counts itself, and a rule that stops running stops being counted, with nothing to
+     * remember to update.
+     */
+    const run = async (rule: string, sql: string): Promise<any[]> => {
+      try {
+        const rows = await this.dataSource.query(sql);
+        answeredRules += 1;
+        return rows;
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        failedRules.push({ rule, error });
+        this.logger.error(`Integrity rule ${rule} could not be evaluated: ${error}`);
+        return [];
+      }
+    };
 
     // 1. Multiple active assignments for one assayer on the same day
-    const doubleBookings = await this.dataSource.query(`
+    const doubleBookings = await run('MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY', `
       SELECT assayer_id, scheduled_date::text as scheduled_date, count(*) as count,
              array_agg(id) as assignment_ids, array_agg(assignment_number) as assignment_numbers
       FROM assignments
@@ -41,7 +78,7 @@ export class OperationalIntegrityService {
         AND assayer_id IS NOT NULL
       GROUP BY assayer_id, scheduled_date
       HAVING count(*) > 1
-    `).catch(() => []);
+    `);
 
     for (const row of doubleBookings) {
       violations.push({
@@ -54,7 +91,7 @@ export class OperationalIntegrityService {
     }
 
     // 2. Multiple active assignments for one branch where prohibited
-    const branchSlotViolations = await this.dataSource.query(`
+    const branchSlotViolations = await run('MULTIPLE_ACTIVE_ASSIGNMENTS_PER_BRANCH', `
       SELECT project_branch_id, count(*) as count,
              array_agg(id) as assignment_ids, array_agg(assignment_number) as assignment_numbers
       FROM assignments
@@ -63,7 +100,7 @@ export class OperationalIntegrityService {
         AND project_branch_id IS NOT NULL
       GROUP BY project_branch_id
       HAVING count(*) > 1
-    `).catch(() => []);
+    `);
 
     for (const row of branchSlotViolations) {
       violations.push({
@@ -76,12 +113,12 @@ export class OperationalIntegrityService {
     }
 
     // 3. Cancelled assignment with attendance recorded
-    const cancelledWithAttendance = await this.dataSource.query(`
+    const cancelledWithAttendance = await run('CANCELLED_ASSIGNMENT_WITH_ATTENDANCE', `
       SELECT id, assignment_number, status, checked_in_at, checked_out_at, cancel_reason
       FROM assignments
       WHERE status = 'CANCELLED'
         AND (checked_in_at IS NOT NULL OR checked_out_at IS NOT NULL)
-    `).catch(() => []);
+    `);
 
     for (const row of cancelledWithAttendance) {
       violations.push({
@@ -94,13 +131,13 @@ export class OperationalIntegrityService {
     }
 
     // 4. Completed assignment without required attendance evidence
-    const completedWithoutAttendance = await this.dataSource.query(`
+    const completedWithoutAttendance = await run('COMPLETED_ASSIGNMENT_WITHOUT_ATTENDANCE', `
       SELECT id, assignment_number, status, completion_date, checked_in_at
       FROM assignments
       WHERE status = 'COMPLETED'
         AND checked_in_at IS NULL
         AND is_active = true
-    `).catch(() => []);
+    `);
 
     for (const row of completedWithoutAttendance) {
       violations.push({
@@ -113,7 +150,7 @@ export class OperationalIntegrityService {
     }
 
     // 5. Assignment linked to ineligible assayer
-    const ineligibleAssayers = await this.dataSource.query(`
+    const ineligibleAssayers = await run('ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER', `
       SELECT a.id, a.assignment_number, a.status as assignment_status,
              ass.id as assayer_id, ass.assayer_code, ass.status as assayer_status, ass.is_active as assayer_is_active
       FROM assignments a
@@ -121,7 +158,7 @@ export class OperationalIntegrityService {
       WHERE a.is_active = true
         AND a.status IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')
         AND (ass.status != 'ACTIVE' OR ass.is_active = false)
-    `).catch(() => []);
+    `);
 
     for (const row of ineligibleAssayers) {
       violations.push({
@@ -134,7 +171,7 @@ export class OperationalIntegrityService {
     }
 
     // 6. Assignment with invalid lifecycle combination
-    const invalidLifecycle = await this.dataSource.query(`
+    const invalidLifecycle = await run('INVALID_LIFECYCLE_COMBINATION', `
       SELECT id, assignment_number, status, checked_in_at, completion_date
       FROM assignments
       WHERE is_active = true
@@ -143,7 +180,7 @@ export class OperationalIntegrityService {
           (status = 'IN_PROGRESS' AND checked_in_at IS NULL) OR
           (status = 'PENDING' AND checked_in_at IS NOT NULL)
         )
-    `).catch(() => []);
+    `);
 
     for (const row of invalidLifecycle) {
       violations.push({
@@ -156,13 +193,13 @@ export class OperationalIntegrityService {
     }
 
     // 7. Employment date integrity
-    const invalidEmploymentDates = await this.dataSource.query(`
+    const invalidEmploymentDates = await run('INVALID_EMPLOYMENT_DATES', `
       SELECT id, assayer_code, display_name, joining_date, exit_date
       FROM assayers
       WHERE exit_date IS NOT NULL
         AND joining_date IS NOT NULL
         AND exit_date < joining_date
-    `).catch(() => []);
+    `);
 
     for (const row of invalidEmploymentDates) {
       violations.push({
@@ -175,7 +212,7 @@ export class OperationalIntegrityService {
     }
 
     // 8. Active assayer with incomplete onboarding/KYC state
-    const incompleteKyAssayers = await this.dataSource.query(`
+    const incompleteKyAssayers = await run('ACTIVE_ASSAYER_INCOMPLETE_KYC', `
       SELECT id, assayer_code, display_name, pan_number, bank_account_number, ifsc_code
       FROM assayers
       WHERE status = 'ACTIVE'
@@ -185,7 +222,7 @@ export class OperationalIntegrityService {
           bank_account_number IS NULL OR trim(bank_account_number) = '' OR
           ifsc_code IS NULL OR trim(ifsc_code) = ''
         )
-    `).catch(() => []);
+    `);
 
     for (const row of incompleteKyAssayers) {
       violations.push({
@@ -198,14 +235,14 @@ export class OperationalIntegrityService {
     }
 
     // 9. Stale/orphan workflow records
-    const orphanAssignments = await this.dataSource.query(`
+    const orphanAssignments = await run('STALE_ORPHAN_WORKFLOW_RECORD', `
       SELECT a.id, a.assignment_number, a.status, a.project_branch_id
       FROM assignments a
       LEFT JOIN project_branches pb ON a.project_branch_id = pb.id
       WHERE a.is_active = true
         AND (pb.id IS NULL OR pb.is_active = false)
         AND a.status IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')
-    `).catch(() => []);
+    `);
 
     for (const row of orphanAssignments) {
       violations.push({
@@ -225,10 +262,11 @@ export class OperationalIntegrityService {
 
     return {
       timestamp: new Date().toISOString(),
-      scannedRules: 9,
+      scannedRules: answeredRules,
       totalViolations: violations.length,
       summary,
       violations,
+      failedRules,
     };
   }
 }

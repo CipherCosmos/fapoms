@@ -13,18 +13,20 @@ import { OperationalIntegrityService } from './operational-integrity.service';
  * anything in the unit run.
  *
  * That matters more here than the percentage suggests, because of the shape of the class. Every one
- * of the nine queries ends `.catch(() => [])`. A rule whose SQL no longer matches the schema — a
- * renamed column, a status value that no longer exists, a table that grew a tenant predicate —
- * therefore contributes zero violations, and zero violations is indistinguishable from a clean
- * result. The report still says `scannedRules: 9`. So the failure mode of this scanner is that it
- * reports perfect health, which is the single worst thing an integrity scanner can do: it is the
+ * of the nine queries used to end `.catch(() => [])`. A rule whose SQL no longer matched the schema
+ * — a renamed column, a status value that no longer exists, a table that grew a tenant predicate —
+ * contributed zero violations, and zero violations was indistinguishable from a clean result; the
+ * report still said `scannedRules: 9`. The failure mode of this scanner was therefore that it
+ * reported perfect health, which is the single worst thing an integrity scanner can do: it is the
  * report an auditor is shown, and a P0 rule like ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER going
- * quiet reads exactly like the problem having been fixed.
+ * quiet read exactly like the problem having been fixed.
  *
- * These tests do two things about that. They pin what each rule finds and how it is classified, so
- * a rule cannot lose its severity or its identifying id without a red test. And they pin the
- * swallow itself, explicitly and by name, so that the day someone decides an all-clear ought to be
- * distinguishable from a broken query, the test that has to change says why it exists.
+ * Each statement is still caught on its own — one broken query must not deny an auditor the other
+ * eight — but the failure is now named rather than swallowed: `failedRules` carries the rule id and
+ * the database error that stopped it, and `scannedRules` counts only the rules that answered. These
+ * tests pin what each rule finds and how it is classified, so a rule cannot lose its severity or its
+ * identifying id without a red test, and they pin the reporting of a failure, so the difference
+ * between a clean database and a scanner that has stopped looking cannot quietly disappear again.
  *
  * ## What is mocked
  *
@@ -92,6 +94,9 @@ describe('OperationalIntegrityService.scan', () => {
       expect(report.totalViolations).toBe(0);
       expect(report.violations).toEqual([]);
       expect(report.summary).toEqual({});
+      // The half of "all clear" that used to be missing. Nine rules asked, nine rules answered —
+      // without this, `totalViolations: 0` is only ever a claim about the queries that ran.
+      expect(report.failedRules).toEqual([]);
       expect(Date.parse(report.timestamp)).not.toBeNaN();
     });
 
@@ -286,19 +291,17 @@ describe('OperationalIntegrityService.scan', () => {
 
   describe('a rule whose query fails', () => {
     /**
-     * This is the behaviour, and it is worth stating plainly rather than leaving to be discovered:
-     * `.catch(() => [])` on each query means a rule that cannot run is reported as a rule that
-     * found nothing.
+     * A rule that cannot run is still contained to itself: the other eight are evaluated and
+     * returned, which is why the first test asserts the survivors. That containment was always the
+     * right call. What was wrong was that it was the ONLY thing that happened — `.catch(() => [])`
+     * turned a broken statement into an empty result set, so `scannedRules: 9` reported rules
+     * ATTEMPTED as rules ANSWERED and nothing in the response told the two apart.
      *
-     * The upside is real — one broken statement does not deny an auditor the other eight rules —
-     * and it is why the test asserts the survivors first. The cost is that `scannedRules: 9` is a
-     * count of rules ATTEMPTED being presented as a count of rules ANSWERED, and nothing in the
-     * response distinguishes them. An operator reading this report cannot tell a clean database
-     * from a scanner that has quietly stopped looking.
-     *
-     * If that is ever fixed — a `failedRules: string[]` on the report is the obvious shape, and the
-     * severity of a silent all-clear argues for it — this test is the one that will fail, and it
-     * should be changed to assert the new field rather than deleted.
+     * Now the failure is named. `failedRules` carries the rule id and the database error, and a rule
+     * that failed is not counted in `scannedRules` — which is a tally of rules that answered, so
+     * `scannedRules + failedRules.length` comes to nine either way and an operator can tell a clean
+     * database from a scanner that has stopped looking. These tests pin that, because the field is
+     * only worth having if it cannot be dropped silently.
      */
     it('still returns the other eight rules’ findings', async () => {
       serve({
@@ -311,30 +314,57 @@ describe('OperationalIntegrityService.scan', () => {
       const report = await service.scan();
 
       expect(report.violations.map((v) => v.rule)).toEqual(['INVALID_EMPLOYMENT_DATES']);
+      // Both halves of the contract in one place: the eight that ran are reported, and the one that
+      // did not is reported as well, rather than being indistinguishable from a rule that passed.
+      expect(report.failedRules.map((f) => f.rule)).toEqual(['ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER']);
     });
 
-    it('reports the failed rule as nine-scanned and zero-found — an all-clear it did not earn', async () => {
+    it('names the rule that could not run, and does not count it as scanned', async () => {
       serve({ ineligibleAssayer: new Error('column "assayer_status" does not exist') });
 
       const report = await service.scan();
 
-      expect(report.scannedRules).toBe(9);
+      // Eight, not nine. The number is the honest one: this scan looked at eight of the invariants.
+      expect(report.scannedRules).toBe(8);
+      expect(report.failedRules).toEqual([
+        {
+          rule: 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER',
+          // The database's own message, verbatim. Whoever reads this report is the person who has to
+          // repair the query, and "a rule failed" without the reason sends them to the source anyway.
+          error: 'column "assayer_status" does not exist',
+        },
+      ]);
+      // `totalViolations: 0` is still zero — the rule genuinely found nothing, because it never ran.
+      // It is `failedRules` that stops that zero from being read as a clean bill of health.
       expect(report.totalViolations).toBe(0);
       expect(report.summary).toEqual({});
-      // Nothing anywhere in the response names the rule that could not run. That is the gap.
-      expect(JSON.stringify(report)).not.toContain('ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER');
     });
 
-    it('does not throw when every single rule fails', async () => {
+    it('does not throw when every single rule fails, and reports zero rules scanned', async () => {
       query.mockRejectedValue(new Error('connection terminated'));
 
-      // The route is behind a role guard and is expected to answer, not 500 — but note that the
-      // answer it gives here is a perfectly clean bill of health for a database it could not read
-      // one row of.
+      // The route is behind a role guard and is expected to answer, not 500. What it must not do is
+      // answer with a clean bill of health for a database it could not read one row of.
       const report = await service.scan();
 
+      expect(report.scannedRules).toBe(0);
       expect(report.totalViolations).toBe(0);
-      expect(report.scannedRules).toBe(9);
+      expect(report.failedRules).toHaveLength(9);
+      expect(report.failedRules.every((f) => f.error === 'connection terminated')).toBe(true);
+      // Every rule accounted for by its own id — a call site tagged with the wrong or a duplicated
+      // name would leave one of these unnamed, and that rule could then fail without ever being
+      // reported under the id an operator would search for.
+      expect(report.failedRules.map((f) => f.rule).sort()).toEqual([
+        'ACTIVE_ASSAYER_INCOMPLETE_KYC',
+        'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER',
+        'CANCELLED_ASSIGNMENT_WITH_ATTENDANCE',
+        'COMPLETED_ASSIGNMENT_WITHOUT_ATTENDANCE',
+        'INVALID_EMPLOYMENT_DATES',
+        'INVALID_LIFECYCLE_COMBINATION',
+        'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY',
+        'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_BRANCH',
+        'STALE_ORPHAN_WORKFLOW_RECORD',
+      ]);
     });
   });
 });
