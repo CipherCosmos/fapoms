@@ -57,6 +57,31 @@ const DEFAULT_DURATION: Record<ToastType, number> = {
 
 const MAX_VISIBLE = 4;
 
+/**
+ * Add one toast, and if the stack is full drop something that can afford to go.
+ *
+ * This used to be `[...prev, next].slice(-MAX_VISIBLE)`, which always dropped the oldest — and
+ * the oldest is very often a pinned error nobody has read yet. That quietly undid the guarantee
+ * at the top of this file: four routine "Saved" messages after a failure would carry the failure
+ * off the top of the stack, and the person would be left believing their work saved when it had
+ * not. Exactly the outcome the persist-errors rule exists to prevent, arriving by a different
+ * door.
+ *
+ * So: evict the oldest toast that dismisses itself anyway (success, info — anything with a
+ * countdown), because it was leaving in a few seconds regardless and losing it costs nothing.
+ * Only when every visible toast is pinned does the oldest pinned one go, since something must,
+ * and by then the stack is four unacknowledged problems deep and the newest is the most likely
+ * to be about what the person just did.
+ */
+const admit = (prev: ToastRecord[], next: ToastRecord): ToastRecord[] => {
+  const grown = [...prev, next];
+  if (grown.length <= MAX_VISIBLE) return grown;
+
+  const victim = grown.findIndex((t) => t.duration > 0);
+  const drop = victim === -1 ? 0 : victim;
+  return grown.filter((_, i) => i !== drop);
+};
+
 interface ToastApi {
   toast: (a: ToastType | ToastOptions, b?: string) => number;
   dismiss: (id: number) => void;
@@ -187,33 +212,51 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [paused, setPaused] = useState(false);
   const idRef = useRef(0);
 
-  const dismiss = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  /**
+   * The list, held where a decision can be made against it synchronously.
+   *
+   * `toast()` has to answer two questions in the same call: what goes on screen, and what id to
+   * hand back. A `setToasts(prev => ...)` updater answers the first perfectly and cannot answer
+   * the second — React batches it, so it has not run by the time this function returns. Keeping
+   * the array in a ref and driving state from it lets both answers come from the same list.
+   */
+  const listRef = useRef<ToastRecord[]>([]);
+  const commit = useCallback((next: ToastRecord[]) => {
+    listRef.current = next;
+    setToasts(next);
   }, []);
+
+  const dismiss = useCallback((id: number) => {
+    commit(listRef.current.filter((t) => t.id !== id));
+  }, [commit]);
 
   const toast = useCallback((a: ToastType | ToastOptions, b?: string) => {
     const opts: ToastOptions = typeof a === 'string' ? { type: a, message: b ?? '' } : a;
     const type = opts.type ?? 'info';
-    const id = ++idRef.current;
 
-    setToasts((prev) => {
-      // Collapse an identical message already on screen instead of stacking
-      // duplicates — a double-clicked Save should not read as two failures.
-      const dupe = prev.find((t) => t.message === opts.message && t.type === type);
-      if (dupe) return prev;
-      const next: ToastRecord = {
-        id,
-        type,
-        title: opts.title,
-        message: opts.message,
-        action: opts.action,
-        duration: opts.duration ?? DEFAULT_DURATION[type],
-        createdAt: Date.now(),
-      };
-      return [...prev, next].slice(-MAX_VISIBLE);
-    });
+    // Collapse an identical message already on screen instead of stacking duplicates — a
+    // double-clicked Save should not read as two failures.
+    //
+    // The id handed back is the SURVIVING toast's, not a fresh one. Minting an id for a toast
+    // that was never created breaks the only contract this return value has: `dismiss(id)` would
+    // match nothing, so a caller that showed a pinned 'loading' and then tried to clear it would
+    // leave it spinning for ever with no way to reach it. Nothing calls it that way today, which
+    // is exactly why it was worth fixing now rather than after someone relies on it.
+    const dupe = listRef.current.find((t) => t.message === opts.message && t.type === type);
+    if (dupe) return dupe.id;
+
+    const id = ++idRef.current;
+    commit(admit(listRef.current, {
+      id,
+      type,
+      title: opts.title,
+      message: opts.message,
+      action: opts.action,
+      duration: opts.duration ?? DEFAULT_DURATION[type],
+      createdAt: Date.now(),
+    }));
     return id;
-  }, []);
+  }, [commit]);
 
   const api = useMemo(() => ({ toast, dismiss }), [toast, dismiss]);
 
