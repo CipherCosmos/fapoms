@@ -72,21 +72,57 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     if (!this.redisClient) return; // No Redis configured (e.g. most unit tests) — in-process only.
 
-    try {
-      this.subscriber = this.redisClient.duplicate();
-      this.subscriber.on('error', (err: Error) => {
-        this.logger.warn(`Domain-event Redis subscriber connection error: ${err.message}`);
-      });
-      await this.subscriber.subscribe(CHANNEL);
-      this.subscriber.on('message', (_channel: string, message: string) => {
-        this.handleRemoteMessage(message);
-      });
-    } catch (err: any) {
-      this.logger.warn(
+    /**
+     * `enableOfflineQueue: true`, overriding the shared client's own setting.
+     *
+     * The shared client is built by `failFastRedisOptions`, which turns the offline queue OFF on
+     * purpose: a cache read on the request path must fail immediately during an outage rather
+     * than stall behind a reconnect. `duplicate()` copies those options, and that setting is
+     * exactly wrong here — the duplicated connection is still handshaking when this method runs,
+     * so the SUBSCRIBE below was rejected with "Stream isn't writeable and enableOfflineQueue
+     * options is false" on EVERY boot, the catch swallowed it, and the bridge was set to null
+     * for the life of the process with no retry.
+     *
+     * That was not a degraded edge case on this deployment, it was the normal state. Production
+     * runs PROCESS_ROLE=api and PROCESS_ROLE=worker as separate containers, which is the entire
+     * reason this bridge exists: every event a worker raises — the SLA scanner's
+     * `notification:new`, `billing:booked`, an outbox re-publish — reached no api replica, so
+     * `EventsGateway` never pushed it and connected browsers saw nothing until someone refreshed.
+     *
+     * The offline queue is the right trade for this connection specifically. It issues exactly one
+     * command, once, at startup, and nothing waits on it — so "queue it until Redis answers" costs
+     * nothing, where on the request path it would have cost a stall per read.
+     */
+    this.subscriber = this.redisClient.duplicate({ enableOfflineQueue: true });
+
+    this.subscriber.on('error', (err: Error) => {
+      this.logger.warn(`Domain-event Redis subscriber connection error: ${err.message}`);
+    });
+
+    // Handler before SUBSCRIBE, not after. Registering it afterwards leaves a window in which the
+    // channel is live and nothing is listening, and anything delivered in it is gone.
+    this.subscriber.on('message', (_channel: string, message: string) => {
+      this.handleRemoteMessage(message);
+    });
+
+    /**
+     * Deliberately not awaited.
+     *
+     * With the offline queue on, this promise settles whenever Redis first becomes reachable,
+     * which during an outage may be minutes or never. `onModuleInit` blocking on that would stop
+     * the API from starting at all while Redis is down — a far worse failure than the degraded
+     * realtime this bridge exists to prevent, and one that would take down `/health` with it.
+     *
+     * Nothing is lost by letting it settle later: ioredis re-issues subscriptions itself after a
+     * reconnect, so once the queued SUBSCRIBE lands the bridge stays up across later blips
+     * without anything here retrying by hand.
+     */
+    void this.subscriber.subscribe(CHANNEL).then(
+      () => this.logger.log(`Cross-process domain events bridged over ${CHANNEL}`),
+      (err: Error) => this.logger.warn(
         `Could not subscribe to ${CHANNEL}; cross-process domain events are disabled on this replica: ${err?.message}`,
-      );
-      this.subscriber = null;
-    }
+      ),
+    );
   }
 
   async onModuleDestroy(): Promise<void> {

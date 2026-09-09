@@ -137,3 +137,94 @@ describe('DomainEventPublisher', () => {
     });
   });
 });
+
+/**
+ * The two things that stopped this bridge working in production, both silent.
+ *
+ * The class comment explains why the bridge exists: PROCESS_ROLE splits api and worker into
+ * separate containers, so an event a worker raises can only reach an api replica's EventsGateway
+ * over Redis. What the comment could not say was that it never did — the shared client is built
+ * with `enableOfflineQueue: false` (correct for request-path cache reads, which must fail rather
+ * than stall), `duplicate()` copied that, and the SUBSCRIBE issued while the new connection was
+ * still handshaking was rejected every single boot with "Stream isn't writeable". The catch logged
+ * a warning, nulled the subscriber, and never retried. Every deploy came up with realtime dead and
+ * one warning line to say so.
+ */
+describe('the subscriber connection', () => {
+  /** Records what `duplicate()` was asked for, which the bus fake above does not care about. */
+  class OptionRecordingClient extends FakeRedisClient {
+    public duplicateOptions: any;
+    duplicate(override?: any): any {
+      this.duplicateOptions = override;
+      return super.duplicate();
+    }
+  }
+
+  it('turns the offline queue on, so a SUBSCRIBE issued mid-handshake is queued rather than rejected', async () => {
+    const client = new OptionRecordingClient(new FakeRedisBus());
+    const publisher = new DomainEventPublisher(client as any);
+
+    await publisher.onModuleInit();
+
+    // The one setting that mattered. Inheriting `false` from the shared client is what broke it.
+    expect(client.duplicateOptions).toEqual(expect.objectContaining({ enableOfflineQueue: true }));
+    await publisher.onModuleDestroy();
+  });
+
+  it('starts without waiting for Redis to answer', async () => {
+    // A subscribe that never settles is exactly what the offline queue produces while Redis is
+    // unreachable. Awaiting it inside onModuleInit would hold up application start for as long as
+    // the outage lasts — taking /health down with it, which is a worse failure than the degraded
+    // realtime the bridge exists to prevent.
+    // On the duplicate, which is where the publisher actually subscribes. Stubbing the injected
+    // client instead leaves the duplicate's no-op subscribe in place, and the test then passes
+    // against the very code it is meant to reject.
+    const bus = new FakeRedisBus();
+    const client: any = new FakeRedisClient(bus);
+    client.duplicate = () => {
+      const sub: any = new FakeRedisClient(bus);
+      sub.subscribe = () => new Promise<void>(() => { /* never settles */ });
+      return sub;
+    };
+    const publisher = new DomainEventPublisher(client);
+
+    await expect(
+      Promise.race([
+        publisher.onModuleInit().then(() => 'started'),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 50)),
+      ]),
+    ).resolves.toBe('started');
+
+    await publisher.onModuleDestroy();
+  });
+
+  it('is already listening the moment the channel goes live', async () => {
+    // The handler used to be attached after `await subscribe()`, leaving a window where the
+    // channel was live and nothing was reading it. Anything delivered in that window was gone —
+    // rare, silent, and impossible to tell apart from an event that was never published.
+    const bus = new FakeRedisBus();
+    let deliveredDuringSubscribe = false;
+
+    // The publisher subscribes on the DUPLICATE, not on the injected client, so the stand-in for
+    // "a message arrives the instant the channel goes live" has to live there.
+    const client: any = new FakeRedisClient(bus);
+    client.duplicate = () => {
+      const sub: any = new FakeRedisClient(bus);
+      sub.subscribe = async () => {
+        await sub.publish(
+          'fapoms:domain-events',
+          JSON.stringify({ originId: 'somewhere-else', eventName: 'thing:happened', payload: { id: 1 } }),
+        );
+      };
+      return sub;
+    };
+
+    const publisher = new DomainEventPublisher(client);
+    publisher.subscribe('thing:happened', () => { deliveredDuringSubscribe = true; });
+    await publisher.onModuleInit();
+    await new Promise((r) => setImmediate(r));
+
+    expect(deliveredDuringSubscribe).toBe(true);
+    await publisher.onModuleDestroy();
+  });
+});

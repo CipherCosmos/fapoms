@@ -5,6 +5,7 @@
 #   ./setup.sh                                  # local, http://localhost:8080
 #   ./setup.sh --public-url https://audit.example.com
 #   ./setup.sh --dev                            # relax the production-only gates
+#   ./setup.sh --data-residency IN              # declare where this is hosted (CERT-In / RBI)
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # WHY THIS EXISTS
@@ -50,12 +51,18 @@ COMPOSE_ENV_LINK="$REPO_ROOT/deploy/.env"
 
 PUBLIC_URL="http://localhost:8080"
 MODE="production"
+RESIDENCY=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --public-url) PUBLIC_URL="${2:?--public-url needs a value}"; shift 2 ;;
     --dev)        MODE="development"; shift ;;
-    -h|--help)    sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    # Declared hosting region. Not defaulted, and not guessed from the machine: CERT-In requires
+    # logs in India and RBI requires customer data stored only in India, so "IN" is an assertion
+    # about where the database, object store and logs physically live. Only the operator can make
+    # it. Left unset, the API still starts and says on every boot that nobody has confirmed it.
+    --data-residency) RESIDENCY="${2:?--data-residency needs a value, e.g. IN}"; shift 2 ;;
+    -h|--help)    sed -n '3,9p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -144,6 +151,16 @@ else
   set_key CLAMAV_HOST             "clamav"
   set_key REDIS_HOST              "redis"
   set_key REDIS_PORT              "6379"
+
+  # Written only when declared, and an `if` rather than `[ -n … ] && set_key …` because under
+  # `set -e` that one-liner returns non-zero whenever the flag is absent and would end the script
+  # here — for every operator who did not pass it, which is most of them.
+  #
+  # Left unset is the honest state: the startup check then reports that nobody has confirmed where
+  # this is hosted, which is worth more than a default quietly asserting India on their behalf.
+  if [ -n "$RESIDENCY" ]; then
+    set_key DATA_RESIDENCY_REGION "$RESIDENCY"
+  fi
 
   GENERATED_ENV=1
   ok "wrote $(basename "$ENV_FILE") with freshly generated secrets"
