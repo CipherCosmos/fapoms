@@ -123,6 +123,9 @@ describe('AssignmentService.reassignAssignment — transactional integrity', () 
       resolveBlock: jest.fn(),
     };
     (service as any).ruleBypass = { isBypassedSync: () => false, noteBypass: jest.fn() };
+    // Reassignment now tells the losing assayer, the gaining assayer and the desk. `emitSafe`
+    // never throws in production; the stub records so the tests can assert who was told.
+    (service as any).notificationDispatch = { emitSafe: jest.fn() };
 
     return { service, committed, aborted: () => unitOfWorkAborted };
   };

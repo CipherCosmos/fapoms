@@ -107,8 +107,14 @@ describe('AssignmentService.reassignAssignment — write consistency', () => {
       resolveBlock: jest.fn(),
     };
     (service as any).ruleBypass = { isBypassedSync: () => false, noteBypass: jest.fn() };
+    // Reassignment now tells the losing assayer, the gaining assayer and the desk. `emitSafe`
+    // never throws in production; the stub records so the tests can assert who was told.
+    (service as any).notificationDispatch = { emitSafe: jest.fn() };
 
-    return { service, manager, auditService, lineageSaved, assignmentsSaved, emit };
+    return {
+      service, manager, auditService, lineageSaved, assignmentsSaved, emit,
+      notified: (service as any).notificationDispatch.emitSafe as jest.Mock,
+    };
   };
 
   const reassign = (service: AssignmentService) =>
@@ -144,6 +150,50 @@ describe('AssignmentService.reassignAssignment — write consistency', () => {
       }),
       expect.anything(),
     );
+  });
+
+  /**
+   * Reassignment takes work from one person and gives it to another, and told nobody. Every other
+   * transition — offered, accepted, rejected, cancelled, escalated — emits. Verified live on an
+   * ACCEPTED assignment: the move succeeded and zero notification rows were written, so the
+   * assayer who had committed to the audit kept it on their schedule.
+   */
+  describe('tells the three parties who need to know', () => {
+    it('notifies the assayer who lost the work, the one who gained it, and the desk', async () => {
+      const { service, notified } = makeService();
+
+      await reassign(service);
+
+      const types = notified.mock.calls.map((c: any[]) => c[0].type);
+      expect(types).toEqual(expect.arrayContaining([
+        'ASSIGNMENT_REASSIGNED_AWAY',
+        'ASSIGNMENT_OFFERED',
+        'ASSIGNMENT_REASSIGNED',
+      ]));
+    });
+
+    it('addresses the losing notice to the outgoing assayer and the offer to the incoming one', async () => {
+      const { service, notified } = makeService();
+
+      await reassign(service);
+
+      const away = notified.mock.calls.find((c: any[]) => c[0].type === 'ASSIGNMENT_REASSIGNED_AWAY')![0];
+      const offer = notified.mock.calls.find((c: any[]) => c[0].type === 'ASSIGNMENT_OFFERED')![0];
+      expect(away.assayerId).toBe(OLD_ASSAYER);
+      expect(offer.assayerId).toBe(NEW_ASSAYER);
+    });
+
+    it('tells nobody when the write did not take', async () => {
+      const { service, notified } = makeService({ persistedAssayerId: OLD_ASSAYER });
+      await expect(reassign(service)).rejects.toThrow(ConflictException);
+      expect(notified).not.toHaveBeenCalled();
+    });
+
+    it('tells nobody when a terminal assignment is refused', async () => {
+      const { service, notified } = makeService({ lockedStatus: AssignmentStatus.CANCELLED });
+      await expect(reassign(service)).rejects.toThrow(/ASSIGNMENT_CANCELLED/);
+      expect(notified).not.toHaveBeenCalled();
+    });
   });
 
   describe('when the write did not actually move the row', () => {

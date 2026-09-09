@@ -2088,7 +2088,23 @@ export class AssayerController {
   async bulkTransitionLifecycle(
     @Body() dto: BulkTransitionLifecycleDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    /**
+     * The region ceiling applies per id, exactly as it does on the single-id sibling below.
+     *
+     * This route took neither `@GlobalScopeFilter()` nor a scope assertion, so a region-scoped
+     * operator refused `POST /assayers/:id/lifecycle` with 403 "That record belongs to a region
+     * your account is not assigned to" could pass the same id in a list to this route and move it.
+     * Verified live: a NORTH-scoped OPERATIONS account moved two WEST assayers from ACTIVE to
+     * ON_LEAVE in one call, with `updated_by` recording the out-of-region caller.
+     *
+     * Asserted for every id before any of them is transitioned, so a batch containing one
+     * out-of-scope record is refused whole rather than half-applied.
+     */
+    for (const id of dto.ids) {
+      await this.regionGuard.assertAssayerInScope(id, scope);
+    }
     const result = await this.assayerService.bulkTransitionLifecycle(dto.ids, dto.targetStatus, req.user.id, dto.reason);
     return { success: true, data: result };
   }
@@ -2820,7 +2836,21 @@ export class AssayerController {
   async bulkIssueAppAccess(
     @Body() dto: BulkIssueAppAccessDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    /**
+     * Same region ceiling as `:assayerId/app-access` below, and this one matters more.
+     *
+     * Issuing access rotates the assayer's password and sets a new expiry, so an out-of-region
+     * operator who could reach this route locked a person out of the field app until they
+     * received the emailed credential. Verified live: the single-id route answered 403 for a WEST
+     * assayer and this one issued them a new temporary password.
+     *
+     * Asserted per id before any credential is minted, so nobody is half-rotated.
+     */
+    for (const id of dto.ids) {
+      await this.regionGuard.assertAssayerInScope(id, scope);
+    }
     const data = await this.assayerService.bulkIssueAppAccess(dto.ids, req.user.id);
     return { success: true, data };
   }

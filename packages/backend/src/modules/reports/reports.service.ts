@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ProjectBranchStatus, BRANCH_DONE_STATUSES } from '@fapoms/shared';
+import { ProjectBranchStatus, BRANCH_DONE_STATUSES, AssignmentStatus } from '@fapoms/shared';
 import { AssignmentService } from '../assignment/assignment.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { CommandCenterService } from '../planning/command-center.service';
@@ -107,7 +107,24 @@ export class ReportsService {
 
     const rows = branches.map((pb) => {
       const coverage = classify(pb.status);
-      const assigned = (pb.assignments ?? []).filter((a) => a.isActive !== false);
+      /**
+       * Who is actually on this branch — not merely which rows survive `is_active`.
+       *
+       * This filtered on `isActive` alone, and terminal assignments deliberately keep that flag
+       * set (see the note in `assignment-workload.ts`: `is_active` means "not deleted", never
+       * "finished"). So the client-facing coverage workbook counted cancelled and rejected work
+       * as assigned, and printed the name of an assayer who had declined the job. Verified live:
+       * a REJECTED branch reported "Assigned 1" and named the assayer who turned it down.
+       *
+       * COMPLETED is included on purpose — a delivered audit is genuinely covered, and the row
+       * should say who did it. What must not appear is work that ended without being done.
+       */
+      const assigned = (pb.assignments ?? []).filter(
+        (a) =>
+          a.isActive !== false &&
+          a.status !== AssignmentStatus.CANCELLED &&
+          a.status !== AssignmentStatus.REJECTED,
+      );
       return [
         pb.branch?.solId ?? '',
         pb.branch?.name ?? '',

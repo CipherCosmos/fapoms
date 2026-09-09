@@ -284,6 +284,46 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
+  /**
+   * The assayer who had the job and no longer does.
+   *
+   * Reassignment emitted nothing at all — not to the losing assayer, not to the gaining one, not
+   * to operations. Verified live: an ACCEPTED assignment was moved to another assayer and zero
+   * notification rows were written; only the audit event recorded it.
+   *
+   * This is the failure `ASSIGNMENT_CANCELLED` was written to prevent, in a path that had no
+   * equivalent. Someone who accepted an audit and planned their day around it is told nothing,
+   * keeps it on their schedule, and drives to a branch that is no longer expecting them. CRITICAL
+   * and every channel for exactly that reason: it has to reach a phone, not a bell nobody opens.
+   *
+   * Addressed to the assayer alone. Operations gets `ASSIGNMENT_REASSIGNED` below, written in the
+   * third person, because a desk reading "your audit" about somebody else's work is the defect
+   * `ASSIGNMENT_CANCELLED` still has.
+   */
+  ASSIGNMENT_REASSIGNED_AWAY: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: ALL_CHANNELS,
+    title: 'Assignment reassigned',
+    body: 'The audit at ${branchName} on ${scheduledDate} has been reassigned to another assayer and is no longer yours. Reason: ${reason}',
+    link: '/assignments',
+    skipActor: true,
+  },
+  /**
+   * The desk's copy of the same event, in the third person, naming both assayers.
+   */
+  ASSIGNMENT_REASSIGNED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: OPS,
+    channels: [NotificationChannel.IN_APP],
+    title: 'Assignment reassigned',
+    body: '${branchName} on ${scheduledDate} moved from ${previousAssayerName} to ${newAssayerName}. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
   // ASSIGNMENT_COUNTER_OFFERED lived here until in-app fee negotiation was removed: the
   // assayer no longer sees or proposes fees, so there is no counter-offer left to announce.
   // Fee questions are settled by phone; the desk records the outcome via acceptOnBehalf.

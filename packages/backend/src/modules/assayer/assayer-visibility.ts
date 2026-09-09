@@ -39,7 +39,33 @@ const IDENTITY_FIELDS = [
 ];
 
 /** Banking details. Read to pay someone, and for no other reason. */
-const BANKING_FIELDS = ['bankAccountNumber', 'ifscCode', 'bankName', 'accountHolderName'];
+/**
+ * The `destination*` names are the payout snapshot frozen onto a payable or a payment at
+ * approval time. They are the same banking facts under different keys, and they were in neither
+ * list — so `GET /billing-engine/payouts` handed every payee's account number back in full,
+ * in bulk, with no audit row, to any role that could read the billing list. AUDITOR is the sharp
+ * case: `GET /assayers/:id` strips banking from AUDITOR entirely and `/payables` refuses them
+ * outright, yet the payout list gave them eleven rows with five clear account numbers.
+ *
+ * The redaction interceptor was already walking these rows — they carry `assayerCode`, so the
+ * node test matched — it simply had no rule for these keys. Both columns are encrypted at rest
+ * and decrypt on entity load, so they went straight out.
+ *
+ * `POST /payouts/bank-file` is deliberately not affected: it builds its own DTO with the key
+ * `accountNumber`, it *is* the NEFT file, it is limited to the disbursement roles, and it writes
+ * a `PAYABLE_BANK_FILE_EXPORTED` history row every time.
+ *
+ * Stripped, not added to `MASKED_IN_TRANSIT_FIELDS`. Every field in that list has an audited
+ * `GET /assayers/:id/sensitive/:field` counterpart, and the pairing is asserted as an invariant in
+ * `sensitive-field-reveal.spec.ts` — masking a field with no way to reveal it would leave a
+ * reviewer holding four digits and no route to the rest. Giving the frozen destination a reveal
+ * route of its own is a product decision, not a redaction fix; until it has one, the roles that
+ * may read banking read it whole, and the roles that may not read it at all.
+ */
+const BANKING_FIELDS = [
+  'bankAccountNumber', 'ifscCode', 'bankName', 'accountHolderName',
+  'destinationBankAccountNumber', 'destinationIfsc', 'destinationBankName', 'destinationAccountHolderName',
+];
 
 /**
  * Staff-private text about a person — visible to the roles that manage them, and to NOBODY

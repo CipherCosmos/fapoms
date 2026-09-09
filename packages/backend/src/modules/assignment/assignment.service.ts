@@ -2285,6 +2285,17 @@ export class AssignmentService {
       }
 
       const prevAssayerId = assignment.assayerId;
+      /**
+       * Captured here, before the write below replaces the hydrated relation.
+       *
+       * The desk notification read `assignment.assayer?.displayName` after the fact and so
+       * reported "moved from Arun Deshmukh to Arun Deshmukh" — the relation had already been
+       * repointed at the incoming assayer by the fix that stops the column reverting. The
+       * outgoing assayer's name only exists in memory until that line runs.
+       */
+      const prevAssayerName = assignment.assayer?.displayName
+        ?? (assignment.assayer as any)?.assayerCode
+        ?? prevAssayerId;
       const prevStatus = assignment.status;
       const now = new Date();
 
@@ -2470,6 +2481,77 @@ export class AssignmentService {
           });
         }
       }
+
+      /**
+       * Tell the three parties who need to know. This path told nobody.
+       *
+       * Every other assignment transition emits — offered, accepted, rejected, cancelled,
+       * escalated — and reassignment, which takes work away from one person and gives it to
+       * another, emitted only an audit event. The losing assayer kept the job on their schedule;
+       * the gaining assayer held a live PENDING offer with no bell to accept it from; the desk saw
+       * nothing. Verified live on an ACCEPTED assignment: zero notification rows.
+       *
+       * Fired after the write is verified and from the persisted values, like the audit event
+       * above — nobody should be told about a move that did not happen.
+       */
+      const reassignBranchName = assignment.projectBranch?.branch?.name ?? 'the branch';
+      const reassignDateLabel = assignment.scheduledDate
+        ? new Date(assignment.scheduledDate).toISOString().slice(0, 10)
+        : 'a date to be confirmed';
+
+      // 1. The assayer who lost it. Critical, and on every channel — this one has to reach a phone.
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_REASSIGNED_AWAY',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: prevAssayerId,
+        dedupeKey: `ASSIGNMENT_REASSIGNED_AWAY:${saved.id}:${persistedVersion}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          branchName: reassignBranchName,
+          scheduledDate: reassignDateLabel,
+          reason: statedReason,
+        },
+      });
+
+      // 2. The assayer who gained it. The row is PENDING for them, so this is genuinely an offer
+      //    and reuses the type that already says so correctly.
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_OFFERED',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: persistedAssayerId,
+        ownerUserId: userId,
+        dedupeKey: `ASSIGNMENT_OFFERED:${saved.id}:${persistedVersion}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          branchName: reassignBranchName,
+          scheduledDate: reassignDateLabel,
+          proposedFee: saved.proposedFee ?? null,
+        },
+      });
+
+      // 3. The desk, in the third person.
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_REASSIGNED',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        dedupeKey: `ASSIGNMENT_REASSIGNED:${saved.id}:${persistedVersion}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          branchName: reassignBranchName,
+          scheduledDate: reassignDateLabel,
+          previousAssayerName: prevAssayerName,
+          newAssayerName: newAssayer.displayName ?? newAssayer.assayerCode ?? persistedAssayerId,
+          reason: statedReason,
+        },
+      });
 
       emit('assignment:reassigned', {
         eventType: 'assignment:reassigned',
@@ -3989,20 +4071,25 @@ export class AssignmentService {
         return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
       }
 
-      if (assignment.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check in: assignment has been cancelled.' };
-      }
-      if (assignment.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Cannot check in: assignment is already completed.' };
-      }
-      if (assignment.checkedInAt) {
-        return {
-          success: true,
-          assignment,
-          message: `Already checked in at ${new Date(assignment.checkedInAt).toISOString()}`,
-        };
-      }
-
+      /**
+       * Ownership first, before any shortcut that can answer about this assignment.
+       *
+       * These three fast paths used to run above the ownership check. Two of them return
+       * `success: false`, which the controller renders without the record — but the
+       * already-checked-in path returns `success: true`, and the controller then serialises the
+       * whole entity. So an assayer with no relationship to an assignment could POST a check-in
+       * to it and receive 49 fields back: the assignment number and status, the *other* assayer's
+       * check-in GPS coordinates and timestamp, the branch and its address, and that assayer's
+       * code, display name, phone and email. Verified live — the same principal, the same id,
+       * seconds apart: `GET` answered 403 "You can only open an assignment of your own", and
+       * `POST /check-in` answered 201 with the record.
+       *
+       * The refusals leaked less but still answered: a non-owner learned that an assignment they
+       * cannot read had been cancelled or completed, which is a state oracle over any assignment
+       * id. Both classes close the same way, by asking who is calling before answering anything.
+       *
+       * No state was ever changed by this — the fast paths are all reads. It is disclosure.
+       */
       const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
       let staffOverride = false;
       if (!actorIsAssignedAssayer) {
@@ -4018,13 +4105,29 @@ export class AssignmentService {
           ].includes(r as SystemRole),
         );
         if (!staffOverride) {
+          // `assignment: null`, not the record. A caller who may not read this assignment must not
+          // receive it as a consolation prize for being refused.
           return {
             success: false,
-            assignment,
+            assignment: null as any,
             error: 'NOT_YOUR_ASSIGNMENT',
             message: 'You can only check in to an assignment that is assigned to you.',
           };
         }
+      }
+
+      if (assignment.status === AssignmentStatus.CANCELLED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check in: assignment has been cancelled.' };
+      }
+      if (assignment.status === AssignmentStatus.COMPLETED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Cannot check in: assignment is already completed.' };
+      }
+      if (assignment.checkedInAt) {
+        return {
+          success: true,
+          assignment,
+          message: `Already checked in at ${new Date(assignment.checkedInAt).toISOString()}`,
+        };
       }
 
       if (!AssignmentStateMachine.canTransition(assignment.status, AssignmentStatus.CHECKED_IN)) {
@@ -4292,13 +4395,9 @@ export class AssignmentService {
         return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
       }
 
-      if (assignment.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check out of a cancelled assignment.' };
-      }
-      if (assignment.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Assignment is already completed.' };
-      }
-
+      // Ownership before any shortcut, for the reason set out on `recordCheckIn` above: the
+      // already-checked-out path answers `success: true` with the whole record, and the
+      // cancelled/completed paths answer about an assignment the caller may not read.
       const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
       if (!actorIsAssignedAssayer) {
         const actor = await this.dataSource
@@ -4312,11 +4411,18 @@ export class AssignmentService {
         if (!staffOverride) {
           return {
             success: false,
-            assignment,
+            assignment: null as any,
             error: 'NOT_YOUR_ASSIGNMENT',
             message: 'You can only check out of an assignment that is assigned to you.',
           };
         }
+      }
+
+      if (assignment.status === AssignmentStatus.CANCELLED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check out of a cancelled assignment.' };
+      }
+      if (assignment.status === AssignmentStatus.COMPLETED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Assignment is already completed.' };
       }
 
       if (!assignment.checkedInAt) {
