@@ -32,8 +32,14 @@ import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
+import {
+  AssignmentTargetEligibilityService,
+  type EligibilityBlocked,
+  type OverrideOutcome,
+} from './assignment-target-eligibility.policy';
 import { ProjectEntity } from '../project/project.entity';
-import { COMMITTED_ASSIGNMENT_STATUSES } from './assignment-workload';
+import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES } from './assignment-workload';
+import { throwMappedUniqueViolation } from './assignment-constraint-errors';
 import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
@@ -214,6 +220,7 @@ export class AssignmentService {
     private readonly uow: UnitOfWork,
     private readonly cache: CacheService,
     private readonly billingEngine: BillingEngineService,
+    private readonly targetEligibility: AssignmentTargetEligibilityService,
   ) {}
 
 
@@ -575,27 +582,19 @@ export class AssignmentService {
         distancePolicy.reason ?? 'Outside the client\'s permitted distance band for this branch.',
       );
     }
-
     /**
-     * Client empanelment eligibility — enforced here for the first time.
+     * Client empanelment eligibility — a pre-flight read of the one shared policy.
      *
-     * Planning's own candidate list already refuses to *recommend* a non-empanelled assayer
-     * (`ClientEligibilityFilter`, `recommendation.engine.ts`) and the "Assign anyway" panel on
-     * that screen makes overriding it look like a real, audited decision — a required "reason
-     * for overriding" box, disabled until filled in. None of that reached this write path: the
-     * reason was folded into free-text `remarks` client-side and nothing here ever checked
-     * eligibility at all, so a direct `POST /assignments` call — with no remarks, no reason,
-     * nothing — placed a non-empanelled, client-ineligible assayer on a real audit with zero
-     * server-side check and no audit trail. Found live, chaos-testing this exact screen.
+     * Planning's candidate list already refuses to *recommend* a non-empanelled assayer, and the
+     * "Assign anyway" panel makes overriding it look like a real, audited decision. None of that
+     * reached this write path until it was added here: a direct `POST /assignments` placed a
+     * client-ineligible assayer on a real audit with no server-side check at all.
      *
-     * Deliberately a standalone check rather than reusing `ClientEligibilityFilter.exclusionReason`
-     * directly: that method reads its standing from a `branchFacts.empanelmentStatusByAssayer`
-     * map the recommendation engine precomputes for a whole candidate pool in one query, with no
-     * single-pair fallback — calling it here with that map absent would read every assayer as
-     * "no standing recorded," including ones with a real ACTIVE standing. This reuses the same
-     * shared vocabulary (`standingAllowsPlanning`, the canonical PLANNABLE_EMPANELMENT_STANDINGS
-     * set) and the same settings key, so the two paths cannot disagree about what counts as
-     * eligible even though they query it separately.
+     * The rule itself now lives in `AssignmentTargetEligibilityService`, which reassignment calls
+     * too — the two paths cannot disagree about who may hold a client's work because there is
+     * only one implementation to disagree with. This call is advisory and outside the
+     * transaction, so the caller gets a fast, useful refusal; the authoritative evaluation runs
+     * again under the row lock below, where the standing cannot change underneath it.
      */
     let eligibilityOverride: { barredReason: string; overrideReason: string } | null = null;
     /**
@@ -607,53 +606,32 @@ export class AssignmentService {
     let eligibilityBypassReason: string | null = null;
     const clientId = projectBranch.project?.clientId;
     if (clientId) {
-      const restrictedAssayers = projectBranch.project?.client?.restrictedAssayers || [];
-      const clientLabel = projectBranch.project?.client?.clientCode ?? projectBranch.project?.client?.name ?? 'this client';
-      let eligibilityReason: string | null = null;
-      if (restrictedAssayers.includes(assayer.id)) {
-        throw new ForbiddenException(
-          `${assayer.displayName || assayer.assayerCode} is on ${clientLabel}'s restricted list. This restriction is strictly non-overridable.`,
-        );
-      } else {
-        const empanelmentRows = await this.dataSource.query(
-          `SELECT status FROM assayer_client_empanelments WHERE assayer_id = $1 AND client_id = $2 AND is_active = true LIMIT 1`,
-          [assayer.id, clientId],
-        );
-        const standing: string | undefined = empanelmentRows[0]?.status;
-        if (standing !== undefined) {
-          const strictlyNonOverridable = ['REJECTED', 'TERMINATED', 'EXPIRED', 'SUSPENDED'];
-          if (strictlyNonOverridable.includes(standing.toUpperCase())) {
-            throw new ForbiddenException(
-              `Empanelment standing '${standing}' for ${assayer.displayName || assayer.assayerCode} with ${clientLabel} is strictly non-overridable. Assignment cannot be created.`,
-            );
-          }
-          if (!standingAllowsPlanning(standing)) {
-            eligibilityReason = `${assayer.displayName || assayer.assayerCode} has empanelment standing ${standing} with ${clientLabel} — not Active or Recommended.`;
-          }
-        } else {
-          const noRowPolicy = await this.settings.get<string>(NO_EMPANELMENT_ROW_SETTING).catch(() => 'BLOCK');
-          if (noRowPolicy !== 'ALLOW') {
-            eligibilityReason = `${assayer.displayName || assayer.assayerCode} has no empanelment record with ${clientLabel}.`;
-          }
-        }
-      }
+      const preflight = await this.targetEligibility.evaluate({
+        assayer,
+        clientId,
+        clientLabel: projectBranch.project?.client?.clientCode ?? projectBranch.project?.client?.name ?? null,
+        restrictedAssayers: projectBranch.project?.client?.restrictedAssayers || [],
+      });
 
-      if (eligibilityReason) {
-        const bypassed = this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY);
-        if (bypassed) {
-          eligibilityBypassReason = eligibilityReason;
+      if (preflight.outcome === 'BLOCKED') {
+        // The organisation check is specific to overriding on the create path and has no
+        // equivalent on reassignment, so it stays here rather than moving into the policy.
+        if (
+          preflight.overridable &&
+          assayer.organizationId &&
+          projectBranch.project?.organizationId &&
+          assayer.organizationId !== projectBranch.project.organizationId
+        ) {
+          throw new ForbiddenException('Cannot override empanelment across mismatched organization tenants.');
+        }
+        const resolved = await this.targetEligibility.resolveBlock(preflight, {
+          userId,
+          overrideReason: dto.overrideReason,
+        });
+        if (resolved.viaBypassWindow) {
+          eligibilityBypassReason = preflight.message;
         } else {
-          const reason = dto.overrideReason?.trim();
-          if (!reason || reason.length < 10) {
-            throw new BadRequestException(
-              `${eligibilityReason} Assigning anyway requires an override reason of at least 10 characters explaining why client eligibility is waived.`,
-            );
-          }
-          if (assayer.organizationId && projectBranch.project?.organizationId && assayer.organizationId !== projectBranch.project.organizationId) {
-            throw new ForbiddenException('Cannot override empanelment across mismatched organization tenants.');
-          }
-          await this.assertCanOverrideEmpanelment(userId);
-          eligibilityOverride = { barredReason: eligibilityReason, overrideReason: reason };
+          eligibilityOverride = { barredReason: preflight.message, overrideReason: resolved.reason! };
         }
       }
     }
@@ -676,7 +654,7 @@ export class AssignmentService {
         where: {
           assayerId: assayer.id,
           scheduledDate: scheduledDateObj,
-          status: In(COMMITTED_ASSIGNMENT_STATUSES.concat(AssignmentStatus.PENDING)),
+          status: In(DAY_EXCLUSIVE_ASSIGNMENT_STATUSES),
           isActive: true,
         },
       });
@@ -905,61 +883,53 @@ export class AssignmentService {
       // Lock assayer row to serialize concurrent assignments and prevent double-booking races
       await manager.query('SELECT id FROM assayers WHERE id = $1 FOR UPDATE', [dto.assayerId]);
 
-      // Empanelment Concurrency & Historical Standing Enforcement:
-      // Authoritatively verify and lock the empanelment row under transaction to prevent
-      // races with concurrent empanelment revocation, and snapshot standing into the assignment.
+      /**
+       * The authoritative evaluation, under the empanelment row's own lock.
+       *
+       * Same policy object the pre-flight above consulted, asked again inside the transaction
+       * with `lockEmpanelment` so a concurrent revocation cannot land between the decision and
+       * the write. What the policy returns is snapshotted onto the assignment, so the record
+       * carries the standing that was actually true when the work was placed rather than
+       * whatever the row says when someone reads it back months later.
+       */
       if (clientId) {
-        const empanelmentLockQuery = await manager.query(
-          `SELECT id, status, is_active, created_at FROM assayer_client_empanelments
-           WHERE assayer_id = $1 AND client_id = $2 AND is_active = true
-           FOR SHARE LIMIT 1`,
-          [dto.assayerId, clientId],
-        );
-        const empanelmentRow = empanelmentLockQuery && empanelmentLockQuery.length > 0 ? empanelmentLockQuery[0] : null;
-        const standing = empanelmentRow?.status;
+        const verdict = await this.targetEligibility.evaluate({
+          assayer,
+          clientId,
+          clientLabel: projectBranch.project?.client?.clientCode ?? projectBranch.project?.client?.name ?? null,
+          restrictedAssayers: projectBranch.project?.client?.restrictedAssayers || [],
+          manager,
+          lockEmpanelment: true,
+        });
 
-        const strictlyNonOverridable = ['REJECTED', 'TERMINATED', 'EXPIRED', 'SUSPENDED'];
-        if (standing && strictlyNonOverridable.includes(standing.toUpperCase())) {
-          throw new ForbiddenException(
-            `Empanelment standing '${standing}' is strictly non-overridable. Assignment creation aborted.`,
+        let override: OverrideOutcome = { used: false, reason: null, by: null, viaBypassWindow: false };
+        if (verdict.outcome === 'BLOCKED') {
+          // Throws on a hard block, on a missing or too-short reason, or on an actor without
+          // the permission — the same three refusals the pre-flight applies, re-applied here
+          // because only this one runs under the lock.
+          override = await this.targetEligibility.resolveBlock(
+            verdict,
+            {
+              userId,
+              overrideReason: dto.overrideReason,
+              // The pre-flight already consulted the bypass window for this request; carry its
+              // answer rather than asking a second time and risking two different worlds.
+              priorBypassGranted: eligibilityBypassReason !== null,
+            },
+            manager,
           );
         }
 
-        if (!standing || !standingAllowsPlanning(standing)) {
-          const clientLabel = projectBranch.project?.client?.clientCode ?? projectBranch.project?.client?.name ?? 'this client';
-          const inTxReason = standing
-            ? `${assayer.displayName || assayer.assayerCode} has empanelment standing ${standing} with ${clientLabel} — not Active or Recommended.`
-            : `${assayer.displayName || assayer.assayerCode} has no active empanelment record with ${clientLabel}.`;
-
-          const bypassed = eligibilityBypassReason ? true : this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY);
-          const reason = dto.overrideReason?.trim();
-          if (!bypassed && (!reason || reason.length < 10)) {
-            throw new BadRequestException(
-              `${inTxReason} Assigning anyway requires an override reason of at least 10 characters explaining why client eligibility is waived.`,
-            );
-          }
-          if (!bypassed) {
-            await this.assertCanOverrideEmpanelment(userId, manager);
-          }
-
-          assignment.empanelmentStandingAtCreation = standing ?? 'NONE';
-          assignment.empanelmentId = empanelmentRow?.id ?? null;
-          assignment.empanelmentVersionAtCreation = 1;
-          assignment.empanelmentEffectiveAt = empanelmentRow?.created_at ? new Date(empanelmentRow.created_at) : null;
-          assignment.empanelmentVerifiedAt = new Date();
-          assignment.empanelmentOverrideUsed = true;
-          assignment.empanelmentOverrideReason = reason ?? eligibilityBypassReason ?? 'BYPASSED';
-          assignment.empanelmentOverrideBy = userId;
-        } else {
-          assignment.empanelmentStandingAtCreation = standing;
-          assignment.empanelmentId = empanelmentRow?.id ?? null;
-          assignment.empanelmentVersionAtCreation = 1;
-          assignment.empanelmentEffectiveAt = empanelmentRow?.created_at ? new Date(empanelmentRow.created_at) : null;
-          assignment.empanelmentVerifiedAt = new Date();
-          assignment.empanelmentOverrideUsed = false;
-          assignment.empanelmentOverrideReason = null;
-          assignment.empanelmentOverrideBy = null;
-        }
+        assignment.empanelmentStandingAtCreation = verdict.standing ?? 'NONE';
+        assignment.empanelmentId = verdict.empanelmentId;
+        assignment.empanelmentVersionAtCreation = 1;
+        assignment.empanelmentEffectiveAt = verdict.empanelmentEffectiveAt;
+        assignment.empanelmentVerifiedAt = new Date();
+        assignment.empanelmentOverrideUsed = override.used;
+        assignment.empanelmentOverrideReason = override.used
+          ? (override.viaBypassWindow ? `BYPASS WINDOW: ${override.reason}` : override.reason)
+          : null;
+        assignment.empanelmentOverrideBy = override.used ? userId : null;
       }
 
       if (projectBranch && !projectBranch.scheduledDate && scheduledDateObj) {
@@ -1073,16 +1043,9 @@ export class AssignmentService {
           return committed[0].response_payload as AssignmentEntity;
         }
       }
-      if (
-        err?.code === '23505' ||
-        err?.driverError?.code === '23505' ||
-        String(err?.detail || err?.message).includes('idx_assignments_single_active_branch')
-      ) {
-        throw new ConflictException(
-          'Branch Busy: Another active assignment already exists for this branch.',
-        );
-      }
-      throw err;
+      // Named constraint, named message. This arm used to answer "Branch Busy" for every 23505,
+      // including duplicate assignment numbers and replayed idempotency keys.
+      throwMappedUniqueViolation(err);
     }).then(async (saved) => {
       const branchName = projectBranch.branch?.name ?? 'the branch';
       // `targetDateStr`, not `dto.scheduledDate`: the date is optional on the request and falls
@@ -1582,23 +1545,7 @@ export class AssignmentService {
           if (recoveryErr instanceof ConflictException) throw recoveryErr;
         }
       }
-      if (
-        (err?.code === '23505' || err?.driverError?.code === '23505') &&
-        String(err?.detail || err?.message).includes('idx_assignments_single_active_assayer_day')
-      ) {
-        throw new ConflictException(
-          'Assayer already has an active assignment scheduled for this date.',
-        );
-      }
-      if (
-        (err?.code === '23505' || err?.driverError?.code === '23505') &&
-        String(err?.detail || err?.message).includes('idx_assignments_single_active_branch')
-      ) {
-        throw new ConflictException(
-          'Branch Busy: Another active assignment already exists for this branch.',
-        );
-      }
-      throw err;
+      throwMappedUniqueViolation(err);
     }
 
     const { assignment: saved, autoScheduleResult, alreadyAchieved } = transitionOutcome;
@@ -2131,8 +2078,28 @@ export class AssignmentService {
         }
       }
 
+      /**
+       * Reassignment moves live work between assayers. It is not a way to restart dead work.
+       *
+       * COMPLETED was already refused. CANCELLED was not, and reassigning one set its status
+       * straight back to PENDING — so a cancelled assignment quietly came back to life, with a
+       * new owner, under an audit event that said only "reassigned". The cancellation reason was
+       * cleared on the way past. Nobody approved a reopening, because nothing ever asked.
+       *
+       * Both are refused here. REJECTED stays reassignable on purpose: an assayer declining an
+       * offer is exactly the case the desk reassigns, and that decision was never a cancellation
+       * of the work itself. Reviving cancelled work needs its own command, its own permission and
+       * its own reason; it is not a side effect of this one.
+       */
       if (lockedStatus === AssignmentStatus.COMPLETED) {
         throw new ConflictException('Cannot reassign an assignment that has already been completed.');
+      }
+      if (lockedStatus === AssignmentStatus.CANCELLED) {
+        throw new ConflictException(
+          'ASSIGNMENT_CANCELLED: this assignment was cancelled and cannot be reassigned. '
+          + 'Reopening cancelled work is a separate, explicitly authorised action — create a new '
+          + 'assignment for the branch instead.',
+        );
       }
 
       const assignment = await manager.findOne(AssignmentEntity, {
@@ -2141,18 +2108,77 @@ export class AssignmentService {
       });
       if (!assignment) throw new NotFoundException(`Assignment ${id} not found`);
 
+      /**
+       * The incoming assayer must satisfy the same client eligibility as one being assigned for
+       * the first time — the rule is about who may hold this client's work, and it does not care
+       * which command put them there.
+       *
+       * Reassignment enforced none of it. It checked that the target was ACTIVE and stopped, so
+       * the route around every eligibility control was: create the assignment for someone
+       * eligible, then reassign it to someone barred. Restricted-list entries, rejected and
+       * terminated empanelments, and the override permission were all bypassed by one PUT.
+       *
+       * Same policy object `create()` calls, same lock, same structured decision — a hard block
+       * throws whatever the actor holds, and a soft block needs the written reason and the
+       * server-side permission. The override reason is the reassignment reason: this command
+       * already requires one, and demanding a second would be theatre.
+       */
+      const clientForBranch = assignment.projectBranch?.project?.clientId
+        ?? (await manager.query(
+          `SELECT p.client_id FROM project_branches pb JOIN projects p ON p.id = pb.project_id WHERE pb.id = $1`,
+          [assignment.projectBranchId],
+        ))?.[0]?.client_id
+        ?? null;
+
+      let reassignEligibility: EligibilityBlocked | null = null;
+      let reassignOverride: OverrideOutcome = { used: false, reason: null, by: null, viaBypassWindow: false };
+      if (clientForBranch) {
+        const client = await manager.query(
+          `SELECT client_code, name, restricted_assayers FROM clients WHERE id = $1`,
+          [clientForBranch],
+        );
+        const verdict = await this.targetEligibility.evaluate({
+          assayer: newAssayer,
+          clientId: clientForBranch,
+          clientLabel: client?.[0]?.client_code ?? client?.[0]?.name ?? null,
+          restrictedAssayers: client?.[0]?.restricted_assayers ?? [],
+          manager,
+          lockEmpanelment: true,
+        });
+        if (verdict.outcome === 'BLOCKED') {
+          reassignEligibility = verdict;
+          reassignOverride = await this.targetEligibility.resolveBlock(
+            verdict,
+            { userId, overrideReason: statedReason },
+            manager,
+          );
+        }
+        // The standing that was true at the moment of the move, carried on the record it moved to.
+        assignment.empanelmentStandingAtCreation = verdict.standing ?? 'NONE';
+        assignment.empanelmentId = verdict.empanelmentId;
+        assignment.empanelmentEffectiveAt = verdict.empanelmentEffectiveAt;
+        assignment.empanelmentVerifiedAt = new Date();
+        assignment.empanelmentOverrideUsed = reassignOverride.used;
+        assignment.empanelmentOverrideReason = reassignOverride.used
+          ? (reassignOverride.viaBypassWindow ? `BYPASS WINDOW: ${reassignOverride.reason}` : reassignOverride.reason)
+          : null;
+        assignment.empanelmentOverrideBy = reassignOverride.used ? userId : null;
+      }
+
       if (assignment.scheduledDate) {
+        // Same status set the database index uses. Checked here first only so the caller gets a
+        // message naming the assignment in the way; the index remains the authority.
         const doubleBooked = await manager.findOne(AssignmentEntity, {
           where: {
             assayerId: newAssayerId,
             scheduledDate: assignment.scheduledDate,
-            status: In(COMMITTED_ASSIGNMENT_STATUSES),
+            status: In(DAY_EXCLUSIVE_ASSIGNMENT_STATUSES),
             isActive: true,
           },
         });
         if (doubleBooked && doubleBooked.id !== id) {
           throw new ConflictException(
-            `Assayer double booking: ${newAssayer.displayName} is already committed to assignment ${doubleBooked.assignmentNumber} on ${new Date(assignment.scheduledDate).toISOString().slice(0, 10)}.`,
+            `Assayer double booking: ${newAssayer.displayName} already holds assignment ${doubleBooked.assignmentNumber} (${doubleBooked.status}) on ${new Date(assignment.scheduledDate).toISOString().slice(0, 10)}.`,
           );
         }
       }
@@ -2171,21 +2197,31 @@ export class AssignmentService {
         await manager.save(currentActiveOwner);
       }
 
-      // 2. Open new contiguous interval with ownership_ended_at = NULL
+      // 2. The new interval is opened AFTER the write is verified — see below. Lineage must
+      //    describe what happened, not what was asked for.
       const ownershipStartedAt = currentActiveOwner?.ownershipEndedAt ?? assignment.currentOwnershipStartedAt ?? now;
-      const reassignmentRecord = manager.create(AssignmentReassignmentEntity, {
-        assignmentId: id,
-        previousAssayerId: prevAssayerId,
-        newAssayerId: newAssayerId,
-        reassignedBy: userId,
-        reason: statedReason,
-        requestId: options?.clientRequestId ?? null,
-        ownershipStartedAt,
-        ownershipEndedAt: null, // Active owner has no end timestamp
-      });
-      await manager.save(reassignmentRecord);
 
+      /**
+       * Both of these, not just the first — and the second one is the whole defect.
+       *
+       * `AssignmentEntity` maps two properties onto `assayer_id`: the scalar `assayerId` and the
+       * `@ManyToOne` relation `assayer`. This entity was loaded a few lines above WITH that
+       * relation hydrated, so it still holds the OUTGOING assayer. When both are present, TypeORM
+       * builds the column value from the relation, not from the scalar — so setting `assayerId`
+       * alone produced an UPDATE that wrote every other column faithfully, incremented
+       * `entity_version`, and quietly put the OLD assayer id back in `assayer_id`.
+       *
+       * Nothing failed. `save()` resolved, the response carried the new assayer (it was read off
+       * the in-memory object), the lineage row and the audit row were both written from the same
+       * in-memory intent — and the row on disk never moved. Reproduced deterministically on an
+       * isolated single call: API said `a953bf04`, the database said `e40947e8`, version 1 → 2.
+       * It is not a race; every reassignment through this path did it.
+       *
+       * The verification block after the save is what stops a future edit here from ever being
+       * silent again, whatever the mechanism.
+       */
       assignment.assayerId = newAssayerId;
+      assignment.assayer = newAssayer as any;
       assignment.currentOwnershipStartedAt = ownershipStartedAt;
       assignment.status = AssignmentStatus.PENDING;
       assignment.agreedFee = null;
@@ -2209,6 +2245,61 @@ export class AssignmentService {
       assignment.updatedBy = userId;
 
       const saved = await manager.save(assignment);
+
+      /**
+       * Read the row back, inside the same transaction, and refuse to record anything that did
+       * not actually happen.
+       *
+       * This is the invariant the whole method exists to uphold: after commit, the API response,
+       * the assignment row, the lineage row and the audit event must all agree. Until now nothing
+       * checked it — the lineage and audit were written from the caller's *intent*, so a write
+       * that silently did something else still produced a confident, wrong history. An audit trail
+       * that is wrong is worse than one that is missing, because it is trusted.
+       *
+       * Deliberately a raw read of the two columns rather than a re-`findOne`: this must observe
+       * the database, not the identity map that just told us what we wanted to hear.
+       */
+      const [persisted] = await manager.query(
+        'SELECT assayer_id, entity_version, status FROM assignments WHERE id = $1',
+        [id],
+      ) as Array<{ assayer_id: string; entity_version: number; status: string }>;
+
+      if (!persisted || persisted.assayer_id !== newAssayerId) {
+        throw new ConflictException(
+          `REASSIGNMENT_NOT_PERSISTED: the assignment was not moved to ${newAssayerId} `
+          + `(row now holds ${persisted?.assayer_id ?? 'no row'}). Nothing has been recorded; retry.`,
+        );
+      }
+      if (Number(persisted.entity_version) !== lockedVersion + 1) {
+        throw new ConflictException(
+          `REASSIGNMENT_VERSION_MISMATCH: expected version ${lockedVersion + 1} after the write, `
+          + `found ${persisted.entity_version}. Nothing has been recorded; retry.`,
+        );
+      }
+
+      /**
+       * From here down, every recorded value comes from `persisted` rather than from the request
+       * or the in-memory entity. `previousAssayerId` is the exception that proves the rule: it can
+       * only come from the locked pre-image, which is why it is read from the FOR UPDATE row above
+       * and not from the entity TypeORM handed us.
+       */
+      const persistedAssayerId = persisted.assayer_id;
+      const persistedVersion = Number(persisted.entity_version);
+      const persistedStatus = persisted.status as AssignmentStatus;
+
+      // Lineage, now that there is something real to describe. `previousAssayerId` comes from the
+      // locked pre-image; `newAssayerId` comes from the row as it now stands on disk.
+      const reassignmentRecord = manager.create(AssignmentReassignmentEntity, {
+        assignmentId: id,
+        previousAssayerId: prevAssayerId,
+        newAssayerId: persistedAssayerId,
+        reassignedBy: userId,
+        reason: statedReason,
+        requestId: options?.clientRequestId ?? null,
+        ownershipStartedAt,
+        ownershipEndedAt: null, // Active owner has no end timestamp
+      });
+      await manager.save(reassignmentRecord);
 
       if (options?.clientRequestId && requestHash) {
         await manager.query(
@@ -2234,17 +2325,50 @@ export class AssignmentService {
         entityId: saved.id,
         userId,
         previousState: prevStatus,
-        newState: AssignmentStatus.PENDING,
+        // Every value below is read back from the row, not taken from the request. The whole
+        // point of the verification above is that these two can no longer disagree.
+        newState: persistedStatus,
         remarks: `Reassigned from ${prevAssayerId} to ${newAssayer.displayName} (${newAssayer.assayerCode}). Reason: ${statedReason}`,
         metadata: {
           previousAssayerId: prevAssayerId,
-          newAssayerId: newAssayerId,
+          newAssayerId: persistedAssayerId,
           reassignmentId: reassignmentRecord.id,
           reason: statedReason,
           clientRequestId: options?.clientRequestId,
-          entityVersion: saved.entityVersion,
+          entityVersion: persistedVersion,
         },
       }, { manager });
+
+      /**
+       * A waived eligibility rule gets its own audit event, not a sentence buried in the
+       * reassignment remark. It is a separate decision by a separate authority, and a reviewer
+       * asking "who let a non-empanelled assayer onto this client" must be able to find it by
+       * event type rather than by reading prose. Written after the reassignment event and from
+       * the same verified row, so it can never describe a move that did not happen.
+       */
+      if (reassignEligibility && reassignOverride.used) {
+        await this.auditService.recordEventSafe({
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSIGNMENT_ELIGIBILITY_OVERRIDDEN',
+          entityType: 'ASSIGNMENT',
+          entityId: saved.id,
+          userId,
+          remarks: `${reassignEligibility.message} Overridden on reassignment: ${reassignOverride.reason}`,
+          metadata: {
+            rule: AssignmentRule.CLIENT_ELIGIBILITY,
+            reasonCode: reassignEligibility.reasonCode,
+            requiredPermission: reassignEligibility.requiredPermission,
+            viaBypassWindow: reassignOverride.viaBypassWindow,
+            newAssayerId: persistedAssayerId,
+            entityVersion: persistedVersion,
+          },
+        }, { manager });
+        if (reassignOverride.viaBypassWindow) {
+          this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
+            entityType: 'ASSIGNMENT', entityId: saved.id, userId, detail: reassignEligibility.message,
+          });
+        }
+      }
 
       emit('assignment:reassigned', {
         eventType: 'assignment:reassigned',
@@ -2277,15 +2401,7 @@ export class AssignmentService {
           return rec.response_payload as AssignmentEntity;
         }
       }
-      if (
-        (err?.code === '23505' || err?.driverError?.code === '23505') &&
-        String(err?.detail || err?.message).includes('idx_assignments_single_active_assayer_day')
-      ) {
-        throw new ConflictException(
-          'Assayer already has an active assignment scheduled for this date.',
-        );
-      }
-      throw err;
+      throwMappedUniqueViolation(err);
     });
   }
 

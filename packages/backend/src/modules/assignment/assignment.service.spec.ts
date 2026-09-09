@@ -34,6 +34,7 @@ import { DocumentService } from '../document/document.service';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
+import { AssignmentTargetEligibilityService } from './assignment-target-eligibility.policy';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -326,6 +327,15 @@ const mockNotificationService = {
         { provide: ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },
         // Only reached by the owner-decision `reopen` path (billing.service.spec.ts covers
         // voidPayable itself) — a stub is enough for every other test in this suite.
+        /**
+         * The real policy, not a stub. It is the object both write paths consult about client
+         * eligibility, and this suite has tests — the CLIENT_ELIGIBILITY bypass attribution
+         * below, the override-reason rules — that are *about* that decision. Stubbing it here
+         * would leave those tests asserting against a mock's opinion instead of the rule. It is
+         * given the same `mockDataSource`, settings and rule-bypass mocks the service itself
+         * uses, so a test that arranges an empanelment row arranges it once for both.
+         */
+        AssignmentTargetEligibilityService,
         { provide: BillingEngineService, useValue: { voidPayable: jest.fn() } },
       ],
     }).compile();

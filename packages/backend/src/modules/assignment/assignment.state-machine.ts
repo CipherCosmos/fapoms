@@ -24,8 +24,23 @@ export class AssignmentStateMachine {
     // COMPLETED is a terminal workflow state that cannot be exited through generic transition endpoints.
     // Reopening is strictly a privileged back-office operational command via AssignmentStateMachine.reopen().
     [AssignmentStatus.COMPLETED]: [],
+    // A declined offer goes back on the market: reassigning it to somebody else is the whole
+    // point, and it re-enters as a PENDING offer to that person.
     [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
-    [AssignmentStatus.CANCELLED]: [AssignmentStatus.PENDING],
+    /**
+     * Terminal. A cancellation is a decision that this work is not happening.
+     *
+     * This used to list PENDING, so the table declared that cancelled work could quietly become
+     * a live offer again. Nothing in the API could reach that edge — `POST :id/transition` has no
+     * PENDING branch at all — but `reassignAssignment` set the status directly, bypassing this
+     * table entirely, and so DID revive cancelled assignments: new owner, `cancel_reason` wiped,
+     * under an audit event that said only "reassigned". That path now refuses CANCELLED, and the
+     * table is corrected to match, so the declared machine and the enforced one agree.
+     *
+     * Reviving cancelled work needs its own command with its own permission, reason and audit —
+     * see `reopen()` below for the shape that takes. It is not an edge on this table.
+     */
+    [AssignmentStatus.CANCELLED]: [],
   };
 
   private static validateTransition(current: AssignmentStatus, target: AssignmentStatus) {

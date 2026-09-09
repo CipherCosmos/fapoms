@@ -32,6 +32,33 @@ export class DocumentEntity extends BaseEntity {
   @Column({ name: 'mime_type', type: 'varchar', length: 100, nullable: true })
   mimeType: string | null;
 
+  /**
+   * SHA-256 of the bytes as received, lower-case hex.
+   *
+   * The one field on this row that can answer "is the file on disk the file that was uploaded".
+   * Computed server-side from the buffer; a hash the client sends is checked against this one and
+   * never stored in its place. Null means the row predates integrity recording — see migration
+   * 1796800000000 for why those are not backfilled.
+   */
+  @Column({ name: 'content_sha256', type: 'char', length: 64, nullable: true })
+  contentSha256: string | null;
+
+  /** MIME type read from the file's own leading bytes. Null when the signature was unrecognised. */
+  @Column({ name: 'sniffed_mime_type', type: 'varchar', length: 255, nullable: true })
+  sniffedMimeType: string | null;
+
+  /** What the uploading client claimed, kept as a claim rather than as the answer. */
+  @Column({ name: 'declared_mime_type', type: 'varchar', length: 255, nullable: true })
+  declaredMimeType: string | null;
+
+  /** Set when the bytes and the claim disagree. A renamed file produces a row that says so. */
+  @Column({ name: 'mime_type_mismatch', type: 'boolean', default: false })
+  mimeTypeMismatch: boolean;
+
+  /** When the integrity fields above were derived. Distinguishes "not recorded" from "empty". */
+  @Column({ name: 'integrity_recorded_at', type: 'timestamptz', nullable: true })
+  integrityRecordedAt: Date | null;
+
   @Column({
     type: 'enum',
     enum: DocumentType,

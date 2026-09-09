@@ -21,6 +21,7 @@ import { ValidationModule } from '../validation/validation.module';
 import { BillingEngineModule } from '../billing-engine/billing-engine.module';
 
 import { OperationalIntegrityService } from './operational-integrity.service';
+import { AssignmentTargetEligibilityService } from './assignment-target-eligibility.policy';
 
 @Module({
   imports: [
@@ -38,8 +39,8 @@ import { OperationalIntegrityService } from './operational-integrity.service';
     forwardRef(() => PlanningModule),
   ],
   controllers: [AssignmentController],
-  providers: [AssignmentService, OperationsInboxService, OperationalIntegrityService],
-  exports: [AssignmentService, OperationsInboxService, OperationalIntegrityService],
+  providers: [AssignmentService, OperationsInboxService, OperationalIntegrityService, AssignmentTargetEligibilityService],
+  exports: [AssignmentService, OperationsInboxService, OperationalIntegrityService, AssignmentTargetEligibilityService],
 })
 export class AssignmentModule {}
 

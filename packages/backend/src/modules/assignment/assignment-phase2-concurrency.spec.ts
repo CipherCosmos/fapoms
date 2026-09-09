@@ -44,6 +44,7 @@ import { DocumentService } from '../document/document.service';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
+import { AssignmentTargetEligibilityService } from './assignment-target-eligibility.policy';
 import { OperationalIntegrityService } from './operational-integrity.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
@@ -244,6 +245,19 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
         }
         return [];
       }
+      /**
+       * The read-back `reassignAssignment` performs after its save, to confirm the row actually
+       * moved before it records anything. Answering it from `assignmentsDb` — the same map
+       * `save()` writes into — is what makes this fake behave like a database rather than like a
+       * promise that resolves: a reassignment that did not take is visible here, which is
+       * precisely the property the production code now depends on.
+       */
+      if (/SELECT assayer_id, entity_version, status FROM assignments/.test(sql)) {
+        const row = assignmentsDb.get(params?.[0]);
+        return row
+          ? [{ assayer_id: row.assayerId, entity_version: row.entityVersion ?? 1, status: row.status }]
+          : [];
+      }
       return [];
     }),
     getRepository: jest.fn((entity: any) => {
@@ -389,6 +403,22 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
           useValue: {
             getSettings: jest.fn().mockResolvedValue({ maxNegotiationRounds: 0 }),
             getNumber: jest.fn().mockResolvedValue(500),
+          },
+        },
+        /**
+         * These suites are about concurrency and command authority, not client eligibility, so
+         * the policy is stubbed permissive. Its own enforcement is covered by
+         * `assignment-target-eligibility.policy.spec.ts` and by the live matrix run against both
+         * write paths — a stub here would hide nothing that those do not pin.
+         */
+        {
+          provide: AssignmentTargetEligibilityService,
+          useValue: {
+            evaluate: jest.fn().mockResolvedValue({
+              outcome: 'ALLOWED', standing: 'ACTIVE', empanelmentId: null, empanelmentEffectiveAt: null,
+            }),
+            resolveBlock: jest.fn(),
+            assertMayOverride: jest.fn(),
           },
         },
         {

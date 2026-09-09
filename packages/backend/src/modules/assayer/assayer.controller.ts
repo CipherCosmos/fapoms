@@ -92,6 +92,7 @@ import {
   ASSAYER_ERROR_CODES,
   AUTH_ERROR_CODES,
   DocumentVerification, DocumentRejectionReason,
+  EmpanelmentStatus,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
@@ -727,6 +728,47 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
 
   @IsOptional() @IsEnum(AssayerUnavailableReason)
   unavailableReason?: AssayerUnavailableReason;
+}
+
+/**
+ * A client standing is one of eight named states, and only those.
+ *
+ * The route took `@Body() body: any`, so the request body reached `setEmpanelment` unvalidated
+ * and whatever `status` it carried was written to the column verbatim. Confirmed live: `BANANA`,
+ * `SUPER_ACTIVE`, a lower-case `active` and a string of SQL all returned 200 and all persisted.
+ * The lower-case one is the dangerous shape — `standingAllowsPlanning` compares against the
+ * canonical upper-case set, so an assayer whose standing reads `active` is silently treated as
+ * not empanelled and quietly stops being assignable, with nothing anywhere reporting a problem.
+ *
+ * The service signature already said `status: EmpanelmentStatus`. Only the controller's `any`
+ * stood between that declaration and the request, which is why this is a DTO rather than a check
+ * inside the service: the type was always right, it was simply never enforced. The database has a
+ * CHECK constraint on the same set (migration `1796400000000`), so a write that somehow reaches
+ * it without passing through here is refused too.
+ */
+export class SetEmpanelmentDto {
+  @IsEnum(EmpanelmentStatus, {
+    message: `status must be one of: ${Object.values(EmpanelmentStatus).join(', ')}`,
+  })
+  status: EmpanelmentStatus;
+
+  /** Why the client decided this. Free text — it is a quotation, not a category. */
+  @IsOptional() @IsString() @MaxLength(1000)
+  statusReason?: string;
+
+  /** Which of the client's documents are still outstanding, when the standing says they are. */
+  @IsOptional() @IsString() @MaxLength(1000)
+  documentsOutstanding?: string;
+
+  /** The client's own reference for this empanelment, as they file it. */
+  @IsOptional() @IsString() @MaxLength(100)
+  clientReferenceCode?: string;
+
+  @IsOptional() @IsDateString()
+  decidedAt?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  remarks?: string;
 }
 
 export class UpdateLiveLocationDto {
@@ -2251,7 +2293,7 @@ export class AssayerController {
   async setEmpanelment(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Param('clientId', ParseUUIDPipe) clientId: string,
-    @Body() body: any,
+    @Body() body: SetEmpanelmentDto,
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {

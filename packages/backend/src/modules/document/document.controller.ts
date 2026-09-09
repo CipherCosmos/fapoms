@@ -28,6 +28,7 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
+import { deriveFileIntegrity, verifyClientHash } from './document-integrity';
 
 /**
  * Multer memory-storage configuration shared by the single-file document upload routes.
@@ -235,7 +236,24 @@ export class DocumentController {
     }
     const targetType = type;
 
-    const savedPath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype);
+    /**
+     * Derived before the bytes leave this scope, because this is the only place they exist.
+     *
+     * Everything the row used to record about content came from the request: `file.mimetype` is
+     * the `Content-Type` the client wrote into its own multipart header, and there was no hash at
+     * all. A client-supplied `sha256` is accepted here only to be checked against the one computed
+     * from the buffer — it is a useful transit checksum and never the authority.
+     */
+    const integrity = deriveFileIntegrity(file.buffer, file.mimetype);
+    const clientHash = verifyClientHash(integrity, (req?.body?.sha256 ?? null) as string | null);
+    if (clientHash.supplied && !clientHash.matches) {
+      throw new BadRequestException(
+        'UPLOAD_CHECKSUM_MISMATCH: the bytes received do not match the sha256 supplied with them. '
+        + 'Nothing was stored. Retry the upload.',
+      );
+    }
+
+    const savedPath = await this.storage.saveFile(file.originalname, file.buffer, integrity.effectiveMimeType);
 
     // Customer master data upload endpoint accepts documents of type CUSTOMER_MASTER_DATA
 
@@ -247,6 +265,7 @@ export class DocumentController {
       mimeType: file.mimetype,
       type: targetType,
       customerMasterVersionId,
+      integrity,
     }, req?.user?.id || '00000000-0000-0000-0000-000000000000');
 
     return { success: true, data: doc };
@@ -509,7 +528,18 @@ export class DocumentController {
       if (assignment?.projectBranchId) targetId = assignment.projectBranchId;
     }
 
-    const savedFilePath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype || 'application/pdf');
+    // Same derivation as the back-office route: a handset's declared content type is a claim
+    // like any other, and the field PDF is the evidence an audit rests on.
+    const integrity = deriveFileIntegrity(file.buffer, file.mimetype || 'application/pdf');
+    const clientHash = verifyClientHash(integrity, (req?.body?.sha256 ?? null) as string | null);
+    if (clientHash.supplied && !clientHash.matches) {
+      throw new BadRequestException(
+        'UPLOAD_CHECKSUM_MISMATCH: the bytes received do not match the sha256 supplied with them. '
+        + 'Nothing was stored. Retry the upload.',
+      );
+    }
+
+    const savedFilePath = await this.storage.saveFile(file.originalname, file.buffer, integrity.effectiveMimeType);
     let doc = await this.documentService.create(
       {
         assessmentId: targetId,
@@ -518,6 +548,7 @@ export class DocumentController {
         fileSize: file.size,
         mimeType: file.mimetype || 'application/pdf',
         type: DocumentType.AUDITED_RETURN_PDF,
+        integrity,
       },
       req.user.id,
     );

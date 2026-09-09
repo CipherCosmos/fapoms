@@ -42,6 +42,35 @@ export const IN_FLIGHT_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
 ];
 
 /**
+ * The statuses that make an assayer's day exclusive — the application half of a rule whose
+ * other half is a database constraint.
+ *
+ * `idx_assignments_single_active_assayer_day` is a partial unique index on
+ * `(assayer_id, scheduled_date)` covering PENDING, ACCEPTED, CHECKED_IN and IN_PROGRESS. The
+ * application was checking the same rule against `COMMITTED_ASSIGNMENT_STATUSES`, which omits
+ * PENDING — so the two layers disagreed about exactly one status, and on exactly that status
+ * the disagreement was visible to users: the service happily allowed a second PENDING offer for
+ * the same assayer on the same day, the index refused the insert, and the request came back as a
+ * raw unique-violation instead of the policy's own message. The rule was real, it was simply
+ * being stated by the wrong layer.
+ *
+ * Widened rather than narrowing the index: an unanswered offer does occupy the day, because
+ * accepting it is a one-click action and nothing re-checks the day in between. The index is the
+ * authority; this constant exists so the application can refuse first, with a message that says
+ * which assignment is in the way. Change one and you must change the other — the integration
+ * test in `assignment-double-booking.spec.ts` fails if they drift.
+ *
+ * Distinct from `COMMITTED_ASSIGNMENT_STATUSES` on purpose: capacity across a week and
+ * exclusivity within a day are different questions, and PENDING answers them differently.
+ */
+export const DAY_EXCLUSIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
+  AssignmentStatus.PENDING,
+  AssignmentStatus.ACCEPTED,
+  AssignmentStatus.CHECKED_IN,
+  AssignmentStatus.IN_PROGRESS,
+];
+
+/**
  * Reached the end of its life. Expressed by status alone — `isActive` means "not deleted",
  * never "finished".
  */

@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ValidationService } from '../validation/validation.service';
 import { Repository, In, IsNull } from 'typeorm';
 import { DocumentEntity } from './document.entity';
+import { DerivedFileIntegrity } from './document-integrity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -62,6 +63,15 @@ export interface CreateDocumentDto {
   type: DocumentType;
   /** For a generated audit packet: the client batch it was produced from. */
   customerMasterVersionId?: string;
+  /**
+   * What the bytes turned out to be, derived by the caller that actually held them.
+   *
+   * Passed in rather than computed here because this method takes a path, not a buffer — the
+   * route that received the upload is the only place the real bytes exist. Where it is absent
+   * (a document recorded from an object the API never buffered), the integrity columns stay
+   * null, which reads as "not recorded" and never as "verified".
+   */
+  integrity?: DerivedFileIntegrity;
 }
 
 @Injectable()
@@ -580,8 +590,21 @@ export class DocumentService {
       projectBranchId: pb?.id ?? null,
       fileName: dto.fileName,
       filePath: dto.filePath,
-      fileSize: dto.fileSize,
-      mimeType: dto.mimeType ?? null,
+      /**
+       * Derived values win over declared ones wherever both exist.
+       *
+       * `fileSize` and `mimeType` used to be whatever the request said. The byte count and the
+       * sniffed type come from the file itself, so a client that mis-states either — by accident
+       * or by renaming an executable to .pdf — no longer decides what this row claims the
+       * document is. The uploader's own claim is kept beside it, labelled as a claim.
+       */
+      fileSize: dto.integrity?.byteLength ?? dto.fileSize,
+      mimeType: dto.integrity?.effectiveMimeType ?? dto.mimeType ?? null,
+      contentSha256: dto.integrity?.sha256 ?? null,
+      sniffedMimeType: dto.integrity?.sniffedMimeType ?? null,
+      declaredMimeType: dto.integrity?.declaredMimeType ?? dto.mimeType ?? null,
+      mimeTypeMismatch: dto.integrity?.mimeTypeMismatch ?? false,
+      integrityRecordedAt: dto.integrity ? new Date() : null,
       type: dto.type,
       customerMasterVersionId: dto.customerMasterVersionId ?? null,
       status: DocumentStatus.UPLOADED,

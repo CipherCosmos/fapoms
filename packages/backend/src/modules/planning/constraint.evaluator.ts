@@ -8,7 +8,7 @@ import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assaye
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { businessDateKey, BypassableRule, AssignmentRule } from '@fapoms/shared';
-import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
+import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
 export interface ConstraintContext {
@@ -135,12 +135,13 @@ export class ConstraintEvaluator {
         // `scheduledDate` is a `date` column — match on the date-only key, not a Date-with-time,
         // which never equals a midnight `date` value in Postgres and silenced this guard.
         scheduledDate: businessDateKey(scheduledDate) as any,
-        // Every status that means the assayer's day is already committed — not just ACCEPTED.
-        // Checking in moves an assignment to CHECKED_IN, which made the person invisible to
-        // this guard: they could be booked a second branch for the same date while standing in
-        // the first one. `COMMITTED_ASSIGNMENT_STATUSES` is the shared answer to "is this day
-        // spoken for", and exists precisely so the two callers of this question agree.
-        status: In(COMMITTED_ASSIGNMENT_STATUSES),
+        // Every status that makes the day exclusive — not just ACCEPTED, and not only the
+        // committed ones. Checking in moves an assignment to CHECKED_IN, which made the person
+        // invisible to this guard: they could be booked a second branch for the same date while
+        // standing in the first one. PENDING counts too, because
+        // `idx_assignments_single_active_assayer_day` counts it, and a rule the database will
+        // enforce anyway is better stated here where the message can name the conflict.
+        status: In(DAY_EXCLUSIVE_ASSIGNMENT_STATUSES),
         isActive: true,
       },
     });
