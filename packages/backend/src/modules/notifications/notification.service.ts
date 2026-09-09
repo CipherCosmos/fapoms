@@ -33,6 +33,33 @@ export interface NotificationPage {
 /** Every category a recipient can set a preference for — the fixed set the catalog uses. */
 export const ALL_NOTIFICATION_CATEGORIES = Object.values(NotificationCategory);
 
+/**
+ * The tenant ceiling on everything a recipient reads: their bell, their badge, their
+ * mark-as-read.
+ *
+ * A scoped write with an unscoped read is not a fix. Every method below already matches on the
+ * recipient id, which looks like it makes this redundant — it does not, and the two cases where
+ * it does not are the reasons this exists:
+ *
+ *  - Rows that are already in the wrong bell. Fan-out was by role alone for the whole life of
+ *    this table (finding F-07), so a deployment that ever had two organisations has rows sitting
+ *    in inboxes they were never meant to reach. Those rows carry the EVENT's organisation once
+ *    the backfill has run, so this predicate stops showing them without deleting anybody's
+ *    history.
+ *  - Any future write path that picks the wrong recipient. `RECORD_OWNER` and `ASSIGNED_ASSAYER`
+ *    are individually addressed by the caller and deliberately not tenant-filtered on the write
+ *    side (see `NotificationDispatchService`); this is what catches a caller that names somebody
+ *    from another organisation.
+ *
+ * `IS NULL` passes, and that is deliberate rather than an oversight: null is a platform-scoped
+ * type (a data-wipe approval, a CERT-In clock, a support reply) or a legacy row the backfill
+ * could not attribute. Treating null as "hide it" would empty out real inboxes to no benefit —
+ * a null row is still only ever returned to the one recipient it is addressed to.
+ */
+function viewerOrganizationPredicate(column: string): string {
+  return `(${column} IS NULL OR ${column} = :viewerOrganizationId)`;
+}
+
 export interface PreferenceRow {
   category: NotificationCategory;
   inApp: boolean;
@@ -168,8 +195,18 @@ export class NotificationService {
    * Unbounded before this — a long-lived account's entire history came back on every open of
    * the bell. Paginated now, and `unreadCount` is returned alongside the page so the badge
    * reflects the whole inbox rather than just whatever page happens to be showing.
+   *
+   * `viewerOrganizationId` comes from the authenticated principal (`req.user.organizationId`) and
+   * is the tenant ceiling — see `viewerOrganizationPredicate`. Undefined/null means the principal
+   * carries no organisation, in which case the recipient match is the only filter, exactly as
+   * before; that is not a hole so much as the absence of a second line, and it is why the assayer
+   * principal was taught to carry the field (`AuthService.loadPrincipal`).
    */
-  async findByUser(recipientId: string, opts: FindNotificationsOptions = {}): Promise<NotificationPage> {
+  async findByUser(
+    recipientId: string,
+    opts: FindNotificationsOptions = {},
+    viewerOrganizationId?: string | null,
+  ): Promise<NotificationPage> {
     const limit = Math.min(opts.limit ?? 25, 100);
     const offset = Math.max(opts.offset ?? 0, 0);
 
@@ -177,6 +214,10 @@ export class NotificationService {
       .createQueryBuilder('n')
       .where('(n.userId = :rid OR n.assayerId = :rid)', { rid: recipientId })
       .andWhere('n.isActive = true');
+
+    if (viewerOrganizationId) {
+      qb.andWhere(viewerOrganizationPredicate('n.organizationId'), { viewerOrganizationId });
+    }
 
     // Categories this recipient has switched off for in-app. The settings screen tells them
     // "you will stop seeing these in your notification bell entirely" and nothing enforced it —
@@ -198,7 +239,10 @@ export class NotificationService {
       .take(limit)
       .getManyAndCount();
 
-    const unreadCount = await this.getUnreadCount(recipientId);
+    // Same ceiling as the list, or the badge would count rows the list refuses to show — a
+    // number that can never be cleared, which is the exact failure the muted-category filter
+    // below already had to be fixed for.
+    const unreadCount = await this.getUnreadCount(recipientId, viewerOrganizationId);
 
     return { items, total, unreadCount };
   }
@@ -230,24 +274,44 @@ export class NotificationService {
    * neither, and once they are excluded from the list a badge that still counted them would
    * show unread items the user cannot open — a number that can never be cleared.
    */
-  async getUnreadCount(recipientId: string): Promise<number> {
+  async getUnreadCount(recipientId: string, viewerOrganizationId?: string | null): Promise<number> {
     const muted = await this.mutedInAppCategories(recipientId);
     const qb = this.notificationRepository
       .createQueryBuilder('n')
       .where('(n.userId = :rid OR n.assayerId = :rid)', { rid: recipientId })
       .andWhere('n.isActive = true')
       .andWhere('n.isRead = false');
+    if (viewerOrganizationId) {
+      qb.andWhere(viewerOrganizationPredicate('n.organizationId'), { viewerOrganizationId });
+    }
     if (muted.length) qb.andWhere('n.category NOT IN (:...muted)', { muted });
     return qb.getCount();
   }
 
-  async markAsRead(id: string, recipientId: string): Promise<NotificationEntity> {
-    const notif = await this.notificationRepository.findOne({
-      where: [
-        { id, userId: recipientId, isActive: true },
-        { id, assayerId: recipientId, isActive: true },
-      ],
-    });
+  /**
+   * One recipient's own notification, or nothing.
+   *
+   * A query builder rather than the array `where` this used to be. The two forms are not
+   * equivalent under a second predicate: TypeORM OR-s an array, so adding the organisation
+   * ceiling to it means adding it to EVERY branch, and adding it once alongside the array
+   * produces `(mine) OR (mine) OR (org matches)` — a clause that matches the whole
+   * organisation and widens the query instead of narrowing it. That hazard is written up in
+   * `TenantScopedRepository.scopedWhere`; the grouped builder below cannot express it.
+   */
+  private ownRow(id: string, recipientId: string, viewerOrganizationId?: string | null) {
+    const qb = this.notificationRepository
+      .createQueryBuilder('n')
+      .where('n.id = :id', { id })
+      .andWhere('(n.userId = :rid OR n.assayerId = :rid)', { rid: recipientId })
+      .andWhere('n.isActive = true');
+    if (viewerOrganizationId) {
+      qb.andWhere(viewerOrganizationPredicate('n.organizationId'), { viewerOrganizationId });
+    }
+    return qb.getOne();
+  }
+
+  async markAsRead(id: string, recipientId: string, viewerOrganizationId?: string | null): Promise<NotificationEntity> {
+    const notif = await this.ownRow(id, recipientId, viewerOrganizationId);
 
     if (!notif) {
       throw new NotFoundException(`Notification ${id} not found.`);
@@ -267,13 +331,8 @@ export class NotificationService {
    * later"). `readAt` is cleared rather than left stamped with a read time that no longer
    * describes the notification's current state.
    */
-  async markAsUnread(id: string, recipientId: string): Promise<NotificationEntity> {
-    const notif = await this.notificationRepository.findOne({
-      where: [
-        { id, userId: recipientId, isActive: true },
-        { id, assayerId: recipientId, isActive: true },
-      ],
-    });
+  async markAsUnread(id: string, recipientId: string, viewerOrganizationId?: string | null): Promise<NotificationEntity> {
+    const notif = await this.ownRow(id, recipientId, viewerOrganizationId);
 
     if (!notif) {
       throw new NotFoundException(`Notification ${id} not found.`);
@@ -287,15 +346,25 @@ export class NotificationService {
     return this.notificationRepository.save(notif);
   }
 
-  /** For the "mark all read" action — one write rather than N round trips from the UI. */
-  async markAllAsRead(recipientId: string): Promise<number> {
-    const result = await this.notificationRepository
+  /**
+   * For the "mark all read" action — one write rather than N round trips from the UI.
+   *
+   * Carries the same ceiling as the list it clears. Without it, "mark all read" would silently
+   * write to rows the recipient's own bell refuses to show them — the one place in this service
+   * where an unscoped read becomes an unscoped WRITE.
+   */
+  async markAllAsRead(recipientId: string, viewerOrganizationId?: string | null): Promise<number> {
+    const qb = this.notificationRepository
       .createQueryBuilder()
       .update(NotificationEntity)
       .set({ isRead: true, status: NotificationStatus.READ, readAt: new Date(), updatedBy: recipientId })
       .where('(user_id = :rid OR assayer_id = :rid)', { rid: recipientId })
-      .andWhere('is_read = false')
-      .execute();
+      .andWhere('is_read = false');
+    if (viewerOrganizationId) {
+      qb.andWhere(viewerOrganizationPredicate('organization_id'), { viewerOrganizationId });
+    }
+
+    const result = await qb.execute();
 
     return result.affected ?? 0;
   }

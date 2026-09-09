@@ -108,6 +108,26 @@ export class AssignmentStateMachine {
    * The test is `checkedInAt`, not the status — that is the actual evidence, and it survives an
    * assignment moving back and forth between CHECKED_IN and IN_PROGRESS on a retried check-in.
    */
+  /**
+   * Starting work on site.
+   *
+   * Added because `AssignmentService` was setting `IN_PROGRESS` by hand. Its `start` branch
+   * assigned `assignment.status` directly with no validation at all, while the ACCEPTED, REJECTED
+   * and CANCELLED branches beside it all went through this class — so `POST /assignments/:id/start`
+   * moved a brand-new PENDING offer straight to IN_PROGRESS, with `checked_in_at` still null. The
+   * assayer had never accepted it and had never been anywhere near the branch.
+   *
+   * `VALID_PATHS` says work starts from CHECKED_IN, and that is the whole point of the ordering:
+   * the check-in is geofenced, so "in progress" is supposed to mean somebody is actually there.
+   * Writing the column directly skipped both the acceptance record and the geofence.
+   */
+  static startWork(assignment: AssignmentEntity, userId: string) {
+    AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.IN_PROGRESS);
+    const prev = assignment.status;
+    assignment.status = AssignmentStatus.IN_PROGRESS;
+    return { previousState: prev, newState: assignment.status, userId };
+  }
+
   static completeAudit(assignment: AssignmentEntity, userId: string, reason?: string) {
     AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.COMPLETED);
 

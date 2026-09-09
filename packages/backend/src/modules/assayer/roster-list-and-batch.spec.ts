@@ -284,16 +284,36 @@ describe('RosterRecordsService.resolveIssues', () => {
       ['i-2', { id: 'i-2', resolvedAt: null }],
       ['i-3', { id: 'i-3', resolvedAt: null }],
     ]);
+    /**
+     * A chainable query-builder stub, because the open-issue count is now read through the same
+     * scoped builder `listIssues` uses rather than through a bare `issues.count()`.
+     *
+     * That change is the tenancy fix, not an incidental refactor: `count()` counts every
+     * organisation's rows, so the number a batch reported as "what the queue should show next"
+     * was the whole estate's backlog rather than the caller's. The builder carries the
+     * organisation predicate; the bare count could not.
+     */
+    const issueQb: any = {
+      leftJoin: jest.fn(() => issueQb),
+      addSelect: jest.fn(() => issueQb),
+      orderBy: jest.fn(() => issueQb),
+      take: jest.fn(() => issueQb),
+      where: jest.fn(() => issueQb),
+      andWhere: jest.fn(() => issueQb),
+      getMany: jest.fn().mockResolvedValue([]),
+      getCount: jest.fn().mockResolvedValue(280),
+    };
     issues = {
       findOne: jest.fn(({ where }: any) => Promise.resolve(rows.get(where.id) ?? null)),
       save: jest.fn((row: any) => Promise.resolve(row)),
       count: jest.fn().mockResolvedValue(280),
+      createQueryBuilder: jest.fn(() => issueQb),
     };
 
     const mod = await Test.createTestingModule({
       providers: [
         RosterRecordsService,
-        { provide: getRepositoryToken(AssayerEntity), useValue: {} },
+        { provide: getRepositoryToken(AssayerEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: getRepositoryToken(AssayerReferenceEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerClientEmpanelmentEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: {} },
@@ -360,8 +380,16 @@ describe('RosterRecordsService.resolveIssues', () => {
   it('returns the queue depth the batch left behind', async () => {
     const out = await service.resolveIssues(['i-1'], 'Decided.', ACTOR);
     expect(out.openCount).toBe(280);
-    // Ordered by when jest actually invoked them, not by where they appear in the source.
-    expect(issues.count.mock.invocationCallOrder[0])
+    /**
+     * Ordered by when jest actually invoked them, not by where they appear in the source.
+     *
+     * The count comes from `listIssues`'s scoped builder now, not from `issues.count()`, so the
+     * ordering is asserted on `createQueryBuilder`. The change was the tenancy fix: a bare
+     * `count()` counts every organisation's rows, so the number this reported as "what the queue
+     * should show next" was the whole estate's backlog rather than the caller's.
+     */
+    expect(issues.createQueryBuilder.mock.invocationCallOrder[0])
       .toBeGreaterThan(issues.save.mock.invocationCallOrder[0]);
+    expect(issues.count).not.toHaveBeenCalled();
   });
 });

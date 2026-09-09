@@ -19,10 +19,30 @@ import { AssayerLifecycleStatus } from './enums';
  * something the server will refuse.
  */
 export const ASSAYER_LIFECYCLE_TRANSITIONS: Record<string, AssayerLifecycleStatus[]> = {
-  [AssayerLifecycleStatus.INVITED]: [AssayerLifecycleStatus.DOCUMENT_VERIFICATION],
+  /**
+   * The revocation edges (2026-09-09). INVITED used to have exactly one way out — forward, into
+   * document verification — so an invitation nobody ever accepted could not be closed through the
+   * lifecycle at all. The only lifecycle move available said something untrue about a person who
+   * had never replied, and 79 such records were sitting on the live roster.
+   *
+   * The way out existed, but it was hidden: `AssayerService.operatorRevokeInvitation` wrote
+   * `lifecycleStatus = ARCHIVED` straight onto the entity, from INVITED or DOCUMENT_VERIFICATION,
+   * bypassing this map entirely. So the system held two contradictory beliefs at once — the
+   * transition endpoint refused the move with a 400 while the recovery endpoint performed it, and
+   * the UI, which reads this map to decide what to offer, could not know the edge existed.
+   *
+   * Stated here instead. The revoke route still exists and still demands its substantive reason,
+   * but it now delegates to the lifecycle authority like everything else, and the roster can
+   * offer the move directly.
+   */
+  [AssayerLifecycleStatus.INVITED]: [
+    AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+    AssayerLifecycleStatus.ARCHIVED,
+  ],
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: [
     AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
     AssayerLifecycleStatus.INACTIVE,
+    AssayerLifecycleStatus.ARCHIVED,
   ],
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: [
     AssayerLifecycleStatus.TRAINING,
@@ -167,13 +187,48 @@ export function canTransitionAssayerLifecycle(from: string, to: string): boolean
 }
 
 /**
- * States that are an outcome, not a step on the way to somewhere else.
+ * States a route may END at but never PASS THROUGH, in either direction.
  *
- * Being deactivated, suspended, resigned or terminated is a thing that happened to someone; it is
- * never a stage passed through en route to another. They remain valid destinations — just not
- * waypoints.
+ * Each of these is a decision somebody has to make and answer for, not a corridor. A bulk action
+ * that walks one of them has manufactured that decision on the operator's behalf and stamped the
+ * destination's reason onto it.
+ *
+ * Two of these were added after the lifecycle certification found the bulk route reaching, in one
+ * call, edges the single-transition route refuses outright:
+ *
+ *   SUSPENDED — `ACTIVE → TERMINATED` is illegal by design: a dismissal is reached only through a
+ *     suspension, because the suspension is where the investigation goes on the record BEFORE the
+ *     decision. The path-finder was routing straight through it, so "select twelve people → set
+ *     them Terminated" wrote twelve suspensions nobody had decided on, each lasting milliseconds
+ *     and each carrying the dismissal's reason verbatim. The control survived on paper only.
+ *
+ *   INVITED — the rehire edge. `RESIGNED/TERMINATED → INVITED` exists so somebody coming back
+ *     walks the whole document → background → training chain again; see the map above for why.
+ *     Traversing it made `RESIGNED → ACTIVE` a single bulk call that flipped through all five
+ *     hops in milliseconds, verifying nothing. Re-onboarding cannot be a corridor to anywhere.
+ *
+ * INACTIVE is deliberately NOT here. It has a genuine corridor use on the way out — closing a
+ * trainee's file really is TRAINING → INACTIVE → ARCHIVED, and nothing is skipped by taking it —
+ * which is what the `leaving` relaxation below exists for.
  */
-const NOT_A_WAYPOINT: AssayerLifecycleStatus[] = [
+const NEVER_A_WAYPOINT: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.INVITED,
+  AssayerLifecycleStatus.SUSPENDED,
+  AssayerLifecycleStatus.RESIGNED,
+  AssayerLifecycleStatus.TERMINATED,
+  AssayerLifecycleStatus.ARCHIVED,
+];
+
+/**
+ * States that are an outcome rather than a step, and so may only be passed through when the
+ * destination is itself an outcome — i.e. on the way out of the workforce, never back into it.
+ */
+const NOT_A_WAYPOINT_INBOUND: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.INACTIVE,
+];
+
+/** Destinations that make a walk an exit rather than a return. */
+const OUTCOME_DESTINATIONS: AssayerLifecycleStatus[] = [
   AssayerLifecycleStatus.INACTIVE,
   AssayerLifecycleStatus.SUSPENDED,
   AssayerLifecycleStatus.RESIGNED,
@@ -198,7 +253,7 @@ const NOT_A_WAYPOINT: AssayerLifecycleStatus[] = [
  */
 export function assayerLifecyclePath(from: string, to: string): AssayerLifecycleStatus[] | null {
   if (from === to) return [];
-  const leaving = NOT_A_WAYPOINT.includes(to as AssayerLifecycleStatus);
+  const leaving = OUTCOME_DESTINATIONS.includes(to as AssayerLifecycleStatus);
   const queue: Array<{ state: string; path: AssayerLifecycleStatus[] }> = [{ state: from, path: [] }];
   const seen = new Set<string>([from]);
 
@@ -208,7 +263,10 @@ export function assayerLifecyclePath(from: string, to: string): AssayerLifecycle
       if (seen.has(next)) continue;
       const nextPath = [...path, next];
       if (next === to) return nextPath;
-      if (!leaving && NOT_A_WAYPOINT.includes(next)) continue;
+      // A decision is never a corridor, whichever way the walk is heading.
+      if (NEVER_A_WAYPOINT.includes(next)) continue;
+      // An outcome may be passed through on the way out, never on the way back in.
+      if (!leaving && NOT_A_WAYPOINT_INBOUND.includes(next)) continue;
       seen.add(next);
       queue.push({ state: next, path: nextPath });
     }

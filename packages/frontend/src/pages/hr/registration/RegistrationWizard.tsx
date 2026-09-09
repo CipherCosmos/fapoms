@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   User, MapPin, CreditCard, FileText, Users, Building2, ClipboardCheck,
@@ -504,6 +504,9 @@ function useStepParam<K extends string>(keys: readonly K[], fallback: K): [K, (k
   return [value, set];
 }
 
+/** The sticky app header is 56px (see Header.tsx); a little air on top of it. */
+const SCROLL_CLEARANCE_PX = 72;
+
 export const RegistrationWizard: React.FC<{
   /** Leaving the page — the header's back-link. Confirmed first when the current step is dirty. */
   onClose: () => void;
@@ -538,6 +541,32 @@ export const RegistrationWizard: React.FC<{
   const stepIndex = REGISTRATION_STEP_KEYS.indexOf(step);
   const [furthest, setFurthest] = useState(0);
   useEffect(() => { setFurthest((f) => Math.max(f, stepIndex)); }, [stepIndex]);
+
+  /**
+   * Put the failure where the clerk is looking.
+   *
+   * The banner renders at the very top of the wizard, and the app header is sticky and 56px tall.
+   * A clerk who has scrolled down to the phone field, typed something the server rejects and
+   * pressed Save saw *nothing happen*: the banner appeared off-screen above them, and where the
+   * page did happen to be near the top the header painted straight over it —
+   * `document.elementFromPoint` at the banner's own coordinates returned the header. The request
+   * had failed with a perfectly good message and there was no way to know.
+   *
+   * `scrollMarginTop` is what keeps it clear of the header; browsers honour it for
+   * `scrollIntoView`, which is exactly the case a plain `block: 'start'` gets wrong under any
+   * sticky chrome. The clearance is the header's own height plus a little air.
+   */
+  const errorBannerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!reg.error) return;
+    // Guarded, because this scroll exists to REVEAL an error and must never become one. jsdom has
+    // no `scrollIntoView` at all, and an embedding that lacks it would otherwise throw during the
+    // render that is trying to tell somebody their save failed — losing the message entirely,
+    // which is the exact defect this effect was added to fix.
+    const el = errorBannerRef.current;
+    if (typeof el?.scrollIntoView !== 'function') return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [reg.error]);
 
   /**
    * Did the clerk try to move past THIS step? Read by every field on it to decide whether an
@@ -888,7 +917,7 @@ export const RegistrationWizard: React.FC<{
           the box focused rather than leaving the clerk to hunt for what "Aadhaar Number" means here.
         */
         <AlertBanner type="error" onClose={reg.dismissError}>
-          <div>{reg.error}</div>
+          <div ref={errorBannerRef} style={{ scrollMarginTop: SCROLL_CLEARANCE_PX, whiteSpace: 'pre-line' }}>{reg.error}</div>
           {mappedFieldsFromError(reg.error).length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: '8px' }}>
               {mappedFieldsFromError(reg.error).map((f) => (

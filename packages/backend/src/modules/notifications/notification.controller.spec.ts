@@ -93,14 +93,14 @@ describe('NotificationController', () => {
       expect(result.meta).toEqual({ total: 1, unreadCount: 1, limit: 25, offset: 0 });
       expect(mockNotifService.findByUser).toHaveBeenCalledWith('u1', {
         category: undefined, unreadOnly: false, limit: 25, offset: 0,
-      });
+      }, null);
     });
 
     it('passes the category filter through unchanged', async () => {
       await controller.findMyNotifications({ user: { id: 'u1' } }, 'ASSIGNMENT' as any, true, 10, 0);
       expect(mockNotifService.findByUser).toHaveBeenCalledWith('u1', {
         category: 'ASSIGNMENT', unreadOnly: true, limit: 10, offset: 0,
-      });
+      }, null);
     });
   });
 
@@ -117,7 +117,7 @@ describe('NotificationController', () => {
       mockNotifService.markAllAsRead.mockResolvedValueOnce(7);
       const result: any = await controller.markAllAsRead({ user: { id: 'u1' } });
       expect(result.data).toEqual({ updated: 7 });
-      expect(mockNotifService.markAllAsRead).toHaveBeenCalledWith('u1');
+      expect(mockNotifService.markAllAsRead).toHaveBeenCalledWith('u1', null);
     });
   });
 
@@ -144,6 +144,30 @@ describe('NotificationController', () => {
       );
       expect(result.success).toBe(true);
       expect(mockNotifService.setPreference).toHaveBeenCalledWith('u1', false, 'ASSIGNMENT', { push: false });
+    });
+  });
+  /**
+   * The tenant ceiling on every recipient-facing read comes off the principal, not off a query
+   * parameter — a caller must not be able to choose which organisation's notifications to read.
+   * A principal carrying no organisation passes null, which the service treats as "no ceiling"
+   * so that an unassigned account still sees its own notifications rather than an empty bell.
+   */
+  describe('viewer organisation', () => {
+    it('passes the principal\'s organisation to every read', async () => {
+      const req = { user: { id: 'u1', organizationId: 'org-a' } };
+      mockNotifService.findByUser.mockResolvedValueOnce({ items: [], total: 0, unreadCount: 0 });
+
+      await controller.findMyNotifications(req, undefined, false, 25, 0);
+      await controller.unreadCount(req);
+      await controller.markAllAsRead(req);
+      await controller.markAsRead('11111111-1111-4111-8111-111111111111', req);
+
+      expect(mockNotifService.findByUser).toHaveBeenCalledWith('u1', expect.anything(), 'org-a');
+      expect(mockNotifService.getUnreadCount).toHaveBeenCalledWith('u1', 'org-a');
+      expect(mockNotifService.markAllAsRead).toHaveBeenCalledWith('u1', 'org-a');
+      expect(mockNotifService.markAsRead).toHaveBeenCalledWith(
+        '11111111-1111-4111-8111-111111111111', 'u1', 'org-a',
+      );
     });
   });
 });

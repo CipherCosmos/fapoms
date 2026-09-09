@@ -141,7 +141,11 @@ const ToastCard: React.FC<{ t: ToastRecord; paused: boolean; onDismiss: () => vo
 
       <div style={{ flex: 1, minWidth: 0 }}>
         {t.title && <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{t.title}</div>}
-        <div style={{ fontSize: 12.5, lineHeight: 1.45, color: t.title ? 'var(--text-secondary)' : 'var(--text-primary)', overflowWrap: 'anywhere' }}>
+        {/* `pre-line` so a multi-line message survives: a validation failure with several
+            problems now lists each one on its own line (see `joinServerMessage`), and
+            without this they collapse into one run-on sentence. Wrapping is unaffected —
+            `pre-line` collapses spaces and still wraps, it only keeps the newlines. */}
+        <div style={{ fontSize: 12.5, lineHeight: 1.45, color: t.title ? 'var(--text-secondary)' : 'var(--text-primary)', overflowWrap: 'anywhere', whiteSpace: 'pre-line' }}>
           {t.message}
         </div>
         {t.action && (

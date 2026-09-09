@@ -90,6 +90,26 @@ export class AssayerStateMachine {
     return new AssayerTrainingStartedEvent(assayer.id, prev, assayer.lifecycleStatus, userId);
   }
 
+  /**
+   * Is the move to ACTIVE legal, without making it?
+   *
+   * Exists for one caller and one reason. `AssayerService`'s identity gate has to run before an
+   * activation is applied — it can refuse the activation outright under `enforce` — but it must
+   * NOT run before the edge itself is known to be legal. It used to, and the consequence was
+   * that a refused `INVITED → ACTIVE` still wrote "Activated without a verified identity" onto
+   * the timeline of somebody who was never activated, and under `enforce` answered with the
+   * wrong error entirely: go and chase documents, when the real problem was that the transition
+   * does not exist.
+   *
+   * Splitting the check out is what lets the service order the two correctly. Deliberately not a
+   * general `assertCanTransition(target)`: the only gate that has to interleave like this is the
+   * identity one, and a general form invites callers to validate here and apply somewhere else,
+   * which is the two-writers shape this class exists to prevent.
+   */
+  static assertCanActivate(assayer: AssayerEntity): void {
+    this.validateTransition(assayer, AssayerLifecycleStatus.ACTIVE);
+  }
+
   static activate(assayer: AssayerEntity, userId: string): AssayerActivatedEvent {
     this.validateTransition(assayer, AssayerLifecycleStatus.ACTIVE);
     const prev = assayer.lifecycleStatus;

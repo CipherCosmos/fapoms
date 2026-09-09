@@ -1383,21 +1383,30 @@ export class AssignmentService {
     } else if (targetStatus === AssignmentStatus.CANCELLED) {
       event = AssignmentStateMachine.cancel(assignment, userId, reason || '');
     } else if (targetStatus === AssignmentStatus.COMPLETED) {
-      // Completed transition via state machine
+      /**
+       * Through the state machine, like the three branches above it.
+       *
+       * The comment here used to say "Completed transition via state machine" while the code did
+       * the opposite: it assigned `assignment.status` directly and consulted nothing. So
+       * `POST /assignments/:id/complete` closed a brand-new PENDING offer — never accepted, never
+       * attended — and COMPLETED is the state that books the payout and the client line.
+       *
+       * `completeAudit` was written for exactly this and was simply not being called. It refuses
+       * an edge `VALID_PATHS` does not allow, and it demands a stated reason when there is no
+       * check-in behind the completion, because closing an unattended job books money on
+       * somebody's word alone. Both controls existed; neither ran.
+       */
       if (!assignment.completionDate) {
         assignment.completionDate = businessTodayDateKey() as any;
       }
-      const prev = assignment.status;
-      assignment.status = AssignmentStatus.COMPLETED;
-      event = { previousState: prev, newState: assignment.status, userId };
+      event = AssignmentStateMachine.completeAudit(assignment, userId, reason);
       if (assignment.projectBranch) {
         pbEvent = ProjectBranchStateMachine.completeAudit(assignment.projectBranch, userId);
       }
     } else if (targetStatus === AssignmentStatus.IN_PROGRESS) {
-      // IN_PROGRESS start work transition
-      const prev = assignment.status;
-      assignment.status = AssignmentStatus.IN_PROGRESS;
-      event = { previousState: prev, newState: assignment.status, userId };
+      // Same defect, same shape: this assigned the column directly, so a PENDING offer could be
+      // put IN_PROGRESS with `checked_in_at` still null. See `AssignmentStateMachine.startWork`.
+      event = AssignmentStateMachine.startWork(assignment, userId);
     } else {
       throw new BadRequestException(`Invalid assignment status transition to ${targetStatus}`);
     }

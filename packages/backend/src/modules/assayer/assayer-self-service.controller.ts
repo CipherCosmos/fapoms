@@ -39,6 +39,8 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, OnboardingAllowed } 
 import { assertSelfOrPrivileged } from './assayer-visibility';
 import { RosterRecordsService } from './roster-records.service';
 import { AssayerDocumentEntity } from './assayer-document.entity';
+import { AssayerEntity } from './assayer.entity';
+import { tenantFilterId } from '../../infrastructure/tenancy/ambient-tenant-context';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
@@ -96,6 +98,11 @@ export class AssayerSelfServiceController {
     private readonly rosterRecords: RosterRecordsService,
     @InjectRepository(AssayerDocumentEntity)
     private readonly documents: Repository<AssayerDocumentEntity>,
+    // Only for the ownership lookup in `getOwnDocumentFile` — this controller reads the document
+    // table directly rather than through `RosterRecordsService`, so it needs its own way to ask
+    // which organisation the person belongs to.
+    @InjectRepository(AssayerEntity)
+    private readonly assayers: Repository<AssayerEntity>,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
   ) {}
 
@@ -219,6 +226,29 @@ export class AssayerSelfServiceController {
     const position = Number(index);
     if (!Number.isInteger(position) || position < 0) {
       throw new BadRequestException('That is not a file number.');
+    }
+
+    /**
+     * The tenant check, before the file is located.
+     *
+     * `assertSelfOrPrivileged` above lets the assayer through for their own id, and lets any
+     * ADMIN or OPERATIONS principal through for anybody's — which, before organisations were
+     * filtered anywhere, meant any staff account on the platform could stream any identity scan
+     * on the platform through this route. This controller injects no `RegionGuardService` at all,
+     * so there was nothing else here to notice.
+     *
+     * Reported as the same "No such file on this document." a genuinely missing scan gets: an
+     * assayer id that resolves for one caller and 404s for another is the existence oracle this
+     * whole change is closing.
+     */
+    const owner = await this.assayers.findOne({
+      where: { id: assayerId },
+      select: { id: true, organizationId: true },
+      withDeleted: true,
+    });
+    const tenantId = tenantFilterId();
+    if (tenantId && (owner?.organizationId ?? null) !== tenantId) {
+      throw new NotFoundException('No such file on this document.');
     }
 
     const row = await this.documents.findOne({

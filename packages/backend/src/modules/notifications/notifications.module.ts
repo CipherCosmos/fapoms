@@ -22,6 +22,7 @@ import { NotificationSweeper } from './notification.sweeper';
 import { NotificationSettingEntity } from './notification-setting.entity';
 import { NotificationSettingsService } from './notification-settings.service';
 import { NotificationAdminController } from './notification-admin.controller';
+import { NotificationTenancyService } from './notification-tenancy';
 
 @Module({
   imports: [
@@ -40,6 +41,9 @@ import { NotificationAdminController } from './notification-admin.controller';
   providers: [
     NotificationService, PushNotificationService, NotificationDispatchService,
     NotificationDeliveryWorker, NotificationSweeper, FcmProvider, EmailProvider, SmsProvider, NotificationSettingsService,
+    // Deliberately a plain singleton, not request-scoped: dispatch is reached from Bull workers
+    // and cron scans where there is no request to be scoped to. See its own comment.
+    NotificationTenancyService,
   ],
   exports: [NotificationService, PushNotificationService, NotificationDispatchService, EmailProvider, SmsProvider, NotificationSettingsService],
 })

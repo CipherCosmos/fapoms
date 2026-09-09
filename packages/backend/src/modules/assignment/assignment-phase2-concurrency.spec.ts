@@ -610,11 +610,24 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
       const assignmentId = 'asg-stale-concurrency';
       const assayerId = 'assayer-e';
 
-      // Server assignment is at version 10
+      /**
+       * Server assignment is at version 10, and CHECKED_IN.
+       *
+       * CHECKED_IN rather than ACCEPTED because the command below targets IN_PROGRESS, and
+       * `VALID_PATHS` only allows work to start from a check-in — the check-in is geofenced, so
+       * "in progress" is meant to mean somebody is actually at the branch.
+       *
+       * This fixture said ACCEPTED until the IN_PROGRESS branch of `executeAssignmentTransition`
+       * was made to consult the state machine at all. It had been assigning the column directly,
+       * so an illegal edge sailed through to the version check and this test passed for the wrong
+       * reason — it was measuring the absence of a control, not the presence of the one it names.
+       * With a legal edge the stale-version conflict is what actually refuses the command, which
+       * is what the test is about.
+       */
       const serverAssignment: any = {
         id: assignmentId,
         assignmentNumber: 'ASN-E',
-        status: AssignmentStatus.ACCEPTED,
+        status: AssignmentStatus.CHECKED_IN,
         assayerId,
         entityVersion: 10,
         isActive: true,
@@ -646,7 +659,9 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
       // Verify server assignment version is still 10 and status is not changed
       const authoritative = assignmentsDb.get(assignmentId);
       expect(authoritative.entityVersion).toBe(10);
-      expect(authoritative.status).toBe(AssignmentStatus.ACCEPTED);
+      // Unchanged — the refusal must leave the server's own state exactly where it was, which is
+      // where this fixture starts (see the note on the fixture above for why that is CHECKED_IN).
+      expect(authoritative.status).toBe(AssignmentStatus.CHECKED_IN);
     });
   });
 

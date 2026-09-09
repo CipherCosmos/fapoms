@@ -13,6 +13,7 @@ import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
 import { NOTIFICATION_QUEUE } from './notification-delivery.worker';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { NotificationTenancyService } from './notification-tenancy';
 
 describe('NotificationDispatchService', () => {
   let service: NotificationDispatchService;
@@ -39,6 +40,43 @@ describe('NotificationDispatchService', () => {
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     getMany: jest.fn(),
+  };
+
+  /** The organisation every fixture below belongs to, and the one the mocked tenancy resolves. */
+  const TEST_ORG = 'org-a';
+
+  /**
+   * The query builder the service actually gets.
+   *
+   * Identical to `mockUserQb` except that it stamps `organizationId` onto whatever a test
+   * resolved. Recipients are now filtered by the event's organisation
+   * (`NotificationDispatchService.withinOrganization`), so a fixture with no organisation is in
+   * nobody's audience — which is correct behaviour and would otherwise turn every existing test
+   * here into a silent zero-recipient assertion about the wrong thing. A fixture that names its
+   * own `organizationId` keeps it, which is how the cross-tenant tests below say what they mean.
+   */
+  const tenantAwareUserQb: any = {
+    innerJoin: () => tenantAwareUserQb,
+    leftJoinAndSelect: () => tenantAwareUserQb,
+    where: () => tenantAwareUserQb,
+    andWhere: () => tenantAwareUserQb,
+    getMany: async () =>
+      ((await mockUserQb.getMany()) ?? []).map((u: any) => ({ organizationId: TEST_ORG, ...u })),
+  };
+
+  /**
+   * Resolves every event to one organisation unless a test says otherwise. The real derivation —
+   * which entity a given event's organisation is read from — is exercised against the real schema
+   * in `notification-tenant-isolation.db.spec.ts`; what matters here is that the dispatcher
+   * honours whatever it is told.
+   */
+  const mockTenancy = {
+    resolve: jest.fn(async (_opts: any, scope: string) => ({
+      scope,
+      organizationId: scope === 'PLATFORM' ? null : TEST_ORG,
+      source: scope === 'PLATFORM' ? 'PLATFORM' : 'ENTITY',
+      attempted: [],
+    })),
   };
 
   /**
@@ -106,6 +144,7 @@ describe('NotificationDispatchService', () => {
     mockQueue.addBulk.mockClear();
     mockUserQb.getMany.mockReset();
     mockRegionGuard.resolveEventRegion.mockReset().mockResolvedValue(null);
+    mockTenancy.resolve.mockClear();
     mockRegionGuard.filterUsersByRegion.mockReset().mockImplementation(async (ids: string[]) => ids);
     mockSettings.defFor.mockReset();
     mockSettings.defFor.mockImplementation(async (t: string) => {
@@ -119,7 +158,7 @@ describe('NotificationDispatchService', () => {
         { provide: getRepositoryToken(NotificationEntity), useValue: mockNotifRepo },
         {
           provide: getRepositoryToken(UserEntity),
-          useValue: { createQueryBuilder: jest.fn(() => mockUserQb) },
+          useValue: { createQueryBuilder: jest.fn(() => tenantAwareUserQb) },
         },
         {
           // No saved preferences: everyone is opted in, which is the state these tests are about.
@@ -143,6 +182,7 @@ describe('NotificationDispatchService', () => {
         { provide: NotificationSettingsService, useValue: mockSettings },
         { provide: DomainEventPublisher, useValue: mockEventPublisher },
         { provide: RegionGuardService, useValue: mockRegionGuard },
+        { provide: NotificationTenancyService, useValue: mockTenancy },
         {
           provide: AuditService,
           useValue: { recordEvent: jest.fn(async (e) => { auditCalls.push(e); return e; }) },
@@ -731,6 +771,161 @@ describe('NotificationDispatchService', () => {
       });
 
       expect(mockRegionGuard.resolveEventRegion).not.toHaveBeenCalled();
+    });
+  });
+  /**
+   * Finding F-07: fan-out was by role alone, so activating an assayer in one organisation put
+   * their name, a count and a link to their record into an OPERATIONS user's bell in a different
+   * organisation. The tenant ceiling is applied inside `usersInRoles`, which is the single point
+   * every audience passes through; these prove the dispatcher applies it, refuses to guess, and
+   * still lets the platform-scoped types through.
+   */
+  describe('tenant ceiling on the resolved audience', () => {
+    it('notifies only the users of the organisation the event belongs to', async () => {
+      mockUserQb.getMany.mockResolvedValue([
+        { id: 'ops-a', organizationId: 'org-a' },
+        { id: 'ops-b', organizationId: 'org-b' },
+        { id: 'admin-b', organizationId: 'org-b' },
+      ]);
+
+      const res = await service.emit({
+        type: 'ASSAYER_ONBOARDED',
+        entityType: 'ASSAYER',
+        entityId: 'as-1',
+        assayerId: 'as-1',
+        payload: { assayerName: 'R. Nair' },
+      });
+
+      expect(res.recipients.userIds).toEqual(['ops-a']);
+      expect(res.organizationId).toBe('org-a');
+      // The body names a real person, so the assertion is about the row, not just the id list.
+      expect(insertedRows).toHaveLength(1);
+      expect(insertedRows[0]).toMatchObject({ userId: 'ops-a', organizationId: 'org-a' });
+    });
+
+    it('gives a platform ADMIN no cross-tenant exemption', async () => {
+      // The one decision worth pinning down: `CROSS_TENANT_ROLES` lets ADMIN and DEVELOPER READ
+      // across organisations, and notifications deliberately do not honour it — being pushed
+      // another tenant's operational detail is not the same act as choosing to look at it.
+      mockUserQb.getMany.mockResolvedValue([
+        { id: 'admin-other-tenant', organizationId: 'org-b', roles: [{ name: 'ADMIN' }] },
+      ]);
+
+      const res = await service.emit({
+        type: 'ASSIGNMENT_SLA_BREACHED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'asn-1',
+        payload: { branchName: 'Thrissur', slaType: 'ACCEPTANCE' },
+      });
+
+      expect(res.recipients.userIds).toEqual([]);
+      expect(insertedRows).toHaveLength(0);
+    });
+
+    it('stamps the event organisation on every row of the fan-out', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
+
+      await service.emit({
+        type: 'ASSIGNMENT_ESCALATED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'asn-2',
+        payload: { branchName: 'Kochi', reason: 'Client escalated.' },
+      });
+
+      expect(insertedRows).toHaveLength(2);
+      for (const row of insertedRows) expect(row.organizationId).toBe(TEST_ORG);
+    });
+
+    it('refuses the whole role fan-out when the event has no resolvable organisation', async () => {
+      // The aggregate sweeps (`entityId: 'backlog'`) are the real shape of this: no single entity
+      // to derive an organisation from. Silence is the required direction — the alternative is
+      // the deployment-wide fan-out this change removes.
+      mockTenancy.resolve.mockResolvedValueOnce({
+        scope: 'TENANT', organizationId: null, source: 'UNRESOLVED', attempted: [],
+      } as any);
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
+
+      const res = await service.emit({
+        type: 'PAYABLE_AWAITING_APPROVAL',
+        entityType: 'PAYABLE',
+        entityId: 'backlog',
+        payload: { count: 3, amount: '12,000', days: 4 },
+      });
+
+      expect(res.recipients.userIds).toEqual([]);
+      expect(insertedRows).toHaveLength(0);
+      // Not even the never-reach-nobody administrator fallback fires: there is no organisation
+      // whose administrators could legitimately be told.
+      expect(mockUserQb.getMany).not.toHaveBeenCalled();
+    });
+
+    it('still reaches the whole platform audience for a platform-scoped type', async () => {
+      // DESTRUCTIVE_ACTION_REQUESTED: a wipe spans every tenant, so scoping it would leave the
+      // approval request undeliverable and a two-person control with one person in it.
+      mockUserQb.getMany.mockResolvedValue([
+        { id: 'admin-a', organizationId: 'org-a' },
+        { id: 'admin-b', organizationId: 'org-b' },
+      ]);
+
+      const res = await service.emit({
+        type: 'DESTRUCTIVE_ACTION_REQUESTED',
+        entityType: 'DESTRUCTIVE_ACTION_REQUEST',
+        entityId: 'req-1',
+        payload: { requesterName: 'A. Dev', domainCount: 3 },
+      });
+
+      expect(res.recipients.userIds).toEqual(expect.arrayContaining(['admin-a', 'admin-b']));
+      expect(res.organizationId).toBeNull();
+      for (const row of insertedRows) expect(row.organizationId).toBeNull();
+    });
+
+    it('keeps the empty-desk administrator fallback inside the same organisation', async () => {
+      // ASSIGNMENT_ACCEPTED: roles-only, so exactly two queries — the catalogued OPS lookup, then
+      // the ADMIN fallback. The fallback finds an administrator belonging to another tenant, who
+      // must not be handed this organisation's assignment either.
+      mockUserQb.getMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 'admin-b', organizationId: 'org-b' }]);
+
+      const res = await service.emit({
+        type: 'ASSIGNMENT_ACCEPTED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'asn-3',
+        payload: { assayerName: 'Nilesh', branchName: 'Thrissur' },
+      });
+
+      expect(res.recipients.userIds).toEqual([]);
+      expect(insertedRows).toHaveLength(0);
+    });
+
+    it('never counts a user with no organisation at all as part of a tenant audience', async () => {
+      // The columns are still nullable, so an insert path that forgets to stamp one would create
+      // exactly this user. "Unknown owner" must not resolve to "hears everything".
+      mockUserQb.getMany.mockResolvedValue([{ id: 'orphan', organizationId: null }]);
+
+      const res = await service.emit({
+        type: 'ASSIGNMENT_ESCALATED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'asn-4',
+        payload: { branchName: 'Kochi', reason: 'Client escalated.' },
+      });
+
+      expect(res.recipients.userIds).toEqual([]);
+    });
+
+    it('still delivers to an individually addressed assayer, who is named rather than discovered', async () => {
+      mockUserQb.getMany.mockResolvedValue([]);
+
+      const res = await service.emit({
+        type: 'ASSIGNMENT_OFFERED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'asn-5',
+        assayerId: 'assayer-1',
+        payload: { branchName: 'Thrissur', scheduledDate: '2026-09-20', assignmentId: 'asn-5' },
+      });
+
+      expect(res.recipients.assayerIds).toEqual(['assayer-1']);
+      expect(insertedRows[0]).toMatchObject({ assayerId: 'assayer-1', organizationId: TEST_ORG });
     });
   });
 });

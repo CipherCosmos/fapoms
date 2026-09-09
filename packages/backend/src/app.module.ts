@@ -125,7 +125,27 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
       imports: [ConfigModule],
       inject: [ConfigService, MetricsService],
       useFactory: (config: ConfigService, metrics: MetricsService) => ({
-        throttlers: [{ ttl: 60_000, limit: 300 }],
+        /**
+         * The global per-IP brake. 300 requests a minute, which is the value it has always had —
+         * the two settings below default to it exactly, so nothing changes unless somebody sets
+         * them.
+         *
+         * Made configurable because it was not, and a hard-coded operational limit eventually
+         * blocks something legitimate. The case that surfaced it: the lifecycle certification
+         * suite drives several hundred real requests through this API in a few seconds — every
+         * illegal transition, every empty-reason variant, every concurrency pair — and spent them
+         * all inside one throttle window. The suite started reporting 429s as if they were
+         * lifecycle failures, which is the worst kind of flake: it looks exactly like the defect
+         * you are trying to prove is gone.
+         *
+         * Security here comes from per-account lockout (five failed sign-ins, fifteen minutes),
+         * not from this; see the note on the login route. This is the blunt instrument behind it,
+         * and a test rig or a batch integration is entitled to ask for a wider one.
+         */
+        throttlers: [{
+          ttl: config.get<number>('THROTTLE_TTL_MS', 60_000),
+          limit: config.get<number>('THROTTLE_LIMIT', 300),
+        }],
         // Fail-fast client, fail-open storage: a Redis outage stops rate limiting, not the API.
         // See resilient-throttler-storage.ts for why the stock storage took the whole API down.
         storage: createResilientThrottlerStorage(

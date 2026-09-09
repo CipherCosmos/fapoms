@@ -1,6 +1,6 @@
 import React from 'react';
-import { ShieldAlert, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
-import { AssayerLifecycleStatus, assayerLifecycleLabel } from '@fapoms/shared';
+import { ShieldAlert, CheckCircle2, AlertTriangle, XCircle, HelpCircle } from 'lucide-react';
+import { assayerLifecycleLabel, standingAllowsPlanning } from '@fapoms/shared';
 import type { Assayer } from '../assayer-shared';
 import type { AssayerDossier, PlanningSnapshot } from './record-types';
 
@@ -13,6 +13,34 @@ export interface DeploymentReadinessCardProps {
   onInspectVetting?: () => void;
 }
 
+/**
+ * WHAT THE SERVER SAYS, AND NOTHING ELSE.
+ *
+ * This card has always been labelled "(Backend-Authoritative)" and has always branched on
+ * `dossier.deployable` and `dossier.deploymentBlockers`. The dossier endpoint returned neither, so
+ * both read `undefined` and the label was simply untrue: the verdict fell back to a rulebook this
+ * component kept for itself — lifecycle, an explicit `unavailableReason`, and a missing lat/lng —
+ * while everything else it displayed was demoted to a *warning*, and warnings never touched the
+ * badge.
+ *
+ * What that produced, in the live UI: somebody ACTIVE with a coordinate, no bank account, no IFSC,
+ * no PAN, no verified identity document and ZERO client empanelments got a green **Deployable**
+ * badge, at the same moment the planning engine was refusing that same person outright with
+ * "planning requires an Active or Recommended empanelment standing". A coordinator reading this
+ * card would ring somebody the dispatch surface will not let them send.
+ *
+ * `RosterRecordsService.deploymentVerdict` now composes the real gates — the candidate-pool
+ * predicate, `DeployabilityFilter`, `ClientEligibilityFilter`, `identityStanding`, `cannotBePaid`
+ * — and emits the answer with the blockers already written as sentences. So this component holds
+ * NO eligibility rules of its own. It has three jobs: render the verdict, render the blockers, and
+ * — the part the old fallback got most wrong — say plainly when it has not been given an answer at
+ * all rather than defaulting to green.
+ *
+ * That last case is real and not merely defensive: the dossier is ADMIN/OPERATIONS only, and
+ * `AssayerRecord` swallows the 403 with `catch(() => {})`, leaving `dossier` null for everybody
+ * else. Under the old code that null was indistinguishable from "no blockers found", so the one
+ * viewer with the least information was shown the most confident answer.
+ */
 export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = ({
   assayer,
   dossier,
@@ -21,79 +49,45 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
   onInspectDocuments,
   onInspectVetting,
 }) => {
-  const blockers: string[] = [];
-  const warnings: string[] = [];
-
   const handleNavDocs = onInspectDocuments || (() => onNavigateTab && onNavigateTab('documents'));
   const handleNavVetting = onInspectVetting || (() => onNavigateTab && onNavigateTab('vetting'));
   void handleNavDocs;
   void handleNavVetting;
 
-  // Backend-authoritative deployment readiness & blockers
-  if (dossier?.deploymentBlockers && dossier.deploymentBlockers.length > 0) {
-    blockers.push(...dossier.deploymentBlockers);
-  }
+  /**
+   * Three states, not two. `answered` is false when the dossier has not loaded, failed, or came
+   * back from a server old enough not to carry the verdict — and in every one of those the honest
+   * thing to draw is "we do not know", because this card has deliberately kept no way to work it
+   * out for itself.
+   */
+  const answered = !!dossier && typeof dossier.deployable === 'boolean';
+  const blockers: string[] = (dossier?.deploymentBlockers ?? []).filter(Boolean);
+  const isDeployable = answered && dossier!.deployable === true;
 
-  const lifecycle = assayer.lifecycleStatus;
+  const warnings: string[] = [];
 
-  // 1. Canonical lifecycle status check
-  if (lifecycle !== AssayerLifecycleStatus.ACTIVE) {
-    if (lifecycle === AssayerLifecycleStatus.SUSPENDED) {
-      blockers.push('Suspended: Disciplinary action blocks all assignments and sign-in');
-    } else if (lifecycle === AssayerLifecycleStatus.RESIGNED || lifecycle === AssayerLifecycleStatus.TERMINATED) {
-      blockers.push(`Departed (${assayerLifecycleLabel(lifecycle)}): Record closed; rehire path required`);
-    } else if (lifecycle === AssayerLifecycleStatus.ON_LEAVE) {
-      blockers.push('On Leave: Temporarily marked unavailable for field dispatch');
-    } else if (lifecycle === AssayerLifecycleStatus.INACTIVE) {
-      blockers.push('Inactive: Parked from operational planning');
-    } else {
-      blockers.push(`Onboarding in progress (${assayerLifecycleLabel(lifecycle)})`);
-    }
-  }
-
-  // 2. Unavailability check
-  if (assayer.unavailableReason) {
-    blockers.push(`Explicitly unavailable: ${assayer.unavailableReason}`);
-  }
-
-  // 3. Location/Pin blocker (only checked if backend did not already supply blockers)
-  if (!dossier?.deploymentBlockers && (assayer.latitude == null || assayer.longitude == null)) {
-    blockers.push('Missing home base coordinate (blocks automated distance filtering)');
-  }
-
-  // 4. Dossier facts (Identity compliance & Empanelment readiness)
-  let plannableEmpanelmentCount = 0;
-  if (dossier) {
-    const onboarding = dossier.onboarding || [];
-    const panDoc = onboarding.find((r) => r.requirement === 'PAN_CARD');
-    const aadhaarFront = onboarding.find((r) => r.requirement === 'AADHAAR_FRONT');
-
-    if (panDoc && panDoc.verificationStatus !== 'VERIFIED') {
-      warnings.push('PAN Card scan is unverified or rejected');
-    }
-    if (aadhaarFront && aadhaarFront.verificationStatus !== 'VERIFIED') {
-      warnings.push('Aadhaar scan is unverified or rejected');
-    }
-
-    const empanelments = dossier.empanelments || [];
-    plannableEmpanelmentCount = empanelments.filter(
-      (e) => e.status === 'ACTIVE' || e.status === 'RECOMMENDED',
-    ).length;
-
-    if (empanelments.length > 0 && plannableEmpanelmentCount === 0) {
-      warnings.push('0 client bank empanelments in plannable standing (Active or Recommended)');
-    }
-  }
-
-  // 5. Workload capacity
+  /**
+   * A full week is not a permanent bar, so it stays a warning and stays here rather than moving to
+   * the server: `deployable` is a fact about the person, and this is a fact about one week. It is
+   * also the only thing on this card that comes from the planning snapshot rather than the
+   * dossier.
+   */
   const remainingCapacity = planningSnapshot?.workload?.remaining ?? null;
   if (remainingCapacity !== null && remainingCapacity <= 0) {
     warnings.push('Weekly workload capacity is full (0 slots remaining)');
   }
 
-  const isDeployable = dossier && typeof dossier.deployable === 'boolean'
-    ? dossier.deployable && blockers.length === 0
-    : blockers.length === 0;
+  // A count for the readout beside the verdict, through the planner's own predicate rather than a
+  // hand-written `=== 'ACTIVE' || === 'RECOMMENDED'`: DOCUMENTS_PENDING and INACTIVE are neither
+  // refusals nor plannable, and that is exactly the distinction a second copy of the list loses.
+  const plannableEmpanelmentCount = (dossier?.empanelments ?? [])
+    .filter((e) => standingAllowsPlanning(e.status)).length;
+
+  const verdictTone = !answered
+    ? { bg: 'var(--bg-surface-2)', fg: 'var(--text-muted)', border: 'var(--border-color)' }
+    : isDeployable
+      ? { bg: 'var(--status-active-bg)', fg: 'var(--success)', border: 'var(--success)' }
+      : { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)', border: 'var(--danger)' };
 
   return (
     <div
@@ -125,12 +119,16 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
             borderRadius: '999px',
             fontSize: '11.5px',
             fontWeight: 700,
-            background: isDeployable ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
-            color: isDeployable ? 'var(--success)' : 'var(--danger)',
-            border: `1px solid ${isDeployable ? 'var(--success)' : 'var(--danger)'}`,
+            background: verdictTone.bg,
+            color: verdictTone.fg,
+            border: `1px solid ${verdictTone.border}`,
           }}
         >
-          {isDeployable ? (
+          {!answered ? (
+            <>
+              <HelpCircle size={13} /> Readiness Unavailable
+            </>
+          ) : isDeployable ? (
             <>
               <CheckCircle2 size={13} /> Deployable
             </>
@@ -172,7 +170,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
         </div>
       </div>
 
-      {/* Blockers Section */}
+      {/* Blockers Section — the server's list, verbatim and in its order. */}
       {blockers.length > 0 && (
         <div
           data-testid="deployment-blockers-list"
@@ -215,6 +213,14 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
               <li key={idx} style={{ marginBottom: '2px' }}>{w}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {!answered && (
+        <div data-testid="readiness-unavailable-note" style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          The readiness check has not answered for this record — the dossier is still loading, or
+          this account is not entitled to read it. Nothing here is a statement that they are clear
+          to deploy.
         </div>
       )}
 

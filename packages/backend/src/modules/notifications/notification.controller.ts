@@ -38,6 +38,21 @@ class UnregisterDeviceTokenRequestDto {
   token: string;
 }
 
+
+/**
+ * The organisation the caller is reading as, from the authenticated principal.
+ *
+ * Read off `req.user` rather than looked up, because it is already there on every request:
+ * `JwtStrategy` puts the principal `AuthService.loadPrincipal` built, which is the `users` row
+ * itself for staff and — since this change — carries `organizationId` for field assayers too.
+ * Null for a principal that genuinely has none, and the read methods treat that as "no ceiling",
+ * so an account that has not been assigned an organisation still sees its own notifications
+ * instead of an inbox that has silently gone empty.
+ */
+function viewerOrganizationId(req: any): string | null {
+  return req?.user?.organizationId ?? null;
+}
+
 @ApiTags('Notifications')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -70,7 +85,11 @@ export class NotificationController {
     @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit?: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset?: number,
   ) {
-    const page = await this.notificationService.findByUser(req.user.id, { category, unreadOnly, limit, offset });
+    const page = await this.notificationService.findByUser(
+      req.user.id,
+      { category, unreadOnly, limit, offset },
+      viewerOrganizationId(req),
+    );
     return { success: true, data: page.items, meta: { total: page.total, unreadCount: page.unreadCount, limit, offset } };
   }
 
@@ -78,7 +97,7 @@ export class NotificationController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Just the bell badge count — cheap enough to poll on its own' })
   async unreadCount(@Req() req: any) {
-    const count = await this.notificationService.getUnreadCount(req.user.id);
+    const count = await this.notificationService.getUnreadCount(req.user.id, viewerOrganizationId(req));
     return { success: true, data: { count } };
   }
 
@@ -111,7 +130,7 @@ export class NotificationController {
   async markAsRead(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     // Previously `req?.user?.id || id`, which fell back to using the *notification id* as the
     // recipient id — letting anyone mark any notification read by knowing its id.
-    const notif = await this.notificationService.markAsRead(id, req.user.id);
+    const notif = await this.notificationService.markAsRead(id, req.user.id, viewerOrganizationId(req));
     return { success: true, data: notif };
   }
 
@@ -119,7 +138,7 @@ export class NotificationController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Mark one of your own notifications as unread' })
   async markAsUnread(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    const notif = await this.notificationService.markAsUnread(id, req.user.id);
+    const notif = await this.notificationService.markAsUnread(id, req.user.id, viewerOrganizationId(req));
     return { success: true, data: notif };
   }
 
@@ -127,7 +146,7 @@ export class NotificationController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Mark every one of your unread notifications as read' })
   async markAllAsRead(@Req() req: any) {
-    const updated = await this.notificationService.markAllAsRead(req.user.id);
+    const updated = await this.notificationService.markAllAsRead(req.user.id, viewerOrganizationId(req));
     return { success: true, data: { updated } };
   }
 

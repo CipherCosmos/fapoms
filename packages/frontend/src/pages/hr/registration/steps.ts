@@ -350,22 +350,46 @@ export function mappedFieldsFromError(message: string): ErrorField[] {
     if (field && step) found.push({ key, label: field.label, step });
   };
 
-  const multi = message.match(/^\d+\s+fields?\s+need attention:\s*(.+)\.\s*$/i);
-  if (multi) {
-    for (const label of multi[1].split(',').map((s) => s.trim()).filter(Boolean)) {
-      addIfKnown(keyByLabel.get(label));
-    }
-    return found;
+  /**
+   * One line per server message, and every line is read the same way.
+   *
+   * This used to parse a single collapsed sentence — "2 fields need attention: End Date, Budget."
+   * — by splitting on commas and looking each LABEL up in a reverse map. That worked only while
+   * `joinServerMessage` threw the server's actual wording away, which was the defect it has since
+   * stopped doing: a validation failure now lists each real message on its own line, so
+   * "endDate must be on or after startDate" reaches the screen intact instead of becoming the
+   * word "End Date".
+   *
+   * The lines that result all have the shape the single-message branch below already handled —
+   * they begin with the field's own key, first letter capitalised. So there is no longer a
+   * separate multi-field rule to keep in step with a formatting function in another package;
+   * there is one rule, applied per line. That also recovers fields the old branch could not,
+   * because a label like "Aadhaar Number" only round-tripped when the key happened to space out
+   * to exactly that.
+   */
+  const keyFromLine = (line: string): string | undefined => {
+    const firstWord = (line.replace(/^[•\s-]+/, '').trim().split(/\s+/)[0] ?? '').replace(/[.,:;]+$/, '');
+    if (!firstWord) return undefined;
+    const asKey = firstWord.charAt(0).toLowerCase() + firstWord.slice(1);
+    if (fields.some((f) => f.key === asKey)) return asKey;
+    // Fall back to the spaced label, so an older collapsed message still resolves.
+    return keyByLabel.get(firstWord);
+  };
+
+  for (const line of message.split('\n')) {
+    if (/^\s*\d+\s+things?\s+need attention/i.test(line)) continue;
+    addIfKnown(keyFromLine(line));
   }
 
-  // A single-field message starts with that field's own key, first letter capitalised and
-  // nothing else touched — "PanNumber must match…" — never spaced the way the multi-field
-  // sentence spaces it, so lower-casing just the one leading letter recovers the key directly.
-  const firstWord = (message.trim().split(/\s+/)[0] ?? '').replace(/[.,:;]+$/, '');
-  if (firstWord) {
-    const asKey = firstWord.charAt(0).toLowerCase() + firstWord.slice(1);
-    if (fields.some((f) => f.key === asKey)) addIfKnown(asKey);
+  // The historical collapsed shape, still parsed so a cached bundle or an older server does not
+  // lose its jump links: "2 fields need attention: End Date, Budget."
+  const collapsed = message.match(/^\d+\s+fields?\s+need attention:\s*(.+)\.\s*$/i);
+  if (collapsed) {
+    for (const label of collapsed[1].split(',').map((t) => t.trim()).filter(Boolean)) {
+      addIfKnown(keyByLabel.get(label));
+    }
   }
+
   return found;
 }
 

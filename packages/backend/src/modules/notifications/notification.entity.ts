@@ -49,7 +49,34 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 // Serves the stranded-email sweep. Declared here AND in the migration — synchronize drops
 // migration-only indexes (see the class comment above; it has happened to this very table).
 @Index('idx_notifications_email_pending', ['createdAt'], { where: `"email_status" = 'PENDING'` })
+// The tenant column every scoped read filters on. Declared here as well as in migration
+// 1796600000000-NotificationTenantScope — same reason as the indexes above: synchronize deletes
+// what it does not recognise, and this table has already lost an index that way once.
+@Index('idx_notifications_organization_id', ['organizationId'])
 export class NotificationEntity extends BaseEntity {
+  /**
+   * The organisation whose data this notification is ABOUT — never the recipient's.
+   *
+   * The distinction is the whole fix. Fan-out was by role alone, so "New assayer onboarded" for
+   * an assayer in one organisation was written into the bell of every OPERATIONS user on the
+   * deployment, including users of other organisations (finding F-07, reproduced live). This
+   * table had 35 columns and not one of them recorded whose data the row carried, so there was
+   * nothing for a read to filter on and nothing for an auditor to check afterwards.
+   *
+   * Stamped by `NotificationDispatchService` from the emitting entity — see
+   * `NotificationTenancyService` for why it is derived from the event rather than taken from the
+   * request (dispatch is frequently not in one). Storing the EVENT's organisation rather than the
+   * recipient's is what makes the read filter meaningful: a row that reached the wrong bell still
+   * says which tenant it belongs to, so `NotificationService` can decline to show it.
+   *
+   * Nullable, and null means one of two things, both legitimate: a platform-scoped type
+   * (`NotificationTypeDef.scope`) that belongs to no tenant, or a legacy row written before this
+   * column existed whose organisation the backfill could not determine. Both are visible to the
+   * recipient they are addressed to; neither widens anybody's inbox beyond their own rows.
+   */
+  @Column({ name: 'organization_id', type: 'uuid', nullable: true })
+  organizationId: string | null;
+
   @Column({ name: 'user_id', type: 'uuid', nullable: true })
   userId: string | null;
 

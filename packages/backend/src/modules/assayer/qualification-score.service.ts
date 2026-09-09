@@ -18,6 +18,7 @@ import {
   maskTail,
 } from '@fapoms/shared';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from './assayer.entity';
+import { assertTenantOwns, tenantFilterId, tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
 import { AssayerScoreOverrideEntity } from './assayer-score-override.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -117,7 +118,10 @@ export class QualificationScoreService {
   // ── Profile qualification ─────────────────────────────────────────────────
 
   async qualification(assayerId: string): Promise<AssayerQualificationView & { printSummary: Record<string, unknown> }> {
-    const assayer = await this.assayers.findOne({ where: { id: assayerId } });
+    // Scored from the person's own record — remarks, references, background checks, paperwork —
+    // so the tenant boundary is the same one `AssayerService.findOne` applies, said here because
+    // this service loads the assayer itself rather than going through that method.
+    const assayer = await this.assayers.findOne({ where: tenantWhere<AssayerEntity>({ id: assayerId }) });
     if (!assayer) throw new NotFoundException('No such assayer.');
 
     const [dims, weights, overrideRows] = await Promise.all([
@@ -185,7 +189,10 @@ export class QualificationScoreService {
   // ── Partner qualification ─────────────────────────────────────────────────
 
   async partnerQualifications(assayerId: string): Promise<PartnerQualificationView[]> {
-    const assayer = await this.assayers.findOne({ where: { id: assayerId } });
+    // Scored from the person's own record — remarks, references, background checks, paperwork —
+    // so the tenant boundary is the same one `AssayerService.findOne` applies, said here because
+    // this service loads the assayer itself rather than going through that method.
+    const assayer = await this.assayers.findOne({ where: tenantWhere<AssayerEntity>({ id: assayerId }) });
     if (!assayer) throw new NotFoundException('No such assayer.');
 
     const [dims, weights, policy, allClients, empanelmentRows, overrideRows] = await Promise.all([
@@ -426,7 +433,10 @@ export class QualificationScoreService {
     if (!reason) {
       throw new BadRequestException('Say why the computed score is being overridden — the reason travels with the number.');
     }
-    const assayer = await this.assayers.findOne({ where: { id: assayerId } });
+    // Scored from the person's own record — remarks, references, background checks, paperwork —
+    // so the tenant boundary is the same one `AssayerService.findOne` applies, said here because
+    // this service loads the assayer itself rather than going through that method.
+    const assayer = await this.assayers.findOne({ where: tenantWhere<AssayerEntity>({ id: assayerId }) });
     if (!assayer) throw new NotFoundException('No such assayer.');
     const clientId = dto.clientId || null;
     if (clientId) {
@@ -472,6 +482,17 @@ export class QualificationScoreService {
   async clearOverride(overrideId: string, actorId: string): Promise<void> {
     const row = await this.overrides.findOne({ where: { id: overrideId, isActive: true } });
     if (!row) throw new NotFoundException('No such live override.');
+    // `DELETE /assayers/qualification/override/:id` names the override, not the person, so nothing
+    // upstream has an assayer id to check. Resolved from the row and reported as the same
+    // "No such live override." an unknown id gets.
+    if (tenantFilterId()) {
+      const owner = await this.assayers.findOne({
+        where: { id: row.assayerId },
+        select: { id: true, organizationId: true },
+        withDeleted: true,
+      });
+      assertTenantOwns(owner?.organizationId ?? undefined, 'No such live override.');
+    }
     row.isActive = false;
     row.updatedBy = actorId;
     await this.overrides.save(row);

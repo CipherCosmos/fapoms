@@ -17,6 +17,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { AssayerEntity } from './assayer.entity';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { tenantFilterId } from '../../infrastructure/tenancy/ambient-tenant-context';
 
 /**
  * The filter catalogue, mirrored 1:1 against `ROSTER_FILTERS` in
@@ -76,9 +77,29 @@ export class RosterQueryService {
     private readonly assayerRepository: Repository<AssayerEntity>,
   ) {}
 
-  /** Base query every method here starts from: active roster, region-scoped exactly like `AssayerService.findAll`. */
+  /**
+   * Base query every method here starts from: active roster, tenant-scoped, then region-scoped
+   * exactly like `AssayerService.findAll`.
+   *
+   * Six of the seven public methods on this service — `findFiltered`, `findKeyset`, `search`,
+   * `countsByLifecycleStatus`, `count` and `streamChunks` — begin here and nowhere else, so the
+   * organisation predicate is applied once for the whole read surface behind `GET /assayers`,
+   * `GET /assayers/search`, `GET /assayers/counts` and `GET /assayers/export`. That is the reason
+   * this method exists in the shape it does, and the reason the predicate goes in it rather than
+   * in each caller: `export` streams the entire result set to a CSV file, so one forgotten
+   * `andWhere` there is every tenant's roster on somebody's laptop.
+   *
+   * Region and organisation are both applied, and they are not the same question. Region is what
+   * the operator chose to look at and is enforced only when their account carries an assignment —
+   * most do not, so before this line the default `GET /assayers` was a national, cross-tenant
+   * read.
+   */
   private baseQuery(scope?: Partial<GlobalScope>): SelectQueryBuilder<AssayerEntity> {
     const qb = this.assayerRepository.createQueryBuilder('a').where('a.isActive = true');
+    const organizationId = tenantFilterId();
+    if (organizationId) {
+      qb.andWhere('a.organizationId = :__tenantId', { __tenantId: organizationId });
+    }
     if (scope?.regions?.length) {
       qb.andWhere('a.region IN (:...scopeRegions)', { scopeRegions: scope.regions });
     }
@@ -179,11 +200,30 @@ export class RosterQueryService {
          * reads the real microseconds back out of the table, so the equality arm actually fires.
          * The string timestamp survives only as the fallback for a cursor row deleted mid-walk.
          */
+        /**
+         * The two cursor subqueries carry the organisation predicate of their own.
+         *
+         * `baseQuery` scopes the rows this page RETURNS, which is the disclosure that matters —
+         * but `c` and `c2` are separate range variables over `assayers` and they resolve whatever
+         * uuid the caller put in the cursor. Left unscoped, a cursor minted in one organisation
+         * (cursors travel: they are in URLs, in bookmarks, in support tickets) would read another
+         * organisation's `created_at` here and use it as this walk's position, which both leaks
+         * that timestamp by observation and lands the caller at an arbitrary point in their own
+         * list. Scoping both arms makes a foreign cursor behave exactly like a deleted one: the
+         * `NOT EXISTS` arm fires and the walk falls back to the string timestamp.
+         */
+        const cursorTenantId = tenantFilterId();
+        const cursorScope = cursorTenantId ? 'AND c.organization_id = :__cursorTenantId' : '';
+        const cursorScope2 = cursorTenantId ? 'AND c2.organization_id = :__cursorTenantId' : '';
         qb.andWhere(
-          `((a.createdAt, a.id) < (SELECT c.created_at, c.id FROM assayers c WHERE c.id = :cursorId)
-            OR (NOT EXISTS (SELECT 1 FROM assayers c2 WHERE c2.id = :cursorId)
+          `((a.createdAt, a.id) < (SELECT c.created_at, c.id FROM assayers c WHERE c.id = :cursorId ${cursorScope})
+            OR (NOT EXISTS (SELECT 1 FROM assayers c2 WHERE c2.id = :cursorId ${cursorScope2})
                 AND a.createdAt < :cursorCreatedAt))`,
-          { cursorId: id, cursorCreatedAt: createdAtIso ?? '1970-01-01T00:00:00Z' },
+          {
+            cursorId: id,
+            cursorCreatedAt: createdAtIso ?? '1970-01-01T00:00:00Z',
+            ...(cursorTenantId ? { __cursorTenantId: cursorTenantId } : {}),
+          },
         );
       }
     }

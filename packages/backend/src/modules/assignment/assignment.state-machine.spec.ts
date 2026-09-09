@@ -147,3 +147,87 @@ describe('AssignmentStateMachine', () => {
     );
   });
 });
+
+/**
+ * THE TWO EDGES THAT WERE NOT GOING THROUGH THIS CLASS AT ALL.
+ *
+ * `AssignmentService.executeAssignmentTransition` routed ACCEPTED, REJECTED and CANCELLED through
+ * the state machine and then, for COMPLETED and IN_PROGRESS, simply assigned `assignment.status`
+ * directly. One of them even carried the comment "Completed transition via state machine" above
+ * code that consulted nothing.
+ *
+ * Reproduced against the running deployment on a brand-new PENDING offer — never accepted, never
+ * attended:
+ *
+ *   POST /assignments/:id/start     -> 201, status IN_PROGRESS, checked_in_at still NULL
+ *   POST /assignments/:id/complete  -> 201, status COMPLETED
+ *
+ * COMPLETED is the state that books the payout and the client line, and `completeAudit` already
+ * existed to guard exactly that — including refusing to close an unattended job without a stated
+ * reason. It was written and then not called. IN_PROGRESS is meant to follow a geofenced check-in,
+ * which is the whole reason work starts from CHECKED_IN rather than from ACCEPTED.
+ *
+ * These tests are on the state machine because that is where the answer belongs; the service is
+ * now a caller rather than a second opinion.
+ */
+describe('the edges the service used to write by hand', () => {
+  const at = (status: AssignmentStatus): any => ({ id: 'asg-1', status, checkedInAt: null });
+
+  describe('startWork', () => {
+    it.each([
+      AssignmentStatus.PENDING,
+      AssignmentStatus.ACCEPTED,
+      AssignmentStatus.COMPLETED,
+      AssignmentStatus.REJECTED,
+      AssignmentStatus.CANCELLED,
+    ])('refuses to start work from %s', (from) => {
+      const assignment = at(from);
+      expect(() => AssignmentStateMachine.startWork(assignment, 'user-1')).toThrow(BadRequestException);
+      expect(assignment.status).toBe(from);
+    });
+
+    it('starts work from a check-in, which is the only place it may start', () => {
+      const assignment = at(AssignmentStatus.CHECKED_IN);
+      const event = AssignmentStateMachine.startWork(assignment, 'user-1');
+      expect(assignment.status).toBe(AssignmentStatus.IN_PROGRESS);
+      expect(event.previousState).toBe(AssignmentStatus.CHECKED_IN);
+    });
+  });
+
+  describe('completeAudit', () => {
+    it.each([
+      AssignmentStatus.PENDING,
+      AssignmentStatus.REJECTED,
+      AssignmentStatus.CANCELLED,
+    ])('refuses to complete from %s — that is the state that books money', (from) => {
+      const assignment = at(from);
+      expect(() => AssignmentStateMachine.completeAudit(assignment, 'user-1', 'a reason'))
+        .toThrow(BadRequestException);
+      expect(assignment.status).toBe(from);
+    });
+
+    /**
+     * The desk genuinely does close jobs the assayer never checked into — a flat battery, a
+     * phone left in the car — so this is allowed, but only with somebody's name against a
+     * sentence explaining it.
+     */
+    it('refuses an unattended completion with no reason, and allows one with', () => {
+      const bare = at(AssignmentStatus.ACCEPTED);
+      expect(() => AssignmentStateMachine.completeAudit(bare, 'user-1'))
+        .toThrow(/books the payout and the client line on your word alone/);
+      expect(bare.status).toBe(AssignmentStatus.ACCEPTED);
+
+      const explained = at(AssignmentStatus.ACCEPTED);
+      AssignmentStateMachine.completeAudit(explained, 'user-1', 'Phone died on site; branch confirmed by call.');
+      expect(explained.status).toBe(AssignmentStatus.COMPLETED);
+      expect(explained.completedWithoutCheckInReason).toMatch(/Phone died on site/);
+    });
+
+    it('needs no reason when the assayer actually checked in', () => {
+      const attended: any = { id: 'asg-2', status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date() };
+      AssignmentStateMachine.completeAudit(attended, 'user-1');
+      expect(attended.status).toBe(AssignmentStatus.COMPLETED);
+    });
+  });
+});
+

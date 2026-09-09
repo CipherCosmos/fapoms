@@ -171,12 +171,45 @@ const DOMAIN_ERROR_TRANSLATIONS: Record<
 };
 
 /** NestJS sends `message` as a string, or an array of validation failures. */
+/**
+ * The server's validation messages, kept rather than summarised away.
+ *
+ * ## What this used to do, and why it was worse than it looked
+ *
+ * Two or more errors collapsed to a count and a list of FIELD NAMES: "2 fields need attention:
+ * End Date, Budget." One error kept its full text. So the moment somebody got two things wrong —
+ * the common case on a form of any size — every sentence the server had carefully written was
+ * discarded and replaced with a list of labels.
+ *
+ * The failure is worst exactly where the message matters most. The server said
+ * `endDate must be on or after startDate`; the user was told "End Date". The end date is
+ * perfectly well-formed, so "End Date" points at a field with nothing visibly wrong with it and
+ * says nothing about the ordering, which is the actual problem. A field name can only carry the
+ * message when the message is "this is missing" or "this is malformed"; it cannot carry a rule
+ * about two fields, a range, or a business constraint — and those are the ones people get stuck on.
+ *
+ * ## What it does now
+ *
+ * Every message, one per line, each turned into a sentence. A short heading keeps the count
+ * visible for scanning. Capped at six lines because past that a toast becomes a wall and the form
+ * itself is the better place to look — and the cap says how many are hidden rather than silently
+ * dropping them.
+ */
+const MAX_LISTED_VALIDATION_MESSAGES = 6;
+
 function joinServerMessage(raw: unknown): string {
   if (Array.isArray(raw)) {
     const parts = raw.filter((m) => typeof m === 'string') as string[];
     if (parts.length === 0) return '';
     if (parts.length === 1) return simplifyEnumMessage(parts[0]) ?? sentence(parts[0]);
-    return `${parts.length} fields need attention: ${parts.map(fieldOf).filter(Boolean).join(', ')}.`;
+
+    const lines = parts
+      .slice(0, MAX_LISTED_VALIDATION_MESSAGES)
+      .map((m) => `• ${simplifyEnumMessage(m) ?? sentence(m)}`);
+    const hidden = parts.length - lines.length;
+    if (hidden > 0) lines.push(`• and ${hidden} more.`);
+
+    return [`${parts.length} things need attention:`, ...lines].join('\n');
   }
   return typeof raw === 'string' ? raw : '';
 }

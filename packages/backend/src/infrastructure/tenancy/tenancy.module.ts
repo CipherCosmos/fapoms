@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { TenantContext } from './tenant-context';
+import { AmbientTenantContext } from './ambient-tenant-context';
 
 /**
  * Provides the request-scoped `TenantContext`.
@@ -12,9 +13,16 @@ import { TenantContext } from './tenant-context';
  * request and only for the injection chains that actually ask for one, so modules that never
  * touch tenant data pay nothing.
  */
+/**
+ * `AmbientTenantContext` is provided alongside it and is the one in use today. It answers the same
+ * questions from the `AsyncLocalStorage` request context instead of `@Inject(REQUEST)`, so it is a
+ * singleton: a consumer can inject it without turning its own injection chain request-scoped, which
+ * is what `AssayerService` needs — it is reached from a Bull processor, and a request-scoped
+ * processor cannot resolve a request. See that file's header for the full reasoning.
+ */
 @Global()
 @Module({
-  providers: [TenantContext],
-  exports: [TenantContext],
+  providers: [TenantContext, AmbientTenantContext],
+  exports: [TenantContext, AmbientTenantContext],
 })
 export class TenancyModule {}

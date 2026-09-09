@@ -268,19 +268,37 @@ async function bootstrap() {
   );
 
   if (processRole === 'worker') {
+    /**
+     * Still needs ONE thing HTTP-shaped: liveness. The prod healthcheck
+     * (deploy/docker-compose.prod.yml) wgets `/api/v1/health` on every container in the compose
+     * file, worker included — a worker with no listener there fails its healthcheck forever and
+     * the orchestrator kills a process that was never actually broken. `HealthController` is
+     * already registered on this app (AppModule), so this is the global prefix plus `listen` and
+     * nothing else — not a second Express app, not a duplicate of the health logic, just skipping
+     * the api-only middleware above.
+     *
+     * BEFORE `init()`, and that ordering is the whole point.
+     *
+     * `setGlobalPrefix` rewrites the route table, and `init()` is what builds it. Called after,
+     * it silently does nothing: the routes stay where they were mapped. So the worker served its
+     * health endpoint at `/health` while the healthcheck asked for `/api/v1/health` and got a 404
+     * — for a failing streak of 297 probes, on a container that was sealing audit events and
+     * running integrity scans perfectly the whole time.
+     *
+     * That is worse than a cosmetic wrong colour in `podman ps`. `depends_on: service_healthy`
+     * means a permanently-unhealthy worker blocks anything declared to wait for it, and an
+     * orchestrator with a restart-on-unhealthy policy will keep killing a healthy process. It
+     * also trains whoever reads the dashboard to ignore the one signal that is supposed to mean
+     * something.
+     */
+    app.setGlobalPrefix('api/v1');
+
     // Dedicated worker: runs Bull processors + scheduled crons and skips the request-serving
     // middleware stack below (compression, LiveKit proxy, body parsers, Swagger) because nothing
     // here ever takes a real user request. init() runs the module lifecycle hooks that register
     // the processors and repeatable jobs.
     await app.init();
 
-    // Still needs ONE thing HTTP-shaped: liveness. The prod healthcheck (deploy/docker-compose.prod.yml)
-    // wgets /api/v1/health on every container in the compose file, worker included — a worker with
-    // no listener there fails its healthcheck forever and the orchestrator kills a process that was
-    // never actually broken. HealthController is already registered on this app (AppModule), so
-    // this is the global prefix plus app.listen and nothing else — not a second Express app, not a
-    // duplicate of the health logic, just skipping the api-only middleware above.
-    app.setGlobalPrefix('api/v1');
     const workerPort = process.env.WORKER_HEALTH_PORT || process.env.PORT || 3000;
     await app.listen(workerPort);
 

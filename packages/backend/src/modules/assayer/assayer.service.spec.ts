@@ -745,9 +745,17 @@ describe('AssayerService', () => {
       mockAssayerRepo.findOne.mockResolvedValue(activeAssayer);
       mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
 
-      const result = await service.archiveAssayer('asr-1', 'user-1');
+      // A reason, because archival joined `LIFECYCLE_MOVES_NEEDING_A_REASON` when INVITED and
+      // DOCUMENT_VERIFICATION gained edges into it: revoking an invitation is a fresh decision
+      // about somebody nobody has recorded anything about, and it arrives at the same state.
+      const result = await service.archiveAssayer('asr-1', 'user-1', 'Leaver file closed.');
 
       expect(result.isActive).toBe(false);
+    });
+
+    it('refuses to archive without saying why', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ ...assayer, lifecycleStatus: AssayerLifecycleStatus.RESIGNED });
+      await expect(service.archiveAssayer('asr-1', 'user-1')).rejects.toThrow(/Say why/);
     });
 
     it('should sync operational status on transition', async () => {
@@ -767,7 +775,11 @@ describe('AssayerService', () => {
 
   describe('remove — transactional cascade', () => {
     const deletedAssayer = {
+      // A lifecycle status, because the deletion audit now records the state it deleted FROM —
+      // that is what lets the trail tell an administrative deletion apart from an archival that
+      // went through the lifecycle, which was indistinguishable before.
       id: 'a-1', displayName: 'Test Person', organizationId: 'org-1', isActive: true,
+      lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
     };
 
     beforeEach(() => {
@@ -784,7 +796,7 @@ describe('AssayerService', () => {
      * rather than eleven autocommits.
      */
     it('runs the whole cascade inside the unit of work', async () => {
-      await service.remove('a-1', 'user-1');
+      await service.remove('a-1', 'user-1', 'Duplicate record created in error.');
       expect(mockUow.run).toHaveBeenCalledTimes(1);
     });
 
@@ -797,7 +809,7 @@ describe('AssayerService', () => {
      * never touched `status` — so both assertions below fail against that code.
      */
     it('excludes COMPLETED assignments from deactivation and cancels the rest with a terminal status', async () => {
-      await service.remove('a-1', 'user-1');
+      await service.remove('a-1', 'user-1', 'Duplicate record created in error.');
       const assignmentsCall = mockDataSource.query.mock.calls.find(
         ([sql]: [string]) => /UPDATE\s+assignments\b/i.test(sql),
       );
@@ -808,8 +820,32 @@ describe('AssayerService', () => {
       expect(params).toEqual([AssignmentStatus.CANCELLED, 'user-1', 'a-1', AssignmentStatus.COMPLETED]);
     });
 
+    /**
+     * Deletion is an administrative act on a ROW, not a lifecycle move on a person — so it keeps
+     * its own route rather than joining the transition map, and it earns its own controls
+     * instead. The certification found it archiving an ACTIVE assayer in one call, with no reason
+     * and nothing in the trail to tell it apart from an ordinary archival.
+     */
+    it('refuses to delete a record without saying why', async () => {
+      await expect(service.remove('a-1', 'user-1')).rejects.toThrow(/Say why/);
+      await expect(service.remove('a-1', 'user-1', '   ')).rejects.toThrow(/Say why/);
+      expect(mockUow.run).not.toHaveBeenCalled();
+    });
+
+    it('records the reason and the state it deleted from, so the trail can tell it apart', async () => {
+      await service.remove('a-1', 'user-1', 'Duplicate created by a double-submitted form.');
+      const call = mockAuditService.recordEvent.mock.calls
+        .map(([e]: [any]) => e)
+        .find((e: any) => e.eventType === 'ASSAYER_DELETED');
+      expect(call).toBeDefined();
+      expect(call.remarks).toMatch(/Duplicate created by a double-submitted form/);
+      expect(call.metadata).toEqual(expect.objectContaining({ reason: expect.any(String) }));
+      expect(call.previousState).toBeDefined();
+      expect(call.newState).toBe('ARCHIVED');
+    });
+
     it('leaves a COMPLETED assignment\'s schedule alone too', async () => {
-      await service.remove('a-1', 'user-1');
+      await service.remove('a-1', 'user-1', 'Duplicate record created in error.');
       const schedulesCall = mockDataSource.query.mock.calls.find(
         ([sql]: [string]) => /UPDATE\s+schedules\b/i.test(sql),
       );
@@ -1122,13 +1158,44 @@ describe('AssayerService', () => {
    * assignment and to sending work back for rework.
    */
   describe('transitionLifecycle — reasons on the record', () => {
-    it.each(['SUSPENDED', 'INACTIVE', 'RESIGNED', 'TERMINATED'])(
+    /**
+     * The reason is demanded by `doTransitionLifecycle`, the one funnel all three routes share —
+     * not by the single-move route, where it used to live alongside a copy in the bulk route that
+     * tested the final target only. That copy is why `RESIGNED → … → ACTIVE` could re-onboard a
+     * departed person in one unreasoned call.
+     *
+     * Moving it there also means the record is loaded first, which is a small improvement in its
+     * own right: poking a nonexistent or archived assayer now answers "not found" instead of
+     * "say why this assayer is being moved to…", which read as though the move would work given
+     * an explanation. It would not.
+     */
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'as-1', assayerCode: 'AS-1', lifecycleStatus: 'ACTIVE', isActive: true, version: 1,
+      });
+      mockAssayerRepo.save.mockImplementation(async (v: any) => v);
+      mockWorkforceRepo.find.mockResolvedValue([]);
+    });
+
+    it.each(['SUSPENDED', 'INACTIVE', 'RESIGNED'])(
       'refuses to move someone to %s with no reason',
       async (target) => {
         await expect(service.transitionLifecycle('as-1', target, 'user-1')).rejects.toThrow(/Say why/);
         await expect(service.transitionLifecycle('as-1', target, 'user-1', '   ')).rejects.toThrow(/Say why/);
       },
     );
+
+    it('refuses a dismissal with no reason, from the only state it is reachable from', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'as-1', assayerCode: 'AS-1', lifecycleStatus: 'SUSPENDED', isActive: true, version: 1,
+      });
+      await expect(service.transitionLifecycle('as-1', 'TERMINATED', 'user-1')).rejects.toThrow(/Say why/);
+    });
+
+    it('answers "not found" rather than asking for a reason when the record is not there', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      await expect(service.transitionLifecycle('as-1', 'SUSPENDED', 'user-1')).rejects.toThrow(/not found/);
+    });
 
     it('asks for nothing extra when someone simply progresses through onboarding', async () => {
       mockAssayerRepo.findOne.mockResolvedValue({
@@ -1421,9 +1488,15 @@ describe('AssayerService', () => {
       // Unlike `remove()`'s cascade, no `is_active = false` here.
       expect(sql).not.toMatch(/is_active\s*=\s*false/);
       expect(sql).toMatch(/SET\s+status\s*=\s*\$1/);
-      expect(sql).toMatch(/status\s*!=\s*\$5/);
+      // An explicit open set, not `!= COMPLETED`. The old predicate was also true of CANCELLED
+      // and REJECTED, so every departure re-closed work an earlier decision had already closed
+      // and counted it again in the consequence line on the employment record.
+      expect(sql).toMatch(/status\s*=\s*ANY\(\$5\)/);
+      expect(sql).not.toMatch(/status\s*!=/);
       expect(params).toEqual([
-        AssignmentStatus.CANCELLED, expect.any(String), 'u-1', 'as-1', AssignmentStatus.COMPLETED,
+        AssignmentStatus.CANCELLED, expect.any(String), 'u-1', 'as-1',
+        [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED,
+         AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS],
       ]);
     });
 

@@ -8,6 +8,7 @@ import {
 } from '@fapoms/shared';
 import { isAddressUsable } from '../geo/indian-address';
 import { AssayerEntity } from './assayer.entity';
+import { tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
@@ -1119,8 +1120,23 @@ export class DataIntegrityService {
     if (targetPan) selectFields.push('panNumber');
     if (targetAadhaar) selectFields.push('aadhaarNumber');
 
+    /**
+     * Scoped, even though this is only an advisory duplicate check.
+     *
+     * `GET /assayers/identifier-check` is what the registration form calls while somebody types a
+     * PAN or a phone number, and what it returns for a hit is the matching person's code, display
+     * name and lifecycle status. Unscoped, that turned the form into an oracle over the whole
+     * platform: enter a PAN and learn the name and standing of whoever holds it, in any
+     * organisation, from a route with no id in it and nothing to guess.
+     *
+     * Nothing depends on it seeing across organisations. It is advice, not a constraint — unlike
+     * `assayer_code`, which carries a database-wide UNIQUE index and is deliberately checked
+     * platform-wide in `AssayerService.create` so a collision produces a clean 409 rather than a
+     * constraint violation. PAN and Aadhaar have no such index, so there is no second enforcement
+     * behind this to keep it honest with.
+     */
     const roster = await this.assayers.find({
-      where: { isActive: true },
+      where: tenantWhere<AssayerEntity>({ isActive: true }),
       select: selectFields,
     });
 

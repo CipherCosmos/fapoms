@@ -27,6 +27,25 @@ yarn-error.log*
 .env.docker
 !.env.docker.example
 
+# Backups of the env file, whatever they are called.
+#
+# `.env.docker` itself is ignored above, but a timestamped copy of it is not, and those get made
+# — by hand before an edit, and by `deploy/auto-deploy.sh`. One was sitting untracked in this
+# repository holding seven live secrets (JWT signing key, database password, the PII encryption
+# key) and would have been committed by the next `git add -A`. The pattern matters more than the
+# one file: a secret leaks once and is burned for ever, and `assertProductionSafeConfig` already
+# has to permanently refuse two values for exactly that reason.
+.env*.bak
+.env*.bak-*
+.env.*.backup
+
+# Runtime caches written next to the code rather than into a volume. `var/geo-cache` is the
+# geocoder's on-disk memo; it is derived data, it grows without bound, and it is per-machine.
+var/
+
+# Worktrees created for background agent sessions.
+.claude/worktrees/
+
 # IDE & OS Files
 .DS_Store
 .idea/

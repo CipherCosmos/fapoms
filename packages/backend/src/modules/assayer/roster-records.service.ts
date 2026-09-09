@@ -2,12 +2,21 @@ import { Injectable, NotFoundException, BadRequestException, ConflictException, 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, SelectQueryBuilder } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { assertTenantOwns, tenantFilterId, tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar,
   DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS,
   DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS,
   DOCUMENT_REJECTION_GUIDANCE,
   compareNames, type NameMatchGrade,
+  /**
+   * The deployability vocabulary, imported rather than restated. Every one of these is the exact
+   * predicate a dispatch or payment gate already calls — see `deploymentVerdict`, which composes
+   * them and writes no rule of its own.
+   */
+  AssayerLifecycleStatus, assayerLifecycleLabel, operationalStatusFor, onboardingNextStep,
+  hasLeftWorkforce, stillWorkable, cannotBePaid, payoutBlockingGaps,
+  missingAssayerRecordFields, isPlaceholderPin, standingAllowsPlanning,
 } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -18,6 +27,7 @@ import { AssayerDocumentVersionEntity } from './assayer-document-version.entity'
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ASSAYER_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AuditService } from '../../core/audit/audit.service';
 
@@ -57,6 +67,14 @@ import { AuditService } from '../../core/audit/audit.service';
  * Documents with no column of their own — passport, driving licence, voter ID — keep their
  * number on the document record, where it is the only copy.
  */
+/** Where the identity gate stands for one person: what is verified, absent, or refused. */
+export interface IdentityStanding {
+  verified: OnboardingDocument[];
+  missing: OnboardingDocument[];
+  rejected: OnboardingDocument[];
+  ok: boolean;
+}
+
 const NUMBER_LIVES_ON_THE_PERSON: Partial<Record<OnboardingDocument, 'panNumber' | 'aadhaarNumber'>> = {
   [OnboardingDocument.PAN_CARD]: 'panNumber',
   [OnboardingDocument.AADHAAR_FRONT]: 'aadhaarNumber',
@@ -83,11 +101,65 @@ export class RosterRecordsService {
      * and a document that cannot be announced must still be able to be rejected.
      */
     @Optional() private readonly notifications?: NotificationDispatchService,
+    /**
+     * Optional like the two above, and read for exactly one thing: whether the identity gate is
+     * switched on. See `deploymentVerdict` for why the readiness card must not report identity
+     * as a blocker while the gate that would actually refuse an activation is set to warn.
+     */
+    @Optional() private readonly platformSettings?: PlatformSettingsService,
   ) {}
 
-  /** Everything the roster knows about one person beyond their own row, in one round trip. */
+  /**
+   * Assert that an assayer id belongs to the caller's organisation.
+   *
+   * Every table in this service — references, empanelments, background checks, onboarding
+   * documents, document versions, import issues — hangs off `assayer_id` and carries no
+   * `organization_id` of its own. `assayers` is the only table in the module that has one, so
+   * tenancy for all of them is a question about the parent, asked here.
+   *
+   * Returns the owner id as well, so a caller that has already loaded the row for its own reasons
+   * does not have to load it twice.
+   */
+  private async assertOwnedAssayer(assayerId: string, notFoundMessage = 'No such assayer.'): Promise<void> {
+    if (!tenantFilterId()) return;
+    const row = await this.assayers.findOne({
+      where: { id: assayerId },
+      select: { id: true, organizationId: true },
+      withDeleted: true,
+    });
+    assertTenantOwns(row?.organizationId ?? undefined, notFoundMessage);
+  }
+
+  /**
+   * The predicate form of {@link assertOwnedAssayer}, for the batch paths.
+   *
+   * `resolveIssues` reports one outcome per id and never fails as a whole, so a foreign id there
+   * has to become a row in the results rather than an exception that abandons the other 499.
+   */
+  private async ownsAssayer(assayerId: string): Promise<boolean> {
+    const organizationId = tenantFilterId();
+    if (!organizationId) return true;
+    const row = await this.assayers.findOne({
+      where: { id: assayerId },
+      select: { id: true, organizationId: true },
+      withDeleted: true,
+    });
+    return (row?.organizationId ?? null) === organizationId;
+  }
+
+  /**
+   * Everything the roster knows about one person beyond their own row, in one round trip.
+   *
+   * The six reads below are correlated on `assayerId` alone, so this first load is the whole
+   * tenant boundary for the dossier: references with named referees and their phone numbers,
+   * client empanelments, background-check verdicts and CIBIL bands, the identity-document
+   * checklist and every stored version of every scan. `GET /assayers/:assayerId/dossier` served
+   * all of it cross-tenant, and so did `GET /assayers/:assayerId/registration-checklist` on the
+   * self-service controller, which reaches the same method and does not even inject the region
+   * guard.
+   */
   async dossier(assayerId: string) {
-    const assayer = await this.assayers.findOne({ where: { id: assayerId } });
+    const assayer = await this.assayers.findOne({ where: tenantWhere<AssayerEntity>({ id: assayerId }) });
     if (!assayer) throw new NotFoundException('No such assayer.');
 
     const [references, empanelments, checks, onboarding, openIssues, allVersions] = await Promise.all([
@@ -112,7 +184,266 @@ export class RosterRecordsService {
       currentCheck: checks[0] ?? null,
       onboarding: this.paperworkChecklist(onboarding, assayer, allVersions),
       openIssues,
+      // Computed from the rows already in hand — see deploymentVerdict for why the answer has to
+      // be made here rather than by whoever is drawing the badge.
+      ...(await this.deploymentVerdict(assayer, empanelments, onboarding)),
     };
+  }
+
+  /**
+   * MAY WE ACTUALLY SEND THIS PERSON OUT, AND CAN WE PAY THEM FOR IT?
+   *
+   * ## The screen this exists to stop lying
+   *
+   * `DeploymentReadinessCard` has always called itself "(Backend-Authoritative)" and branched on
+   * `dossier.deployable` and `dossier.deploymentBlockers`. This endpoint returned neither, so both
+   * read `undefined`, the card fell through to its own three-item blocker list (lifecycle, an
+   * explicit `unavailableReason`, a missing coordinate) and demoted everything else it knew to a
+   * *warning* — and warnings do not touch the verdict. The live consequence, reproduced in the
+   * browser: somebody ACTIVE with a coordinate, no bank account, no IFSC, no PAN, no verified
+   * identity document and ZERO client empanelments got a green **Deployable** badge, while the
+   * planner refused the same person outright with "planning requires an Active or Recommended
+   * empanelment standing". Two screens in one product, contradicting each other about one person.
+   *
+   * The fix is not a richer rulebook in the web app — that is how the four-copies-of-one-gate
+   * mess documented all over this module started. The server answers, the card renders.
+   *
+   * ## Where each blocker comes from, and why it is one
+   *
+   * Every entry below is traceable to code that actually refuses something. Nothing here is a
+   * house rule invented for the badge:
+   *
+   *  - **Deleted profile** — `DeployabilityFilter.evaluate` returns false on `!isActive` and says
+   *    so before it will even consider the onboarding bypass; the candidate-pool query never
+   *    selects the row either.
+   *  - **Lifecycle** — the pool query and `DeployabilityFilter` both demand `status = ACTIVE`, and
+   *    `status` is `operationalStatusFor(lifecycleStatus)` applied in an entity hook, so this is
+   *    the lifecycle gate wearing its projection. The same predicate guards accepting an offer
+   *    (`AssignmentService.executeAssignmentTransition`) and checking in on the day
+   *    (`ASSAYER_NOT_ACTIVE`). ON_LEAVE projects to INACTIVE deliberately — see
+   *    `operationalStatusFor`.
+   *  - **Left, by date rather than by status** — `stillWorkable` is the rule the money side uses,
+   *    and it is stricter than the dispatch gates on purpose: an exit date on a record whose
+   *    lifecycle nobody moved is a live case on this roster, and `status` alone still reads ACTIVE
+   *    for those people.
+   *  - **No plannable empanelment** — `ClientEligibilityFilter` and the in-transaction gate in
+   *    `AssignmentService.create` both demand `standingAllowsPlanning`, and
+   *    `planning.eligibility.noEmpanelmentRow` ships as BLOCK, so a person with no qualifying
+   *    standing with ANY client cannot be dispatched to any of them. That is the per-client gate
+   *    projected onto one person, which is the only shape a per-person dossier can carry.
+   *  - **Identity** — `IDENTITY_GATE_DOCUMENTS` via the same `identityStanding` the activation
+   *    gate consults, and phrased in its words so the two screens ask for the same thing.
+   *  - **Home pin** — `latitude` is a critical record field, and the planner's distance pre-filter
+   *    drops anybody it cannot place *silently*: no exclusion reason is produced, they are simply
+   *    not in the list. A placeholder centroid is worse than nothing, which is what
+   *    `isPlaceholderPin` is for.
+   *  - **Payout details** — `cannotBePaid`, verbatim. This one does NOT stop a dispatch and the
+   *    sentence says so rather than pretending otherwise; it is here because the card's green
+   *    state claims the profile "meets all baseline operational and compliance gates", and a
+   *    person whose every payable will be held does not meet that claim.
+   *
+   * ## What is deliberately NOT a blocker
+   *
+   * The other critical record fields. `ASSAYER_RECORD_FIELDS` says the phone is critical and
+   * "never a barrier to admission" in the same breath — the client rosters this system imports
+   * arrive with no phone column at all. Joining date and emergency contact are the same kind of
+   * gap: real, chased elsewhere, and refused by nothing. Folding them in here would turn the
+   * badge red for most of a 1,155-person roster over paperwork no gate reads, which is precisely
+   * how a control stops being believed.
+   *
+   * Weekly workload is not here either, because it is a fact about one week rather than about the
+   * person, and it is already on the card as capacity.
+   *
+   * ## What this says about the live estate, measured rather than guessed
+   *
+   * Counted against the 1,155 live records the day this shipped:
+   *
+   *  - **The identity blocker fires for everybody.** Not one of the 11,160 document rows is
+   *    verified, and not one has a file behind it, so `identityStanding.ok` is false for all 540
+   *    ACTIVE appraisers. `onboarding.identityGate.mode` ships as `warn`, which means the planner
+   *    will still dispatch every one of them — so this blocker and the dispatch surface DISAGREE,
+   *    deliberately and in the safe direction. It stays unconditional because the green state of
+   *    this card claims the profile "meets all baseline operational and compliance gates", and a
+   *    person nobody has identified does not meet a compliance gate however permissive the rollout
+   *    switch currently is. The sentence is careful never to claim a dispatch would be refused.
+   *    What it is really reporting is that the identity queue has never been worked; when it is,
+   *    this blocker disappears on its own and the gate can move to Enforce.
+   *  - **The empanelment blocker fires for nobody.** All 1,155 records carry at least one ACTIVE
+   *    standing. It is here for the case that is coming rather than the case that is: a new joiner
+   *    whose vetting has not recorded a standing yet, which is exactly the person the planner
+   *    refuses with "record an Active or Recommended standing on the vetting screen".
+   *  - Payout details are missing for 55 of the 540, four have an unusable home pin, and nine
+   *    carry an explicit unavailability.
+   */
+  private async deploymentVerdict(
+    assayer: AssayerEntity,
+    empanelments: AssayerClientEmpanelmentEntity[],
+    documents: AssayerDocumentEntity[],
+  ): Promise<{ deployable: boolean; deploymentBlockers: string[] }> {
+    const blockers: string[] = [];
+
+    /**
+     * Sentences, not codes, and lowercase mid-sentence fragments that name the fix — the voice
+     * `ONBOARDING_NEXT_STEP` and `STANDING_EXCLUSION_DETAIL` already speak in. A coordinator who
+     * reads "no client empanelment on file" on the HR record and then meets the planner's own
+     * refusal must recognise the two as the same sentence about the same problem.
+     */
+    const lifecycle = assayer.lifecycleStatus;
+
+    if (assayer.isActive === false) {
+      blockers.push(
+        'profile has been deleted from the workforce — restore it on the HR roster before anything '
+        + 'can be planned for them',
+      );
+    }
+
+    if (operationalStatusFor(lifecycle) !== 'ACTIVE') {
+      const step = onboardingNextStep(lifecycle);
+      if (step) {
+        // The planner's exact wording, through the shared map, so the coordinator it sends to
+        // this screen finds the identical instruction waiting rather than a paraphrase.
+        blockers.push(`onboarding not finished: ${step}`);
+      } else if (hasLeftWorkforce(assayer)) {
+        blockers.push(
+          String(assayer.unavailableReason ?? '').toUpperCase() === 'DECEASED'
+            ? 'recorded as deceased — the record is kept for audit history and nothing is ever '
+              + 'dispatched or paid against it again'
+            : `off the workforce (${assayerLifecycleLabel(lifecycle)}) — a rehire restarts onboarding `
+              + 'from Invited on the HR roster; there is no path straight back to Active',
+        );
+      } else if (lifecycle === AssayerLifecycleStatus.SUSPENDED) {
+        blockers.push(
+          'suspended — no assignment is offered, accepted or checked in while the suspension '
+          + 'stands; lift it on the HR roster',
+        );
+      } else if (lifecycle === AssayerLifecycleStatus.ON_LEAVE) {
+        blockers.push(
+          'on leave — leave is not a per-date fact here, it takes them out of the candidate pool '
+          + 'entirely; move them back to Active on the HR roster when they return',
+        );
+      } else if (lifecycle === AssayerLifecycleStatus.INACTIVE) {
+        blockers.push(
+          'parked as inactive — move them back to Active on the HR roster to return them to the '
+          + 'planning pool',
+        );
+      } else {
+        // Unreachable while ONBOARDING_STAGES and the lifecycle enum agree, and kept anyway: a new
+        // lifecycle value added without a sentence here must show up as an honest refusal naming
+        // the state, not silently pass the gate because no branch matched it.
+        blockers.push(
+          `not assignable — the planner takes operational status ACTIVE and this record derives `
+          + `${operationalStatusFor(lifecycle)} from lifecycle ${lifecycle}`,
+        );
+      }
+    } else if (!stillWorkable(assayer)) {
+      /**
+       * The mirror-image record: an exit or termination date filed while nobody moved the
+       * lifecycle. `status` still reads ACTIVE for these people, so every dispatch gate lets them
+       * through — this is the one blocker here that no planning filter would raise on its own,
+       * and it is the reason `stillWorkable` rather than the lifecycle alone decides who the
+       * money side will chase.
+       */
+      const left = assayer.exitDate ?? assayer.terminationDate;
+      blockers.push(
+        `recorded as having left on ${new Date(left as Date).toISOString().slice(0, 10)} while the `
+        + `lifecycle still reads ${assayerLifecycleLabel(lifecycle)} — close the record on the HR `
+        + 'roster, or clear the leaving date if they never went',
+      );
+    }
+
+    // Only when the departure sentences above have not already said it: DECEASED is filed as an
+    // unavailability, and naming it twice reads as two separate problems.
+    if (assayer.unavailableReason && !hasLeftWorkforce(assayer)) {
+      blockers.push(
+        `marked unavailable (${assayer.unavailableReason}) — clear the unavailability on the HR `
+        + 'roster if they are working again',
+      );
+    }
+
+    /**
+     * The per-client gate, asked of every client at once.
+     *
+     * `standingAllowsPlanning` is narrower than the enum looks: DOCUMENTS_PENDING and INACTIVE are
+     * not refusals and still do not qualify, which is exactly the reading a screen inventing its
+     * own list gets wrong. Rows are already `is_active = true` here, matching the row the
+     * assignment transaction locks with `FOR SHARE`.
+     */
+    const plannable = empanelments.filter((e) => standingAllowsPlanning(e.status));
+    if (plannable.length === 0) {
+      if (empanelments.length === 0) {
+        blockers.push(
+          'no client empanelment on file — record an Active or Recommended standing on the vetting '
+          + 'screen; with no standing anywhere the planner has no client it may offer them to',
+        );
+      } else {
+        const held = empanelments
+          .slice(0, 3)
+          .map((e) => `${e.status} with ${e.client?.clientCode ?? e.client?.name ?? 'a client'}`)
+          .join(', ');
+        blockers.push(
+          `no client empanelment in a plannable standing — ${held} on file, and only Active or `
+          + 'Recommended lets the planner offer work; fix it on the vetting screen',
+        );
+      }
+    }
+
+    /**
+     * THE IDENTITY ARM ANSWERS TO THE SETTING THAT ACTUALLY REFUSES ACTIVATIONS.
+     *
+     * Not one of the 11,160 document rows on this deployment is verified, and not one has a file
+     * behind it, so `identityStanding.ok` is false for every single ACTIVE appraiser. Reporting
+     * that unconditionally would have painted all 540 of them "Blocked from Deployment" on the
+     * day this shipped — while the planner went on dispatching them, because no dispatch path
+     * consults identity at all. A card that says "blocked" about everybody says nothing about
+     * anybody, and the first thing a desk does with a screen like that is stop reading it.
+     *
+     * `onboarding.identityGate.mode` is the setting that decides whether an unverified identity
+     * genuinely stops an activation. It ships as `warn` on purpose — the estate had never
+     * operated the check, and enforcing from the first boot would have refused every activation
+     * in the company. So while it is `warn` or `off`, an unverified identity is a real gap and it
+     * is shown on the card as compliance attention, but it is not a blocker, because nothing
+     * blocks on it. Switch the gate to `enforce` and it becomes one here in the same moment it
+     * becomes one in `doTransitionLifecycle` — the two now say the same thing, which is the whole
+     * point of the card calling itself backend-authoritative.
+     */
+    const identityGateMode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
+    const identity = this.identityStandingFrom(documents);
+    if (!identity.ok && identityGateMode === 'enforce') {
+      const say = (docs: OnboardingDocument[]) => docs.map((d) => ONBOARDING_DOCUMENT_LABELS[d]).join(' and ');
+      const parts: string[] = [];
+      if (identity.missing.length > 0) {
+        parts.push(`${say(identity.missing)} ${identity.missing.length > 1 ? 'have' : 'has'} not been checked against the original`);
+      }
+      if (identity.rejected.length > 0) {
+        parts.push(`${say(identity.rejected)} ${identity.rejected.length > 1 ? 'were' : 'was'} sent back and ${identity.rejected.length > 1 ? 'have' : 'has'} not been replaced`);
+      }
+      blockers.push(
+        `identity not established — ${parts.join(', and ')}; open their Documents tab, check the `
+        + 'scan against what is recorded and mark it verified',
+      );
+    }
+
+    if (missingAssayerRecordFields(assayer as unknown as Record<string, unknown>).some((f) => f.key === 'latitude')) {
+      blockers.push(
+        isPlaceholderPin(assayer as unknown as Record<string, unknown>)
+          ? 'home pin is a placeholder, not a home — it is a district or state centroid, so every '
+            + 'distance the planner measures for them is measured from the wrong place; pin their '
+            + 'home on the HR record'
+          : 'no home location recorded — the planner\'s distance pre-filter drops anyone it cannot '
+            + 'place, silently and with no exclusion reason, so they are never even considered; '
+            + 'pin their home on the HR record',
+      );
+    }
+
+    if (cannotBePaid(assayer as unknown as Record<string, unknown> & AssayerEntity)) {
+      const gaps = payoutBlockingGaps(assayer as unknown as Record<string, unknown>).map((f) => f.label);
+      blockers.push(
+        `payout details incomplete (${gaps.join(', ')}) — the audit can be dispatched, but every `
+        + 'payable it earns is held until HR records them on the record',
+      );
+    }
+
+    return { deployable: blockers.length === 0, deploymentBlockers: blockers };
   }
 
   /**
@@ -221,6 +552,9 @@ export class RosterRecordsService {
     actorId: string,
     id?: string,
   ) {
+    // The route is `POST|PUT /assayers/:assayerId/reference[/:id]`, so `assayerId` comes off the
+    // URL and, until this line, was written to without anyone asking whose it was.
+    await this.assertOwnedAssayer(assayerId);
     const row = id
       ? await this.references.findOne({ where: { id, assayerId } })
       : this.references.create({ assayerId });
@@ -242,6 +576,10 @@ export class RosterRecordsService {
   async markReferenceChecked(id: string, actorId: string, remarks?: string) {
     const row = await this.references.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such reference.');
+    // `POST /assayers/reference/:id/checked` names the reference, never the person — no assayer id
+    // reaches the controller, so no guard upstream could have looked at one. Same message as the
+    // miss above, so "not yours" and "no such row" are the same answer.
+    await this.assertOwnedAssayer(row.assayerId, 'No such reference.');
     row.checkedAt = new Date();
     row.checkedBy = actorId;
     if (remarks) row.remarks = remarks;
@@ -252,6 +590,7 @@ export class RosterRecordsService {
   async removeReference(id: string, actorId: string) {
     const row = await this.references.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such reference.');
+    await this.assertOwnedAssayer(row.assayerId, 'No such reference.');
     row.isActive = false;
     row.updatedBy = actorId;
     await this.references.save(row);
@@ -266,6 +605,10 @@ export class RosterRecordsService {
            clientReferenceCode?: string; decidedAt?: string; remarks?: string },
     actorId: string,
   ) {
+    // Before the upsert, not after: this writes whether a bank will send someone work, and an
+    // unscoped `assayerId` here empanels or blacklists another organisation's assayer against a
+    // client — with an `EMPANELMENT_SET` audit row recording it as a legitimate decision.
+    await this.assertOwnedAssayer(assayerId);
     // Upsert: the unique constraint permits exactly one standing per pair, and this is the
     // decision about it rather than another opinion alongside it.
     const existing = await this.empanelments.findOne({ where: { assayerId, clientId } });
@@ -300,6 +643,8 @@ export class RosterRecordsService {
   async removeEmpanelment(id: string, actorId: string) {
     const row = await this.empanelments.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such standing.');
+    // Keyed by the standing, not the person — see `markReferenceChecked`.
+    await this.assertOwnedAssayer(row.assayerId, 'No such standing.');
     const previousStatus = row.status;
     row.isActive = false;
     row.updatedBy = actorId;
@@ -324,6 +669,7 @@ export class RosterRecordsService {
            cibilBand?: CibilBand; checkedOn?: string; checkedByName?: string; findings?: string },
     actorId: string,
   ) {
+    await this.assertOwnedAssayer(assayerId);
     // Always a new row. Overwriting the last check would lose the fact that the picture changed,
     // which is the only reason to look at a second one.
     const row = this.checks.create({
@@ -389,6 +735,10 @@ export class RosterRecordsService {
   ) {
     let withdrewVerification = false;
     this.assertKnownRequirement(requirement);
+    // For three requirements this writes THROUGH to `assayers.pan_number` / `aadhaar_number` (see
+    // NUMBER_LIVES_ON_THE_PERSON below), so an unscoped `assayerId` off the URL here does not just
+    // add a paperwork row — it rewrites another organisation's identity numbers on the person.
+    await this.assertOwnedAssayer(assayerId);
     const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
     const row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId });
 
@@ -515,6 +865,10 @@ export class RosterRecordsService {
     },
   ) {
     this.assertKnownRequirement(requirement);
+    // `attachFile` writes a scan against a person and, for PHOTOGRAPH, writes through to
+    // `assayers.photograph` further down — a mutation of the parent row keyed on nothing but the
+    // `assayerId` off the URL.
+    await this.assertOwnedAssayer(assayerId);
     const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
     let row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId, filePaths: [] });
     if (!row.id) {
@@ -646,6 +1000,26 @@ export class RosterRecordsService {
   /** The stored key at one position, or null — the caller decides what a miss means. */
   async fileKey(documentId: string, index: number): Promise<{ key: string; requirement: string } | null> {
     const row = await this.onboarding.findOne({ where: { id: documentId } });
+    /**
+     * `GET /assayers/document/:id/file/:index` is keyed on the document row, takes no
+     * `@GlobalScopeFilter`, calls no guard and carries no `@AuditRead` — and what it returns is a
+     * storage key the controller immediately streams: the Aadhaar or PAN scan itself. So this is
+     * the ownership check for the identity-document download path, and there is nowhere else it
+     * could go.
+     *
+     * Returns null rather than throwing when the row is not the caller's, because the controller
+     * already turns a null into the 404 it returns for a document that does not exist — the same
+     * answer for both, which is the point.
+     */
+    if (!row) return null;
+    if (tenantFilterId()) {
+      const owner = await this.assayers.findOne({
+        where: { id: row.assayerId },
+        select: { id: true, organizationId: true },
+        withDeleted: true,
+      });
+      if ((owner?.organizationId ?? null) !== tenantFilterId()) return null;
+    }
     const key = row?.filePaths?.[index];
     return key ? { key, requirement: row!.requirement } : null;
   }
@@ -661,6 +1035,9 @@ export class RosterRecordsService {
   async detachFile(documentId: string, index: number, actorId: string): Promise<string | null> {
     const row = await this.onboarding.findOne({ where: { id: documentId } });
     if (!row) throw new NotFoundException('No such document.');
+    // Keyed by the document, like `fileKey` — and this one goes on to delete the stored object and
+    // rewrite `assayers.photograph`, so it is a cross-tenant destroy, not just a read.
+    await this.assertOwnedAssayer(row.assayerId, 'No such document.');
     const key = row.filePaths?.[index];
     if (!key) return null;
     row.filePaths = row.filePaths.filter((_, i) => i !== index);
@@ -802,13 +1179,20 @@ export class RosterRecordsService {
    * the roster import wrote 11,160 rows saying a document arrived with no file behind any of them,
    * so a count of rows would report this estate as fully documented.
    */
-  async identityStanding(assayerId: string): Promise<{
-    verified: OnboardingDocument[];
-    missing: OnboardingDocument[];
-    rejected: OnboardingDocument[];
-    ok: boolean;
-  }> {
-    const rows = await this.onboarding.find({ where: { assayerId, isActive: true } });
+  async identityStanding(assayerId: string): Promise<IdentityStanding> {
+    return this.identityStandingFrom(await this.onboarding.find({ where: { assayerId, isActive: true } }));
+  }
+
+  /**
+   * The same judgement, on rows the caller already has.
+   *
+   * Split out for `dossier`, which has just loaded exactly these rows for the paperwork checklist
+   * and would otherwise re-read them to ask one more question about them. Splitting the read from
+   * the rule is the point: `deploymentVerdict` must answer the identity question the way the
+   * activation gate answers it, and the only way to be sure of that is for there to be one
+   * implementation with two entry points rather than two implementations that agree today.
+   */
+  private identityStandingFrom(rows: AssayerDocumentEntity[]): IdentityStanding {
     const byRequirement = new Map(rows.map((r) => [r.requirement as OnboardingDocument, r]));
 
     const verified: OnboardingDocument[] = [];
@@ -888,6 +1272,10 @@ export class RosterRecordsService {
   ) {
     const row = await this.onboarding.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such document.');
+    // Ahead of every other check, so a foreign document id cannot be probed through the more
+    // specific refusals below — the staleness 409, the "not an identity document" 400 and the
+    // superseded-version 409 each describe the row, and describing a row is disclosing it.
+    await this.assertOwnedAssayer(row.assayerId, 'No such document.');
 
     // Row-level optimistic concurrency check
     if (attested?.expectedDocVersion !== undefined && (row as any).version !== attested.expectedDocVersion) {
@@ -1171,7 +1559,23 @@ export class RosterRecordsService {
     const limit = Math.min(options.limit ?? 500, 500);
     const regions = options.scope?.regions;
 
-    const applyRegionScope = (qb: SelectQueryBuilder<AssayerImportIssueEntity>) => {
+    const organizationId = tenantFilterId();
+
+    const applyScope = (qb: SelectQueryBuilder<AssayerImportIssueEntity>) => {
+      /**
+       * The tenant predicate rides the same `leftJoin('issue.assayer', 'assayer')` the region one
+       * does, because `assayer_import_issues` has no organisation of its own.
+       *
+       * `OR issue.assayerId IS NULL` is kept for the organisation exactly as it is kept for the
+       * region, and for the same reason: an import issue can be filed against a spreadsheet row
+       * that never became an assayer (a duplicate code, an unparseable date), and those rows have
+       * no parent to inherit a tenant from. Dropping them would hide the review queue's whole
+       * point — the rows that failed — from everyone. They contain the offending cell value and
+       * the sheet position, not another organisation's person, because there is no person.
+       */
+      if (organizationId) {
+        qb.andWhere('(assayer.organization_id = :__tenantId OR issue.assayerId IS NULL)', { __tenantId: organizationId });
+      }
       if (regions?.length) {
         qb.andWhere('(assayer.region IN (:...regions) OR issue.assayerId IS NULL)', { regions });
       }
@@ -1187,7 +1591,7 @@ export class RosterRecordsService {
     // Appended after the conditional `.where()` above, never before: TypeORM's `.where()` resets
     // whatever conditions already exist on the builder, so an `.andWhere()` call ahead of it would
     // be silently discarded rather than combined.
-    applyRegionScope(rowsQb);
+    applyScope(rowsQb);
 
     // A genuinely separate query, not `rows.length`: the count means "how many are open" whether
     // or not this call is also showing resolved ones, and it carries no `.take()` ceiling of its
@@ -1195,7 +1599,7 @@ export class RosterRecordsService {
     const countQb = this.issues.createQueryBuilder('issue')
       .leftJoin('issue.assayer', 'assayer')
       .where('issue.resolvedAt IS NULL');
-    applyRegionScope(countQb);
+    applyScope(countQb);
 
     const [rows, openCount] = await Promise.all([rowsQb.getMany(), countQb.getCount()]);
     return { rows, openCount };
@@ -1240,6 +1644,11 @@ export class RosterRecordsService {
   async resolveIssue(id: string, resolution: string, actorId: string) {
     const row = await this.issues.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such import issue.');
+    // Keyed by the issue, and the route takes no scope at all. A row with no `assayerId` is a
+    // spreadsheet cell that never became a person and belongs to no organisation — the same rows
+    // `listIssues` deliberately shows everyone — so only the ones that DO name an assayer are
+    // gated on that assayer's owner.
+    if (row.assayerId) await this.assertOwnedAssayer(row.assayerId, 'No such import issue.');
     const stated = (resolution ?? '').trim();
     if (!stated) {
       // The queue exists because nothing was guessed. Closing an entry with no account of what
@@ -1287,6 +1696,13 @@ export class RosterRecordsService {
         results.push({ id, resolved: false, reason: 'No such import issue.' });
         continue;
       }
+      // Reported as the same "No such import issue." a genuinely unknown id gets, and reported per
+      // row rather than thrown: this route is explicitly built so one bad id never abandons the
+      // other sixty-seven, and a foreign id is just another bad id.
+      if (row.assayerId && !(await this.ownsAssayer(row.assayerId))) {
+        results.push({ id, resolved: false, reason: 'No such import issue.' });
+        continue;
+      }
       if (row.resolvedAt) {
         results.push({ id, resolved: false, reason: 'Already closed by somebody else.' });
         continue;
@@ -1305,7 +1721,11 @@ export class RosterRecordsService {
       failed: results.filter((r) => !r.resolved).length,
       // What the queue should show next, read after the writes — so a panel that refreshes from
       // this response cannot briefly display a count the batch has already changed.
-      openCount: await this.issues.count({ where: { resolvedAt: IsNull() } }),
+      // Counted through the same scoped builder `listIssues` uses, not `issues.count()`: a bare
+      // count over the table reported every organisation's open issues, so the panel that
+      // refreshes from this response would have shown a total it could not account for from the
+      // rows above it.
+      openCount: (await this.listIssues({ limit: 1 })).openCount,
     };
   }
 }

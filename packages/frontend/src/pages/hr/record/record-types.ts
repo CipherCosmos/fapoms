@@ -96,8 +96,24 @@ export interface AssayerDossier {
   currentCheck: BackgroundCheck | null;
   onboarding: PaperworkDocument[];
   openIssues: any[];
-  deployable?: boolean;
-  deploymentBlockers?: string[];
+  /**
+   * The server's answer to "may we send this person out, and can we pay them for it", and the
+   * reasons when it is no. Written by `RosterRecordsService.deploymentVerdict`, which composes the
+   * gates that actually refuse things — the candidate-pool predicate, `DeployabilityFilter`,
+   * `ClientEligibilityFilter`, `identityStanding`, `cannotBePaid`.
+   *
+   * These were declared optional here long before the endpoint emitted either of them, which is
+   * how `DeploymentReadinessCard` came to branch on two fields that were always `undefined` while
+   * calling itself backend-authoritative. Required now, because the endpoint always sends them —
+   * and required is what makes a future removal a compile error instead of a green badge on
+   * somebody the planner refuses.
+   *
+   * `deploymentBlockers` are finished sentences meant for the screen, in the product's own voice
+   * (lowercase mid-sentence fragments that name the fix). Render them; do not parse them, and do
+   * not re-derive the verdict from them — `deployable` is the verdict.
+   */
+  deployable: boolean;
+  deploymentBlockers: string[];
 }
 
 export interface PlanningSnapshot {

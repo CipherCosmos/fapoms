@@ -25,6 +25,7 @@ import { SystemRole, ClientLifecycleStatus, ContractStatus, isValidGstin, isVali
 import { QualificationScoreService } from '../assayer/qualification-score.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
+import { IsHttpUrl, IsIndianMobile } from '../../infrastructure/http/format-validators';
 
 /**
  * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
@@ -105,14 +106,14 @@ class CreateClientRequestDto implements CreateClientDto {
   @IsOptional() @IsString() @TrimmedString() @MaxLength(50) clientCode?: string;
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name: string;
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) displayName: string;
-  @IsOptional() @IsString() @MaxLength(500) website?: string;
+  @IsOptional() @IsString() @MaxLength(500) @IsHttpUrl() website?: string;
   @IsOptional() @IsString() @MaxLength(100) industry?: string;
   @IsOptional() @IsString() @MaxLength(50) clientType?: string;
   @IsOptional() @IsString() @MaxLength(100) registrationNumber?: string;
   @IsOptional() @IsString() @MaxLength(100) @IsGstinOrPanFormat() taxId?: string;
   @IsOptional() @IsString() @MaxLength(200) contactPerson?: string;
   @IsOptional() @IsString() @MaxLength(255) contactEmail?: string;
-  @IsOptional() @IsString() @MaxLength(20) contactPhone?: string;
+  @IsOptional() @IsString() @MaxLength(20) @IsIndianMobile() contactPhone?: string;
   @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() @MaxLength(50) priority?: string;
   // A negative budget is not a budget. It was stored verbatim and rendered as "₹-5000.00".
@@ -127,14 +128,14 @@ class UpdateClientRequestDto implements UpdateClientDto {
   // Same rules as create — an edit must not be able to write what create refuses.
   @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name?: string;
   @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) displayName?: string;
-  @IsOptional() @IsString() @MaxLength(500) website?: string;
+  @IsOptional() @IsString() @MaxLength(500) @IsHttpUrl() website?: string;
   @IsOptional() @IsString() @MaxLength(100) industry?: string;
   @IsOptional() @IsString() @MaxLength(50) clientType?: string;
   @IsOptional() @IsString() @MaxLength(100) registrationNumber?: string;
   @IsOptional() @IsString() @MaxLength(100) @IsGstinOrPanFormat() taxId?: string;
   @IsOptional() @IsString() @MaxLength(200) contactPerson?: string;
   @IsOptional() @IsString() @MaxLength(255) contactEmail?: string;
-  @IsOptional() @IsString() @MaxLength(20) contactPhone?: string;
+  @IsOptional() @IsString() @MaxLength(20) @IsIndianMobile() contactPhone?: string;
   @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() @MaxLength(50) priority?: string;
   @IsOptional() @IsNumber() @Min(0) budget?: number;

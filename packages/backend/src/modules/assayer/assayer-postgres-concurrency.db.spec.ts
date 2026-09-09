@@ -39,6 +39,13 @@ describe('Phase 3 — Real PostgreSQL Concurrency Race Test Suite (Races A–F)'
   const createdClientIds: string[] = [];
   const createdProjectIds: string[] = [];
   const createdBranchIds: string[] = [];
+  // `branches` and `project_branches` are two tables with two independent id spaces, and cleanup
+  // used to delete from both using only the `project_branches` id — so the `DELETE FROM branches`
+  // matched nothing and every run leaked one branch row, permanently, plus the `clients` and
+  // `organizations` rows it holds a foreign key on (their deletes silently failed too). It went
+  // unnoticed only because the insert above has been erroring out, so no branch was reaching the
+  // table to be leaked. Track the two ids separately.
+  const createdRawBranchIds: string[] = [];
   const createdOrgIds: string[] = [];
 
   beforeAll(async () => {
@@ -69,7 +76,9 @@ describe('Phase 3 — Real PostgreSQL Concurrency Race Test Suite (Races A–F)'
       }
       if (createdBranchIds.length > 0) {
         await client.query('DELETE FROM project_branches WHERE id = ANY($1)', [createdBranchIds]);
-        await client.query('DELETE FROM branches WHERE id = ANY($1)', [createdBranchIds]);
+      }
+      if (createdRawBranchIds.length > 0) {
+        await client.query('DELETE FROM branches WHERE id = ANY($1)', [createdRawBranchIds]);
       }
       if (createdProjectIds.length > 0) {
         await client.query('DELETE FROM projects WHERE id = ANY($1)', [createdProjectIds]);
@@ -163,11 +172,24 @@ describe('Phase 3 — Real PostgreSQL Concurrency Race Test Suite (Races A–F)'
 
     const branchId = uuidv4();
     const solId = `SOL_${branchId.substring(0, 8)}`;
+    // `organization_id` is stamped from the org this fixture set was built under, NOT looked up.
+    // An earlier edit added the column with the value
+    // `(SELECT id FROM organizations WHERE is_active = true ORDER BY created_at LIMIT 1)` and, in
+    // doing so, mangled the parentheses into `now(, (SELECT …))` — invalid SQL, so every branch
+    // insert raised `syntax error at or near ","` and Races B, C, E and F died in setup before
+    // reaching a single concurrent statement. Restoring the parentheses alone would have made the
+    // suite pass while leaving the lookup wrong: it binds the branch to whichever organisation
+    // happens to sort first platform-wide, which is not the throwaway org that owns the client and
+    // project rows this branch is joined to. That mismatch is invisible until someone adds a
+    // tenant-scoped assertion here, at which point the fixture — not the code — is what fails, and
+    // it returns NULL outright the moment this database has no seeded organisation, which is
+    // exactly the state it is in now. `orgId` is already a parameter; use it.
     await client.query(
-      `INSERT INTO branches (id, version, client_id, sol_id, name, address, state, district, city, risk_score, complexity, estimated_duration_hours, is_active, created_at, updated_at)
-       VALUES ($1, 1, $2, $3, 'Test Branch', 'Nariman Point', 'MH', 'Mumbai', 'Mumbai', 10, 'LOW', 2, true, now(), now())`,
-      [branchId, clientId, solId],
+      `INSERT INTO branches (id, version, client_id, sol_id, name, address, state, district, city, risk_score, complexity, estimated_duration_hours, is_active, organization_id, created_at, updated_at)
+       VALUES ($1, 1, $2, $3, 'Test Branch', 'Nariman Point', 'MH', 'Mumbai', 'Mumbai', 10, 'LOW', 2, true, $4, now(), now())`,
+      [branchId, clientId, solId, orgId],
     );
+    createdRawBranchIds.push(branchId);
 
     const projectBranchId = uuidv4();
     await client.query(

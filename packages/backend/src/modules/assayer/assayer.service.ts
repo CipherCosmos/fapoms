@@ -1,7 +1,8 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
 import { RosterRecordsService } from './roster-records.service';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate,
 } from '@fapoms/shared';
@@ -12,6 +13,12 @@ import { diffFields } from '../../core/audit/diff-fields';
 import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { DATA_INTEGRITY_SHEET } from './data-integrity.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import {
+  assertTenantOwns,
+  tenantFilterId,
+  tenantStampId,
+  tenantWhere,
+} from '../../infrastructure/tenancy/ambient-tenant-context';
 import { pincodeAuthority } from '../geo/india-geocoder';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from '../geo/coordinate-resolution';
 import { reverseFreely } from '../geo/osm-geocoder';
@@ -815,6 +822,11 @@ export class AssayerService implements OnModuleInit {
     // hide anyone who has not yet worked for the client the operator happens to be scoped to.
     const where: Record<string, unknown> = { isActive: true };
     if (scope?.regions?.length) where.region = In(scope.regions);
+    // Region narrows what an operator chose to look at; the organisation decides what they are
+    // entitled to see at all, and the two are independent. Before this line an operator with no
+    // region assignment — the default — got every organisation's roster on page one.
+    const organizationId = tenantFilterId();
+    if (organizationId) where.organizationId = organizationId;
 
     const [assayers, total] = await this.assayerRepository.findAndCount({
       where,
@@ -986,6 +998,12 @@ export class AssayerService implements OnModuleInit {
   async mapRoster(scope?: Partial<GlobalScope>, limit = 2000): Promise<Array<Record<string, unknown>>> {
     const where: Record<string, unknown> = { isActive: true };
     if (scope?.regions?.length) where.region = In(scope.regions);
+    // The two grouped queries further down key off `ids`, which comes out of this find — so
+    // narrowing here narrows the empanelment and workload joins with it, and no other predicate
+    // is needed for them. It also means forgetting this one line would have plotted another
+    // organisation's workforce on the map, with their names and phone numbers in the popups.
+    const organizationId = tenantFilterId();
+    if (organizationId) where.organizationId = organizationId;
 
     const assayers = await this.assayerRepository.find({
       select: [
@@ -1051,11 +1069,122 @@ export class AssayerService implements OnModuleInit {
     }));
   }
 
+  /**
+   * One assayer by id, within the caller's organisation — the tenant boundary for most of this
+   * service, because most of this service loads through here.
+   *
+   * ## What was wrong
+   *
+   * This read `where: { id, isActive: true }` and nothing else. `organization_id` has been on the
+   * table since the beginning, is carried in every JWT and is stamped on create, and was never
+   * once used as a filter. The only ownership check anywhere on these routes was
+   * `regionGuard.assertAssayerInScope`, which compares the record's `region` column — a different
+   * question entirely — and early-returns for any account with no region assignment, which is
+   * every account by default. Finding F-03 reproduced the consequence end to end against the live
+   * system: an OPERATIONS user in organisation A read organisation B's assayer (200), suspended
+   * them (201), read their bank account number in cleartext (200) and soft-deleted them (204).
+   *
+   * ## Why the fix belongs here rather than at the routes
+   *
+   * `remove`, `update`, `doTransitionLifecycle` (and therefore every named lifecycle helper and
+   * the bulk walk), `updateLiveLocation`, `confirmBaseLocation`, `setLiveTracking`,
+   * `createCommercialProfile`, `operatorRevokeInvitation` and
+   * `operatorReconcileDepartedEmpanelments` all pre-read through this method. Adding the predicate
+   * at each of those instead would be nine chances to forget it, silently, in the permissive
+   * direction — the shape of mistake `TenantScopedRepository`'s comment was written about.
+   *
+   * ## Why the caller gets a 404
+   *
+   * The predicate is in the WHERE clause, so a foreign id simply matches nothing and the
+   * `NotFoundException` below — the one this method already threw for an unknown id — fires
+   * unchanged. That is the intended answer and not an accident of implementation: 404 for "not
+   * yours" is indistinguishable from 404 for "does not exist", whereas a 403 would confirm the id
+   * names a real assayer in some other organisation. See `assertTenantOwns` for the argument in
+   * full.
+   */
+  /**
+   * The record, for anything that intends to CHANGE it.
+   *
+   * `isActive: true` is what makes an archived assayer unreachable, and that is deliberate here:
+   * archival is the end of the line, so every mutation should refuse it, and refusing it at the
+   * load is stronger than refusing it at each rule. It is also, incidentally, the reason the
+   * transition endpoint answers 404 rather than 400 for a move out of ARCHIVED — the row is never
+   * loaded, so the map is never consulted.
+   *
+   * Reads go through `findOneForReading` instead. See its comment for why the two were separated.
+   */
   async findOne(id: string): Promise<AssayerEntity> {
-    const assayer = await this.assayerRepository.findOne({ where: { id, isActive: true } });
+    const assayer = await this.assayerRepository.findOne({
+      where: tenantWhere<AssayerEntity>({ id, isActive: true }),
+    });
     if (!assayer) throw new NotFoundException(`Assayer ${id} not found.`);
     await this.hydrateWorkforceAttributes(assayer);
     return assayer;
+  }
+
+  /**
+   * The record, for anything that only intends to LOOK at it — archived people included.
+   *
+   * ## Why this exists
+   *
+   * Archival used to be a soft delete by accident. `findOne` filters `isActive: true`, ARCHIVED
+   * is the one state that sets it false, and every read went through `findOne` — so a leaver's
+   * file 404'd by id, was absent from search and typeahead, and, most tellingly, the roster's own
+   * `lifecycleStatus=ARCHIVED` filter returned nothing at all. The screen offered a filter for a
+   * population it could never show. Nobody decided that; it fell out of one flag doing two jobs.
+   *
+   * The decision, taken deliberately: an archived record is READABLE and never MUTABLE. That is
+   * what archival means everywhere else — closed, not erased — and the data was always still
+   * there; only the way in was missing. HR can open a leaver's file to answer a reference check
+   * or a dispute, which is exactly when somebody needs it and exactly when the record is closed.
+   *
+   * ## The line between the two methods
+   *
+   * Every mutation keeps `findOne` and therefore keeps refusing archived rows. Reads use this.
+   * Splitting them rather than adding a boolean parameter is the point: a flag would let a caller
+   * opt into loading an archived record and then write to it, and the whole guarantee here is
+   * that no such caller can exist. `hasLeftWorkforce`, `stillWorkable` and the deployability
+   * verdict all continue to treat ARCHIVED as departed, so reading one cannot make it workable.
+   *
+   * Tenancy still applies. Being archived does not put somebody in a different organisation.
+   */
+  async findOneForReading(id: string): Promise<AssayerEntity> {
+    const assayer = await this.assayerRepository.findOne({
+      where: tenantWhere<AssayerEntity>({ id }),
+    });
+    if (!assayer) throw new NotFoundException(`Assayer ${id} not found.`);
+    await this.hydrateWorkforceAttributes(assayer);
+    return assayer;
+  }
+
+  /**
+   * Assert that an assayer id belongs to the caller's organisation, without loading the record.
+   *
+   * The counterpart to `findOne` for the paths that do NOT want the record: reads of a child
+   * table keyed on `assayer_id` (`assayer_payables`, `assayer_activities`, `workforce_attributes`,
+   * `assayer_commercial_profiles`), and mutations reached by a CHILD row's id, where the owner has
+   * to be resolved before ownership can be judged. None of those tables carries `organization_id`
+   * of its own — `assayers` is the only one in this module that does — so tenancy for every one of
+   * them is a question about the parent, which is what this asks.
+   *
+   * `withDeleted` is on, and that is the point of asking here rather than through `findOne`:
+   * `findOne` filters `isActive: true`, so a soft-deleted assayer would answer "not in your
+   * organisation" and turn a legitimate 400/409 about a departed person into a 404 about a
+   * stranger. Ownership does not lapse when a record is archived.
+   *
+   * Selects the one column it needs. This runs ahead of reads that are otherwise a single query,
+   * and the point is a cheap gate, not a second full load of a 90-column row.
+   */
+  private async assertAssayerInTenant(assayerId: string, notFoundMessage: string): Promise<void> {
+    if (!tenantFilterId()) return;
+    const row = await this.assayerRepository.findOne({
+      where: { id: assayerId },
+      select: { id: true, organizationId: true },
+      withDeleted: true,
+    });
+    // A row that does not exist at all gets the same answer as one belonging to somebody else —
+    // see `assertTenantOwns` for why the two must not be distinguishable.
+    assertTenantOwns(row?.organizationId ?? undefined, notFoundMessage);
   }
 
   /**
@@ -1116,8 +1245,26 @@ export class AssayerService implements OnModuleInit {
     assertNoMaskedPii(dto as Record<string, any>);
     const createRequestHash = dto.clientRequestId ? hashAssayerCreationRequest(dto) : null;
 
-    // Fast-path idempotency pre-check (tenant-scoped)
-    const orgId = organizationId ?? dto.organizationId ?? null;
+    /**
+     * The owning organisation, decided here and taken from the authenticated principal FIRST.
+     *
+     * `dto.organizationId` is a field on the request body. It was the last term of this
+     * expression, so it only ever applied when the controller passed nothing — but it was still a
+     * caller-chosen tenant, and once reads filter on this column a caller-chosen tenant is a
+     * caller-chosen audience: create a record stamped with somebody else's organisation and it
+     * appears on their roster. `tenantStampId()` reads `req.user.organizationId`, which the JWT
+     * guard resolved, so in a request it always wins.
+     *
+     * The two fallbacks are kept, in order, for the callers that have no request: the explicit
+     * argument (`AssayerController.create` passes `req.user.organizationId`) and then the DTO
+     * field, which several specs and the idempotency suite set directly.
+     *
+     * A null outcome is not refused here. It cannot happen through the API — every principal
+     * carries an organisation since the backfill — and refusing would break the direct callers
+     * above for no security gain: a null-owned row is invisible to every scoped read, so the
+     * failure direction is already closed.
+     */
+    const orgId = tenantStampId() ?? organizationId ?? dto.organizationId ?? null;
     if (dto.clientRequestId && createRequestHash) {
       const queryRunner = typeof this.assayerRepository?.manager?.query === 'function' ? this.assayerRepository.manager : this.dataSource;
       const existingIdemp = await queryRunner.query(
@@ -1139,10 +1286,21 @@ export class AssayerService implements OnModuleInit {
 
     const supplied = dto.assayerCode?.trim();
     if (supplied) {
+      /**
+       * Deliberately NOT tenant-scoped, and this is the one read in the module that should stay
+       * that way. `assayer_code` carries a database-wide UNIQUE constraint
+       * (`UQ_ac38fe8dfe44eb1ad3310e29fb0`), so the code namespace is the platform's, not the
+       * organisation's. Scoping this check would let a second organisation pass it and then be
+       * refused by Postgres on INSERT — turning a clean 409 naming the code into a constraint
+       * violation surfacing as a 500, for a code the operator typed and can change.
+       *
+       * What it discloses is that a code is taken, not by whom: the response says only
+       * "already exists", and the row is not loaded into anything the caller can see.
+       */
       const existing = await this.assayerRepository.findOne({ where: { assayerCode: supplied } });
       if (existing) throw new ConflictException(`Assayer code ${supplied} already exists.`);
       try {
-        return await this.persistNewAssayer(dto, supplied, userId, organizationId, actorRoles, createRequestHash);
+        return await this.persistNewAssayer(dto, supplied, userId, orgId, actorRoles, createRequestHash);
       } catch (err: any) {
         return await this.handleCreateIdempotencyConflict(err, dto.clientRequestId, createRequestHash, orgId);
       }
@@ -1151,7 +1309,7 @@ export class AssayerService implements OnModuleInit {
     for (let attempt = 0; attempt < 5; attempt++) {
       const candidate = await this.allocateAssayerCode();
       try {
-        return await this.persistNewAssayer(dto, candidate, userId, organizationId, actorRoles, createRequestHash);
+        return await this.persistNewAssayer(dto, candidate, userId, orgId, actorRoles, createRequestHash);
       } catch (err: any) {
         const isIdemp =
           (err?.code === '23505' || err?.driverError?.code === '23505') &&
@@ -2001,8 +2159,59 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
-  async remove(id: string, userId: string): Promise<void> {
+  /**
+   * ADMINISTRATIVE DELETION. Explicitly not a lifecycle transition, and now explicitly bounded.
+   *
+   * ## What it is
+   *
+   * A soft delete: the profile is taken out of the operational picture (`is_active = false`), its
+   * lifecycle is set to ARCHIVED, and the cascade below closes everything hanging off it. Every
+   * row survives; nothing is erased. It exists for the case the lifecycle has no answer for — a
+   * record created in error, a duplicate, a person who should never have been on the roster.
+   *
+   * ## Why it is not folded into the transition map
+   *
+   * Because it is not a thing that happened to a person. Every edge in the map records a decision
+   * about somebody's employment; this records a decision about a ROW. Making it an ordinary
+   * archival transition would mean deleting an ACTIVE assayer required resigning or terminating
+   * them first, which would put a fictitious departure on the record of somebody who was never
+   * employed. Keeping it separate is right; keeping it SILENT was not.
+   *
+   * ## What changed, and why
+   *
+   * The lifecycle certification found this reaching ARCHIVED from any state at all, with no
+   * state-machine validation, no reason, and nothing in the trail to distinguish it from an
+   * ordinary archival. It was a hidden lifecycle transition — the third of three routes that
+   * moved the column without the map being consulted. It is now:
+   *
+   *   - **ADMIN only.** OPERATIONS runs the workforce and has every lifecycle move it needs;
+   *     destroying a record is a different kind of act. Narrowed on the controller.
+   *   - **Reasoned.** The same standard as a suspension or a dismissal, and for the same reason:
+   *     somebody will ask later why this record is gone, and "it was deleted" is not an answer.
+   *   - **Distinctly audited.** `ASSAYER_DELETED` already existed; it now carries the reason and
+   *     the state the record was deleted FROM, so the trail can tell an administrative deletion
+   *     apart from an archival that went through the lifecycle.
+   *
+   * It deliberately does NOT gain a source-state restriction. Deleting a record created in error
+   * has to work whatever state that error left it in, and narrowing the callers plus demanding a
+   * reason is the control that fits — not a rule that would force somebody to walk a fictitious
+   * employment history before they can remove a duplicate.
+   */
+  async remove(id: string, userId: string, reason?: string): Promise<void> {
+    if (!reason?.trim()) {
+      throw new BadRequestException(
+        'Say why this assayer record is being deleted. It closes their assignments and client '
+        + 'standings, and the reason is the only thing that will explain it afterwards.',
+      );
+    }
+    if (reason.length > LIFECYCLE_REASON_MAX_LENGTH) {
+      throw new BadRequestException(
+        `That reason is ${reason.length} characters. Keep it under ${LIFECYCLE_REASON_MAX_LENGTH}.`,
+      );
+    }
+
     const assayer = await this.findOne(id);
+    const deletedFrom = assayer.lifecycleStatus;
     assayer.isActive = false;
     assayer.lifecycleStatus = AssayerLifecycleStatus.ARCHIVED;
     assayer.status = AssayerStatus.INACTIVE;
@@ -2114,7 +2323,11 @@ export class AssayerService implements OnModuleInit {
           entityType: 'ASSAYER',
           entityId: id,
           userId,
-          remarks: `Soft deleted assayer profile ${assayer.displayName} and cascaded deactivation to commercial profiles, documents, and non-completed assignments`,
+          previousState: deletedFrom,
+          newState: AssayerLifecycleStatus.ARCHIVED,
+          remarks: `Administrative deletion of ${assayer.displayName} (was ${deletedFrom}): ${reason.trim()}`
+            + ' — cascaded deactivation to commercial profiles, documents, and non-completed assignments.',
+          metadata: { reason: reason.trim(), deletedFrom },
         },
         { manager },
       )));
@@ -2149,6 +2362,19 @@ export class AssayerService implements OnModuleInit {
      * onboarding progress the way DOCUMENT_VERIFICATION or TRAINING are.
      */
     AssayerLifecycleStatus.INVITED,
+    /**
+     * ARCHIVED joined this list on 2026-09-09, when INVITED → ARCHIVED and
+     * DOCUMENT_VERIFICATION → ARCHIVED became real edges (see the shared map). Archival is now
+     * two different acts wearing one name: filing away a leaver whose departure was already
+     * reasoned, and revoking an invitation, which is a fresh decision about a person nobody has
+     * ever recorded anything about. The second needs a sentence — `operatorRevokeInvitation`
+     * always demanded one — and there is no way to demand it for one inbound edge and not the
+     * other without splitting the state.
+     *
+     * The cost is one sentence on filing a leaver, on an action that ends a person's record and
+     * cannot be undone. That is a cost worth paying.
+     */
+    AssayerLifecycleStatus.ARCHIVED,
   ]);
 
   /**
@@ -2160,6 +2386,34 @@ export class AssayerService implements OnModuleInit {
     AssayerLifecycleStatus.RESIGNED,
     AssayerLifecycleStatus.TERMINATED,
   ]);
+
+  /**
+   * Assignments a departure actually has to end — work that is still expected to happen.
+   *
+   * Written out rather than expressed as "not COMPLETED", which is what it used to be. That
+   * predicate is true of CANCELLED and REJECTED as well, so every departure re-cancelled work
+   * that some earlier decision had already closed and counted it again as a fresh consequence.
+   * Reproduced without any race at all: resign somebody holding one accepted assignment, rehire
+   * them, resign them again, and the second departure reports "1 open assignment cancelled" when
+   * nothing was open.
+   *
+   * The count is the part that matters. It goes onto the employment record and into
+   * `audit_events.remarks` so that "who took her off the Axis list?" has an answer — and it was
+   * answering with work closed by a different decision, months earlier, on a table nothing can
+   * correct because it is append-only.
+   *
+   * REJECTED is history in the same way COMPLETED is: the assayer was offered the job and said
+   * no. Overwriting that with CANCELLED and "the work could not proceed as planned" replaces
+   * something that happened with something that did not. The empanelment close next door was
+   * always right about this — it filters on an explicit set of open standings, which is why it
+   * was idempotent while this was not.
+   */
+  private static readonly OPEN_ASSIGNMENT_STATUSES: string[] = [
+    AssignmentStatus.PENDING,
+    AssignmentStatus.ACCEPTED,
+    AssignmentStatus.CHECKED_IN,
+    AssignmentStatus.IN_PROGRESS,
+  ];
 
   /**
    * Every lifecycle move goes through here, so the cached principal is dropped in one place.
@@ -2175,46 +2429,38 @@ export class AssayerService implements OnModuleInit {
    * a working session just as promptly, and a rule that fires on every move cannot be wrong about
    * which move mattered.
    */
-  async transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
-    const result = await this.dispatchLifecycleTransition(id, targetStatus, userId, reason);
+  async transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string, expectedVersion?: number): Promise<AssayerEntity> {
+    const result = await this.dispatchLifecycleTransition(id, targetStatus, userId, reason, expectedVersion);
     await this.cache.del(rbacPrincipalCacheKey(id));
     return result;
   }
 
-  private async dispatchLifecycleTransition(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
-    if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
-      throw new BadRequestException(
-        `Say why this assayer is being moved to ${targetStatus.toLowerCase().replace(/_/g, ' ')}. ` +
-        'This goes on their employment record and is what the decision will be judged on later.',
-      );
-    }
-
-    if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
-      return this.verifyDocuments(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
-      return this.initiateBackgroundCheck(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
-      return this.startTraining(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
-      return this.activateAssayer(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.ON_LEAVE) {
-      return this.putOnLeave(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.SUSPENDED) {
-      return this.suspendAssayer(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
-      return this.deactivateAssayer(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.RESIGNED) {
-      return this.acceptResignation(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.TERMINATED) {
-      return this.terminateAssayer(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.ARCHIVED) {
-      return this.archiveAssayer(id, userId, reason);
-    } else if (targetStatus === AssayerLifecycleStatus.INVITED) {
-      // The rehire edge: RESIGNED/TERMINATED → INVITED. See `AssayerStateMachine.rehire`.
-      return this.rehireAssayer(id, userId, reason);
-    } else {
+  /**
+   * Routes a target status to the named method for it. Carries no rules of its own any more.
+   *
+   * The reason check used to live here, and a copy of it lived in `bulkTransitionLifecycle`
+   * testing the final target only — so the bulk route could walk through SUSPENDED, INACTIVE or
+   * INVITED without one. Both copies are gone; `doTransitionLifecycle` enforces it per hop, on
+   * the one path all three routes share.
+   */
+  private async dispatchLifecycleTransition(id: string, targetStatus: string, userId: string, reason?: string, expectedVersion?: number): Promise<AssayerEntity> {
+    if (!Object.values(AssayerLifecycleStatus).includes(targetStatus as AssayerLifecycleStatus)) {
       throw new BadRequestException(`Invalid target status: ${targetStatus}`);
     }
+
+    /**
+     * One call to the authority, rather than an eleven-armed switch onto eleven wrappers that
+     * each made the same call. The wrappers still exist below — a few other modules call
+     * `verifyDocuments` and `acceptResignation` by name — but the route no longer goes through
+     * them, so a parameter added to the funnel (`expectedVersion` was the one that forced this)
+     * does not have to be threaded through eleven signatures that would each be a place to
+     * forget it.
+     */
+    const { saved, event } = await this.doTransitionLifecycle(
+      id, targetStatus as AssayerLifecycleStatus, userId, reason, SystemRole.ADMIN, expectedVersion,
+    );
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
   }
 
   /**
@@ -2242,15 +2488,25 @@ export class AssayerService implements OnModuleInit {
       throw new BadRequestException(`Invalid target status: ${targetStatus}`);
     }
 
-    // Doing it to twenty people at once does not make the reason less necessary. This path calls
-    // `doTransitionLifecycle` directly, so the check in `transitionLifecycle` never saw it.
-    if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
-      throw new BadRequestException(
-        `Say why these assayers are being moved to ${targetStatus.toLowerCase().replace(/_/g, ' ')}. ` +
-        'It goes on each of their employment records.',
-      );
-    }
-
+    /**
+     * The reason is NOT checked here any more, and that is the fix rather than an omission.
+     *
+     * This used to test `LIFECYCLE_MOVES_NEEDING_A_REASON` against `targetStatus` — the FINAL
+     * destination — and then hand whatever it was given to every hop of the walk below. So any
+     * path whose destination happens not to need a reason carried none through the states that
+     * do. Two reproductions from the certification, both returning 201 with no reason supplied:
+     *
+     *   TRAINING → ARCHIVED   walked TRAINING → INACTIVE → ARCHIVED. The deactivation, which the
+     *                         single route always refuses without a reason, was recorded with
+     *                         nothing but "Lifecycle transition: TRAINING → INACTIVE".
+     *   RESIGNED → ACTIVE     walked all five hops of a rehire. A departed person came back to
+     *                         work, through document and background verification, and not one of
+     *                         the five audit rows says why.
+     *
+     * `doTransitionLifecycle` now enforces it per hop, so the walk stops at the first hop that
+     * needs a reason it does not have — and the hops already committed stay committed, which is
+     * the honest outcome: they happened.
+     */
     const succeeded: { id: string; from: string; to: string }[] = [];
     const skipped: { id: string; current: string; reason: string }[] = [];
     const failed: { id: string; reason: string }[] = [];
@@ -2282,35 +2538,230 @@ export class AssayerService implements OnModuleInit {
     return { succeeded, skipped, failed };
   }
 
+  /**
+   * THE LIFECYCLE AUTHORITY. Every change to `lifecycle_status` goes through this method.
+   *
+   * ## What was wrong, and why it needed restructuring rather than patching
+   *
+   * This method used to read the assayer with a plain `findOne` — outside any transaction, with
+   * no row lock — validate the requested edge against that in-memory copy, and only then hand a
+   * closure to `workflowEngine.executeCommand`, which opened the transaction and saved. The
+   * save emitted `UPDATE assayers SET …, version = version + 1 WHERE id = $1`, with no version
+   * predicate, and `@VersionColumn` does not supply one: TypeORM raises
+   * `OptimisticLockVersionMismatchError` only when a caller explicitly uses
+   * `setLock('optimistic', v)`, which nothing does for assayers.
+   *
+   * So two operators moving the same person at the same time both read ACTIVE, both validated
+   * against ACTIVE, and both committed. Measured on the live deployment: eight simultaneous
+   * pairs, eight times both requests returned 201. The row ended up wherever the later write
+   * landed, and the audit trail was left holding two rows that each claim `previous_state =
+   * ACTIVE` — one of them describing a transition that never took effect, attributed to a named
+   * operator at a timestamp. That is worse than the lost update. `audit_events` is append-only
+   * by database trigger precisely so it can be read back in a dispute, and it was being handed
+   * a contradiction it can never be corrected out of.
+   *
+   * The same hole defeated the self-transition guard: six identical concurrent requests wrote
+   * six audit rows for one move.
+   *
+   * ## The shape now
+   *
+   * Read, validate, mutate and audit all happen inside one transaction, with the assayer row
+   * held under `SELECT … FOR UPDATE` for the whole of it — the pattern `AssignmentService`
+   * already uses for its own state commands, which is why the assignment races passed the same
+   * certification this one failed. Concretely:
+   *
+   *   1. lock the row and re-read the lifecycle state and version FROM THE LOCKED ROW;
+   *   2. compare-and-swap against what the caller was looking at, and against `expectedVersion`
+   *      when the client supplied one;
+   *   3. validate the edge against the LOCKED state, never the pre-read one;
+   *   4. enforce the reason requirement (see `LIFECYCLE_MOVES_NEEDING_A_REASON`);
+   *   5. run the identity gate — AFTER the edge is known to be legal, so a refused transition
+   *      can no longer leave "Activated without a verified identity" on the timeline of somebody
+   *      who was never activated;
+   *   6. apply, cascade the side effects, and write the audit and activity rows, all in the
+   *      transaction the lock is held in.
+   *
+   * The loser of a race now gets a 409 naming the state it lost to, and the trail contains
+   * exactly one row per transition that actually happened.
+   *
+   * ## Why the pre-read still exists
+   *
+   * `workflowEngine.executeCommand` takes `fromState` in its signature and checks it before
+   * opening its transaction, so one read has to happen first. It is used for that argument and
+   * as the CAS baseline — never as the thing the state machine validates against.
+   */
   private async doTransitionLifecycle(
     id: string,
     targetStatus: AssayerLifecycleStatus,
     userId: string,
     reason?: string,
     role = SystemRole.ADMIN,
+    expectedVersion?: number,
   ): Promise<{ saved: AssayerEntity; event: any }> {
-    const assayer = await this.findOne(id);
-    const currentStatus = assayer.lifecycleStatus;
+    const preRead = await this.findOne(id);
+    const currentStatus = preRead.lifecycleStatus;
 
     /**
-     * Nobody becomes active until somebody has established who they are.
+     * An early look at the edge, for the SENTENCE only. The authoritative check is under the lock.
      *
-     * Here rather than in `AssayerStateMachine`, which is static and holds no repository, and here
-     * rather than at the caller: `doTransitionLifecycle` is the one funnel every path runs through
-     * — the single move, the bulk action, and the multi-hop walk `assayerLifecyclePath` produces.
-     * A guard anywhere else is routed around by a bulk INVITED→ACTIVE move, which passes through
-     * this edge as an intermediate step.
+     * `workflowEngine.executeCommand` runs its own `canTransition` before it opens the
+     * transaction, and its refusal reads "Invalid transition from 'RESIGNED' to 'ACTIVE' for
+     * command 'ACTIVE_Command'" — a sentence about a command name the operator has never heard
+     * of. The state machine's is "Invalid lifecycle transition from 'RESIGNED' to 'ACTIVE'",
+     * which is the one that used to reach people, because before this method was restructured
+     * the state machine ran first.
      *
-     * Three positions, defaulting to warn. On the day this shipped not one document in the estate
-     * had ever been verified, so enforcing from the first boot would have refused every activation
-     * in the company against a process the desk had never operated — which is how a control gets
-     * switched off permanently rather than adopted. See `onboarding.identityGate.mode`.
+     * So the edge is checked here purely so the better message wins the race to be thrown. This
+     * check is deliberately NOT trusted for correctness: it reads a row fetched outside the
+     * transaction, so under a concurrent move it can be out of date in either direction. It is
+     * allowed to be wrong. `validateTransition` inside the locked section is what actually
+     * decides, and a request that slips past this one is refused there against the real state.
      */
-    if (targetStatus === AssayerLifecycleStatus.ACTIVE && this.rosterRecords) {
-      const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
-      if (mode !== 'off') {
-        const standing = await this.rosterRecords.identityStanding(id);
-        if (!standing.ok) {
+    if (!canTransitionAssayerLifecycle(currentStatus, targetStatus)) {
+      throw new BadRequestException(
+        `Invalid lifecycle transition from '${currentStatus}' to '${targetStatus}'`,
+      );
+    }
+
+    let event: any;
+
+    return this.workflowEngine.executeCommand(
+      'assayer',
+      preRead.id,
+      `${targetStatus}_Command`,
+      currentStatus,
+      targetStatus,
+      userId,
+      role,
+      [],
+      async (manager) => {
+        const assayerRepo = manager ? manager.getRepository(AssayerEntity) : this.assayerRepository;
+
+        /**
+         * The lock, and everything that has to be decided while holding it.
+         *
+         * `FOR UPDATE` on the assayer row: a second transition against the same person blocks
+         * here until this one commits or rolls back, and then re-reads what actually landed.
+         * Without a `manager` there is no transaction to lock in — that only happens if a caller
+         * bypasses the workflow engine, which nothing does — so the lock is skipped rather than
+         * silently taken on a connection that will autocommit around it.
+         */
+        const locked: Array<{ lifecycle_status: string; version: number }> = manager
+          ? await manager.query(
+              'SELECT lifecycle_status, version FROM assayers WHERE id = $1 AND is_active = true FOR UPDATE',
+              [preRead.id],
+            )
+          : [];
+        const lockedStatus = (manager ? locked?.[0]?.lifecycle_status : currentStatus) as AssayerLifecycleStatus;
+        const lockedVersion = manager ? Number(locked?.[0]?.version ?? 0) : preRead.version;
+        if (manager && !lockedStatus) throw new NotFoundException(`Assayer ${preRead.id} not found.`);
+
+        /**
+         * Compare-and-swap. The pre-read is what the caller believed; `lockedStatus` is the
+         * truth. When they differ, somebody else moved this person between the two reads and
+         * the edge this request validated no longer starts where it thought.
+         *
+         * A 409 rather than a 400, and the difference is the point: the request was not
+         * malformed and the operator did nothing wrong. They were looking at a screen that has
+         * since gone stale, and the remedy is to refresh and decide again with the new facts —
+         * which is exactly what the message says.
+         */
+        if (lockedStatus !== currentStatus) {
+          throw new ConflictException(
+            `This assayer changed while you were acting on it — they are now `
+            + `'${lockedStatus}', not '${currentStatus}'. Refresh the record and decide again.`,
+          );
+        }
+
+        /**
+         * The client's own precondition, when it offers one. Optional because the HR screens do
+         * not carry a version today; honoured strictly when present, so an integration or a
+         * mobile client CAN demand the stronger guarantee. Mirrors the assignment commands,
+         * including the distinction between a stale version and one that never existed.
+         */
+        if (expectedVersion !== undefined && expectedVersion !== lockedVersion) {
+          throw new ConflictException(
+            expectedVersion < lockedVersion
+              ? `STALE_ASSAYER_VERSION: this record is at version ${lockedVersion} (you sent `
+                + `${expectedVersion}). Refresh and try again.`
+              : `INVALID_ASSAYER_VERSION: version ${expectedVersion} does not exist — the record `
+                + `is at version ${lockedVersion}.`,
+          );
+        }
+
+        /**
+         * The edge is validated against the LOCKED state, by re-reading it onto the entity
+         * first. Before this, the state machine was handed an entity loaded outside the
+         * transaction, so its verdict described a world that may already have moved on.
+         */
+        const assayer = await assayerRepo.findOne({ where: { id: preRead.id } });
+        if (!assayer) throw new NotFoundException(`Assayer ${preRead.id} not found.`);
+        // Callers receive this entity back and some of them read skills off it; the pre-read
+        // was hydrated by `findOne`, so the locked copy has to be too or the shape changes
+        // depending on which branch produced it.
+        await this.hydrateWorkforceAttributes(assayer).catch(() => undefined);
+
+        /**
+         * WHY THE REASON IS CHECKED HERE and not only at the routes.
+         *
+         * It used to live in `dispatchLifecycleTransition` (the single-move route) and, copied,
+         * in `bulkTransitionLifecycle` — where it tested the FINAL target only. So a bulk walk
+         * whose destination needs no reason skipped the requirement for every reason-requiring
+         * state it passed through: `RESIGNED → … → ACTIVE` re-invited and fully re-onboarded a
+         * departed person in one unreasoned call, and `ACTIVE → ARCHIVED` removed a working
+         * assayer from the workforce with nothing on the record saying why.
+         *
+         * A rule enforced at two of the three doors is not enforced. This is the one door they
+         * all pass through, and per hop.
+         */
+        if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
+          throw new BadRequestException(
+            `Say why this assayer is being moved to ${targetStatus.toLowerCase().replace(/_/g, ' ')}. `
+            + 'This goes on their employment record and is what the decision will be judged on later.',
+          );
+        }
+
+        /**
+         * The ceiling, again. `TransitionLifecycleDto` already carries `@MaxLength`, so the HTTP
+         * routes never get this far — but the DTO is not the authority, and the recovery routes
+         * and any in-process caller reach the funnel without passing one. A 200,000-character
+         * reason was previously stored in full, twice, into a table nothing can delete from.
+         */
+        if (reason && reason.length > LIFECYCLE_REASON_MAX_LENGTH) {
+          throw new BadRequestException(
+            `That reason is ${reason.length} characters. Keep it under ${LIFECYCLE_REASON_MAX_LENGTH} — `
+            + 'it goes onto the employment record and into the audit trail, which cannot be edited later.',
+          );
+        }
+
+        /**
+         * Nobody becomes active until somebody has established who they are.
+         *
+         * Three positions, defaulting to warn. On the day this shipped not one document in the
+         * estate had ever been verified, so enforcing from the first boot would have refused
+         * every activation in the company against a process the desk had never operated — which
+         * is how a control gets switched off permanently rather than adopted. See
+         * `onboarding.identityGate.mode`.
+         *
+         * MOVED, twice. It used to run before the edge was validated, and outside the
+         * transaction. Both were wrong in the same direction — they let a REFUSED activation
+         * leave evidence behind. An illegal `INVITED → ACTIVE` was correctly rejected with a
+         * 400, but by then the warn arm had already written "Activated without a verified
+         * identity" onto the timeline of somebody who was never activated, on its own
+         * connection, where the rejection could not roll it back. Four attempts, four rows.
+         * Under `enforce` the same ordering answered the wrong question entirely: the operator
+         * was told to go and chase documents when the real problem was that the transition does
+         * not exist.
+         *
+         * Now it runs after `validateTransition` has accepted the edge, inside the transaction,
+         * so it can only ever describe an activation that is actually going to happen.
+         */
+        const runIdentityGate = async () => {
+          if (targetStatus !== AssayerLifecycleStatus.ACTIVE || !this.rosterRecords) return;
+          const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
+          if (mode === 'off') return;
+          const standing = await this.rosterRecords.identityStanding(preRead.id);
+          if (standing.ok) return;
           const outstanding = [...standing.missing, ...standing.rejected]
             .map((d) => ONBOARDING_DOCUMENT_LABELS[d]).join(' and ');
           const sentence = `${assayer.displayName} cannot be activated yet: ${outstanding} `
@@ -2322,58 +2773,46 @@ export class AssayerService implements OnModuleInit {
           if (mode === 'enforce') {
             throw withCode(new BadRequestException(sentence), ASSAYER_ERROR_CODES.IDENTITY_NOT_VERIFIED);
           }
-          // Warn: let it through, but leave the fact on the record rather than nowhere.
           this.logger.warn(`Identity gate (warn only): ${sentence}`);
           await this.recordActivity(
-            id, 'ASSAYER_UPDATED', null, null, userId,
+            preRead.id, 'ASSAYER_UPDATED', null, null, userId,
             `Activated without a verified identity — ${outstanding} still unchecked. The identity `
             + 'check is set to warn; switch it to Enforce in Settings once the queue is being worked.',
+            manager,
           ).catch(() => undefined);
+        };
+
+        if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
+          event = AssayerStateMachine.verifyDocuments(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
+          event = AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
+          event = AssayerStateMachine.startTraining(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
+          AssayerStateMachine.assertCanActivate(assayer);
+          await runIdentityGate();
+          event = AssayerStateMachine.activate(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.ON_LEAVE) {
+          event = AssayerStateMachine.putOnLeave(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.SUSPENDED) {
+          event = AssayerStateMachine.suspend(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
+          event = AssayerStateMachine.deactivate(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.RESIGNED) {
+          event = AssayerStateMachine.acceptResignation(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.TERMINATED) {
+          event = AssayerStateMachine.terminate(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.ARCHIVED) {
+          event = AssayerStateMachine.archive(assayer, userId);
+        } else if (targetStatus === AssayerLifecycleStatus.INVITED) {
+          event = AssayerStateMachine.rehire(assayer, userId);
+        } else {
+          throw new BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
         }
-      }
-    }
 
-    let event: any;
-    if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
-      event = AssayerStateMachine.verifyDocuments(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
-      event = AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
-      event = AssayerStateMachine.startTraining(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
-      event = AssayerStateMachine.activate(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.ON_LEAVE) {
-      event = AssayerStateMachine.putOnLeave(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.SUSPENDED) {
-      event = AssayerStateMachine.suspend(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
-      event = AssayerStateMachine.deactivate(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.RESIGNED) {
-      event = AssayerStateMachine.acceptResignation(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.TERMINATED) {
-      event = AssayerStateMachine.terminate(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.ARCHIVED) {
-      event = AssayerStateMachine.archive(assayer, userId);
-    } else if (targetStatus === AssayerLifecycleStatus.INVITED) {
-      event = AssayerStateMachine.rehire(assayer, userId);
-    } else {
-      throw new BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
-    }
+        // Before the save, because these are columns on the entity about to be written.
+        const datesCorrected = this.reconcileDepartureDates(assayer, targetStatus);
 
-    // Before the save, because these are columns on the entity about to be written.
-    const datesCorrected = this.reconcileDepartureDates(assayer, targetStatus);
-
-    return this.workflowEngine.executeCommand(
-      'assayer',
-      assayer.id,
-      `${targetStatus}_Command`,
-      currentStatus,
-      targetStatus,
-      userId,
-      role,
-      [],
-      async (manager) => {
-        const assayerRepo = manager ? manager.getRepository(AssayerEntity) : this.assayerRepository;
         const saved = await assayerRepo.save(assayer);
 
         // After the save, so a departure whose workflow command was refused does not close the
@@ -2640,8 +3079,8 @@ export class AssayerService implements OnModuleInit {
     const [, assignmentsAffected] = await runner.query(
       `UPDATE assignments SET status = $1, cancel_reason = $2, updated_by = $3,
           entity_version = COALESCE(entity_version, 1) + 1, updated_at = NOW()
-        WHERE assayer_id = $4 AND is_active = true AND status != $5`,
-      [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssignmentStatus.COMPLETED],
+        WHERE assayer_id = $4 AND is_active = true AND status = ANY($5)`,
+      [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssayerService.OPEN_ASSIGNMENT_STATUSES],
     ) ?? [];
 
     // Same follow-on `remove()` already applies: a cancelled assignment must not leave its
@@ -2727,11 +3166,41 @@ export class AssayerService implements OnModuleInit {
   // ---- Controlled Operator Recovery Actions ----
 
   /**
-   * Controlled operator recovery for stuck onboarding states.
+   * REWIND a stuck joiner to an earlier onboarding stage. It cannot do anything else.
    *
-   * Allows resetting an assayer's onboarding progress to an earlier onboarding stage
-   * (e.g. from TRAINING back to DOCUMENT_VERIFICATION when a credential failed).
-   * Refuses jumping directly into ACTIVE or terminal states.
+   * ## What this used to be, and what it cost
+   *
+   * It wrote `lifecycleStatus` straight onto the entity, and its only guard on the CURRENT state
+   * was "not ACTIVE". Everything else walked through. The certification reproduced the worst
+   * case in two API calls:
+   *
+   *     POST /assayers/:id/lifecycle {"targetStatus":"TRAINING"}          -> 400, correctly refused
+   *     POST /assayers/:id/recovery/reset-onboarding-stage
+   *          {"targetStage":"TRAINING","reason":"..."}                    -> 201
+   *     POST /assayers/:id/lifecycle {"targetStatus":"ACTIVE"}            -> 201
+   *
+   * A dismissed person was back at work. Their audit trail contained no DOCUMENT_VERIFICATION
+   * event and no BACKGROUND_VERIFICATION event, because neither happened; sign-in was restored;
+   * the planner offered them for real branch work; and the departure dates were silently wiped by
+   * the activation. The shared map's own comment exists to prevent exactly this — a rehire walks
+   * the whole document → background → training chain BECAUSE identity was verified against
+   * papers that may have expired and a termination usually happened for a reason somebody should
+   * re-examine. Two calls defeated it. The same route also laundered a suspension: SUSPENDED →
+   * DOCUMENT_VERIFICATION → … → ACTIVE returned somebody to work with no reinstatement decision
+   * anywhere on file.
+   *
+   * ## What it is now
+   *
+   * A rewind, and only a rewind. The source must ALREADY be an onboarding stage and the target
+   * must be at or before it. So it can undo a step somebody took by mistake, and it cannot
+   * fabricate progress, cannot re-enter onboarding from outside it, and cannot manufacture a
+   * rehire. Coming back after leaving is `RESIGNED/TERMINATED → INVITED`, deliberately, with a
+   * reason, and then the chain walked properly.
+   *
+   * Kept as a policy operation rather than folded into the transition map, because a backwards
+   * step is not a lifecycle event: nothing happened to this person, somebody corrected a filing
+   * error. It writes its own distinctly-typed audit row saying so, and it holds the same row lock
+   * as a real transition so it cannot race one.
    */
   async operatorResetOnboardingStage(
     id: string,
@@ -2739,16 +3208,10 @@ export class AssayerService implements OnModuleInit {
     reason: string,
     userId: string,
   ): Promise<AssayerEntity> {
-    const validOnboardingStages = [
-      AssayerLifecycleStatus.INVITED,
-      AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
-      AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
-      AssayerLifecycleStatus.TRAINING,
-    ];
-
-    if (!validOnboardingStages.includes(targetStage)) {
+    if (!ONBOARDING_STAGES.includes(targetStage)) {
       throw new BadRequestException(
-        `Cannot reset to ${targetStage}: Operator onboarding recovery only allows resetting to early onboarding stages (INVITED, DOCUMENT_VERIFICATION, BACKGROUND_VERIFICATION, TRAINING).`,
+        `Cannot reset to ${targetStage}: an onboarding rewind may only target an onboarding stage `
+        + `(${ONBOARDING_STAGES.join(', ')}).`,
       );
     }
 
@@ -2756,37 +3219,96 @@ export class AssayerService implements OnModuleInit {
       throw new BadRequestException('A substantive operational reason (minimum 10 characters) is required to reset an onboarding stage.');
     }
 
-    const assayer = await this.findOne(id);
-    const prevStatus = assayer.lifecycleStatus;
+    return this.uow.run(async (manager) => {
+      const repo = manager.getRepository(AssayerEntity);
+      const locked: Array<{ lifecycle_status: string }> = await manager.query(
+        'SELECT lifecycle_status FROM assayers WHERE id = $1 AND is_active = true FOR UPDATE',
+        [id],
+      );
+      const prevStatus = locked?.[0]?.lifecycle_status as AssayerLifecycleStatus;
+      if (!prevStatus) throw new NotFoundException(`Assayer ${id} not found.`);
 
-    if (assayer.lifecycleStatus === AssayerLifecycleStatus.ACTIVE) {
-      throw new BadRequestException('Cannot reset onboarding stage on an ACTIVE assayer. Use suspend or deactivate instead.');
-    }
+      /**
+       * The source gate. "Not ACTIVE" was never the rule anybody meant — it admitted every
+       * departed, suspended and on-leave state as a doorway back into onboarding.
+       */
+      if (!ONBOARDING_STAGES.includes(prevStatus)) {
+        throw new BadRequestException(
+          `Cannot reset onboarding for somebody who is ${prevStatus}: this corrects a joiner who is `
+          + 'still going through onboarding. Bringing back a leaver is a rehire — move them to '
+          + 'Invited and walk the checks again.',
+        );
+      }
 
-    assayer.lifecycleStatus = targetStage;
-    assayer.deriveOperationalStatus();
-    assayer.isActive = targetStage !== AssayerLifecycleStatus.ARCHIVED;
-    assayer.updatedBy = userId;
+      // Rewind only. Forward progress is a real transition, with its own event and its own gates.
+      if (ONBOARDING_STAGES.indexOf(targetStage) > ONBOARDING_STAGES.indexOf(prevStatus)) {
+        throw new BadRequestException(
+          `Cannot reset ${prevStatus} forward to ${targetStage}: an onboarding rewind only goes `
+          + 'back. To advance them, use the lifecycle action on their record.',
+        );
+      }
 
-    const saved = await this.assayerRepository.save(assayer);
+      if (targetStage === prevStatus) {
+        throw new BadRequestException(`This assayer is already at ${prevStatus}.`);
+      }
 
-    await this.auditService.recordEvent({
-      category: EventCategory.WORKFLOW,
-      eventType: 'ASSAYER_ONBOARDING_STAGE_RESET',
-      entityType: 'ASSAYER',
-      entityId: saved.id,
-      previousState: prevStatus,
-      newState: targetStage,
-      userId,
-      remarks: `Operator reset onboarding stage from ${prevStatus} to ${targetStage}: ${reason.trim()}`,
-      metadata: { previousStage: prevStatus, newStage: targetStage, reason: reason.trim() },
+      const assayer = await repo.findOne({ where: { id } });
+      if (!assayer) throw new NotFoundException(`Assayer ${id} not found.`);
+
+      assayer.lifecycleStatus = targetStage;
+      assayer.deriveOperationalStatus();
+      assayer.isActive = true; // every onboarding stage is on the roster; ARCHIVED is unreachable here
+      assayer.updatedBy = userId;
+      const saved = await repo.save(assayer);
+
+      await this.recordActivity(
+        saved.id, 'ASSAYER_UPDATED', prevStatus, targetStage, userId,
+        `Onboarding rewound from ${prevStatus} to ${targetStage}: ${reason.trim()}`, manager,
+      ).catch(() => undefined);
+
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSAYER_ONBOARDING_STAGE_RESET',
+        entityType: 'ASSAYER',
+        entityId: saved.id,
+        previousState: prevStatus,
+        newState: targetStage,
+        userId,
+        remarks: `Operator reset onboarding stage from ${prevStatus} to ${targetStage}: ${reason.trim()}`,
+        metadata: { previousStage: prevStatus, newStage: targetStage, reason: reason.trim() },
+      }, { manager });
+
+      return saved;
+    }).then(async (saved) => {
+      /**
+       * Outside the transaction, and unable to fail it.
+       *
+       * A rewind changes what the guard tells a signed-in assayer about their own onboarding, so
+       * the cached principal has to go — but dropping it is a cache concern, not a correctness
+       * one. Inside the `uow.run` above, a Redis hiccup would have rolled back a state change
+       * that had every right to commit. The principal cache is fail-closed anyway
+       * (`loadPrincipal` re-reads and re-checks `maySignIn`), so the worst a missed invalidation
+       * costs is a stale session for the remainder of its TTL.
+       */
+      await this.cache?.del?.(rbacPrincipalCacheKey(saved.id))?.catch?.(() => undefined);
+      return saved;
     });
-
-    return saved;
   }
 
   /**
-   * Operator recovery: revoke an invitation for an assayer who never completed onboarding.
+   * Revoke an invitation nobody took up.
+   *
+   * This is now a thin wrapper over the lifecycle authority. It used to write `ARCHIVED` onto the
+   * entity by hand, from INVITED or DOCUMENT_VERIFICATION — an edge the transition map called
+   * illegal and the transition endpoint refused with a 400 at the very same moment this route
+   * performed it. The system held two opinions and the screens only knew about one, so the roster
+   * could not offer the move and 79 unaccepted invitations had no way out at all.
+   *
+   * Both edges are in the shared map now (see `ASSAYER_LIFECYCLE_TRANSITIONS`), so the state
+   * machine validates them, the UI can offer them, and the audit trail records them as the
+   * transitions they are. What this route keeps is its own stricter door: a ten-character reason,
+   * where the general endpoint would accept any non-blank one. Revoking somebody's invitation is
+   * a decision about a person nobody has recorded anything about yet, and "no" is not a reason.
    */
   async operatorRevokeInvitation(id: string, reason: string, userId: string): Promise<AssayerEntity> {
     if (!reason || reason.trim().length < 10) {
@@ -2799,20 +3321,20 @@ export class AssayerService implements OnModuleInit {
       throw new BadRequestException(`Cannot revoke invitation: assayer is currently in ${assayer.lifecycleStatus} stage.`);
     }
 
-    const prev = assayer.lifecycleStatus;
-    assayer.lifecycleStatus = AssayerLifecycleStatus.ARCHIVED;
-    assayer.status = AssayerStatus.INACTIVE;
-    assayer.isActive = false;
-    assayer.updatedBy = userId;
+    const saved = await this.transitionLifecycle(
+      id, AssayerLifecycleStatus.ARCHIVED, userId, `Invitation revoked: ${reason.trim()}`,
+    );
 
-    const saved = await this.assayerRepository.save(assayer);
-
+    // Kept alongside the lifecycle row the funnel writes: "an invitation was withdrawn" is a
+    // different question from "who archived this record", and the two are asked by different
+    // people. The metadata carries the reason on its own so a query does not have to parse it
+    // back out of the remark.
     await this.auditService.recordEvent({
       category: EventCategory.WORKFLOW,
       eventType: 'ASSAYER_INVITATION_REVOKED',
       entityType: 'ASSAYER',
       entityId: saved.id,
-      previousState: prev,
+      previousState: assayer.lifecycleStatus,
       newState: AssayerLifecycleStatus.ARCHIVED,
       userId,
       remarks: `Invitation revoked: ${reason.trim()}`,
@@ -2980,7 +3502,18 @@ export class AssayerService implements OnModuleInit {
     const where: any[] = isUuid
       ? [{ id: assayerId, isActive: true }]
       : [{ assayerCode: assayerId, isActive: true }, { employeeId: assayerId, isActive: true }];
-    const assayer = await this.assayerRepository.findOne({ where });
+    /**
+     * `tenantWhere` and not a single appended clause, because this `where` is an ARRAY and
+     * TypeORM OR-s an array. Adding `{ organizationId }` as a fourth element would produce
+     * `(code = x) OR (employeeId = x) OR (org = mine)` — every assayer in the caller's own
+     * organisation, matched by nothing but membership, which is a wider query than the unscoped
+     * one it replaced. The helper distributes the predicate into each branch instead.
+     *
+     * This route is the dossier the app and the roster screen both open, and it accepts an
+     * assayer *code* as well as a uuid — codes are short and sequential (`AS0688`), so an
+     * unscoped lookup by code was cross-tenant enumeration with no guessing required.
+     */
+    const assayer = await this.assayerRepository.findOne({ where: tenantWhere<AssayerEntity>(where) });
     if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
 
     // Live update stats & ratings from real DB tables
@@ -3059,7 +3592,9 @@ export class AssayerService implements OnModuleInit {
     workload: { activeCount: number; maxWeeklyCapacity: number; remaining: number };
     riskFlags: Array<{ reason: string; rawValue: string; createdAt: string }>;
   }> {
-    const assayer = await this.assayerRepository.findOne({ where: { id: assayerId } });
+    // The two queries below are correlated on `assayerId`, so this load is the only gate on them:
+    // if it refuses, neither the workload figure nor the import-issue risk flags are ever read.
+    const assayer = await this.assayerRepository.findOne({ where: tenantWhere<AssayerEntity>({ id: assayerId }) });
     if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
 
     const mgr = this.assayerRepository.manager;
@@ -3102,6 +3637,10 @@ export class AssayerService implements OnModuleInit {
   }
 
   async getActivityTimeline(assayerId: string, page = 1, limit = 20): Promise<{ activities: AssayerActivityEntity[]; total: number }> {
+    // The timeline is the record of everything that has ever been done to this person — every
+    // lifecycle move, every reason given, every operator who touched them. `assayer_activities`
+    // has no organisation of its own, so the gate is on the parent.
+    await this.assertAssayerInTenant(assayerId, `Assayer ${assayerId} not found.`);
     const [activities, total] = await this.activityRepository.findAndCount({
       where: { assayerId },
       order: { occurredAt: 'DESC' },
@@ -3198,6 +3737,12 @@ export class AssayerService implements OnModuleInit {
   async updateCommercialProfile(profileId: string, dto: any, userId: string): Promise<AssayerCommercialProfileEntity> {
     const profile = await this.commercialRepository.findOne({ where: { id: profileId, isActive: true } });
     if (!profile) throw new NotFoundException(`Commercial profile ${profileId} not found.`);
+    // `PUT /assayers/commercial/:id` is keyed on the rate card, not the person, so it takes no
+    // `@GlobalScopeFilter` and calls no guard — the only route in the commercial group that does
+    // neither. Its sibling `POST /assayers/:assayerId/commercial` is covered by `findOne`; this
+    // one has to resolve the owner from the row it just loaded. Pay terms are the thing being
+    // written, so an unscoped id here rewrites what another organisation owes its workforce.
+    await this.assertAssayerInTenant(profile.assayerId, `Commercial profile ${profileId} not found.`);
     if (dto.baseFee !== undefined) profile.baseFee = dto.baseFee;
     if (dto.hourlyRate !== undefined) profile.hourlyRate = dto.hourlyRate;
     if (dto.dailyRate !== undefined) profile.dailyRate = dto.dailyRate;
@@ -3222,6 +3767,7 @@ export class AssayerService implements OnModuleInit {
   }
 
   async getCommercialProfiles(assayerId: string): Promise<AssayerCommercialProfileEntity[]> {
+    await this.assertAssayerInTenant(assayerId, `Assayer ${assayerId} not found.`);
     return this.commercialRepository.find({
       where: { assayerId, isActive: true },
       order: { effectiveStartDate: 'DESC' },
@@ -3229,6 +3775,7 @@ export class AssayerService implements OnModuleInit {
   }
 
   async getActiveCommercialProfile(assayerId: string, date: Date = new Date()): Promise<AssayerCommercialProfileEntity | null> {
+    await this.assertAssayerInTenant(assayerId, `Assayer ${assayerId} not found.`);
     const profiles = await this.commercialRepository.find({
       where: { assayerId, isActive: true, effectiveStartDate: LessThanOrEqual(date) },
       order: { effectiveStartDate: 'DESC' },
@@ -3252,7 +3799,15 @@ export class AssayerService implements OnModuleInit {
    */
   async getRosterCommercialProfiles(onDate: Date = new Date()):
     Promise<Array<{ assayerId: string; profile: AssayerCommercialProfileEntity | null; hasFutureProfile: boolean }>> {
-    const assayers = await this.assayerRepository.find({ where: { isActive: true }, select: { id: true } });
+    // `GET /assayers/commercial/roster` takes no scope filter of any kind — it is the whole rate
+    // card in one call, which is exactly why it needs the predicate here rather than at the route.
+    // The profiles are then matched by id against this list, so narrowing the roster narrows the
+    // payload: a profile belonging to another organisation has no assayer to attach to and is
+    // dropped, without a second predicate on a table that has no `organization_id` to filter on.
+    const assayers = await this.assayerRepository.find({
+      where: tenantWhere<AssayerEntity>({ isActive: true }),
+      select: { id: true },
+    });
     const all = await this.commercialRepository.find({
       where: { isActive: true },
       order: { effectiveStartDate: 'DESC' },
@@ -3316,6 +3871,12 @@ export class AssayerService implements OnModuleInit {
   async updateWorkforceAttribute(attributeId: string, dto: any, userId: string): Promise<WorkforceAttributeEntity> {
     const attr = await this.workforceAttributeRepository.findOne({ where: { id: attributeId, isActive: true } });
     if (!attr) throw new NotFoundException(`Workforce attribute ${attributeId} not found.`);
+    // `PUT /assayers/workforce-attribute/:id` names the attribute, never the person — so nothing
+    // upstream has had an assayer id to check, and the region guard the sibling routes call was
+    // never even reachable here. The owner has to be resolved from the row before it can be
+    // written to. Same message as the miss above: a caller must not be able to tell "no such
+    // attribute" from "somebody else's attribute".
+    await this.assertAssayerInTenant(attr.assayerId, `Workforce attribute ${attributeId} not found.`);
     if (dto.name !== undefined) attr.name = dto.name;
     if (dto.level !== undefined) attr.level = dto.level;
     if (dto.expiryDate !== undefined) attr.expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : null;
@@ -3337,6 +3898,8 @@ export class AssayerService implements OnModuleInit {
   async removeWorkforceAttribute(attributeId: string, userId: string): Promise<void> {
     const attr = await this.workforceAttributeRepository.findOne({ where: { id: attributeId, isActive: true } });
     if (!attr) throw new NotFoundException(`Workforce attribute ${attributeId} not found.`);
+    // Keyed by the attribute, like `updateWorkforceAttribute` — see the note there.
+    await this.assertAssayerInTenant(attr.assayerId, `Workforce attribute ${attributeId} not found.`);
     attr.isActive = false;
     attr.updatedBy = userId;
     await this.workforceAttributeRepository.save(attr);
@@ -3352,6 +3915,7 @@ export class AssayerService implements OnModuleInit {
   }
 
   async getWorkforceAttributes(assayerId: string, type?: string): Promise<WorkforceAttributeEntity[]> {
+    await this.assertAssayerInTenant(assayerId, `Assayer ${assayerId} not found.`);
     const where: any = { assayerId, isActive: true };
     if (type) where.type = type;
     return this.workforceAttributeRepository.find({ where, order: { type: 'ASC', name: 'ASC' } });
@@ -3600,8 +4164,16 @@ export class AssayerService implements OnModuleInit {
 
     // Through the repository, so the `encryptedColumn` transformer decrypts on read — a raw
     // query here would hand back the `enc:v1:` ciphertext and look like it had worked.
+    //
+    // Scoped, because this is the sharpest edge of F-03 and the one that was demonstrated: an
+    // OPERATIONS user in one organisation called `GET /assayers/<other-org-id>/sensitive/bank` and
+    // got another tenant's bank account number back in cleartext, decrypted for them by this very
+    // transformer. Note the ordering — the load fails first, so no `ASSAYER_SENSITIVE_FIELD_REVEALED`
+    // audit row is written for a reveal that did not happen. `audit_events` is append-only, so a
+    // row written here on the way to a refusal could never be retracted, and a compliance report
+    // that shows a bank reveal against a record the actor could not read is worse than no row.
     const assayer = await this.assayerRepository.findOne({
-      where: { id: assayerId },
+      where: tenantWhere<AssayerEntity>({ id: assayerId }),
       select: { id: true, assayerCode: true, displayName: true, [property]: true } as any,
     });
     if (!assayer) throw new NotFoundException('Assayer not found.');
@@ -3679,8 +4251,13 @@ export class AssayerService implements OnModuleInit {
     assayerId: string,
     actorId: string,
   ): Promise<{ username: string; temporaryPassword: string; expiresAt: string; canSignInNow: boolean; accessScope: 'FULL' | 'REGISTRATION_ONLY' }> {
+    // Scoped here rather than in `issueAppAccessCore`, which takes an already-loaded entity and is
+    // also driven by `bulkIssueAppAccess` — the two entry points load separately, so each one
+    // carries its own predicate. Issuing app access mints a credential and speaks a temporary
+    // password back to the caller, so an unscoped id here is account takeover of another tenant's
+    // field worker, not merely a read.
     const assayer = await this.assayerRepository.findOne({
-      where: { id: assayerId },
+      where: tenantWhere<AssayerEntity>({ id: assayerId }),
       select: { id: true, assayerCode: true, displayName: true, phone: true, email: true, lifecycleStatus: true },
     });
     if (!assayer) throw new NotFoundException('Assayer not found.');
@@ -3886,7 +4463,13 @@ export class AssayerService implements OnModuleInit {
     newPassword: string | undefined,
     actorId: string,
   ): Promise<{ generatedPassword?: string }> {
-    const assayer = await this.assayerRepository.findOne({ where: { id: assayerId }, select: { id: true } });
+    // Same reasoning as `issueAppAccess`: the recovery path is a credential-issuing path, and the
+    // `update` below is keyed on `assayerId` with no predicate of its own, so this load is what
+    // stands between a foreign id and another organisation's password hash being replaced.
+    const assayer = await this.assayerRepository.findOne({
+      where: tenantWhere<AssayerEntity>({ id: assayerId }),
+      select: { id: true },
+    });
     if (!assayer) throw new NotFoundException('Assayer not found.');
 
     // When HR does not supply one, generate a readable temporary password and return it once.
@@ -3977,6 +4560,14 @@ export class AssayerService implements OnModuleInit {
    * Frozen payable disbursement destination snapshots for an assayer.
    */
   async getPayables(assayerId: string): Promise<any[]> {
+    /**
+     * Gated on the parent rather than filtered in the SQL, because `assayer_payables` carries no
+     * `organization_id` and the columns this returns are the reason it matters: the destination
+     * bank name, IFSC, account number and account-holder name of every payout ever made to this
+     * person. That is the same disclosure `revealSensitiveField` exists to control, reached by a
+     * route that had no ownership check at all.
+     */
+    await this.assertAssayerInTenant(assayerId, `Assayer ${assayerId} not found.`);
     return this.dataSource.query(
       `SELECT id, payable_number as "payableNumber", status, total_amount as "amount",
               currency, approved_at as "approvedAt",

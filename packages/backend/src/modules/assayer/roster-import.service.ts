@@ -408,12 +408,43 @@ export class RosterImportService {
        * every table through the transaction manager it is handed. Same `IN (…)`, one query.
        */
       const codesInFile = [...new Set(rowCodes.filter((c): c is string => !!c))];
+      /**
+       * The organisation every row of this import belongs to, resolved from the person who
+       * started it.
+       *
+       * NOT from the ambient request context, and that is the point. A roster import is queued:
+       * `RosterImportWorker` runs it in a Bull job, where there is no request and no principal to
+       * read a tenant off. `TenantContext` says exactly this — "Background work that touches
+       * tenant-owned data must carry the organisation id explicitly in its job payload and pass it
+       * down" — and `actorId` is what this job carries, so the organisation is looked up from the
+       * actor once per import rather than guessed per row.
+       *
+       * Without it, every imported assayer would be written with a null organisation. Nothing
+       * would error: the rows would save, the summary would report success, and they would be
+       * invisible to every scoped read from that moment on — the roster would simply not grow.
+       * That is the failure mode this whole change has to avoid, and the import is the path that
+       * created 1,155 of the 1,172 people on this system.
+       */
+      const actorOrgRows: Array<{ organization_id: string | null }> = await manager.query(
+        'SELECT organization_id FROM users WHERE id = $1',
+        [actorId],
+      );
+      const owningOrganizationId = actorOrgRows?.[0]?.organization_id ?? null;
+
       const existingByCode = new Map<string, AssayerEntity>();
       if (codesInFile.length) {
-        const found: AssayerEntity[] = await manager
+        const qb = manager
           .createQueryBuilder(AssayerEntity, 'assayer')
-          .where('assayer.assayerCode IN (:...codes)', { codes: codesInFile })
-          .getMany();
+          .where('assayer.assayerCode IN (:...codes)', { codes: codesInFile });
+        // Matched within the importer's own organisation. A code that exists but belongs to
+        // somebody else is not "this person, update them" — it is a collision, and it is handled
+        // as one further down: the insert hits the database-wide UNIQUE constraint on
+        // `assayer_code` and the row is filed as a review issue instead of quietly overwriting
+        // another organisation's appraiser with a stranger's details.
+        if (owningOrganizationId) {
+          qb.andWhere('assayer.organizationId = :__importOrgId', { __importOrgId: owningOrganizationId });
+        }
+        const found: AssayerEntity[] = await qb.getMany();
         for (const person of found) existingByCode.set(person.assayerCode, person);
       }
 
@@ -455,7 +486,10 @@ export class RosterImportService {
         }
 
         const existing = existingByCode.get(code) ?? null;
-        const assayer = existing ?? manager.create(AssayerEntity, { assayerCode: code });
+        // Stamped on creation, never on update: an existing row keeps the organisation it already
+        // has, so an import run by one organisation cannot re-home another's records.
+        const assayer = existing
+          ?? manager.create(AssayerEntity, { assayerCode: code, organizationId: owningOrganizationId });
         const isNew = !existing;
 
         this.applyIdentity(assayer, read, sourceRow, sheetName, issues, overwrite);

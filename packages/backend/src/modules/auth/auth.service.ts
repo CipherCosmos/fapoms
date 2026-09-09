@@ -1367,6 +1367,20 @@ export class AuthService implements OnModuleInit {
         username: assayer.assayerCode,
         displayName: assayer.displayName,
         /**
+         * The organisation this account belongs to, carried so tenant-scoped reads work for
+         * field accounts the same way they do for staff.
+         *
+         * The staff branch above returns the `users` row itself, which has always had the
+         * column; this branch hand-builds its object and simply omitted it, so `req.user`
+         * was tenantless for every assayer in the system — including for `TenantContext`,
+         * which reads exactly this field. The notification bell is the first read to use it
+         * (`NotificationController.viewerOrganizationId`), and without it an assayer would fall
+         * through to the unscoped path forever while every staff account was scoped. The JWT
+         * payload has carried `organizationId` for assayers since login was written; this makes
+         * the resolved principal agree with the token.
+         */
+        organizationId: assayer.organizationId ?? null,
+        /**
          * Carried so `JwtAuthGuard` can enforce forced rotation on assayer principals too.
          *
          * This principal did not carry the flag, so the guard's check never fired for field

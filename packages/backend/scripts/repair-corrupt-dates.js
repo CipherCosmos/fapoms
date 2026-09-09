@@ -112,6 +112,27 @@ async function main() {
     DATE_COLUMNS.map((c) => outOfRange(`${prefix}${c}`)).join(' OR ');
   const BOUNDS = [MIN_DATE, MAX_EMPLOYMENT_DATE, MAX_BIRTH_DATE];
 
+  /**
+   * The single-column form, and why it cannot reuse `outOfRange` above.
+   *
+   * `outOfRange` numbers its ceiling $2 for an employment column and $3 for a birth one, which is
+   * correct only in a statement that mentions BOTH kinds — the scan at the top does, because it
+   * ORs all four columns together. The per-column statements below mention one, so one of $2/$3
+   * is never referenced, and Postgres cannot infer the type of a parameter that appears nowhere:
+   *
+   *     error: could not determine data type of parameter $2
+   *
+   * Every per-column statement therefore failed, the transaction rolled back, and the script
+   * reported "Repair failed, nothing was changed" — while `--report` succeeded, because the
+   * report only ever runs the combined scan. So the script looked like it worked right up until
+   * the moment it was asked to do something, which is why 32 impossible dates were still in the
+   * table months after it was committed.
+   *
+   * One ceiling, always $2, chosen per column.
+   */
+  const outOfRangeOne = (col) => `${col} IS NOT NULL AND (${col} < $1 OR ${col} > $2)`;
+  const boundsFor = (col) => [MIN_DATE, maxDateFor(col)];
+
   try {
     const { rows } = await client.query(
       `SELECT id, assayer_code, display_name, date_of_birth, joining_date, exit_date, termination_date
@@ -179,27 +200,54 @@ async function main() {
            (id, category, event_type, entity_type, entity_id, user_id, remarks, metadata, occurred_at)
          SELECT uuid_generate_v4(), 'OPERATIONAL', 'ASSAYER_CORRUPT_DATE_BLANKED', 'ASSAYER', a.id,
                 NULL,
-                'scripts/repair-corrupt-dates.js removed ' || $4 || ' = ' || a.${col}::text ||
+                'scripts/repair-corrupt-dates.js removed ' || $3 || ' = ' || a.${col}::text ||
                 ' from ' || a.assayer_code ||
                 ' — not a real date for a person (importer parse bug); original kept in _fix_backup_corrupt_dates.',
-                jsonb_build_object('column', $4, 'removed', a.${col}::text),
+                jsonb_build_object('column', $3, 'removed', a.${col}::text),
                 now()
            FROM assayers a
-          WHERE ${outOfRange(`a.${col}`)}`,
-        // $4 is the column NAME for the remark. $1..$3 are the bounds; the column moved from $3
-        // to $4 when the birth ceiling took a parameter of its own.
-        [...BOUNDS, col],
+          WHERE ${outOfRangeOne(`a.${col}`)}`,
+        // $1/$2 are this column's own bounds; $3 is the column NAME for the remark.
+        [...boundsFor(col), col],
       );
 
-      const res = await client.query(
-        `UPDATE assayers
-            SET ${col} = NULL, updated_by = 'data-fix:corrupt-date', updated_at = now()
-          WHERE ${outOfRange(col)}`,
-        BOUNDS,
+      const { rows: affected } = await client.query(
+        `SELECT count(*)::int AS n FROM assayers WHERE ${outOfRangeOne(col)}`,
+        boundsFor(col),
       );
-      if (res.rowCount > 0) console.log(`  blanked ${col} on ${res.rowCount} row(s)`);
-      totalBlanked += res.rowCount;
+      if (affected[0].n > 0) console.log(`  blanking ${col} on ${affected[0].n} row(s)`);
+      totalBlanked += affected[0].n;
     }
+
+    /**
+     * ONE update for every column, not one per column.
+     *
+     * `chk_assayers_employment_dates_sane` is evaluated against the whole candidate row, and 25
+     * of these rows carry BOTH an impossible birth date and a joining date in the 4200s that
+     * their real exit date precedes. Blanking column by column meant the birth-date write was
+     * refused because the row's employment pair was still inverted — a column the statement had
+     * not touched and was about to fix on the next pass. The whole transaction rolled back and
+     * the script reported that nothing had changed, correctly and unhelpfully.
+     *
+     * Nulling every out-of-range value in a single statement takes the row from bad to good in
+     * one step, so the constraint only ever sees the finished result. The audit rows above are
+     * still written per column, because "which value was removed" is the question somebody will
+     * actually ask.
+     */
+    // Each column gets its own pair of bound parameters, numbered in order, so the SET and the
+    // WHERE below speak the same numbering and no parameter goes unreferenced.
+    const predicate = (c, i) => `${c} IS NOT NULL AND (${c} < $${i * 2 + 1} OR ${c} > $${i * 2 + 2})`;
+    const setClause = DATE_COLUMNS
+      .map((c, i) => `${c} = CASE WHEN ${predicate(c, i)} THEN NULL ELSE ${c} END`)
+      .join(', ');
+    const whereClause = DATE_COLUMNS.map((c, i) => `(${predicate(c, i)})`).join(' OR ');
+    const setParams = DATE_COLUMNS.flatMap((c) => boundsFor(c));
+    await client.query(
+      `UPDATE assayers
+          SET ${setClause}, updated_by = 'data-fix:corrupt-date', updated_at = now()
+        WHERE ${whereClause}`,
+      setParams,
+    );
 
     await client.query('COMMIT');
 

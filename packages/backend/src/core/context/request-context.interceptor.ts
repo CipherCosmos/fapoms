@@ -23,12 +23,33 @@ export class RequestContextInterceptor implements NestInterceptor {
       if (user) {
         // Roles arrive either as objects ({ name }) from the resolved principal or as bare strings.
         const roles: unknown[] = Array.isArray(user.roles) ? user.roles : [];
-        const primaryRole = roles
+        // Both shapes, because both arrive: `RoleEntity[]` (`{ name }`) from a resolved staff
+        // principal, bare strings inside a raw JWT payload, and a synthetic `[{ name: 'ASSAYER' }]`
+        // for a field account. Reading only one shape would leave `roleNames` empty for the other,
+        // and an empty roles list reads as "not a platform operator" — the safe direction for
+        // tenant scoping, but silently wrong for an ADMIN, so both are handled here rather than
+        // hoped for.
+        const roleNames = roles
           .map((r) => (typeof r === 'string' ? r : (r as { name?: string })?.name))
-          .find(Boolean);
+          .filter((n): n is string => typeof n === 'string' && n.length > 0);
+        const primaryRole = roleNames[0];
         updateRequestContext({
           userId: typeof user.id === 'string' ? user.id : undefined,
           role: primaryRole ?? undefined,
+          roleNames,
+          /**
+           * The tenant every organisation-scoped query filters on, taken from the principal the
+           * JWT guard resolved and from nowhere else.
+           *
+           * This runs after guards, so `req.user` is the authenticated principal rather than
+           * anything the caller sent. That ordering is the whole security property: an
+           * `organizationId` read from a query string, header or body would be a filter the
+           * attacker chooses, which is worse than no filter at all because it looks like one.
+           */
+          organizationId:
+            typeof user.organizationId === 'string' && user.organizationId.length > 0
+              ? user.organizationId
+              : undefined,
           displayName: user.displayName ?? user.display_name ?? user.username ?? undefined,
           // `sid` is the durable session claim added to the access token; absent until the
           // session store lands, at which point every request carries it.

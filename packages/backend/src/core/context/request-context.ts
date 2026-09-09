@@ -22,6 +22,28 @@ export interface RequestContext {
   userId?: string;
   /** The actor's primary role name at the time of the request (e.g. ADMIN, OPERATIONS). */
   role?: string;
+  /**
+   * EVERY role the actor holds, not just the first one `role` reports.
+   *
+   * `role` takes whichever entry happens to come back first from `roles` and is fine for an
+   * audit row, which only wants to say "an OPERATIONS user did this". Tenant scoping cannot use
+   * it: the decision it drives is "may this principal read across organisations", and answering
+   * that from one arbitrarily-chosen entry means an ADMIN whose roles array happens to start with
+   * something else is refused, while the reverse — reading a cross-tenant role out of a principal
+   * that does not hold it — is worse still. See `AmbientTenantContext.isCrossTenant`.
+   */
+  roleNames?: string[];
+  /**
+   * The organisation the actor belongs to, from `req.user.organizationId`.
+   *
+   * Carried here rather than resolved from the database at each read because this is the value
+   * every tenant-scoped query filters on, and it must be the *authenticated* one — derived from
+   * the principal the JWT guard resolved, never from a query string, header or body the caller
+   * controls. Finding F-03 was exactly what happens without it: an OPERATIONS user in one
+   * organisation read, suspended, revealed the bank details of and deleted an assayer belonging
+   * to another, because no query anywhere had ever mentioned this column.
+   */
+  organizationId?: string;
   /** Display name, so an audit row can name the actor without a second lookup. */
   displayName?: string;
   /** Real client IP (Express `req.ip`, resolved through `trust proxy` — see main.ts). */

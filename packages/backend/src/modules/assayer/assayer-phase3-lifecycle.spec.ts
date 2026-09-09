@@ -107,7 +107,23 @@ describe('Phase 3 — Assayer Lifecycle, KYC, Empanelment & Financial Integrity'
           findOne: assayerRepo.findOne,
           save: assayerRepo.save,
           create: assayerRepo.create,
-          query: jest.fn().mockResolvedValue([]),
+          /**
+           * The lifecycle funnel and the onboarding rewind both re-read the assayer under
+           * `SELECT … FOR UPDATE` and decide from THAT row rather than from one loaded earlier
+           * outside the transaction — which is the fix for the lost update that let two
+           * concurrent transitions both commit and both claim the same previous state.
+           *
+           * So the fake manager has to answer that read, and it answers it from whatever
+           * `assayerRepo.findOne` is currently mocked to return. Anything else would let a test
+           * set up one state and have the code under test lock a different one.
+           */
+          query: jest.fn().mockImplementation(async (sql: string) => {
+            if (/FROM\s+assayers\b[\s\S]*FOR UPDATE/i.test(sql)) {
+              const row = await (assayerRepo.findOne as jest.Mock)();
+              return row ? [{ lifecycle_status: row.lifecycleStatus, version: row.version ?? 1 }] : [];
+            }
+            return [];
+          }),
           getRepository: jest.fn().mockImplementation((entity) => {
             if (entity === AssayerEntity) return assayerRepo;
             if (entity === AssayerDocumentEntity) return docRepo;
@@ -635,12 +651,16 @@ describe('Phase 3 — Assayer Lifecycle, KYC, Empanelment & Financial Integrity'
       );
 
       expect(result.lifecycleStatus).toBe(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
+      // The second argument is the transaction manager. The audit row is written in the SAME
+      // transaction as the state change now, so a rewind that fails to commit cannot leave a
+      // record saying it happened — and one that commits cannot lose its record.
       expect(auditService.recordEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           eventType: 'ASSAYER_ONBOARDING_STAGE_RESET',
           previousState: AssayerLifecycleStatus.TRAINING,
           newState: AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
         }),
+        expect.objectContaining({ manager: expect.anything() }),
       );
     });
 
@@ -659,6 +679,71 @@ describe('Phase 3 — Assayer Lifecycle, KYC, Empanelment & Financial Integrity'
           'operator-1',
         ),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    /**
+     * THE REWIND IS A REWIND. It was, until the lifecycle certification, a way back into the
+     * workforce from anywhere.
+     *
+     * The only guard on the CURRENT state was "not ACTIVE", so a dismissed person could be
+     * dropped straight into TRAINING and then activated by an ordinary legal edge — two calls,
+     * and their audit trail contained no document-verification and no background-verification
+     * event because neither happened. Sign-in came back; the planner offered them real work. The
+     * shared map's rehire edge exists precisely so that coming back means walking those checks
+     * again.
+     *
+     * Both halves are now closed: the source must already be an onboarding stage, and the target
+     * must be at or before it.
+     */
+    describe('the onboarding rewind cannot manufacture progress or a rehire', () => {
+      const stuckAt = (stage: AssayerLifecycleStatus) => {
+        const a = new AssayerEntity();
+        a.id = 'asr-rw-1';
+        a.lifecycleStatus = stage;
+        a.isActive = true;
+        (assayerRepo.findOne as jest.Mock).mockResolvedValue(a);
+        return a;
+      };
+      const rewind = (to: AssayerLifecycleStatus) => assayerService.operatorResetOnboardingStage(
+        'asr-rw-1', to, 'A substantive operational reason for the rewind', 'operator-1',
+      );
+
+      it.each([
+        AssayerLifecycleStatus.RESIGNED,
+        AssayerLifecycleStatus.TERMINATED,
+        AssayerLifecycleStatus.SUSPENDED,
+        AssayerLifecycleStatus.ON_LEAVE,
+        AssayerLifecycleStatus.INACTIVE,
+      ])('refuses to pull a %s assayer back into onboarding', async (from) => {
+        stuckAt(from);
+        await expect(rewind(AssayerLifecycleStatus.TRAINING)).rejects.toThrow(/still going through onboarding/);
+        expect(assayerRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('refuses to move a joiner FORWARD, which is a transition with its own gates', async () => {
+        stuckAt(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
+        await expect(rewind(AssayerLifecycleStatus.TRAINING)).rejects.toThrow(/only goes\s+back/);
+        expect(assayerRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('refuses a target that is not an onboarding stage at all', async () => {
+        stuckAt(AssayerLifecycleStatus.TRAINING);
+        await expect(rewind(AssayerLifecycleStatus.ACTIVE)).rejects.toThrow(/only target an onboarding stage/);
+        await expect(rewind(AssayerLifecycleStatus.ARCHIVED)).rejects.toThrow(/only target an onboarding stage/);
+        expect(assayerRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('refuses a rewind that goes nowhere', async () => {
+        stuckAt(AssayerLifecycleStatus.TRAINING);
+        await expect(rewind(AssayerLifecycleStatus.TRAINING)).rejects.toThrow(/already at TRAINING/);
+      });
+
+      it('still allows the case it exists for — a joiner stepped back a stage', async () => {
+        stuckAt(AssayerLifecycleStatus.TRAINING);
+        (assayerRepo.save as jest.Mock).mockImplementation(async (a: any) => a);
+        const result = await rewind(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
+        expect(result.lifecycleStatus).toBe(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
+      });
     });
 
     it('reconciles departed empanelments by closing active standings with audit log', async () => {

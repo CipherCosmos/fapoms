@@ -1,5 +1,6 @@
 import { NotificationCategory, NotificationChannel, NotificationPriority } from '@fapoms/shared';
 import { FEEDBACK_TEAM_ROLE_NAMES } from '../feedback/feedback-roles';
+import { NotificationScope } from './notification-tenancy';
 
 /**
  * The single registry of what this system can notify anyone about.
@@ -30,6 +31,26 @@ export type SpecialRecipient =
 export interface NotificationTypeDef {
   category: NotificationCategory;
   priority: NotificationPriority;
+  /**
+   * Whose data this event is about — the tenant boundary, declared per type.
+   *
+   * Absent means `'TENANT'`, and that default is the point: `roles` below resolves to every
+   * active holder of a role, and until this field existed that meant every holder on the
+   * DEPLOYMENT. Activating an assayer in one organisation put their name, a count and a link to
+   * their record into an OPERATIONS user's bell in a different organisation (finding F-07). The
+   * fan-out is shared, so every entry here with a non-empty `roles` list had the same hole.
+   *
+   * `'PLATFORM'` is the deliberate exemption, for the handful of events whose subject is the
+   * platform itself — the compliance register the operator answers to a regulator for, a data
+   * wipe that spans every tenant, the support desk staffed by DEVELOPER/PRODUCT_SUPPORT. Those
+   * have no owning tenant to scope to, and scoping them would mean nobody hears them at all.
+   * Each one carries its own justification below; a type that says nothing is scoped, so
+   * forgetting to think about tenancy fails towards the closed answer rather than the open one.
+   *
+   * There is no operator override for this (see `NotificationScope`) — it is not a messaging
+   * preference, and re-opening F-07 should take a code review, not a checkbox.
+   */
+  scope?: NotificationScope;
   /** Roles whose active holders receive this. */
   roles: string[];
   /**
@@ -870,9 +891,22 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   // event keys, the NotificationCategory.FEEDBACK value and the /feedback link all keep the
   // historical name on purpose (see feedback.service.ts for the full note); only the strings a
   // person reads have changed.
+  //
+  // Every type in this block is `scope: 'PLATFORM'`, and the reason is FEEDBACK_TEAM_ROLE_NAMES
+  // itself: the desk is DEVELOPER plus PRODUCT_SUPPORT — "feedback from support is for developer
+  // only… what arrives here is bug reports and product questions, which is the technical
+  // estate's work" (feedback-roles.ts). That is one desk for the whole platform, not one per
+  // customer, so a tenant filter on the audience would leave a support request from any tenant
+  // reaching nobody. The reporter-facing half (TEAM_REPLY, STATUS_CHANGED, ASSIGNED) is
+  // addressed to a named individual anyway and has no role audience to scope. Worth stating
+  // plainly because it is the one place tenant data (a thread's title, written by a tenant's
+  // user) deliberately crosses to a platform audience: if support ever becomes a per-tenant
+  // desk, these seven lines are the change, and `ENTITY_ORGANIZATION_SQL.FEEDBACK` already
+  // resolves the thread's organisation for the stamp.
   FEEDBACK_SUBMITTED: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
+    scope: 'PLATFORM',
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     channels: IN_APP,
     title: 'New support request',
@@ -883,6 +917,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_TEAM_REPLY: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
+    scope: 'PLATFORM',
     roles: [],
     special: ['RECORD_OWNER', 'ASSIGNED_ASSAYER'],
     channels: IN_APP,
@@ -894,6 +929,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_REPORTER_REPLY: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
+    scope: 'PLATFORM',
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
@@ -905,6 +941,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_STATUS_CHANGED: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
+    scope: 'PLATFORM',
     roles: [],
     special: ['RECORD_OWNER', 'ASSIGNED_ASSAYER'],
     channels: IN_APP,
@@ -916,6 +953,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_ASSIGNED: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
+    scope: 'PLATFORM',
     roles: [],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
@@ -929,6 +967,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_SLA_FIRST_RESPONSE_BREACH: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.HIGH,
+    scope: 'PLATFORM',
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     channels: IN_APP_AND_EMAIL,
     title: 'Support request awaiting first response',
@@ -938,6 +977,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_SLA_RESOLUTION_BREACH: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.HIGH,
+    scope: 'PLATFORM',
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     special: ['RECORD_OWNER'],
     channels: IN_APP_AND_EMAIL,
@@ -980,9 +1020,18 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   // reconstructed from memory during an actual incident" — a register nobody is told to look at
   // does not deliver that. Every type below reaches ADMIN (who act on this register) and AUDITOR
   // (who can already read it — see ComplianceController's own @Roles).
+  //
+  // All four are `scope: 'PLATFORM'`, and the register's own shape says why: `security_incidents`
+  // and `data_rights_requests` carry no `organization_id` and never have. These are the platform
+  // operator's statutory obligations — the CERT-In six-hour clock and the DPDP Board's
+  // seventy-two hours run against the entity that holds the data, not against a customer of it —
+  // and `ComplianceController` exposes one undivided register to ADMIN and AUDITOR. A tenant
+  // filter here would have nothing to filter on and would silence the loudest alarms the system
+  // has. If the register is ever split per tenant, these four move to TENANT with it.
   SECURITY_INCIDENT_RAISED: {
     category: NotificationCategory.SYSTEM,
     priority: NotificationPriority.CRITICAL,
+    scope: 'PLATFORM',
     roles: COMPLIANCE,
     channels: ALL_CHANNELS,
     title: 'Security incident raised',
@@ -999,6 +1048,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   SECURITY_INCIDENT_CLOCK_BREACHED: {
     category: NotificationCategory.SYSTEM,
     priority: NotificationPriority.CRITICAL,
+    scope: 'PLATFORM',
     roles: COMPLIANCE,
     channels: ALL_CHANNELS,
     title: 'Statutory reporting deadline missed',
@@ -1008,6 +1058,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DATA_RIGHTS_REQUEST_RECEIVED: {
     category: NotificationCategory.SYSTEM,
     priority: NotificationPriority.NORMAL,
+    scope: 'PLATFORM',
     roles: COMPLIANCE,
     channels: IN_APP,
     title: 'New data rights request',
@@ -1019,6 +1070,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DATA_RIGHTS_REQUEST_SLA_BREACH: {
     category: NotificationCategory.SYSTEM,
     priority: NotificationPriority.HIGH,
+    scope: 'PLATFORM',
     roles: COMPLIANCE,
     channels: IN_APP_AND_EMAIL,
     title: 'Data rights request past its SLA',
@@ -1027,6 +1079,11 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   },
 
   // ── Destructive actions (the two-person rule) ─────────────────────────────
+  // Both `scope: 'PLATFORM'`: a wipe is selected by DATA DOMAIN, not by customer — it empties
+  // the chosen domains across the whole database — so the event has no owning tenant, and the
+  // two-person rule that governs it (a DEVELOPER requests, an ADMIN approves) is a platform
+  // control. Scoping these would make the approval request derivable from no entity at all and
+  // therefore undeliverable, which on this pair means a wipe request nobody is asked to approve.
   /**
    * A developer filed a data-wipe request; only an admin's decision can move it. Decision-forcing
    * by definition — nothing happens until a human clicks approve or reject — so it emails, per
@@ -1037,6 +1094,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESTRUCTIVE_ACTION_REQUESTED: {
     category: NotificationCategory.SYSTEM,
     priority: NotificationPriority.HIGH,
+    scope: 'PLATFORM',
     roles: ADMINS,
     channels: IN_APP_AND_EMAIL,
     title: 'A data wipe needs your approval',
@@ -1055,6 +1113,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESTRUCTIVE_ACTION_DECIDED: {
     category: NotificationCategory.SYSTEM,
     priority: NotificationPriority.HIGH,
+    scope: 'PLATFORM',
     roles: [],
     special: ['RECORD_OWNER'],
     channels: IN_APP_AND_EMAIL,

@@ -418,7 +418,20 @@ export class PlanningController {
   @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch, for a given audit date' })
   async getRecommendations(
-    @Query('branchId', ParseUUIDPipe) branchId: string,
+    /**
+     * `branchId` is required, and the message says which parameter is missing.
+     *
+     * The bare `ParseUUIDPipe` answered an omitted `branchId` with "The value passed as UUID is
+     * not a string" — the pipe describing its own internals, naming neither the parameter nor
+     * what to do about it. A caller integrating against this endpoint reads that and has no idea
+     * which of the six query parameters it means.
+     */
+    @Query('branchId', new ParseUUIDPipe({
+      exceptionFactory: () => new BadRequestException(
+        'branchId is required and must be a branch UUID — it is the branch you are asking for '
+        + 'candidates at.',
+      ),
+    })) branchId: string,
     // The audit date availability is evaluated against (YYYY-MM-DD). Ops plans ahead, so the UI
     // sends its date picker; omitted, today is assumed (legacy callers).
     @Query('date') date?: string,

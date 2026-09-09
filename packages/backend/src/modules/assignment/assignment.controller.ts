@@ -86,7 +86,31 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
    */
   @IsOptional() @IsString() @MaxLength(1000)
   overrideReason?: string;
-  /** Durable idempotency key for retryable creation. */
+
+  /**
+   * Durable idempotency key for retryable creation.
+   *
+   * The decorators are the load-bearing part of this declaration, not the sentence above them.
+   * This field had none, and `tsconfig` targets ES2022 — so `clientRequestId;` is emitted as a
+   * real class field, and every instance class-transformer builds owns the key with the value
+   * `undefined` before a single byte of the request is copied in. class-validator's whitelist
+   * walks the instance's own keys, finds no metadata for this one, and `forbidNonWhitelisted`
+   * (main.ts) turns that into a refusal. So `POST /assignments` answered EVERY request with
+   * `400 property clientRequestId should not exist` — including a valid body that never
+   * mentioned the field, because the field did not have to be sent to be present. Not a subset
+   * of requests: the endpoint was unreachable, with nothing else broken to explain it, and the
+   * error named a property the caller had never heard of.
+   *
+   * The same field on `CreateAssayerRequestDto` (assayer.controller.ts) has carried
+   * `@IsOptional() @IsString()` all along, which is why assayer registration kept accepting
+   * idempotent retries while assignment creation accepted nothing at all.
+   *
+   * `@MaxLength(100)` is the width of `assignment_idempotency_records.client_request_id`, the
+   * column `AssignmentService.create()` writes this into. Without it an over-long key is a 500
+   * out of Postgres ("value too long for type character varying(100)") instead of a 400 that
+   * names the field the caller can shorten.
+   */
+  @IsOptional() @IsString() @MaxLength(100)
   clientRequestId?: string;
 }
 

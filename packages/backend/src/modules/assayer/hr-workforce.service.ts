@@ -11,6 +11,7 @@ import {
   PAYOUT_BLOCKING_COLUMNS,
 } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { tenantFilterId } from '../../infrastructure/tenancy/ambient-tenant-context';
 
 /**
  * FAPOMS — HR workforce analytics.
@@ -164,7 +165,23 @@ export class HrWorkforceService implements OnModuleInit {
    */
   private static overviewCacheKey(scope?: GlobalScope): string {
     const suffix = scope?.regions?.length ? `r:${[...scope.regions].sort().join(',')}` : 'all';
-    return `${OVERVIEW_CACHE_KEY}:${suffix}`;
+    /**
+     * The organisation is part of the key, and leaving it out would have undone the scoping below
+     * completely.
+     *
+     * This payload is cached cluster-wide in Redis for 30 seconds. The queries are now scoped per
+     * organisation, so two organisations produce two different payloads — but they would have
+     * shared one cache entry, and whichever loaded `/hr/workforce` first would have served their
+     * headcount, their attrition and their named compliance and idle lists to the other for the
+     * rest of the TTL. A cache key that omits a dimension the value depends on is exactly as
+     * disclosing as no filter at all, and harder to spot because it only happens on a hit.
+     *
+     * `platform` is a distinct key rather than a missing segment: ADMIN's unscoped view really is
+     * a different result set, and letting it collide with a tenant's key in either direction is
+     * the same bug.
+     */
+    const tenant = tenantFilterId() ?? 'platform';
+    return `${OVERVIEW_CACHE_KEY}:${tenant}:${suffix}`;
   }
 
   private static num(v: any): number {
@@ -172,25 +189,50 @@ export class HrWorkforceService implements OnModuleInit {
   }
 
   /**
-   * The region half of the caller's scope, as a WHERE fragment plus its bind parameter.
+   * The caller's scope — organisation AND region — as a WHERE fragment plus its bind parameters.
    *
-   * Appended, never inserted: this pushes the regions array onto the END of the caller's OWN
-   * params array, so it never renumbers a `$1…$n` the query already uses — the caller builds its
-   * other bind values first, and the placeholder this returns is always `$` + that array's new
-   * length. One implementation, so a query scoped by hand cannot say something subtly different
-   * from a query scoped by calling this — see `hr-workforce-region-scope.spec.ts`, which fails on
-   * a raw query that does neither this nor carries a reviewed exemption.
+   * Appended, never inserted: this pushes its bind values onto the END of the caller's OWN params
+   * array, so it never renumbers a `$1…$n` the query already uses — the caller builds its other
+   * bind values first, and each placeholder returned is `$` + that array's new length. One
+   * implementation, so a query scoped by hand cannot say something subtly different from a query
+   * scoped by calling this — see `hr-workforce-region-scope.spec.ts`, which fails on a raw query
+   * that does neither this nor carries a reviewed exemption.
    *
-   * Returns `''` when the scope carries no region constraint, so an unscoped caller's SQL is
-   * byte-for-byte what it was before region scoping existed. `alias` is the range variable that
-   * carries `region` in THIS query — `assayers` itself when the table has no `AS`, the join alias
-   * otherwise (Postgres exposes an unaliased table under its own name, so `assayers.region` is
-   * always valid there).
+   * `alias` is the range variable carrying these columns in THIS query — `assayers` itself when
+   * the table has no `AS`, the join alias otherwise (Postgres exposes an unaliased table under its
+   * own name, so `assayers.region` is always valid there).
+   *
+   * ## Why the organisation predicate lives in here too
+   *
+   * This service is 29 hand-written statements over `assayers`, several holding three and four
+   * independent range variables over the table in one statement, and it has no repository to put
+   * a filter behind. But every one of those statements already routes its scope through this
+   * method — the fitness spec above makes that mandatory rather than customary — so adding the
+   * tenant predicate here reaches all of them at once, and any future query that forgets it fails
+   * that spec instead of quietly serving the wrong organisation's headcount.
+   *
+   * The two predicates answer different questions and are deliberately independent. Region is what
+   * the operator chose to look at, and is empty for most accounts; organisation is what they are
+   * entitled to see at all. `GET /hr/workforce` is the whole workforce dashboard — headcount,
+   * attrition, expiring credentials, named people in the compliance and idle lists — so with the
+   * region half alone it was, for any account without a region assignment, every tenant's
+   * workforce aggregated into one number and then itemised by name.
+   *
+   * Returns `''` when neither applies (the platform operator, or a background sweep), so the SQL
+   * those callers run is byte-for-byte what it was before any scoping existed.
    */
   private static scopeSql(alias: string, params: unknown[], scope?: GlobalScope): string {
-    if (!scope?.regions?.length) return '';
-    params.push(scope.regions);
-    return ` AND ${alias}.region = ANY($${params.length})`;
+    let sql = '';
+    const organizationId = tenantFilterId();
+    if (organizationId) {
+      params.push(organizationId);
+      sql += ` AND ${alias}.organization_id = $${params.length}`;
+    }
+    if (scope?.regions?.length) {
+      params.push(scope.regions);
+      sql += ` AND ${alias}.region = ANY($${params.length})`;
+    }
+    return sql;
   }
 
   async overview(scope?: GlobalScope): Promise<any> {

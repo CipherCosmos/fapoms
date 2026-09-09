@@ -45,7 +45,7 @@ const assayerUploadMulterOptions = {
   limits: { fileSize: MAX_UPLOAD_BYTES },
 };
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, IsIn, MinLength, MaxLength, ArrayMinSize, ValidateNested, ArrayMaxSize, Matches, ValidateBy, ValidationOptions } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, IsIn, MinLength, MaxLength, Min, ArrayMinSize, ValidateNested, ArrayMaxSize, Matches, ValidateBy, ValidationOptions } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -104,10 +104,12 @@ import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RosterImportService } from './roster-import.service';
 import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
+import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
 import { DataIntegrityService } from './data-integrity.service';
 import { QualificationScoreService } from './qualification-score.service';
 import { RosterQueryService, RosterFilters, rosterCursorFor } from './roster-query.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
+import { formatRule, IsIndianMobile } from '../../infrastructure/http/format-validators';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
 const STAFF_ASSAYER_EDITORS: string[] = [
@@ -297,21 +299,7 @@ class SetDocumentRequestDto {
  * through. `assertNoMaskedPii` in AssayerService covers all three, and covers the write paths
  * that do not pass through this class at all.
  */
-const identityFormatRule = (
-  name: string,
-  ok: (value: string) => boolean,
-  message: string | ((value: unknown) => string),
-) =>
-  (options?: ValidationOptions): PropertyDecorator =>
-    ValidateBy({
-      name,
-      validator: {
-        validate: (value: unknown) =>
-          typeof value === 'string' && (value.trim() === '' || ok(value)),
-        defaultMessage: (args) =>
-          typeof message === 'function' ? message(args?.value) : message,
-      },
-    }, options);
+const identityFormatRule = formatRule;
 
 const IsPanFormat = identityFormatRule('isPanFormat', isValidPan,
   "This PAN doesn't look right — it should be 5 letters, 4 digits, 1 letter, like ABCDE1234F.");
@@ -336,8 +324,7 @@ const IsAadhaarNumber = identityFormatRule('isAadhaarNumber', isValidAadhaar,
       : 'This doesn\'t match a real Aadhaar number — one digit looks mistyped or swapped. Please re-check it against the card.';
   });
 
-const IsIndianMobile = identityFormatRule('isIndianMobile', (value) => normalisePhone(value) !== null,
-  "This phone number doesn't look right — please enter a 10-digit Indian mobile number, like 98765 43210 (with or without +91).");
+
 
 /**
  * Shape only — nothing checked this before, and any string passed. Reuses the same
@@ -892,12 +879,37 @@ export class UpdateCommercialProfileRequestDto {
   effectiveEndDate?: string | null;
 }
 
+
+
 export class TransitionLifecycleDto {
   @IsString() @IsNotEmpty()
   targetStatus: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @MaxLength(LIFECYCLE_REASON_MAX_LENGTH)
   reason?: string;
+
+  /**
+   * The version the client believed it was acting on, if it wants the stronger guarantee.
+   *
+   * Optional because the HR screens do not carry one today and demanding it would break them.
+   * Honoured strictly when supplied: `doTransitionLifecycle` compares it against the version it
+   * reads under the row lock and answers 409 if they differ, exactly as the assignment commands
+   * do. An integration that cares about lost updates can opt in without waiting for the UI.
+   */
+  @IsOptional() @IsInt() @Min(1)
+  expectedVersion?: number;
+}
+
+/**
+ * The reason a record is being administratively deleted.
+ *
+ * A body on a DELETE is unusual and deliberate: the alternative is a query parameter, and a
+ * reason that ends up in an access log and a browser history is the wrong place for a sentence
+ * about why somebody's record was destroyed.
+ */
+export class DeleteAssayerDto {
+  @IsString() @IsNotEmpty() @MaxLength(LIFECYCLE_REASON_MAX_LENGTH)
+  reason: string;
 }
 
 export class BulkTransitionLifecycleDto {
@@ -908,7 +920,7 @@ export class BulkTransitionLifecycleDto {
   @IsString() @IsNotEmpty()
   targetStatus: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @MaxLength(LIFECYCLE_REASON_MAX_LENGTH)
   reason?: string;
 }
 
@@ -1500,7 +1512,11 @@ export class AssayerController {
     // WHETHER a region-assigned account may open the record at all. HR and the other national
     // desks hold no assignment, so this is a no-op for them.
     await this.regionGuard.assertAssayerInScope(id, scope);
-    const assayer = await this.assayerService.findOne(id);
+    // `findOneForReading`, not `findOne`: opening a leaver's file is a read, and an archived
+    // record is readable and never mutable. Before this, archival was a soft delete by accident
+    // — `findOne` filters `isActive: true`, ARCHIVED is the one state that clears it, and so the
+    // roster's own `lifecycleStatus=ARCHIVED` filter offered a population it could never show.
+    const assayer = await this.assayerService.findOneForReading(id);
     return {
       success: true,
       data: scopeAssayerForRoles(assayer as any, rolesOf(req.user), req.user?.id === id),
@@ -1840,14 +1856,30 @@ export class AssayerController {
     return { success: true, data: assayer };
   }
 
+  /**
+   * Administrative deletion of a record, NOT a lifecycle move. See `AssayerService.remove`.
+   *
+   * ADMIN only since 2026-09-09. OPERATIONS runs the workforce and holds every lifecycle move it
+   * needs — suspend, deactivate, accept a resignation, archive a leaver. Destroying a record is a
+   * different kind of act, and the lifecycle certification found this route archiving an ACTIVE
+   * assayer in one call with no reason and nothing in the trail to tell it apart from an ordinary
+   * archival. Narrowing the callers and demanding a reason is the control that fits; a source-state
+   * restriction is not, because deleting a record created in error has to work whatever state the
+   * error left it in.
+   */
   @Delete(':id')
   @HttpCode(204)
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('assayer:delete:organization')
-  @ApiOperation({ summary: 'Soft delete assayer profile' })
-  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope): Promise<void> {
+  @ApiOperation({ summary: 'Administratively delete an assayer profile (soft delete, reason required)' })
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: DeleteAssayerDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<void> {
     await this.regionGuard.assertAssayerInScope(id, scope);
-    await this.assayerService.remove(id, req.user.id);
+    await this.assayerService.remove(id, req.user.id, body?.reason);
   }
 
   // Commercial Profile CRUD APIs
@@ -2030,7 +2062,9 @@ export class AssayerController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertAssayerInScope(id, scope);
-    const assayer = await this.assayerService.transitionLifecycle(id, dto.targetStatus, req.user.id, dto.reason);
+    const assayer = await this.assayerService.transitionLifecycle(
+      id, dto.targetStatus, req.user.id, dto.reason, dto.expectedVersion,
+    );
     return { success: true, data: assayer };
   }
 

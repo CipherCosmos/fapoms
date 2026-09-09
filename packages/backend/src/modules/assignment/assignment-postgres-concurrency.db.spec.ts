@@ -121,8 +121,8 @@ describe('Phase 2 PostgreSQL Concurrency, Invariants & Failure Injection Integra
 
     const branchId = crypto.randomUUID();
     await ds.query(
-      `INSERT INTO branches (id, client_id, sol_id, name, address, state, district, city, is_active, version)
-       VALUES ($1, $2, $3, $4, '456 Branch St', 'Maharashtra', 'Mumbai', 'Mumbai', true, 1)`,
+      `INSERT INTO branches (id, client_id, sol_id, name, address, state, district, city, is_active, version, organization_id)
+       VALUES ($1, $2, $3, $4, '456 Branch St', 'Maharashtra', 'Mumbai', 'Mumbai', true, 1, (SELECT id FROM organizations WHERE is_active = true ORDER BY created_at LIMIT 1))`,
       [branchId, clientId, `SOL-${suffix}-${Date.now().toString().slice(-4)}`, `Branch ${suffix}`],
     );
     createdBranchIds.push(branchId);

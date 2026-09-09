@@ -919,3 +919,146 @@ describe('AssayerRecord — onboarding guidance in the header', () => {
     expect(screen.queryByText(/^Next:/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * "(BACKEND-AUTHORITATIVE)", NOW THAT IT IS TRUE.
+ *
+ * `DeploymentReadinessCard` carried that label from the beginning and branched on
+ * `dossier.deployable` and `dossier.deploymentBlockers`. The dossier endpoint returned neither —
+ * six keys, `references / empanelments / backgroundChecks / currentCheck / onboarding /
+ * openIssues` — so both read `undefined`, and the verdict silently fell through to a rulebook the
+ * card kept for itself: lifecycle, an explicit `unavailableReason`, and a missing lat/lng. Every
+ * other thing it displayed — unverified identity documents, no bank account, no IFSC, no PAN, zero
+ * plannable empanelments — was demoted to a *warning*, and warnings never touched the badge.
+ *
+ * Reproduced in the browser before this was written: an ACTIVE appraiser with a coordinate, no
+ * bank account, no verified identity document and ZERO client empanelments drew a green
+ * **Deployable** badge, while the planning engine refused the same person outright — "planning
+ * requires an Active or Recommended empanelment standing". The record screen and the dispatch
+ * screen contradicted each other about one person, and the record screen was the confident one.
+ *
+ * The server now computes the verdict (`RosterRecordsService.deploymentVerdict`) from the gates
+ * that actually refuse things, so the tests below feed the card what that endpoint really returns
+ * and hold it to rendering it — including the case it has no answer for, which used to be drawn
+ * green because "no blockers found" and "nobody asked" were the same value.
+ */
+describe('AssayerRecord — deployment readiness is the server\'s verdict', () => {
+  /** The record from the browser reproduction: ACTIVE, pinned, and short of everything else. */
+  const unreadyPerson = () => record({
+    lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+    bankAccountNumber: null,
+  });
+
+  /** Aadhaar and PAN on file as rows, neither checked against the original. */
+  const unverifiedIdentity = () => [
+    doc({ requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true, verificationStatus: null }),
+    doc({ requirement: 'PAN_CARD', label: 'PAN card', identity: true, verificationStatus: null }),
+  ];
+
+  /**
+   * The three sentences `deploymentVerdict` returns for exactly that record — copied from the
+   * server rather than paraphrased, because the point of the fix is that this component invents
+   * no wording of its own and a paraphrase here would quietly reintroduce a second voice.
+   */
+  const SERVER_BLOCKERS = [
+    'no client empanelment on file — record an Active or Recommended standing on the vetting screen; '
+      + 'with no standing anywhere the planner has no client it may offer them to',
+    'identity not established — Aadhaar — front and PAN card have not been checked against the original; '
+      + 'open their Documents tab, check the scan against what is recorded and mark it verified',
+    'payout details incomplete (Bank account) — the audit can be dispatched, but every payable it earns '
+      + 'is held until HR records them on the record',
+  ];
+
+  /**
+   * THE ACCEPTANCE CASE. ACTIVE + no bank + no verified identity + zero plannable empanelments.
+   *
+   * Every reason has to appear as a blocking reason. None of them may be demoted to "Compliance
+   * Attention", which is where the old card put the two that would actually stop a dispatch, and
+   * the reassuring "meets all baseline operational and compliance gates" line must be nowhere on
+   * the screen.
+   */
+  it('renders BLOCKED, with all three of the server\'s reasons, for the record the planner refuses', async () => {
+    serveWithDossier(unreadyPerson(), {
+      empanelments: [],
+      onboarding: unverifiedIdentity(),
+      deployable: false,
+      deploymentBlockers: SERVER_BLOCKERS,
+    });
+    renderRecord();
+    await waitForDossier();
+
+    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Blocked from Deployment');
+
+    const list = screen.getByTestId('deployment-blockers-list');
+    for (const blocker of SERVER_BLOCKERS) {
+      expect(within(list).getByText(blocker)).toBeInTheDocument();
+    }
+
+    // Nothing that stops work is filed as an "attention", and nothing on the card says they are fine.
+    expect(screen.queryByTestId('deployment-warnings-list')).not.toBeInTheDocument();
+    expect(screen.queryByText(/meets all baseline operational and compliance gates/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The exact payload the live endpoint served before the fix. The card cannot answer from it and
+   * must say so — drawing "Deployable" off a dossier that was never asked the question is the
+   * whole defect, not a detail of it.
+   */
+  it('refuses to guess from the old six-key dossier, instead of calling the person deployable', async () => {
+    serveWithDossier(unreadyPerson(), {
+      empanelments: [],
+      onboarding: unverifiedIdentity(),
+    });
+    renderRecord();
+    await waitForDossier();
+
+    const badge = screen.getByTestId('readiness-verdict-badge');
+    expect(badge).toHaveTextContent('Readiness Unavailable');
+    expect(badge).not.toHaveTextContent('Deployable');
+  });
+
+  /**
+   * The dossier is ADMIN/OPERATIONS only and this page swallows the 403, so `dossier` stays null
+   * for everyone else. Under the old fallback that gave the viewer with the least information the
+   * most confident answer on the screen.
+   */
+  it('says it does not know when the dossier read is refused', async () => {
+    serve(unreadyPerson());
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Readiness Unavailable');
+    expect(screen.getByTestId('readiness-unavailable-note')).toBeInTheDocument();
+  });
+
+  /**
+   * ONE BLOCKER PER PROBLEM. The card used to add its own lifecycle sentence on top of whatever
+   * the server sent, so the moment the server started answering, a suspended appraiser would have
+   * been given two entries saying the same thing in two different voices.
+   */
+  it('states a suspension once, in the server\'s words, not twice in two vocabularies', async () => {
+    serveWithDossier(record({ lifecycleStatus: AssayerLifecycleStatus.SUSPENDED }), {
+      deployable: false,
+      deploymentBlockers: [
+        'suspended — no assignment is offered, accepted or checked in while the suspension stands; '
+        + 'lift it on the HR roster',
+      ],
+    });
+    renderRecord();
+    await waitForDossier();
+
+    const items = within(screen.getByTestId('deployment-blockers-list')).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent(/suspended — no assignment is offered/);
+  });
+
+  /** And the green badge, only when the server actually said yes. */
+  it('draws Deployable only on the server\'s own yes', async () => {
+    serveWithDossier(record(), { deployable: true, deploymentBlockers: [] });
+    renderRecord();
+    await waitForDossier();
+
+    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Deployable');
+    expect(screen.queryByTestId('deployment-blockers-list')).not.toBeInTheDocument();
+  });
+});
