@@ -100,11 +100,84 @@ say "Configuration"
 # repository's git history and are permanently burned. A human picking them is how a burned value
 # gets picked again.
 gen_hex()    { openssl rand -hex "$1"; }
+# Alphanumeric after the `tr`, which matters twice: these end up inside a `postgres://` URL below,
+# where a `/` or a `+` would need percent-encoding, and inside `ALTER ROLE … PASSWORD '…'`.
 gen_pass()   { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }
 
+# Set a key wherever it appears (commented or not), else append it. Hoisted to the top level
+# because BOTH branches below need it now: a fresh file gets every key, and an existing file gets
+# the ones a newer version of this deployment requires and it has never heard of.
+set_key() {
+  local key="$1" value="$2"
+  # `|` as the sed delimiter because values contain `/` and `+`.
+  #
+  # A temp file rather than `sed -i`, because `-i` is where GNU and BSD sed disagree and the
+  # disagreement is SILENT. BSD sed takes the next argument as the backup suffix, so `sed -i -E`
+  # reads `-E` as that suffix: it writes a stray `.env.docker-E`, and — the part that matters —
+  # the script is then interpreted as a basic regular expression, where `#?` is a literal `#`
+  # followed by a literal `?`. Every uncommented key stops matching, every replacement quietly
+  # does nothing, and the file keeps the template's blank `# REQUIRED` values. `setup.sh` then
+  # reports "wrote .env.docker with freshly generated secrets" having written none of them, and
+  # the failure surfaces much later as `assertProductionSafeConfig` refusing to boot on an unset
+  # JWT_SECRET. Without `-i` there is nothing for `-E` to be mistaken for.
+  if grep -qE "^#? *${key}=" "$ENV_FILE"; then
+    local tmp
+    tmp="$(mktemp)"
+    sed -E "s|^#? *${key}=.*|${key}=${value}|" "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+# The current value of a key, empty when absent or blank.
+read_key() {
+  sed -nE "s|^ *$1=(.*)$|\\1|p" "$ENV_FILE" | tail -1
+}
+
 if [ -f "$ENV_FILE" ]; then
-  ok "$(basename "$ENV_FILE") already exists — leaving it exactly as it is"
+  ok "$(basename "$ENV_FILE") already exists — leaving every value it already has exactly as it is"
   GENERATED_ENV=0
+
+  # ── Keys this deployment now requires that an older env file has never heard of ────────────
+  #
+  # "Leave it exactly as it is" is the right rule for a value somebody chose. It is the wrong rule
+  # for a key that did not exist when they wrote the file: the deployment simply will not start,
+  # and it fails in `db-migrate` with "FAPOMS_MIGRATION_PASSWORD is not set", several layers away
+  # from the file that is actually missing it.
+  #
+  # So: nothing already present is touched, and anything ABSENT that the compose file cannot start
+  # without is added, named out loud. The three below arrived with the database role split — see
+  # docs/database-roles.md.
+  ADDED_KEYS=()
+  add_missing() {
+    if [ -z "$(read_key "$1")" ]; then
+      set_key "$1" "$2"
+      ADDED_KEYS+=("$1")
+    fi
+  }
+  add_missing FAPOMS_RUNTIME_PASSWORD   "$(gen_pass)"
+  add_missing FAPOMS_MIGRATION_PASSWORD "$(gen_pass)"
+  # Built from the credentials the file already carries, so it names the superuser this compose
+  # file actually created rather than one invented here.
+  EXISTING_DB_USER="$(read_key DB_USERNAME)"
+  EXISTING_DB_PASS="$(read_key DB_PASSWORD)"
+  EXISTING_DB_HOST="$(read_key DB_HOST)"
+  if [ -n "$EXISTING_DB_USER" ] && [ -n "$EXISTING_DB_PASS" ]; then
+    add_missing DB_ADMIN_URL "postgres://${EXISTING_DB_USER}:${EXISTING_DB_PASS}@${EXISTING_DB_HOST:-postgres}:5432/postgres"
+  fi
+
+  if [ ${#ADDED_KEYS[@]} -gt 0 ]; then
+    warn "added ${#ADDED_KEYS[@]} newly-required key(s) to $(basename "$ENV_FILE"): ${ADDED_KEYS[*]}"
+    warn "these are the database role credentials — read docs/database-roles.md before the next deploy, and take a backup first"
+  fi
+
+  # NOT changed, deliberately, even though the compose file needs it false: flipping a value
+  # somebody set is the one thing this branch promises not to do. The compose file sets it for the
+  # API and the worker itself, so an old `true` here governs only a dev stack. Said out loud
+  # anyway, because a reader comparing the two files should not have to work that out.
+  if [ "$(read_key DB_MIGRATIONS_RUN)" = "true" ]; then
+    warn "DB_MIGRATIONS_RUN=true is still in $(basename "$ENV_FILE"); the production compose overrides it to false for the API and the worker, and migrations run in the db-migrate step instead"
+  fi
 else
   [ -f "$EXAMPLE_FILE" ] || die "No $ENV_FILE and no $EXAMPLE_FILE to build one from."
 
@@ -114,21 +187,12 @@ else
   umask 077
   cp "$EXAMPLE_FILE" "$ENV_FILE"
 
-  set_key() {
-    local key="$1" value="$2"
-    # Replace the key wherever it appears (commented or not), else append it. `|` as the sed
-    # delimiter because values contain `/` and `+`.
-    if grep -qE "^#? *${key}=" "$ENV_FILE"; then
-      sed -i -E "s|^#? *${key}=.*|${key}=${value}|" "$ENV_FILE"
-    else
-      printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
-    fi
-  }
-
   set_key NODE_ENV                "$MODE"
   set_key JWT_SECRET              "$(gen_hex 32)"
   set_key PII_ENCRYPTION_KEY      "$(gen_hex 32)"
-  set_key DB_PASSWORD             "$(gen_pass)"
+  # Captured, not inlined: DB_ADMIN_URL below is built from it.
+  DB_PASSWORD_VALUE="$(gen_pass)"
+  set_key DB_PASSWORD             "$DB_PASSWORD_VALUE"
   set_key MINIO_ROOT_PASSWORD     "$(gen_pass)"
   set_key MINIO_ROOT_USER         "fapoms"
   set_key DB_USERNAME             "fapoms"
@@ -138,7 +202,28 @@ else
   # The schema is owned by migrations, and `synchronize` would let TypeORM reshape a live database
   # from the entity classes on every boot. Set here so it can never be absent by accident.
   set_key DB_SYNCHRONIZE          "false"
-  set_key DB_MIGRATIONS_RUN       "true"
+  # The API and the worker do NOT migrate. `deploy/docker-compose.prod.yml` runs `db-migrate`
+  # first, as the deploy role, and both application services gate on it finishing. A process that
+  # migrates needs schema privileges, and a runtime identity with schema privileges can remove the
+  # audit triggers — which is the whole of docs/database-roles.md.
+  #
+  # The compose file sets this for the two application services regardless, so the value here only
+  # governs a `docker-compose.yml` (dev) stack, where one role still does everything.
+  set_key DB_MIGRATIONS_RUN       "false"
+  set_key STARTUP_CHECKS_STRICT   "true"
+
+  # ── The three database identities ──────────────────────────────────────────────────────────
+  # Generated here for the same reason as every other secret above: a human picking them is how a
+  # burned value gets picked again. `db-migrate` refuses to run without all three — its `env()`
+  # throws on empty as well as unset, deliberately, because a role created with a password nobody
+  # recorded is a deployment that cannot start.
+  #
+  # DB_ADMIN_URL points at the superuser THIS compose file creates: `postgres` in the compose
+  # network, with the DB_USERNAME/DB_PASSWORD generated just above. It is used only by the
+  # one-shot db-migrate container, never by the API or the worker.
+  set_key FAPOMS_RUNTIME_PASSWORD   "$(gen_pass)"
+  set_key FAPOMS_MIGRATION_PASSWORD "$(gen_pass)"
+  set_key DB_ADMIN_URL              "postgres://fapoms:${DB_PASSWORD_VALUE}@postgres:5432/postgres"
   set_key CORS_ORIGINS            "$PUBLIC_URL"
   # Audit evidence on a container's local disk is destroyed by the next deploy, so production
   # requires object storage. MinIO ships in the compose file; nothing external is needed.

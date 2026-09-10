@@ -48,9 +48,39 @@ means migrations ran and the connection is live.
 
 ---
 
+## Who the application is when it talks to the database
+
+**The API and the worker are not the identity that can change the schema.** Three roles, not one:
+
+| role | logs in | owns | may |
+|---|---|---|---|
+| `fapoms_migrator` | deploy time only | the ordinary schema | all DDL |
+| `fapoms_audit_owner` | no | the audit tables, triggers and trigger functions | nothing on its own |
+| `fapoms_runtime` | the API and the worker | nothing | row reads and writes; append and read on audit |
+
+FAPOMS used to connect as a superuser, so anything holding the application's credential could
+`ALTER TABLE audit_events DISABLE TRIGGER` and then delete the audit trail. The triggers protected
+the tables from the code and not from the credential.
+
+Migrations therefore no longer run inside the API. `deploy/docker-compose.prod.yml` has a one-shot
+`db-migrate` service that creates the roles, applies the migrations as `fapoms_migrator`, hardens,
+and verifies the result from a `fapoms_runtime` connection; `backend` and `backend-worker` both
+wait on it completing successfully, so a failed migration stops the deploy with the previous
+containers still serving.
+
+`setup.sh` generates `FAPOMS_RUNTIME_PASSWORD`, `FAPOMS_MIGRATION_PASSWORD` and `DB_ADMIN_URL` on a
+fresh install, and adds them to an older `.env.docker` that predates them — naming what it added.
+For an existing deployment, follow the transition procedure and take the backup it asks for first.
+
+**Read `docs/database-roles.md`** for the full model, every environment variable, the transition
+procedure and its rollback.
+
 ## How the schema is managed
 
 **Migrations are the authority. `DB_SYNCHRONIZE` must stay `false`.**
+
+`DB_MIGRATIONS_RUN` is `false` for the API and the worker, and the production compose sets it for
+them regardless of the env file. Migrations happen in `db-migrate`, before either starts.
 
 `packages/backend/src/infrastructure/database/migrations/1784000000000-BaselineSchema.ts` is the
 whole schema as one migration. The 65 files in `migrations/_historical/` are the superseded chain,

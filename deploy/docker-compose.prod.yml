@@ -408,6 +408,13 @@ services:
     env_file: [../.env.docker]
     environment:
       PROCESS_ROLE: worker
+      # The SAME runtime identity as the API, and for the same reason. The worker runs every Bull
+      # processor and every scheduled cron — retention, the outbox relay, the audit sealer — so a
+      # worker still connecting as the old owning role would leave the audit triggers removable by
+      # exactly the process that touches the audit tables most.
+      DB_USERNAME: ${FAPOMS_RUNTIME_USER:-fapoms_runtime}
+      DB_PASSWORD: ${FAPOMS_RUNTIME_PASSWORD}
+      DB_MIGRATIONS_RUN: "false"
       # See the arithmetic on `backend` above: 40 here is sized above the 33 slots
       # WORKER_CONCURRENCY currently declares (worker-concurrency.ts), not against this
       # container's own headroom, because that table is the source of truth for demand.
