@@ -230,6 +230,10 @@ the endpoint that produced it. Source inspection is never reported as runtime pr
   the router. Worth certifying deliberately, by somebody who can mint one.
 - **The data-entry case workspace.** No packet was in a workable state on this stack.
 - **MFA enrolment.** No factor was enrolled on any certification account.
+- **The contents of a downloaded export.** The browser sandbox blocks page-initiated downloads, so
+  no export file was opened. Whether any export carries unmasked PAN, Aadhaar or bank details to a
+  role that only sees them masked on screen is the single most valuable unanswered question left,
+  and it is the subject of a workstream that was still running when this report was written.
 
 
 ## What the product does well, measured
@@ -263,6 +267,14 @@ returns exactly one right answer.
 
 **Reading a person's record is itself audited.** `ASSAYER_RECORD_VIEWED`, with the reader named.
 Few systems record who looked.
+
+**The export says whether it follows your filters.** The classic export defect is a file that
+quietly ignores the filters the screen had on. The roster's dialog puts both options side by side
+and labels which is which — *"Current view (CSV, what you see now) — 6 people"* against *"Full
+roster + pay rates (workbook, everyone). **Ignores the filters.**"* Opened with a segment applied,
+the CSV option's count matches the screen and the database exactly. The downloaded bytes were not
+opened — the browser sandbox blocks downloads a page initiates — so what is certified is the
+dialog's contract and its counts.
 
 **The controls fail their own tests when removed.** Eight for eight — segregation of duties, the
 non-overridable standings, the override-reason minimum, the region ceiling, fee self-dealing,
