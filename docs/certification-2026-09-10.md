@@ -485,10 +485,27 @@ Only items for which no evidence could be obtained here.
    backup it asks for first, and read the ten `Database identity` lines in the boot log.
 4. Confirm the grant repair landed: after the deploy, the boot log should carry no
    `behind ROLE_PERMISSIONS` warning. It carries one today naming all nineteen.
-5. Decide who holds DEVELOPER. Nobody does — the deployment's five accounts are two ADMIN, two
-   OPERATIONS and one DESK_OPERATOR, and DESK, AUDITOR, PRODUCT_SUPPORT and CLIENT_USER have none
-   either. After the grant repair, `SYSTEM:VIEW` and `SYSTEM:EDIT` exist and belong to DEVELOPER
-   alone, so the technical estate — the outbox health surface among it — is reachable by nobody
-   until an account holds the role. Who that is is a decision, not a defect, which is why the seed
-   does not make one.
+5. **Create a DEVELOPER account and decide who holds it.** Nobody does. The deployment's five
+   accounts are two ADMIN, two OPERATIONS and one DESK_OPERATOR; DESK, AUDITOR, PRODUCT_SUPPORT
+   and CLIENT_USER have none either. After the grant repair `SYSTEM:VIEW` and `SYSTEM:EDIT` belong
+   to DEVELOPER alone, and six controllers carry gates naming that role and no other:
+
+   | surface | scope of the gate |
+   |---|---|
+   | `infrastructure/persistence/outbox` | the whole controller, four routes |
+   | `modules/platform/logs` | the whole controller |
+   | `infrastructure/data-reset` | the class, over the destructive wipe path |
+   | `infrastructure/ocr/ocr-boundary` | two routes |
+   | `modules/geo` | two admin routes |
+   | `modules/notifications` | two admin routes |
+
+   The outbox is the sharp end. It is the one surface that shows undispatched rows and dead
+   letters — the thing that would have made the stalled cron visible — and it is annotated
+   `@RoleOnly()`, so the permission fallback does not apply and a custom role built in
+   Admin → Roles cannot reach it either. Only an account actually holding DEVELOPER can.
+
+   The fix is to create the account, not to widen the boundary because one deployment has no
+   holder. Who holds it is a decision, which is why the seed does not make one. Verified here from
+   the source and against the live database, and independently by the acceptance session against
+   a running API: admin, manager and validator are all refused the dead-letter surface 403.
 6. Then, and only then, the status becomes CLOSED.
