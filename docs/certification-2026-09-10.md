@@ -13,11 +13,12 @@ database carries both shortfalls until those migrations run.
 Both certification suites have since been run on a production-shaped rig by the parallel
 acceptance session, and after the repairs report 38 of 39 and 150 of 150 — the one remaining
 failure being a vocabulary bug in the suite itself, corrected here after their run. That is their
-evidence, cited where it appears. It is not the homeserver run this gate asks for, which is the
-one thing that cannot be manufactured from this machine, and that is what BLOCKED now stands on. The homeserver that hosts the deployment was offline for the whole session, and
-the two certification suites need it plus a credential that is deliberately not in this repository.
-The release gate requires that run, so the honest answer is BLOCKED pending it, not CLOSED with a
-caveat.
+evidence, cited where it appears.
+
+It is not the homeserver run this gate asks for. That machine was offline for the whole session,
+and the suites need it plus a credential deliberately kept out of this repository, so it is the
+one thing that cannot be manufactured from here. The release gate requires that run, which is what
+BLOCKED now stands on — pending it, rather than CLOSED with a caveat.
 
 Everything below states what was actually executed and what the execution showed.
 
