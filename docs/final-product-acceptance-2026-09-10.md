@@ -2,43 +2,72 @@
 
 ## Verdict
 
-**READY FOR DELIVERY, WITH TWO SUPPORTED FEATURES WITHHELD UNTIL THEY ARE FIXED.**
+**NOT READY.** One blocking defect loses money silently on a supported workflow, and every
+mechanism that should notice it reports the job healthy.
 
-FAPOMS can be handed to the organization and used, tomorrow, by every role it ships with, for the
-work it was built to do. Nine roles were signed in through the real login form in a real browser,
-every one of them landed on the screen its job starts from, and across **351 route-visits not one
-role was shown data it was not entitled to** — every route outside a role's grant redirected it
-back to its own home page. The figures on screen reproduce from the base tables to
-the rupee and the person. A record's history answers who did what, when and why, in plain English,
-without SQL. A full create-and-delete cycle through the interface persists, survives a hard reload,
-soft-deletes rather than vanishing, and leaves two audit rows naming the person who did it.
+That is a change from where this campaign stood an hour earlier, and it rests on a single finding
+that was reproduced from scratch rather than accepted on report.
 
-Two things the product offers must not be switched on yet, because they do not work:
+### The blocker
+
+**Redoing a reopened audit is never paid for.** Complete a job — a payout and a client line are
+booked, correctly. Reopen it, which is a documented operational action for work that was done
+wrong: the payout is voided and the client line cancelled, also correctly. Send somebody back,
+redo the work, complete it again: **201, `status = COMPLETED`** — and no money is ever booked. Not
+after a minute, not ever.
+
+The assayer is not paid for the work they redid. The client is not billed for it. And nothing in
+the product says so:
+
+- the money card for that assignment reports **`booked: true`**, while the only payable it can
+  show is voided;
+- `reconcile/preview` reports **`count: 0`**, and the repair job runs the same query — so the
+  recovery path is as blind as the detection path. There is no way to fix this from inside the
+  product.
+
+The cause is one idea used in seven places: *"is it booked?"* answered as *"does a row exist?"*,
+in five reads and both unique indexes, none of which were revisited when those rows grew a status
+that can make them dead. The fix is a pair of partial unique indexes plus the matching status
+filters — a migration on the two money tables, specified in the ledger, and an owner's decision
+rather than something to attempt at the end of a long campaign.
+
+Everything else in this report stands. The product is otherwise in good shape, and the rest of
+this document says so in detail. But a system that can silently not pay somebody for work it
+recorded as complete is not one to hand over this week.
+
+### And two features that must not be switched on
+
+Independent of the blocker, and each a defect rather than a risk to weigh:
 
 1. **Do not confine any account to a region.** Region scoping refuses reads correctly and largely
    does not refuse writes. A region-scoped operations account can approve a payout, mint an
    invoice, adjust a client line, set a commercial rate, and move a branch out of its own region —
    in territories it is refused so much as *reading*. Nineteen routes confirmed at runtime with the
-   rows read back. It is dormant today only because **no real account is region-scoped**: the only
-   two that are, this campaign created, minutes ago, to find this.
+   rows read back. Dormant today only because **no real account is region-scoped**: the only two
+   that are, this campaign created, minutes ago, to find this.
 
 2. **Do not build a custom role.** A role built through Admin → Roles is offered ten navigation
    entries and nine of the backing APIs refuse it. On the scheduling screen the refusal is drawn as
    *"0 active schedules"* — a confident, specific, wrong answer on the screen whose job is to say
    what work exists.
 
-Neither is a risk to accept. Both are engineering problems, and calling them anything else would
-be dressing them up. Both are also **one administrator click away** — a field on `/users`, a button
-on Admin → Roles — so "we simply won't use those" needs an owner, not an assumption.
+Both are one administrator click away, so "we simply won't use those" needs an owner, not an
+assumption.
 
-Everything else found in this campaign is fixed, or small, or belongs to the environment rather
-than the product. The itemised list is in the ledger below.
+### What is nonetheless proven
+
+Nine roles signed in through the real login form in a real browser, every one landing on the screen
+its job starts from, and across **351 route-visits not one role was shown data it was not entitled
+to**. Dashboard figures reproduce from the base tables to the rupee and the person. A record's
+history answers who did what, when and why, in plain English, without SQL. Exports carry no
+identity or bank numbers for any role. Eight of eight controls fail their own tests when removed.
+Four defects found here are fixed and re-verified against a container built from HEAD.
 
 ## What the verdict is about
 
 | | status |
 |---|---|
-| **Product readiness** | **READY**, with the two features above withheld |
+| **Product readiness** | **NOT READY** — one blocking money defect, plus two features that must not be switched on |
 | **Deployment readiness** | **NOT ASSESSED** — unchanged from the previous campaign. Neither the homeserver nor the AWS box was reachable from this machine, so no health endpoint, TLS, proxy, backup or worker check was performed against either |
 
 This report is evidence about **the software**, exercised on a production-shaped stack: caddy,
@@ -335,6 +364,7 @@ was involved. Nothing here is inferred from source alone; where something is sou
 
 | id | severity | what | disposition |
 |---|---|---|---|
+| **PA-F14** | **BLOCKER** | Redoing a reopened audit books no money at all — the assayer is not paid, the client is not billed — and the money card says `booked: true` while `reconcile/preview` says `count: 0`, so neither detection nor repair can see it | **FIX before go-live.** Needs two changes together: partial unique indexes excluding the dead states (`assayer_payables` `WHERE status <> 'VOIDED'`, `billing_entries` `WHERE state <> 'CANCELLED'`) **and** the same status filter on the five existence checks. A migration on the money tables — specified, not attempted |
 | **PA-F02** | **HIGH** | A region-scoped account is refused *reading* an out-of-region assignment and can *create* one — 201, `ASN-2026-000016`, a real row it then cannot see | **FIXED and re-verified against HEAD** — now 403, no row written. Committed `69ae3491`, pinned in `write-region-parity.spec.ts`, and its removal turns that spec red |
 | **PA-F06** | **HIGH** (dormant) | The same class on **18 more routes** — approve a payout, mint an invoice, adjust a client line, set a commercial rate, and move a branch out of your own region so you lose sight of it. Every one confirmed at runtime with the row read back | **FIX before anyone is region-scoped** — see the verdict |
 | **PA-F09** | **HIGH** | A custom role is offered ten nav entries; nine backing APIs refuse. `/scheduling` renders the refusal as **"0 active schedules"** | **FIX** — decide per route, then make a refused fetch look like a refusal |
@@ -347,6 +377,39 @@ was involved. Nothing here is inferred from source alone; where something is sou
 | **PA-F05** | **LOW** | Platform Settings makes an ADMIN-only call for the two other roles allowed to open it; the mail indicator is silently missing | **ACCEPT or fix with PA-F04** |
 | **PA-F11** | **LOW** | 25 map pins and one icon button carry no accessible name; two screens have no `h1`; four skip a heading level | **DEFER** — the map pins are the one worth doing |
 | **PA-F12** | **LOW** | A person's History tab is curated to decisions and does not say so; there is no route from a record to its full trail (which does exist, system-wide, at `/users?tab=activity`) | **ACCEPT** — label it |
+
+### The blocker in full
+
+**Reproduced from scratch on an independent probe**, not accepted on report —
+`scratchpad/pa/reopen-redo-money.mjs`, 9 of 13, the four failures being this finding.
+
+| step | what the database says |
+|---|---|
+| Book work, complete it | `PY-MTVGFQ9V-955890 = PENDING`, `BE-MTVGFQ9X-621728 = UNBILLED` — correct |
+| `POST /assignments/:id/reopen` with a reason | `PY-… = VOIDED`, `BE-… = CANCELLED` — **correct and intended** |
+| Revisit the branch, complete again | **201**, `status = COMPLETED`, `completion_date` set again |
+| 70 seconds later | **still only the VOIDED payable and the CANCELLED line. No new rows. Ever.** |
+
+`billing-engine.service.ts:274-278` asks `findOne(BillingEntryEntity, { where: { assignmentId } })`
+and the same for the payable — no status — so a dead row satisfies "already booked". Filtering by
+status is only half the fix: the uniqueness is status-blind too, so a replacement row could not be
+inserted either.
+
+```
+UNIQUE INDEX UQ_assayer_payables_fee_per_assignment ON assayer_payables (assignment_id) WHERE (expense_id IS NULL)
+UNIQUE INDEX UQ_billing_entries_root_per_assignment  ON billing_entries  (assignment_id)
+```
+
+**Why no test caught it.** `assignment-reopen.spec.ts` has five cases and all five are about the
+reopen direction. `billing-engine.service.spec.ts:415` — *"is idempotent: an already-booked
+assignment writes nothing"* — mocks a **live** row, so it will keep passing after a correct fix
+unless a VOIDED case is added. The test guarding this behaviour asserts the half that works.
+
+**Class of mistake:** a lifecycle column added later, while the existence checks written before it
+were never revisited — "does it exist?" standing in for "is it live?", in five reads and two
+indexes. Worth sweeping: every `EXISTS` or `findOne`-without-status over a table that later grew a
+soft-terminal state — `billing_payments.is_active`, `assayer_client_empanelments.is_active`, and
+the `is_active` filters through the assignment and billing modules.
 
 ### What this campaign found that the previous one could not
 
