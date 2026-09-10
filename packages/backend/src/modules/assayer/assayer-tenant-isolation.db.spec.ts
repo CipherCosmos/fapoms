@@ -108,6 +108,21 @@ const ADMIN_USER = process.env.TI_ADMIN_USER || 'lc-admin@lifecycle-cert.invalid
  */
 const USER_B = 'tfix-ops-b@tenant-isolation.invalid';
 
+
+/**
+ * BEFORE YOU RUN THIS: check that the pool and the API are looking at the same database.
+ *
+ * This suite talks to a live API over HTTP *and* opens its own PostgreSQL connection from the
+ * host. Those are two independent addresses, and nothing makes them agree. `DB_PORT` defaults to
+ * 5432, and `deploy/docker-compose.prod.yml` publishes only caddy — postgres has no host port — so
+ * on a machine running any other stack the pool silently connects to THAT one instead.
+ *
+ * The failure is the expensive kind: fixtures land in one database, the API reads another, and
+ * every assertion fails as a 404 that looks exactly like a tenancy or permission bug. It cost an
+ * hour to diagnose the first time. Publish the rig's postgres on a port of its own and pass
+ * `DB_PORT` explicitly; the resolved connection is printed at the start of the run so a wrong one
+ * is visible in the first line of output rather than in the ninety-eighth failure.
+ */
 const DB = {
   host: process.env.DB_HOST || 'localhost',
   port: Number(process.env.DB_PORT || 5432),
@@ -312,6 +327,14 @@ describe('assayer tenant isolation — F-03 acceptance matrix against the runnin
   };
 
   beforeAll(async () => {
+    // Printed before anything else, because the two addresses below are independent and
+    // nothing makes them agree — see the note above `DB`. A wrong one is then the first
+    // line of output rather than a wall of 404s that reads like a permission bug.
+    // eslint-disable-next-line no-console
+    console.log(
+      `[preflight] API ${API}\n`
+      + `[preflight] pool ${DB.user}@${DB.host}:${DB.port}/${DB.database}`,
+    );
     pool = new Pool(DB);
     await pool.query(CLEANUP);
 

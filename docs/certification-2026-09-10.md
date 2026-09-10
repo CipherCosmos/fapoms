@@ -70,6 +70,13 @@ reads the resulting privilege instead of the statement's exit status.
 The deploy role can still alter an audit table. That is asserted explicitly, as the documented
 boundary rather than an omission.
 
+**Independently confirmed.** The parallel acceptance session probed the same statements against a
+running rig as `fapoms_runtime`, each inside a transaction it rolled back, and reports the same
+answers — including the distinction that matters: `ALTER TABLE audit_events DISABLE TRIGGER USER`
+comes back **"must be owner of table audit_events"**, not "permission denied". The old failure was
+ownership, and no REVOKE could have closed it. Their result is theirs and is cited here as
+corroboration, not as this document's evidence.
+
 ### RBAC, IDOR and sensitive fields
 
 `node scripts/verify-http-security.mjs` against a live API on a hardened database. **31 of 31
@@ -151,9 +158,12 @@ red, naming the method and the line.
 
 ## End to end
 
-**Not run.** The two certification suites need the deployed server, long-lived certification
+**Not run here.** The two certification suites need the deployed server, long-lived certification
 accounts and a runtime credential that is not in this repository. The homeserver was offline for
 the entire session and remains so. The suites were not weakened to make them locally executable.
+
+The parallel acceptance session has since run one of the two on a rig of its own — see "Not
+exercised" below for what it reports and why that is recorded as theirs.
 
 What was exercised live instead, on a disposable stack (PostgreSQL on 55433, Redis on 56380, MinIO
 on 59001, API on 4099), is stated above and is not a substitute for it: real HTTP, real Redis, real
@@ -264,10 +274,16 @@ Closing the cause does not restore the evidence.
 
 Only items for which no evidence could be obtained here.
 
-1. **The two live certification suites** (`assayer-lifecycle-certification.db.spec.ts`,
-   `assayer-tenant-isolation.db.spec.ts`). They need the deployed server, the long-lived
+1. **`assayer-tenant-isolation.db.spec.ts`** — needs the deployed server, the long-lived
    certification accounts and a password supplied at run time. The homeserver was offline
-   throughout.
+   throughout this session.
+
+   Its sibling `assayer-lifecycle-certification.db.spec.ts` **has since been run** — not here. The
+   parallel acceptance session stood up a prod-shaped rig and reports 150/150: 98 illegal
+   transitions refused with no mutation, rehire routing RESIGNED and TERMINATED to INVITED, every
+   concurrency race admitting exactly one winner. That is their evidence, attributed, and it
+   belongs in their report rather than being restated here as mine. Nothing in this document was
+   verified by watching somebody else's terminal.
 2. **The CI `database` job as a GitHub Actions run.** Implemented and locally command-verified; the
    runner is unexecuted.
 3. **The production compose change as an actual deploy.** The `db-migrate` service, the
