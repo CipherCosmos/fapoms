@@ -407,4 +407,10 @@ Only items for which no evidence could be obtained here.
    backup it asks for first, and read the ten `Database identity` lines in the boot log.
 4. Confirm the grant repair landed: after the deploy, the boot log should carry no
    `behind ROLE_PERMISSIONS` warning. It carries one today naming all nineteen.
-5. Then, and only then, the status becomes CLOSED.
+5. Decide who holds DEVELOPER. Nobody does — the deployment's five accounts are two ADMIN, two
+   OPERATIONS and one DESK_OPERATOR, and DESK, AUDITOR, PRODUCT_SUPPORT and CLIENT_USER have none
+   either. After the grant repair, `SYSTEM:VIEW` and `SYSTEM:EDIT` exist and belong to DEVELOPER
+   alone, so the technical estate — the outbox health surface among it — is reachable by nobody
+   until an account holds the role. Who that is is a decision, not a defect, which is why the seed
+   does not make one.
+6. Then, and only then, the status becomes CLOSED.
