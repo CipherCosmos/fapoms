@@ -634,6 +634,30 @@ export class RosterRecordsService {
     // decision about it rather than another opinion alongside it.
     const existing = await this.empanelments.findOne({ where: { assayerId, clientId } });
     const previousStatus = existing?.status ?? null;
+
+    /**
+     * Undoing a client's rejection has to be said out loud.
+     *
+     * `EmpanelmentStatus` has no state machine and deliberately keeps none: the business decided
+     * (2026-09-10) that a rejection stays reversible, because a client changing its mind is an
+     * ordinary thing and making it terminal would push the correction into a database edit where
+     * nobody would see it at all. What it must not be is silent. Every other standing change is a
+     * routine update and stays one; moving *away* from REJECTED is the one transition that
+     * overturns somebody else's decision, so it carries a reason into the `EMPANELMENT_SET` audit
+     * row beside the actor and the previous value.
+     *
+     * The assignment layer is unaffected either way — `REJECTED` is a strictly non-overridable
+     * standing there, so no work can reach the field through this route regardless.
+     */
+    if (previousStatus === EmpanelmentStatus.REJECTED && dto.status !== EmpanelmentStatus.REJECTED) {
+      if (!dto.statusReason?.trim()) {
+        throw new BadRequestException(
+          `Say why this client's rejection is being reversed. Moving from REJECTED to ${dto.status} `
+          + 'overturns a decision the client made, and the reason is recorded against whoever made it.',
+        );
+      }
+    }
+
     const row = existing ?? this.empanelments.create({ assayerId, clientId, createdBy: actorId });
 
     row.status = dto.status;
