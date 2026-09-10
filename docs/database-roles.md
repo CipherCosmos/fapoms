@@ -156,6 +156,15 @@ seeded as the old superuser, an audit row written before the transition, and aft
 branches and that audit row were all still there with the audit tables owned by a role that cannot
 log in.
 
+Verified again, independently, by the parallel acceptance session on a fixture built differently
+on purpose — the database migrated through the ordinary `migration:run` path as the old superuser
+rather than through provisioning. Same result: 5 users, 10 branches and 8 assayers before and
+after, the pre-transition audit row still readable, the database owner moved to
+`fapoms_migrator`, `audit_events` to `fapoms_audit_owner`, and the runtime role then refused
+`UPDATE`, `DELETE` and `DISABLE TRIGGER` on the audit tables while ordinary reads and appends kept
+working. A migration path proven only on the fixture its own author chose is the weakest kind of
+evidence; this is not that.
+
 **Rolling back** is `git revert` of the compose change plus setting `DB_USERNAME`/`DB_PASSWORD`
 back to the old role and `DB_MIGRATIONS_RUN=true`. The roles and grants can be left in place; they
 harm nothing while unused. The audit tables stay owned by `fapoms_audit_owner`, which the old

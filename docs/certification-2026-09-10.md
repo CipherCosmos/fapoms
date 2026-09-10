@@ -289,7 +289,15 @@ Only items for which no evidence could be obtained here.
 3. **The production compose change as an actual deploy.** The `db-migrate` service, the
    `depends_on` gate and the new environment variables are written and the command they run was
    executed locally exactly as the container will run it, from the image root, against a fresh
-   database. Bringing the real stack up was not attempted.
+   database. Bringing the real stack up was not attempted here.
+
+   The parallel acceptance session has since done it and reports the gate holding: with
+   `DB_ADMIN_URL` empty, `db-migrate` exits 1, the API is never started, the container already
+   serving is not replaced and answers `/health` throughout. They also confirm both `main.ts`
+   refusals fire under `NODE_ENV=production`, and that the database-identity check refuses an
+   unhardened database naming `db:harden` rather than dying on an unreadable geo table. Theirs,
+   cited, not adopted — and the three controls that catch somebody skipping a deployment step have
+   now been observed doing their job, which they had not been when this document was written.
 4. **Browser workflows.** No end-to-end browser run was performed; the frontend evidence is its
    1,012 unit and component tests.
 
