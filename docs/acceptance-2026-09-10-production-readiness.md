@@ -12,13 +12,7 @@ directions and says so by name. The audit trail is now tamper-proof against the 
 database credential, which closes the most serious control gap this project has carried. Not one
 defect was found in how this system decides anything about money, work or people.
 
-What stops it shipping is the front door, and one thing behind it: **the seeded role grants do not
-match what the routes require.** Operations can create, edit and delete an assayer but cannot open
-one (AC-F26); a desk operator's own landing page never loads because its route wants a permission
-the seeded role does not hold (AC-F16). Those are the same defect wearing two faces, and between
-them two of the four staff roles cannot do their jobs on a fresh install.
-
-The rest of what stops it is literally the front door. Signing in from the site root — the normal way anyone
+What stops it shipping is now literally the front door, and only that. Signing in from the site root — the normal way anyone
 opens the app — leaves a blank screen with no error and no spinner (AC-F14). Signing out hands the
 next person the previous user's page (AC-F15). And a DESK_OPERATOR's own landing page never
 finishes loading: three of its four tiles sit on an ellipsis for ever because the route wants a
@@ -41,10 +35,18 @@ Six further defects in deployment mechanics were found, reported, fixed by the s
 those files, and **re-verified here from destroyed volumes** — torn down, rebuilt, and the whole
 path run again from nothing, first attempt, no manual steps. Those are closed.
 
-Fix AC-F14, AC-F15, AC-F16 and AC-F26 (the last two being one grant problem), AC-F09 and AC-F20 — the last of which may be no more than
-re-converging the schedules periodically instead of once at boot, plus an alert on a non-empty
-delayed queue — then re-run the four probe scripts and the browser pass. That is what stands
-between this and READY. Nothing else on the list needs to block it.
+**Two defects stand between this and READY, and they share one root cause.** Signing in from the
+site root leaves a blank screen (AC-F14); signing out hands the next person the previous user's
+page (AC-F15). Both are the `fapoms_return_to` key being written when it should not be. Fix that
+one thing, re-run the browser pass, and the verdict flips.
+
+AC-F09 is not a defect and should not block: a client's rejection of an assayer is reversible in
+one call because `EmpanelmentStatus` has no state machine. Whether a rejection is a judgement that
+needs a separate recorded act to undo is a **product decision for the organisation**, not a bug to
+fix quietly. The assignment-time hard block already refuses the work, so nothing unsafe reaches
+the field either way.
+
+Everything else on the list is closed or genuinely low-risk.
 
 What this rests on: a purpose-built production-shaped stack (caddy, ClamAV, Postgres, Redis,
 MinIO, and a separate API and worker) brought up from empty volumes on this machine, migrated,
@@ -96,8 +98,8 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F13 | LOW (test quality, not product) | `billing-overview-region-scope.db.spec.ts` asserts absolute amounts for a region it declares empty (`EMPTY = Region.SOUTH`) and fails the moment anything else books money there. This campaign's own run did exactly that — one paid payable on a SOUTH branch, `paid: 2250` where the suite expects `0`. The weakness is already recorded at `14a11e53`; this is it happening. The suite preflights its two owned regions (CENTRAL, NORTH_EAST) but not the one it calls empty | Open — suite should claim SOUTH too, or assert deltas |
 | AC-F14 | **HIGH** | **Signing in from the site root leaves a blank app.** Open `http://<host>/` signed out — the normal way anyone opens it — and after login the URL stays at `/` with header and sidebar rendered and the content area empty: no spinner, no error, no retry. Deterministic. Arriving unauthenticated at `/` stores `fapoms_return_to = "/"`, and `PostLoginRedirect` then renders `<Navigate to="/">`, a no-op that never reaches `defaultRouteFor` | Open |
 | AC-F15 | **HIGH** | **Sign-out hands the next person the previous user's page.** Signing out writes the current path into `fapoms_return_to` (measured: `null` while signed in, `"/dashboard"` immediately after clicking Sign Out), so the next sign-in lands there instead of that role's home. Observed: `executive` landed on the validator's `/dashboard`. Clearing `sessionStorage` restores correct behaviour, so `defaultRouteFor` is right and the stale return-to is the defect. Same mechanism as AC-F14 | Open |
-| AC-F16 | **HIGH** | **The desk operator's own home page never loads.** `/data-entry` is DESK_OPERATOR's landing route, and three of its four tiles show a literal "…" that never resolves — no error, no retry, a silent permanent loader. `GET /documents/data-entry/mine` returns 403 every time: the route requires both the role and `document:view:organization`, and the seeded DESK_OPERATOR role holds only `DOCUMENT:DOWNLOAD:PLATFORM`. The role passes the role check and fails the permission check | Open |
-| AC-F17 | MEDIUM | **The navigation offers a page the API refuses.** `/documents` is listed for DESK_OPERATOR in `route-permissions.ts`, so the sidebar renders the link, but `GET /documents/operations/overview` answers 403 and the page shows a permission error with a Retry button that will fail identically forever. The message is honest; the link should not be there | Open |
+| AC-F16 | **HIGH — FIXED AND VERIFIED** | The DESK_OPERATOR's own landing page never finished loading: three of four `/data-entry` tiles sat on an ellipsis for ever because `GET /documents/data-entry/mine` answered 403 — the route wanted `document:view:organization` and the seeded role held only `DOCUMENT:DOWNLOAD:PLATFORM`. **Same root cause as AC-F26** — the seed was stripping grants, not the route being wrong. After the repair DESK_OPERATOR holds `DOCUMENT:VIEW:ORGANIZATION` and the route answers **200** | Closed |
+| AC-F17 | MEDIUM — **FIXED AND VERIFIED** | The sidebar offered DESK_OPERATOR a `/documents` page whose data call answered 403. Same grant repair: `GET /documents/operations/overview` now answers **200** for that role | Closed |
 | AC-F18 | MEDIUM | **A role-scoped dashboard states a global fact that is false.** As DESK_OPERATOR the dashboard reads *"Nothing blocked. No audits at risk, no paperwork waiting, nothing unbilled."* while ₹5,400 was unbilled and the admin dashboard said so. The scoped view is defensible; the sentence is not | Open |
 | AC-F19 | LOW | Every Google Fonts file violates the `font-src 'self' data:` CSP. The policy is report-only so fonts load today, but switching CSP to enforce breaks the app's webfonts | Open |
 | AC-F20 | **HIGH** | **FIXED AND VERIFIED.** A reconciler now re-converges the schedules on a plain `setInterval` (`SCHEDULE_RECONCILE_MS`, default 300 s), deliberately not a Bull repeatable. Proven on a real queue at the shipped default, nothing mocked: repeat key deleted → the seeded row stayed undispatched for 120 s across two full one-minute ticks (so the schedule was genuinely dead, not merely keyless) → key restored at 07:41:50 → **the row actually dispatched at 07:42:00**. Recovery is real end to end, not just re-registration. Originally: **every scheduled job could stop for ever, and nothing noticed.** Observed on this healthy deployment: all seven cron schedules registered at 06:42, audit-seal fired once, then **nothing for nine minutes** — while the worker stayed `healthy`, `/health` said `ok`, ordinary Bull jobs kept succeeding, and no error was logged. Measured consequences: a due outbox row undispatched for 181 s across three tick boundaries, and 134 audit events left unsealed (`audit_events` 154 vs `audit_chain` 20). Redis held zero `bull:*:repeat` keys for all seven queues. Proven in isolation on a throwaway queue: delete the repeat key and the schedule fires 0 more times, keys are never recreated, 0 errors emitted. `repeatable-schedules.ts` converges once at `onModuleInit` and never re-verifies; Bull only schedules the next firing if the repeat ZSET member still exists, and a miss returns silently. Only a process restart recovers it — which restored all seven and let the seal catch up to 155/155. **Because the outbox books payables, completed work can silently stop turning into money** | Open |
@@ -106,8 +108,8 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F23 | LOW | Dead-lettering could not be exercised from outside the process: no reachable subscriber throws on a malformed payload, so `attempts` climbing to `failed_at` remains unverified on a live deployment (it is covered by unit tests and by the previous record's replay evidence) | Open |
 | AC-F24 | LOW | Provisioning **asserts** rather than verifies the role passwords — `ALTER ROLE … PASSWORD <supplied>` runs every time — so a mistyped `FAPOMS_MIGRATION_PASSWORD` succeeds and silently rotates the deploy credential. Verified: after passing a deliberately wrong value, `fapoms_migrator` accepted it and refused the real one. Documented as intentional in `role-model.ts`; worth a warning when the role already exists | Open (by design) |
 | AC-F25 | LOW | **FIXED AND VERIFIED.** The identity assertions now run on their own connection before `NestFactory.create`, so they are the first thing to touch the database. Re-verified against a freshly built `bootstrap migrate`-only database: *"FATAL: the database this application is connecting to has not been hardened … Run `npm run db:harden` against it"*, and not one word about `geo_states`. Originally the boot failed closed but blamed a geo table, because `GeoSeedService.onModuleInit` ran before `StartupChecksService.onApplicationBootstrap` | Closed |
-| AC-F26 | **HIGH** | **Operations can create, edit and delete an assayer but cannot open one.** `GET /assayers/:id` declares `@Roles(ADMIN, OPERATIONS, AUDITOR, DESK, DESK_OPERATOR)` and `@RequirePermissions('assayer:view:organization')`. On a **freshly seeded** database the materialised grants are: ADMIN → CREATE/DELETE/EDIT/VIEW, AUDITOR → VIEW, **OPERATIONS → CREATE/DELETE/EDIT and no VIEW**, **DESK_OPERATOR → nothing at all**. `ROLE_PERMISSIONS:144` declares `ASSAYER:VIEW:ORGANIZATION` for OPERATIONS and the permission row exists, so the declaration is not reaching `role_permissions`. Live proof: `manager` and `executive` (both OPERATIONS) receive `403 Insufficient permissions` on their own organisation's assayer, and their JWTs carry `ASSAYER:CREATE/DELETE/EDIT` with no `ASSAYER:VIEW`. This is precisely the inversion `role-permissions.ts:23` warns about — "delete an assayer without holding ASSAYER:VIEW" — and Operations is the role that deploys people to work. **Mechanism:** the seed resolves each declared key with `rd.permissionKeys.map(key => permissionMap.get(key)).filter(Boolean)`, and `permissionMap` is populated only while walking the seed's own `defaultPermissions` list — which defines no ASSAYER permissions at all. Any declared key the seed cannot resolve is dropped without a word. Two lists that must agree, and a silent filter hiding every disagreement — the same shape the extension list had, which was fixed by deriving one from the other and failing the build on drift | Open |
-| AC-F27 | MEDIUM | **A fresh seed leaves rows with no organisation.** On this rig, immediately after seeding: 10 branches and 1 project have `organization_id IS NULL` (assayers, clients and users are attributed). The `BackfillTenantOwnership` migration runs before the seed creates the organisation, so it attributes nothing, and the seed sets `organizationId` for users, clients and assayers but not for branches or projects. Harmless while the deployment is single-organisation — but the product's own certification suite asserts "no assayer, client, project, branch or user is unowned", and that invariant is violated on day one | Open |
+| AC-F26 | **HIGH — FIXED AND VERIFIED** | **Operations could create, edit and delete an assayer but not open one**, and DESK_OPERATOR held nothing. Two causes. (1) `ASSAYER:VIEW:ORGANIZATION` was absent from the seed's `defaultPermissions`, so the declared grant resolved to nothing and a bare `filter(Boolean)` dropped it silently — twelve keys in total. **My first report of this said that list "defines no ASSAYER permissions at all", which was wrong**: it defines four, written as enum members (`PermissionResource.ASSAYER`), which my string-literal grep could not see. (2) The worse one, which I missed entirely and the other session found: `roleRepository.find()` does not load the `permissions` relation, so the merge began from an empty map and TypeORM's many-to-many assignment **deleted** every junction row the new array did not name. The seed was not failing to add — it was removing. Measured live before the repair: ADMIN 57 held of 63 declared, DEVELOPER 57/64, OPERATIONS 36/39, DESK_OPERATOR 3/6 — nineteen grants gone, **including the only `SYSTEM:APPROVE:PLATFORM` in the system, so no account could approve a destructive request and the two-person data-wipe rule could not be completed at all**. Verified after `ReconcileRolePermissions3`: counts restored to 63/64/39/6, `SYSTEM:APPROVE:PLATFORM` back with ADMIN, and `manager`, `executive` and `validator` all answer **200** on `GET /assayers/:id` | Closed |
+| AC-F27 | MEDIUM — **FIXED AND VERIFIED** | A fresh seed left 10 branches and 1 project with `organization_id IS NULL`, because `BackfillTenantOwnership` runs before the seed creates the organisation. The seed now sets it, and `BackfillTenantOwnership2` repairs databases already written. Verified: **0 unowned branches, 0 unowned projects**, and the certification suite's own "nothing is unowned" assertion passes | Closed |
 
 ### The clean-install run
 
@@ -239,6 +241,25 @@ the hash chain had caught up completely: **348 audit events, 348 chain rows, no 
 Bull repeat keys survived, and had they not, the reconciler proven above would have restored them.
 Nobody planned this and it is the strongest single piece of evidence in the report that the system
 degrades predictably rather than corrupting anything.
+
+## Tenant isolation, proven for the first time
+
+`assayer-tenant-isolation.db.spec.ts` — the F-03 acceptance matrix, listed in the previous record
+as never run — was run here. First attempt: **19 of 39 failed**, and the failures were not what
+they appeared. Because OPERATIONS could not read *any* assayer (AC-F26), every cross-organisation
+read was refused by the permission guard before the organisation predicate was ever consulted:
+those eight assertions would have looked identical on a system with no tenant scoping whatsoever.
+
+After the grant repair, **38 of 39 pass**, and the cross-tenant half is testing what it claims for
+the first time rather than passing for the wrong reason. Organisation A against organisation B:
+the profile read, the code lookup, the roster list, typeahead, the map, the dossier, the identity
+scan, the rate card, past payables, the activity timeline, invitation revocation and password
+reset are all refused; a lifecycle transition is refused and the row does not move; a bulk batch
+naming a foreign id changes nothing; and **the cleartext bank reveal — the worst part of the
+original finding — is refused and not audited**. All eight own-tenant operations work.
+
+The single remaining failure is the suite's own: it sends empanelment status `'EMPANELLED'`, which
+is not a member of `EmpanelmentStatus` (the member for empanelled-and-working is `ACTIVE`).
 
 ## The management figures reconcile
 
