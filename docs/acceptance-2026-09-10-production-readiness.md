@@ -123,7 +123,7 @@ outside the `.db.spec.ts` files that talk to a real database.
 |---|---|
 | `tsc --noEmit` backend / frontend / mobile | clean, clean, clean |
 | lint backend / frontend | 0 errors, 0 errors |
-| backend suite | **310 suites, 4,382 tests, all pass** |
+| backend suite | **311 suites, 4,391 tests, all pass** |
 | frontend suite | **83 suites, 1,031 tests, all pass** |
 | shared suite | **10 suites, 413 tests, all pass** |
 | mobile suite | **23 suites, 263 tests, all pass** |
@@ -131,7 +131,7 @@ outside the `.db.spec.ts` files that talk to a real database.
 | `npm run verify:migrations` | 79 migrations, 94 tables, second run a no-op |
 | `npm run verify:runtime-role` | **87/87** across two provisioning shapes |
 
-**Totals: 426 suites, 6,089 tests.** Live evidence on top of that: final business scenario 29/29,
+**Totals: 427 suites, 6,098 tests.** Live evidence on top of that: final business scenario 29/29,
 authorization and audit 20/20, reliability 25/25, lifecycle bypass 32/32, lifecycle certification
 150/150, tenant isolation 39/39, business loop 25/25, adversarial guard mutations 3/3.
 
