@@ -337,6 +337,52 @@ not showing its work.
    disagrees with the product is a claim about the instrument until the instrument has been checked.
 
 
+
+## Ten realistic business days — 80 of 85
+
+Each scenario is a story somebody at the desk would recognise, driven end to end through the
+product's own API as the roles that would really do the work, with the database read back at every
+step and money recomputed from inputs rather than echoed. Identical verdicts across three full runs.
+
+| | scenario | verdict |
+|---|---|---|
+| S1 | a normal day: hire → verify papers → activate → empanel → assign → accept → check in → complete → payable → approve → pay → reconcile | **PASS 18/18** |
+| S2 | the assayer declines; the branch returns to candidate search; somebody else accepts | **PASS 7/7** — and surfaces PA-F15 |
+| S3 | the visit moves; calendar and assignment agree afterwards | **PASS 5/5** |
+| S4 | somebody leaves mid-job | **PASS 4/4** |
+| S5 | the client rejects an empanelment, then reverses it | **FAIL 7/8** — the stale-image finding, since re-verified fixed on HEAD |
+| **S6** | **a completed job was wrong: reopen, redo** | **FAIL 5/9 — the blocker** |
+| S7 | the desk overrides a soft block, and is refused on a hard one whatever role it holds | **PASS 5/5** |
+| S8 | payday: batch approve and pay, one held, one voided | **PASS 8/8** |
+| S9 | invoice the client; lines cannot be invoiced twice | **PASS 6/6** |
+| S10 | the auditor's morning | **PASS 8/8** |
+
+Worth drawing out of the passes:
+
+- **Money is recomputed from its inputs, never echoed.** Fee 2000 → TDS 10% = 200, net 1800
+  (stored 1800.00); client taxable 2000, GST 18% = 360, TDS 200, total 2160 (stored 2160.00), with
+  the rates read from platform settings and the client's own configuration rather than from the row
+  under test. A pay run reconciled independently: 1960−196 + 1800−180 + 1880−188 = **5,076** against
+  `SUM(billing_payments.amount) = 5076`.
+- **Resignation is not silent.** The open assignment moved to CANCELLED carrying
+  *"Assayer workforce record moved to RESIGNED on 2026-09-10…"*, and a resigned person cannot be
+  given new work.
+- **Hard blocks are hard for everybody.** The 5 km conflict-of-interest floor was refused
+  identically for OPERATIONS, ADMIN **and** DEVELOPER, with any reason, and no row landed. The
+  200 km service ceiling is a soft block, waived only with a stated reason and audited as
+  `ASSIGNMENT_ELIGIBILITY_OVERRIDDEN`.
+- **A mixed invoice batch containing one already-invoiced line is refused whole**, not billed by
+  halves.
+- **The auditor's morning:** 7 of 7 writes refused with **403** — not 404, not 401 — nothing moved,
+  and the audit trail answered the question from the product with 10 entries, every one naming an
+  actor. Hash chain `ok: true`, 2,488 rows checked.
+
+**Calendar discipline, because it is the trap this campaign kept meeting:** 243 questions over 27
+dates — 17 workable, **2 refused by a genuine holiday** (Ganesh Chaturthi, Gandhi Jayanti) and
+**8 refused with no holiday row behind them**, because the client's configured working days are
+Monday to Friday. The scenarios ask the API and then ask the `holidays` table *why*, so a Saturday
+and a bank holiday are never reported as the same thing.
+
 ## Regression — exact numbers
 
 Run at the end, on the tree as delivered, nothing disabled, no `--forceExit`, no retries, no
@@ -371,6 +417,8 @@ was involved. Nothing here is inferred from source alone; where something is sou
 | **PA-F08** | **HIGH** | An assayer signing in on the web is trapped forever on the password screen; the same page later tells them their correct password is wrong | **FIXED**, committed `c1e62361` — one helper, both call sites, with a spec pinning that neither screen names the path itself again. The profile-save half is reported, not guessed at: `PUT /users/me` has no assayer counterpart to send it to |
 | **PA-F04** | **HIGH** | An auditor picks an assayer statement and gets a blank page, not a refusal. A blank money screen reads as "never paid anything" | **FIXED and re-verified against HEAD** — 200 with a real payload, committed `47feae4d`. Not a product decision to make: `billing-roles.ts` had decided the same question one route earlier. The assayer boundary was re-checked in the same run and did not move |
 | **PA-F07** | — | The container was running a build two commits behind the branch | **RESOLVED** — rebuilt and the affected probes re-run; see "What the verdict is about" |
+| **PA-F16** | **LOW** | A revoked session is reported as `ACCOUNT_INACTIVE` — "User not found or inactive" — on an account that is perfectly active. The right sentence, *"Your session has ended"*, already exists twenty lines away on the refresh path | **FIX when the auth path is next open** — reported rather than edited, because distinguishing the two nulls means touching the authentication hot path for the sake of a sentence |
+| **PA-F17** | **MEDIUM** (campaign, not product) | `/auth/login` is capped at 20/min/IP and is not lifted by `THROTTLE_LIMIT`; one scenario pass needs ~21 sign-ins. My own helper then retried each 429 every 2.5s forever against a 20s window, turning a throttle into a silent hang | **FIXED in the helper** — honour `Retry-After`, cap the wait, return the 429 as itself so a caller can say "throttled, unknown" instead of waiting for an answer that is not coming |
 | **PA-F15** | **MEDIUM** | Re-offering a declined branch reuses the row and nulls `reject_reason`, so no report over `assignments` can answer "which offers were declined, and why" — it survives only in the audit trail | **FIX** — the condition names CANCELLED where it should name the property both terminal states share |
 | **PA-F01** | **MEDIUM** | The outbox health and dead-letter queue — the documented first place to look when completed work stops becoming payables — has no screen at all | **FIX or document** — today it needs a bearer token and a command line |
 | **PA-F03** | **MEDIUM** | The guard spec that exists to catch PA-F02's whole class is a hand-maintained allow-list, so it cannot see a route nobody added. All 40 of its assertions passed while the hole was open | **PARTIALLY FIXED** — the route is added; the list's shape is a recommendation |
