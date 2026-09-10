@@ -142,6 +142,28 @@ red, naming the method and the line.
   payable — the same payable id as the first delivery. Verified live: DEVELOPER 200, ADMIN 403,
   OPERATIONS 403, anonymous 401, and the audit row reads `previousAttempts: 15` rather than the 0 it
   recorded before.
+- **An event nobody handles is no longer recorded as delivered.** `publishAsync` resolved over an
+  empty listener array and the relay stamped `dispatched_at`, so a renamed subscriber discarded
+  every event of that name for ever. It now returns named handlers and catch-alls separately, and
+  the relay refuses delivery only for the eight events where a missing handler means a business
+  effect silently not happening.
+
+  Two corrections went into getting there, both worth recording because both were mine. The first
+  guard counted named handlers and catch-alls together and was dead code from the moment it
+  shipped — the realtime gateway registers a catch-all for the life of the process, so the total is
+  never zero — and its unit tests passed only because they mocked the publisher to return a value
+  the real one cannot produce. The obvious correction, counting named handlers alone, would have
+  been worse than the bug: nineteen event names including `billing:booked` and
+  `billing:payout-changed` have no named subscriber by design, and that rule would have
+  dead-lettered all of them on every tick, in the money path.
+
+  The acceptance session verified both directions on a live rig. The guard fires: an event added
+  to the required set with no handler was refused with the intended message and climbed the retry
+  path across six attempts toward the dead-letter threshold. And it does not false-positive: all
+  eight required names were seeded into the outbox live and every one was delivered, which
+  establishes that each has a named subscriber **in the worker process** rather than merely
+  somewhere in the source tree. That second half is what rules out the risk this fix created —
+  dead-lettering a real business event — and it is not something the source scan can answer.
 - **Concurrency.** Eight PostgreSQL race suites pass against a real database, including the payout
   destination snapshot against a concurrent bank-detail change.
 - **Cache.** With one token held constant and no flush anywhere: `POST /assignments` 400, then 403
