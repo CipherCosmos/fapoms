@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, LessThan, In } from 'typeorm';
 import { Optional } from '@nestjs/common';
 import { OutboxEntity } from './outbox.entity';
-import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { DomainEventPublisher, EVENTS_REQUIRING_A_NAMED_SUBSCRIBER } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../cache/cache.service';
 import { MetricsService } from '../observability/metrics.service';
 
@@ -83,21 +83,28 @@ export class OutboxRelay {
         if (typeof this.eventPublisher.publishAsync === 'function') {
           const handled = await this.eventPublisher.publishAsync(row.eventName, row.payload);
           /**
-           * Nobody listening is not a delivery.
+           * For the events that need a handler of their own, nobody listening is not a delivery.
            *
            * `publishAsync` resolves happily over an empty listener array, and this used to count
-           * that as success and stamp `dispatched_at` — so a renamed or unregistered subscriber
-           * discarded every event of that name for ever, with no error, no retry and nothing in
-           * the dead-letter queue. For `assignment:status-changed` that is a payable never booked.
+           * that as success and stamp `dispatched_at` — so a renamed subscriber discarded every
+           * event of that name for ever, with no error, no retry and nothing in the dead-letter
+           * queue. For `assignment:status-changed` that is a payable never booked.
+           *
+           * Only the NAMED count, and only for the declared set. Two reasons, both learned the
+           * hard way: the realtime gateway registers a catch-all for the life of the process, so a
+           * combined total is never zero and the first version of this check was unreachable; and
+           * nineteen event names have no named subscriber by design — `billing:booked`,
+           * `assignment:created`, the seven `DESK_*` ones — because being broadcast over a socket
+           * IS their delivery. Keying on named listeners alone would dead-letter all of them.
            *
            * Throwing puts the row on the ordinary failure path: it retries, and if the subscriber
            * is genuinely gone it dead-letters and appears in `GET /admin/outbox/dead-letters` for
-           * a person to look at. A dead letter somebody can see beats a silent discard, even when
-           * the event turns out to be one nothing needs to handle.
+           * a person to look at.
            */
-          if (typeof handled === 'number' && handled === 0) {
+          const named = typeof handled === 'object' && handled !== null ? handled.named : undefined;
+          if (named === 0 && EVENTS_REQUIRING_A_NAMED_SUBSCRIBER.has(row.eventName)) {
             throw new Error(
-              `no subscriber is registered for "${row.eventName}" — the event was not delivered to anything. `
+              `no subscriber is registered for "${row.eventName}" — the event reached no handler of its own. `
               + 'Either a subscriber was renamed or removed, or this process does not register one.',
             );
           }

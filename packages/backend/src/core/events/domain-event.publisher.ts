@@ -55,6 +55,37 @@ interface EventEnvelope {
  * `PUBLISH` — they are different connection modes, so publishing and subscribing on the shared
  * app-wide `REDIS_CLIENT` would break the very first `.publish()` call after `.subscribe()`.
  */
+/** What one local delivery actually reached. Named listeners and catch-alls are not the same thing. */
+export interface DeliveryCount {
+  /** Handlers registered for THIS event name. */
+  named: number;
+  /** Catch-alls registered for every event — currently the realtime gateway, always at least one. */
+  global: number;
+}
+
+/**
+ * Events whose delivery does something other than reach a socket, and must therefore have a
+ * handler of their own.
+ *
+ * Most events are broadcast-only: the gateway's catch-all is their whole purpose, and a missing
+ * named subscriber they never had is not a fault. These are the ones where no handler means a
+ * business effect silently not happening — a payable never booked, an authorization cache never
+ * invalidated — and where the relay must refuse to call the event delivered.
+ *
+ * `event-subscribers.spec.ts` fails the build if any name here stops being subscribed anywhere in
+ * the source, which is the renaming this list exists to catch.
+ */
+export const EVENTS_REQUIRING_A_NAMED_SUBSCRIBER: ReadonlySet<string> = new Set([
+  'assignment:status-changed',
+  'assignment:fee-updated',
+  'assayer:created',
+  'assayer:updated',
+  'assayer:deleted',
+  'user:updated',
+  'user:role-changed',
+  'user:password-changed',
+]);
+
 @Injectable()
 export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('DomainEventPublisher');
@@ -150,7 +181,7 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
    * publishAsync rethrows so the UnitOfWork fast-path or OutboxRelay does NOT mark the outbox record
    * as dispatched!
    */
-  async publishAsync(eventName: string, payload: any): Promise<number> {
+  async publishAsync(eventName: string, payload: any): Promise<DeliveryCount> {
     const handled = await this.deliverLocallyAsync(eventName, payload);
 
     if (!this.redisClient) return handled;
@@ -182,13 +213,23 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
   /**
    * The listener/global-callback fan-out with Promise awaiting. Rethrows subscriber errors.
    *
-   * Returns HOW MANY handlers ran, which the outbox relay needs and used not to have. With no
-   * subscriber registered for an event name this resolves happily over an empty array, the relay
-   * counted that as a delivery and set `dispatched_at` — so a renamed or unregistered subscriber
-   * discarded every event of that name in silence, and the dead-letter queue never learned there
-   * was anything to learn. "Nothing threw" and "somebody received it" are different facts.
+   * Returns the two counts SEPARATELY, which is the whole point.
+   *
+   * With no subscriber for an event name this resolves happily over an empty array, and the relay
+   * counted that as a delivery — so a renamed subscriber discarded every event of that name in
+   * silence. "Nothing threw" and "somebody received it" are different facts.
+   *
+   * The first attempt at that guard returned ONE total, and was dead code: `EventsGateway`
+   * registers a global callback in its constructor for the life of the process, so the total is
+   * never zero and the check could not fire. It passed its unit tests because they mocked
+   * `publishAsync` to return 0, which the real publisher cannot do.
+   *
+   * The two counts answer different questions and only one is "was this delivered". Nineteen
+   * event names — `billing:booked`, `assignment:created`, the seven `DESK_*` ones — have no named
+   * subscriber at all and never will: the gateway broadcasting them over websockets IS their
+   * delivery. Counting only named listeners would dead-letter every one of them.
    */
-  private async deliverLocallyAsync(eventName: string, payload: any): Promise<number> {
+  private async deliverLocallyAsync(eventName: string, payload: any): Promise<DeliveryCount> {
     const list = this.listeners[eventName] || [];
     for (const cb of list) {
       await cb(payload);
@@ -197,7 +238,7 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     for (const cb of this.globalCallbacks) {
       await cb(eventName, payload);
     }
-    return list.length + this.globalCallbacks.length;
+    return { named: list.length, global: this.globalCallbacks.length };
   }
 
   /** The listener/global-callback fan-out. Shared by a local publish() and a remote message. */

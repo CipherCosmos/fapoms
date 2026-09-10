@@ -69,11 +69,16 @@ describe('OutboxRelay', () => {
    * exercises the synchronous branch and never saw this.
    */
   describe('an event nothing is listening for', () => {
-    const withAsyncPublisher = (handled: number) => {
+    // The shape the REAL publisher returns: named listeners and catch-alls counted separately.
+    // The first version of this double returned one number, and the guard it exercised could not
+    // fire in the running process — `EventsGateway` registers a catch-all for the life of the
+    // process, so a combined total is never zero. `event-subscribers.spec.ts` drives the real
+    // object for exactly that reason.
+    const withAsyncPublisher = (named: number, global = 1) => {
       (publisher as unknown as { publishAsync: unknown }).publishAsync = jest.fn(
         async (event: string, payload: any) => {
           published.push({ event, payload });
-          return handled;
+          return { named, global };
         },
       );
     };
@@ -115,6 +120,31 @@ describe('OutboxRelay', () => {
 
       expect(updates.find((u) => u.patch?.lastError)).toBeUndefined();
       expect(updates.find((u) => u.patch?.dispatchedAt)).toBeDefined();
+    });
+
+    it('leaves a broadcast-only event alone — the catch-all IS its delivery', async () => {
+      // Nineteen event names have no named subscriber by design. Treating those as undelivered
+      // would put `billing:booked`, `assignment:created` and the seven DESK_* events into the
+      // dead-letter queue on every single tick.
+      due = [row({ id: 'e1', eventName: 'billing:booked' })];
+      withAsyncPublisher(0);
+
+      await relay.drain();
+
+      expect(updates.find((u) => u.patch?.lastError)).toBeUndefined();
+      expect(updates.find((u) => u.patch?.dispatchedAt)).toBeDefined();
+    });
+
+    it('is not fooled by the catch-all that made the first version of this guard dead code', async () => {
+      // named: 0, global: 1 — the exact shape the real publisher returns for a required event
+      // whose subscriber has been renamed away. A guard on the combined total sees 1 and passes.
+      due = [row({ id: 'e1', eventName: 'assignment:status-changed' })];
+      withAsyncPublisher(0, 1);
+
+      await relay.drain();
+
+      expect(updates.find((u) => u.patch?.dispatchedAt)).toBeUndefined();
+      expect(updates.find((u) => u.patch?.lastError)!.patch.lastError).toMatch(/no subscriber is registered/i);
     });
   });
 
