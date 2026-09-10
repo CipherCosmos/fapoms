@@ -33,13 +33,31 @@ const { Client } = require('pg');
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-const conn = {
-  host: process.env.DB_HOST || '127.0.0.1',
-  port: Number(process.env.DB_PORT || 5432),
-  user: process.env.DB_USERNAME || 'fapoms',
-  password: process.env.DB_PASSWORD || 'fapoms_dev',
-};
-const ADMIN_DB = process.env.ADMIN_DB || 'postgres';
+/**
+ * `DB_ADMIN_URL` wins when it is set, because creating a database from `template0` needs a login
+ * that may CREATE DATABASE, and on a hardened cluster that is not the application's credential.
+ * The discrete `DB_*` variables remain for a developer machine where one role does everything.
+ */
+const conn = (() => {
+  if (process.env.DB_ADMIN_URL) {
+    const url = new URL(process.env.DB_ADMIN_URL);
+    return {
+      host: url.hostname,
+      port: Number(url.port || 5432),
+      user: decodeURIComponent(url.username),
+      password: decodeURIComponent(url.password),
+      adminDb: url.pathname.replace(/^\//, '') || 'postgres',
+    };
+  }
+  return {
+    host: process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.DB_PORT || 5432),
+    user: process.env.DB_USERNAME || 'fapoms',
+    password: process.env.DB_PASSWORD || 'fapoms_dev',
+    adminDb: process.env.ADMIN_DB || 'postgres',
+  };
+})();
+const ADMIN_DB = conn.adminDb;
 
 /**
  * Floors, not exact counts — this file should not need editing every time a migration adds a

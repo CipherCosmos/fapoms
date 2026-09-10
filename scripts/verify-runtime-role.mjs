@@ -112,28 +112,16 @@ async function succeeds(client, what, sql, params) {
 }
 
 async function main() {
-  console.log(`→ provisioning ${DB} on ${HOST}:${PORT}`);
-  await run('db:bootstrap-roles', {
+  // The same entry point the deploy container runs, so what is proven here is the deployment
+  // sequence itself and not a second implementation of it that happens to agree today.
+  console.log(`→ provisioning ${DB} on ${HOST}:${PORT} — roles, schema, grants`);
+  const log = await run('db:provision', {
     DB_ADMIN_URL: ADMIN_URL,
     FAPOMS_RUNTIME_PASSWORD: RUNTIME_PW,
     FAPOMS_MIGRATION_PASSWORD: MIGRATION_PW,
-    CREATE_DATABASE: DB,
   });
-
-  console.log('→ migrating as the migration role (not a superuser)');
-  const migrationLog = await run('migration:run', {
-    DB_USERNAME: 'fapoms_migrator',
-    DB_PASSWORD: MIGRATION_PW,
-  });
-  const applied = (migrationLog.match(/has been executed successfully/g) || []).length;
+  const applied = (log.match(/^ {2}[A-Za-z]+\d{10,}$/gm) || []).length;
   record(applied > 70, `${applied} migrations applied by a non-superuser role`);
-
-  console.log('→ hardening');
-  await run('db:harden', {
-    DB_USERNAME: 'fapoms_migrator',
-    DB_PASSWORD: MIGRATION_PW,
-    FAPOMS_RUNTIME_PASSWORD: RUNTIME_PW,
-  });
 
   const runtime = connect('fapoms_runtime', RUNTIME_PW);
   await runtime.connect();

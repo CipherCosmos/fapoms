@@ -12,6 +12,22 @@
     "rootDir": "./src",
     "baseUrl": "./",
     "incremental": true,
+    /*
+     * The incremental state lives INSIDE `dist`, so `deleteOutDir` wipes both together.
+     *
+     * `nest build` only ever adds: a file deleted or moved in `src` keeps its compiled copy in
+     * `dist` for ever. 63 migrations that had moved into `migrations/_historical/` were still
+     * sitting at the top level of `dist/.../migrations/`, where the runtime glob — single-level
+     * on purpose, to exclude `_historical` — matched them. Provisioning a fresh database from a
+     * checkout that had ever been built therefore ran `InitialMigration1784653336579` and died on
+     * `relation "clients" already exists`. Container images never saw it; anything that builds in
+     * place did.
+     *
+     * `deleteOutDir` alone makes that worse rather than better: with the build info outside
+     * `dist`, the next build finds every input unchanged and emits NOTHING into the directory it
+     * has just emptied. The two settings are only correct together.
+     */
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo",
     "skipLibCheck": true,
     "strictNullChecks": true,
     "noImplicitAny": true,

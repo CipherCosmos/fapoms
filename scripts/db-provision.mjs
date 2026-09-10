@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
- * BRING A FAPOMS DATABASE FROM NOTHING TO READY, IN ONE COMMAND.
+ * BRING A FAPOMS DATABASE FROM NOTHING TO READY, IN ONE COMMAND — from a checkout.
+ *
+ * A thin wrapper around `packages/backend/src/infrastructure/database/roles/provision.ts`, which
+ * is where the sequence actually lives. Production runs the COMPILED form of that module directly
+ * (`deploy/docker-compose.prod.yml`'s `db-migrate` service): the image carries `dist` and nothing
+ * else, so a deploy step that shelled out to `npm run` or `ts-node` would work here and fail
+ * there. This wrapper exists so a developer does not have to know that.
  *
  * Roles, database, extensions, migrations, hardening — in the order they have to happen, with no
  * hand-written SQL at any point. This is what a fresh deployment runs, and what an existing one
@@ -37,8 +43,6 @@ import { dirname, join } from 'node:path';
 
 const BACKEND = join(dirname(fileURLToPath(import.meta.url)), '..', 'packages', 'backend');
 
-const MIGRATION_ROLE = 'fapoms_migrator';
-
 function need(name) {
   const value = process.env[name];
   if (!value) {
@@ -72,35 +76,10 @@ const database = process.env.DB_DATABASE || 'fapoms';
 const migrationPassword = need('FAPOMS_MIGRATION_PASSWORD');
 const runtimePassword = need('FAPOMS_RUNTIME_PASSWORD');
 
-if (process.env.SKIP_BOOTSTRAP !== 'true') {
-  const adminUrl = need('DB_ADMIN_URL');
-  console.log('\n══ 1-3. roles, database, extensions ══');
-  await run('db:bootstrap-roles', {
-    DB_ADMIN_URL: adminUrl,
-    FAPOMS_RUNTIME_PASSWORD: runtimePassword,
-    FAPOMS_MIGRATION_PASSWORD: migrationPassword,
-    CREATE_DATABASE: database,
-  });
-} else {
-  console.log('\n══ 1-3. skipped (SKIP_BOOTSTRAP=true) ══');
-}
-
-console.log('\n══ 4. migrations, as the deploy role ══');
-await run('migration:run', {
+// One process, all three steps, so this wrapper and the container path cannot diverge.
+await run('db:provision', {
   DB_DATABASE: database,
-  DB_USERNAME: MIGRATION_ROLE,
-  DB_PASSWORD: migrationPassword,
-});
-
-console.log('\n══ 5. hardening, verified from the runtime side ══');
-await run('db:harden', {
-  DB_DATABASE: database,
-  DB_USERNAME: MIGRATION_ROLE,
-  DB_PASSWORD: migrationPassword,
+  FAPOMS_MIGRATION_PASSWORD: migrationPassword,
   FAPOMS_RUNTIME_PASSWORD: runtimePassword,
+  ...(process.env.DB_ADMIN_URL ? { DB_ADMIN_URL: process.env.DB_ADMIN_URL } : {}),
 });
-
-console.log(
-  '\n✓ database ready. Start the API and the worker with DB_USERNAME=fapoms_runtime, ' +
-    'DB_PASSWORD=$FAPOMS_RUNTIME_PASSWORD and DB_MIGRATIONS_RUN=false.',
-);

@@ -290,6 +290,49 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # The deploy identity, and the only thing that ever holds it.
+  #
+  # Migrations used to run inside the API on boot, which is why the API's own connection needed
+  # schema privileges — and a runtime identity that can alter schema objects can take the audit
+  # triggers away and then delete the trail. Certification demonstrated exactly that.
+  #
+  # So the schema is somebody else's job now. This one-shot container runs roles, migrations and
+  # hardening as `fapoms_migrator`, exits, and the API starts afterwards as `fapoms_runtime` with
+  # `DB_MIGRATIONS_RUN=false`. `main.ts` refuses to boot in production if either of those is wrong.
+  #
+  # `service_completed_successfully` is the whole gate: a failed migration stops the deploy here,
+  # with the old containers still running, instead of starting an API against a half-migrated
+  # schema.
+  #
+  # Secrets: FAPOMS_MIGRATION_PASSWORD and DB_ADMIN_URL exist only in this service's environment.
+  # See docs/database-roles.md for the full list and the transition procedure for an existing
+  # deployment.
+  # ─────────────────────────────────────────────────────────────────────────
+  db-migrate:
+    build:
+      context: ..
+      dockerfile: packages/backend/Dockerfile
+    restart: "no"
+    env_file: [../.env.docker]
+    environment:
+      DB_ADMIN_URL: ${DB_ADMIN_URL}
+      FAPOMS_MIGRATION_PASSWORD: ${FAPOMS_MIGRATION_PASSWORD}
+      FAPOMS_RUNTIME_PASSWORD: ${FAPOMS_RUNTIME_PASSWORD}
+      DB_DATABASE: ${DB_DATABASE:-fapoms}
+      # Leave the roles alone on a cluster whose identities somebody else manages (a managed
+      # Postgres where CREATE ROLE is not available to any credential this deployment holds).
+      SKIP_BOOTSTRAP: ${DB_SKIP_BOOTSTRAP:-false}
+    # The COMPILED module, from the same image the API runs. The image carries `dist` and nothing
+    # else — no `src`, no ts-node, no `scripts/` — so a step that shelled out to npm would work on
+    # a checkout and fail here, mid-deploy, with the old containers already stopping.
+    command: ["node", "packages/backend/dist/infrastructure/database/roles/provision.js"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   backend:
     build:
       context: ..
@@ -297,6 +340,13 @@ services:
     restart: unless-stopped
     env_file: [../.env.docker]
     environment:
+      # The runtime identity. Least-privileged: owns nothing, is a member of nothing, and cannot
+      # reach the audit tables' structure at any price. See database/roles/role-model.ts.
+      DB_USERNAME: ${FAPOMS_RUNTIME_USER:-fapoms_runtime}
+      DB_PASSWORD: ${FAPOMS_RUNTIME_PASSWORD}
+      # The schema is db-migrate's job. An API that migrates needs DDL, and a runtime identity
+      # with DDL can remove the audit triggers — main.ts refuses to boot with this set to true.
+      DB_MIGRATIONS_RUN: "false"
       # The read-only container API that backs the admin service-log viewer. The socket itself
       # is never mounted into this container.
       DOCKER_API_URL: http://dockerproxy:2375
@@ -339,6 +389,9 @@ services:
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
       clamav: {condition: service_healthy}
+      # A failed migration stops the deploy with the previous containers still serving, rather
+      # than starting an API against a half-migrated schema.
+      db-migrate: {condition: service_completed_successfully}
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "5" }
@@ -375,6 +428,9 @@ services:
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
       clamav: {condition: service_healthy}
+      # A failed migration stops the deploy with the previous containers still serving, rather
+      # than starting an API against a half-migrated schema.
+      db-migrate: {condition: service_completed_successfully}
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "5" }

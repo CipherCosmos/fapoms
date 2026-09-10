@@ -25,7 +25,14 @@ import { TypeOrmModuleOptions } from '@nestjs/typeorm';
  * is launched from, which is the only property worth relying on here.
  */
 const IS_COMPILED = __filename.endsWith('.js');
-const MIGRATIONS_GLOB = [
+/**
+ * Exported so `roles/provision.ts` runs the SAME list. It used to build its own DataSource from
+ * `data-source.ts`, whose globs are relative to `process.cwd()` — correct for the CLI, which runs
+ * from `packages/backend`, and wrong for the deploy container, which runs from `/app`. That
+ * combination reported "No migrations to apply" against an empty database and then failed
+ * hardening on a table no migration had created.
+ */
+export const MIGRATIONS_GLOB = [
   path.join(__dirname, IS_COMPILED ? 'migrations/*.js' : 'migrations/*.ts'),
 ];
 

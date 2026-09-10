@@ -1,0 +1,277 @@
+/**
+ * Bring a FAPOMS database from nothing to ready: roles, schema, grants — in that order.
+ *
+ * ## Why this is one compiled entry point and not three npm scripts
+ *
+ * The production image contains `dist` and nothing else: no `src`, no `ts-node`, no `scripts/`.
+ * A deploy step that shells out to `npm run migration:run` works on a developer's checkout and
+ * fails inside the container, which is the worst possible place to discover it — mid-deploy, with
+ * the old containers already stopping. So the whole sequence is one module that compiles into the
+ * same image the API runs from, and `deploy/docker-compose.prod.yml` runs it with plain `node`.
+ *
+ * ## The steps, and who performs them
+ *
+ *   bootstrap  an administrative login       creates the three roles, the database, the extensions
+ *   migrate    `fapoms_migrator`             applies the migrations
+ *   harden     `fapoms_migrator`             reassigns the audit objects, grants the runtime its
+ *                                            minimum, then re-connects AS the runtime and checks
+ *
+ * The application then starts as `fapoms_runtime` with `DB_MIGRATIONS_RUN=false`. `main.ts`
+ * refuses to boot in production if either is wrong, and `StartupChecksService` asks the database
+ * itself what that identity can do — so a deployment that skipped this step is told at boot rather
+ * than during an incident.
+ *
+ * Every step is idempotent, which is what lets the same command serve a first provision and every
+ * subsequent deploy. `harden` in particular must run after EVERY migration: a new table arrives
+ * with no grant for the runtime, and a recreated audit trigger function arrives owned by the
+ * migrator again.
+ *
+ *   node packages/backend/dist/infrastructure/database/roles/provision.js            # all three
+ *   node packages/backend/dist/infrastructure/database/roles/provision.js harden     # just one
+ *
+ * ## Environment
+ *
+ * | variable | step | notes |
+ * |---|---|---|
+ * | `DB_ADMIN_URL` | bootstrap | a login that may CREATE ROLE and CREATE EXTENSION. Deploy-time only. |
+ * | `FAPOMS_MIGRATION_PASSWORD` | all | the deploy credential. Never in the API's environment. |
+ * | `FAPOMS_RUNTIME_PASSWORD` | bootstrap, harden | the application credential. |
+ * | `DB_HOST`, `DB_PORT`, `DB_DATABASE` | all | where the database is. |
+ * | `SKIP_BOOTSTRAP=true` | — | migrate and harden only, for a managed cluster whose roles somebody else owns. |
+ */
+import { DataSource } from 'typeorm';
+import { MIGRATIONS_GLOB } from '../database.config';
+import {
+  AUDIT_OWNER_ROLE,
+  MIGRATION_ROLE,
+  RUNTIME_ASSERTIONS,
+  RUNTIME_ROLE,
+  createRolesSql,
+  hardenSql,
+} from './role-model';
+
+/** Extensions the migrations assume are present. Installing one needs an administrative login. */
+const REQUIRED_EXTENSIONS = ['uuid-ossp', 'pgcrypto', 'postgis'];
+
+export interface ProvisionTarget {
+  host: string;
+  port: number;
+  database: string;
+}
+
+function env(name: string, fallback?: string): string {
+  const value = process.env[name] ?? fallback;
+  if (value === undefined || value === '') {
+    throw new Error(
+      `${name} is not set. This step writes real credentials and schema; it will not guess one. ` +
+        'See the table in provision.ts for what each step needs.',
+    );
+  }
+  return value;
+}
+
+/** Connection options carrying no entity metadata: these steps issue catalogue statements only. */
+function bareOptions(target: ProvisionTarget, username: string, password: string) {
+  return {
+    type: 'postgres' as const,
+    host: target.host,
+    port: target.port,
+    database: target.database,
+    username,
+    password,
+    entities: [],
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  };
+}
+
+const bare = (target: ProvisionTarget, username: string, password: string): DataSource =>
+  new DataSource(bareOptions(target, username, password));
+
+async function using<T>(ds: DataSource, fn: (ds: DataSource) => Promise<T>): Promise<T> {
+  await ds.initialize();
+  try {
+    return await fn(ds);
+  } finally {
+    await ds.destroy();
+  }
+}
+
+/**
+ * Create the roles, the database and the extensions. The one step needing an administrative login.
+ *
+ * Re-running sets the passwords again and leaves everything else alone, so a credential rotation
+ * is this step with new secrets rather than hand-written SQL on a production box.
+ */
+export async function bootstrapRoles(
+  target: ProvisionTarget,
+  adminUrl: string,
+  runtimePassword: string,
+  migrationPassword: string,
+  log: (line: string) => void = console.log,
+): Promise<void> {
+  const admin = new DataSource({
+    type: 'postgres',
+    url: adminUrl,
+    entities: [],
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  });
+
+  await using(admin, async (ds) => {
+    const who = await ds.query('SELECT current_user AS who, usesuper AS super FROM pg_user WHERE usename = current_user');
+    // Said out loud: running this as an ordinary role fails partway through with half the roles
+    // created, and "permission denied for CREATE ROLE" does not obviously mean "wrong login".
+    log(`Connected as ${who[0]?.who} (superuser: ${who[0]?.super === true}).`);
+
+    for (const statement of createRolesSql(runtimePassword, migrationPassword)) {
+      await ds.query(statement);
+    }
+    log(`Roles ready: ${MIGRATION_ROLE} (deploy), ${AUDIT_OWNER_ROLE} (owns audit, no login), ${RUNTIME_ROLE} (the app).`);
+
+    const exists = await ds.query('SELECT 1 FROM pg_database WHERE datname = $1', [target.database]);
+    if (!Array.isArray(exists) || exists.length === 0) {
+      // Owned by the migration role, so migrations create and alter without a further grant, and
+      // the runtime — which owns nothing — cannot.
+      await ds.query(`CREATE DATABASE "${target.database}" OWNER ${MIGRATION_ROLE}`);
+      log(`Created database ${target.database}, owned by ${MIGRATION_ROLE}.`);
+    } else {
+      log(`Database ${target.database} already exists; leaving its owner alone.`);
+    }
+  });
+
+  const url = new URL(adminUrl);
+  url.pathname = `/${target.database}`;
+  await using(new DataSource({ type: 'postgres', url: url.toString(), entities: [] }), async (ds) => {
+    for (const extension of REQUIRED_EXTENSIONS) {
+      try {
+        await ds.query(`CREATE EXTENSION IF NOT EXISTS "${extension}"`);
+      } catch (err) {
+        // PostGIS is absent from a plain `postgres` image. Named rather than swallowed: without
+        // it the deployment fails later, on a migration, with a much worse message.
+        log(`! could not install extension ${extension}: ${(err as Error).message}`);
+      }
+    }
+    log(`Extensions checked: ${REQUIRED_EXTENSIONS.join(', ')}.`);
+  });
+}
+
+/** Apply the migrations as the deploy role. */
+export async function runMigrations(
+  target: ProvisionTarget,
+  migrationPassword: string,
+  log: (line: string) => void = console.log,
+): Promise<void> {
+  // `MIGRATIONS_GLOB` from database.config.ts, resolved from `__dirname` — NOT `AppDataSource`,
+  // whose globs are relative to `process.cwd()`. That is correct for the CLI, which runs from
+  // `packages/backend`, and wrong for the deploy container, which runs from `/app`: the first
+  // version of this reported "No migrations to apply" against an empty database and then failed
+  // hardening on a table no migration had created. The same trap database.config.ts already
+  // carries a comment about.
+  const ds = new DataSource({
+    ...bareOptions(target, MIGRATION_ROLE, migrationPassword),
+    migrations: MIGRATIONS_GLOB,
+  });
+  await using(ds, async (connected) => {
+    const applied = await connected.runMigrations({ transaction: 'each' });
+    log(applied.length === 0 ? 'No migrations to apply.' : `Applied ${applied.length} migration(s).`);
+    for (const migration of applied) log(`  ${migration.name}`);
+  });
+}
+
+/**
+ * Move the audit objects out of the runtime's reach, grant the runtime its minimum, and then
+ * check the result from the runtime's own connection.
+ *
+ * The verification is the point. A GRANT that ran without error is not the same as a privilege
+ * boundary that holds, and this is the difference between a deployment that is protected and one
+ * that believes it is.
+ */
+export async function hardenDatabase(
+  target: ProvisionTarget,
+  migrationPassword: string,
+  runtimePassword: string | undefined,
+  log: (line: string) => void = console.log,
+): Promise<void> {
+  await using(bare(target, MIGRATION_ROLE, migrationPassword), async (ds) => {
+    log(`Hardening ${target.database} as ${MIGRATION_ROLE}.`);
+    for (const statement of hardenSql(target.database)) {
+      try {
+        await ds.query(statement);
+      } catch (err) {
+        // With the statement. A bare "permission denied for schema public" out of twenty
+        // statements says nothing about which grant is wrong, on a box nobody will bisect by hand.
+        throw new Error(`Hardening statement failed: ${(err as Error).message}\n${statement.trim().split('\n')[0]}…`);
+      }
+    }
+    log('Grants applied; audit tables and their trigger functions reassigned.');
+  });
+
+  if (!runtimePassword) {
+    log(
+      `! FAPOMS_RUNTIME_PASSWORD not set, so the ${RUNTIME_ROLE} side was not checked. A deployment ` +
+        'should always set it: applying a grant and confirming the boundary are different claims.',
+    );
+    return;
+  }
+
+  await using(bare(target, RUNTIME_ROLE, runtimePassword), async (ds) => {
+    const failed: string[] = [];
+    for (const { what, sql } of RUNTIME_ASSERTIONS) {
+      const rows = await ds.query(sql);
+      const ok = rows?.[0]?.ok === true;
+      log(`  ${ok ? '✓' : '✗'} ${what}`);
+      if (!ok) failed.push(what);
+    }
+    if (failed.length > 0) {
+      throw new Error(
+        `The runtime role is not where it should be after hardening:\n  - ${failed.join('\n  - ')}\n` +
+          'Do not start the application against this database.',
+      );
+    }
+    log(`✓ ${RUNTIME_ROLE} is least-privileged and cannot reach the audit structures.`);
+  });
+}
+
+/** `provision.js [bootstrap|migrate|harden]…` — no argument means all three, in order. */
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const steps = argv.length > 0 ? argv : ['bootstrap', 'migrate', 'harden'];
+  const target: ProvisionTarget = {
+    host: env('DB_HOST', 'localhost'),
+    port: Number(env('DB_PORT', '5432')),
+    database: env('DB_DATABASE', 'fapoms'),
+  };
+  const migrationPassword = env('FAPOMS_MIGRATION_PASSWORD');
+  const runtimePassword = process.env.FAPOMS_RUNTIME_PASSWORD;
+
+  if (steps.includes('bootstrap') && process.env.SKIP_BOOTSTRAP !== 'true') {
+    console.log('\n══ roles, database, extensions ══');
+    await bootstrapRoles(target, env('DB_ADMIN_URL'), env('FAPOMS_RUNTIME_PASSWORD'), migrationPassword);
+  } else if (steps.includes('bootstrap')) {
+    console.log('\n══ roles, database, extensions — skipped (SKIP_BOOTSTRAP=true) ══');
+  }
+
+  if (steps.includes('migrate')) {
+    console.log('\n══ migrations, as the deploy role ══');
+    await runMigrations(target, migrationPassword);
+  }
+
+  if (steps.includes('harden')) {
+    console.log('\n══ hardening, verified from the runtime side ══');
+    await hardenDatabase(target, migrationPassword, runtimePassword);
+  }
+
+  console.log(
+    `\n✓ database ready. Start the API and the worker with DB_USERNAME=${RUNTIME_ROLE}, ` +
+      'DB_PASSWORD=$FAPOMS_RUNTIME_PASSWORD and DB_MIGRATIONS_RUN=false.',
+  );
+}
+
+// Only when executed, never when imported by a test.
+if (require.main === module) {
+  main().then(
+    () => process.exit(0),
+    (err) => {
+      console.error(err instanceof Error ? err.message : err);
+      process.exit(1);
+    },
+  );
+}

@@ -17,8 +17,9 @@
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/infrastructure/database/data-source.ts",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/infrastructure/database/data-source.ts",
     "seed": "ts-node src/infrastructure/database/seed.ts",
-    "db:bootstrap-roles": "ts-node src/infrastructure/database/roles/bootstrap-roles.ts",
-    "db:harden": "ts-node src/infrastructure/database/roles/harden.ts",
+    "db:provision": "ts-node src/infrastructure/database/roles/provision.ts",
+    "db:bootstrap-roles": "ts-node src/infrastructure/database/roles/provision.ts bootstrap",
+    "db:harden": "ts-node src/infrastructure/database/roles/provision.ts harden",
     "seed:prod": "node dist/infrastructure/database/seed.js"
   },
   "dependencies": {

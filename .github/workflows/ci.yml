@@ -96,3 +96,103 @@ jobs:
 
       - name: Build frontend
         run: npm run build:frontend
+
+  # ───────────────────────────────────────────────────────────────────────────────────────────
+  # The half `verify` cannot do, because it has no database.
+  #
+  # `verify`'s own comment says so: the `.db.spec.ts` suites open a real connection through
+  # `AppDataSource`, so they can only ever fail in a job with no `services:` block, and "giving CI
+  # its own database is the real fix". This is that job.
+  #
+  # What it proves that nothing else can:
+  #
+  #  - the migrations still build a schema from NOTHING. Every deployment migrates a database that
+  #    already has most of the schema, so the only thing routinely exercised is the newest
+  #    migration on top of the previous one. A migration that depends on something a later one
+  #    renamed works forever on the deployed database and fails the first time anybody provisions.
+  #  - the runtime database role cannot defeat the audit trail. Every attack is issued for real —
+  #    DROP TRIGGER, DISABLE TRIGGER, TRUNCATE, ALTER FUNCTION — as the least-privileged role, on a
+  #    database this job creates and drops. Reading the GRANT statements proves nothing; PostgreSQL
+  #    refusing the statement does.
+  #  - the six self-contained `.db.spec.ts` suites, including the finance-overview reconciliation.
+  #
+  # The two remaining `.db.spec.ts` files are NOT run here and must not be: they drive a live
+  # deployment and sign in as long-lived certification accounts whose password is deliberately not
+  # in this repository. They are deployment certification, not integration tests.
+  #
+  # `postgis/postgis:16-3.4` rather than plain `postgres`, because the schema uses PostGIS columns
+  # and geography functions; a plain image fails the very first migration.
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          # The superuser this job bootstraps FROM. The application never uses it: the whole point
+          # of the run below is that the API connects as a role created by that bootstrap.
+          POSTGRES_USER: pgadmin
+          POSTGRES_PASSWORD: pgadmin_ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pgadmin -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DB_ADMIN_URL: postgres://pgadmin:pgadmin_ci@127.0.0.1:5432/postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_SSL: 'false'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # The backend imports from it, and the db suites import the backend.
+      - name: Build shared
+        run: npm run build:shared
+
+      # From `template0`, then again to prove the second run is a no-op. Drops its own database on
+      # every exit path, so a failure here leaves nothing behind for the next run to trip over.
+      - name: Migrations build a schema from empty, idempotently
+        run: npm run verify:migrations
+
+      # Provisions roles and a database, migrates as the non-superuser deploy role, hardens, and
+      # then attempts every audit-bypass and escalation attack as the runtime role — checking as
+      # well that ordinary application work still succeeds, because a boundary that breaks the
+      # product is one somebody switches off.
+      - name: The runtime database role cannot defeat the audit trail
+        run: npm run verify:runtime-role
+
+      # The suites that build their own fixtures. `--testPathIgnorePatterns` with no value clears
+      # the pattern that holds `.db.spec.ts` out of the unit run; the regex then names exactly the
+      # six that do not need a live deployment.
+      - name: Self-contained database suites
+        env:
+          DB_NAME: fapoms_ci
+        run: node scripts/create-database.mjs
+
+      # `--testPathIgnorePatterns` with no value clears the pattern that holds `.db.spec.ts` out of
+      # the unit run; the regex then names exactly the six suites that build their own fixtures and
+      # need no live deployment.
+      - name: Run them
+        working-directory: packages/backend
+        env:
+          DB_USERNAME: pgadmin
+          DB_PASSWORD: pgadmin_ci
+          DB_DATABASE: fapoms_ci
+        run: |
+          npm run migration:run
+          npx jest --ci -w 1 --testPathIgnorePatterns --testRegex '(assignment-postgres-concurrency|assignment-reassignment-lineage|billing-overview-region-scope|payout-destination-evidence|notification-tenant-isolation|assayer-postgres-concurrency)\.db\.spec\.ts$'
