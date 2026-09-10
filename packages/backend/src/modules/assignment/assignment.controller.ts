@@ -366,7 +366,23 @@ export class AssignmentController {
   // Read `data.status` rather than assuming: with `acceptOnBehalf` the response is ACCEPTED, and
   // if the confirmation could not be applied it comes back PENDING as a live offer instead.
   @ApiOperation({ summary: 'Create an assignment — a PENDING offer, or ACCEPTED when the desk confirms on the assayer behalf' })
-  async create(@Body() dto: CreateAssignmentRequestDto, @Req() req: any) {
+  async create(
+    @Body() dto: CreateAssignmentRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    /**
+     * The ceiling every other route on this controller asserts — and the route that was left
+     * out. The create has no assignment to look up yet, so it asks the branch the work is being
+     * booked against.
+     *
+     * Verified live: an EAST-scoped OPERATIONS account refused `GET /assignments/<Maharashtra id>`
+     * with 403 "That record belongs to a region your account is not assigned to" then booked
+     * ASN-2026-000016 against a Maharashtra branch through this route — 201, a real row, an
+     * assignment number consumed and the billing path armed — and could not read back what it
+     * had just created.
+     */
+    await this.regionGuard.assertProjectBranchInScope(dto.projectBranchId, scope);
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const assignment = await this.assignmentService.create(dto, userId);
     return {

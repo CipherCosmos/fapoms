@@ -78,6 +78,18 @@ const CASES: Array<{ file: string; method: string; assertion: string }> = [
    * the assignment's state back in its refusal. Three routes on one controller asserting and five
    * not is what this file exists to prevent.
    */
+  /*
+   * The route that creates the work, added 2026-09-10.
+   *
+   * Eight routes on this controller were pinned here and `create` was not — the one that brings an
+   * assignment into existence. Confirmed live against an EAST-scoped OPERATIONS account that
+   * `GET /assignments/<Maharashtra id>` answers 403 to: `POST /assignments` against a Maharashtra
+   * branch returned 201 and booked ASN-2026-000016, consuming an assignment number and arming the
+   * payable that completion books, and the same account could not then read what it had created.
+   *
+   * It asserts against the branch rather than the assignment because there is no assignment yet.
+   */
+  { file: 'assignment/assignment.controller.ts', method: 'create', assertion: 'assertProjectBranchInScope' },
   { file: 'assignment/assignment.controller.ts', method: 'update', assertion: 'assertAssignmentInScope' },
   { file: 'assignment/assignment.controller.ts', method: 'addComment', assertion: 'assertAssignmentInScope' },
   { file: 'assignment/assignment.controller.ts', method: 'reportIssue', assertion: 'assertAssignmentInScope' },
