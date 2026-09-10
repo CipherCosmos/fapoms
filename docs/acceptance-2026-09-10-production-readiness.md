@@ -69,6 +69,7 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F09 | **HIGH** | **A client's rejection can be reversed in one unguarded call.** `PUT /assayers/:id/empanelment/:clientId` is a free-form upsert with no state machine: `REJECTED → ACTIVE` in a single request returns 200 and the standing is ACTIVE. No reason is required, no second approver, and any holder of `assayer:edit:organization` can do it. Mitigated only after the fact by the `EMPANELMENT_SET` audit row, which does record the previous value and the actor | Open |
 | AC-F10 | MEDIUM | **A bulk lifecycle move can half-succeed and report only the failure.** `INVITED → INACTIVE` routes through DOCUMENT_VERIFICATION; the first hop needs no reason and commits, the second is refused for want of one. The person ends at DOCUMENT_VERIFICATION when INACTIVE was asked for, one audit row is written, and the response lists the id under `failed` only — it never mentions the hop that landed. A roster batch can silently advance people the operator believes were refused | Open |
 | AC-F11 | MEDIUM | **The assayer-delete cascade cancels assignments with no per-assignment trail.** Archiving a person raw-`UPDATE`s their open assignments to CANCELLED and bumps `entity_version`, but writes **zero** audit rows against those assignments; only the aggregate `ASSAYER_DELETED` row on the assayer exists, and it names neither the assignments nor how many. "Why was my job cancelled?" is answerable only by already knowing to look at the assayer's deletion | Open |
+| AC-F13 | LOW (test quality, not product) | `billing-overview-region-scope.db.spec.ts` asserts absolute amounts for a region it declares empty (`EMPTY = Region.SOUTH`) and fails the moment anything else books money there. This campaign's own run did exactly that — one paid payable on a SOUTH branch, `paid: 2250` where the suite expects `0`. The weakness is already recorded at `14a11e53`; this is it happening. The suite preflights its two owned regions (CENTRAL, NORTH_EAST) but not the one it calls empty | Open — suite should claim SOUTH too, or assert deltas |
 | AC-F12 | LOW | `STRICTLY_NON_OVERRIDABLE_STANDINGS` names `EXPIRED` and `SUSPENDED`, which are not members of `EmpanelmentStatus` and are forbidden by `chk_empanelment_status` — two of the four "strictly non-overridable" standings are unreachable strings. No protection is lost (the reachable ones are covered) but the list overstates what it guards | Open |
 
 ### The clean-install run
@@ -105,7 +106,7 @@ podman and homeserver paths; the orphaned-endpoint list in `integration-audit-ha
 | Shared | 10 suites, **413 tests**, all pass |
 | Frontend | 82 suites, **1012 tests**, all pass |
 | Lint | backend and frontend both 0 errors |
-| Backend `.db.spec.ts`, self-contained | 6 suites, **92 tests**, all pass against the rig |
+| Backend `.db.spec.ts`, self-contained | 6 suites, **92 tests**, all pass against the rig. On a later re-run 241/242 — the one failure is AC-F13, this campaign's own fixture money landing in the region that suite calls empty |
 | `assayer-lifecycle-certification.db.spec.ts` | **150/150** — first time run in this working copy |
 | Core business loop (E2E + SoD + money) | **25/25** |
 | Authorization, isolation, audit defences | **20/20** |
