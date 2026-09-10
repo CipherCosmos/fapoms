@@ -1471,6 +1471,16 @@ async function seed() {
         let branch = await branchRepository.findOne({ where: { solId: bd.solId } });
         if (!branch) {
           branch = branchRepository.create({
+            /**
+             * Owned, like every other row this seed writes.
+             *
+             * Branches and projects were the two tables it left with a null organisation, and a
+             * tenant-scoped read filters on the caller's organisation — so an unowned row is
+             * invisible rather than public. `BackfillTenantOwnership` repairs legacy rows and
+             * cannot help here: on a fresh database it runs before this seed creates the
+             * organisation, so there is nothing yet to assign.
+             */
+            organizationId: defaultOrg.id,
             clientId: sbiClient.id,
             solId: bd.solId,
             name: bd.name,
@@ -1526,6 +1536,8 @@ async function seed() {
       let project = await projectRepository.findOne({ where: { projectNumber: 'PRJ-2026-001' } });
       if (!project) {
         project = projectRepository.create({
+          // Owned, for the reason given where the branches are created above.
+          organizationId: defaultOrg.id,
           projectNumber: 'PRJ-2026-001',
           name: 'SBI Corporate Audit 2026',
           description: 'Annual corporate reference audit for State Bank of India branches.',

@@ -90,6 +90,16 @@ const REQUIRED_INDEXES = [
  */
 const REQUIRED_ROLES = ['ADMIN', 'DEVELOPER', 'OPERATIONS', 'DESK', 'DESK_OPERATOR', 'AUDITOR'];
 
+/**
+ * Every table that carries an owning organisation, as `BackfillTenantOwnership` lists them.
+ *
+ * A tenant-scoped read filters on the caller's organisation, so a row with none is invisible to
+ * the application rather than visible to everybody. The seed used to leave branches and projects
+ * that way, and the backfill migration cannot help on a fresh database because it runs before the
+ * seed creates the organisation.
+ */
+const TENANT_OWNED_TABLES = ['assayers', 'branches', 'clients', 'projects', 'users'];
+
 const scratch = `migcheck_${Date.now()}_${process.pid}`;
 
 async function withClient(database, fn) {
@@ -255,7 +265,21 @@ async function main() {
   }
   if (short) fail(`${short} declared grant(s) are missing after a fresh migrate and seed`);
 
-  console.log('✓ migrations build a complete schema from empty, a repeated run changes nothing, and the seed leaves every role whole');
+  const unowned = await withClient(scratch, async (c) => {
+    const found = [];
+    for (const table of TENANT_OWNED_TABLES) {
+      const { n, total } = await one(
+        c,
+        `SELECT count(*) FILTER (WHERE organization_id IS NULL)::int AS n, count(*)::int AS total FROM ${table}`,
+      );
+      if (Number(n) > 0) found.push(`${table}: ${n} of ${total}`);
+    }
+    return found;
+  });
+  if (unowned.length) fail(`rows with no owning organisation after a fresh seed — ${unowned.join('; ')}`);
+  console.log('   every seeded row carries an owning organisation');
+
+  console.log('✓ migrations build a complete schema from empty, a repeated run changes nothing, and the seed leaves every role whole and every row owned');
 }
 
 let exitCode = 0;

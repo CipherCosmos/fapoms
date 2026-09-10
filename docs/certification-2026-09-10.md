@@ -163,6 +163,25 @@ rather than treated as empty. 13 cases in `seed-grants.spec.ts`.
 `verify-migrations-from-empty.mjs` now runs the real seed against the real schema and compares
 every role's rows to what it declares; without the fix it exits 1 and names all nineteen.
 
+### Every seeded branch and the seeded project had no owning organisation
+
+`BackfillTenantOwnership` assigns every unowned row to the single organisation, and its own
+comment names seeds as a creation path nobody had audited. It had not been: the seed set
+`organizationId` on users, clients and assayers, and left it null on branches and projects. On a
+fresh database the backfill also runs before the seed creates the organisation, so it has nothing
+to assign and the rows arrive unowned a moment later.
+
+Measured on the live deployment on 2026-09-10: 10 of 10 branches and 1 of 1 projects had a null
+`organization_id`; clients, assayers and users were all owned. A tenant-scoped read filters on the
+caller's organisation, so an unowned row is invisible to the application rather than visible to
+everybody — the safe direction, and still wrong.
+
+The seed now sets it, so new databases come up owned. `BackfillTenantOwnership2` repairs the ones
+already built: applied to a database seeded by the old code it assigned all eleven rows to the one
+organisation, and it is the only migration that runs. `verify-migrations-from-empty.mjs` checks
+all five tenant-owned tables after a fresh seed; without the fix it exits 1 and names
+`branches: 10 of 10; projects: 1 of 1`.
+
 ---
 
 ## Data integrity
