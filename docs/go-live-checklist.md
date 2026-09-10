@@ -1,10 +1,21 @@
 # FAPOMS go-live checklist
 
-Companion to `acceptance-2026-09-10-production-readiness.md`, whose verdict is **READY WITH
-ACCEPTED RISKS**. The software is fit to run the business; everything below is about the
-environment it will run in, which this acceptance campaign could not reach.
+Companion to `acceptance-2026-09-10-production-readiness.md` and to the role-by-role certification
+in `final-product-acceptance-2026-09-10.md`. The software is fit to run the business; most of what
+follows is about the environment it will run in, which the acceptance campaigns could not reach.
 
 Work top to bottom. Each item says who it belongs to and what "done" looks like.
+
+## 0. Two features that must not be switched on yet
+
+The role-by-role campaign found two supported, one-click features that do not work. Neither is a
+risk to weigh; both are defects with an owner. Until they are fixed and re-certified, the product
+is only safe in the configuration it ships in — national accounts, built-in roles.
+
+| # | Do not | Why | Done when |
+|---|---|---|---|
+| 0.1 | **Do not set `regions` on any account.** | Region scoping refuses reads and largely does not refuse writes. A region-scoped operations account approved a ₹2,250 payout, minted an invoice, adjusted a client line, set a commercial rate and moved a branch out of its own region — in a territory it is refused so much as reading. 19 routes confirmed at runtime with the rows read back. Dormant today only because **no real account is region-scoped**. | The write surface asserts the ceiling its read sibling does, `PUT /branches/:id` checks the region it is *setting* and not only the one it is replacing, and `write-region-parity.spec.ts` derives its route set instead of listing it. |
+| 0.2 | **Do not create a custom role in Admin → Roles.** | A custom role is offered ten navigation entries and nine of the backing APIs refuse it. On `/scheduling` the refusal is drawn as **"0 active schedules"** — a wrong answer, not a broken page. | Each of the 13 measured pages either honours the permission fallback on its backing route or stops offering itself, and a refused fetch renders as a refusal rather than an empty result. |
 
 ## 1. Before anything reaches production
 
@@ -35,6 +46,8 @@ It must be run by somebody with access.
 | 2.11 | Backups | A backup exists, is off-box, and **has been restored at least once**. `deploy/restore.sh --drill` hardcodes podman and homeserver paths; adapt it or run the equivalent by hand. |
 | 2.12 | Audit protections live | The immutability and TRUNCATE triggers exist on `audit_events` and `audit_chain`, and `UPDATE` is refused when attempted as the runtime role. |
 | 2.13 | Smoke the business loop | Sign in as each role; confirm per-role landing; complete one assignment and watch its payable appear within a minute. `scripts/acceptance/` runs against any deployment given its URL and credentials. |
+| 2.14 | **The log proxy is running** | `/admin/logs` is one of only two DEVELOPER-exclusive screens and the first place 4.2 below sends the platform owner. It reads containers through `dockerproxy`, which was declared in the compose file and started by nothing — so the screen answered *"Cannot reach the Docker log proxy at http://dockerproxy:2375."* `backend` now depends on it; confirm a `dockerproxy` container is up and that the screen shows lines. |
+| 2.15 | **The deployment is serving the commit you think it is** | Nothing in the product reports the running build. On the acceptance stack the container was found to be two code commits behind the branch, which silently made several results statements about an older build. Before certifying anything against a deployment, check a known string from the newest commit inside the running image — `docker exec <api> grep -c '<marker>' /app/packages/backend/dist/...` — rather than trusting the deploy log. |
 
 ## 3. Still open, owned, and not blocking
 
@@ -51,7 +64,16 @@ It must be run by somebody with access.
   nothing until Redis is flushed.** The resulting 403 names the old state, not the cache, and has
   cost two separate sessions an afternoon. Make those changes through the product.
 - **`/admin/outbox/health` is the first place to look** when completed work stops becoming
-  payables. It is DEVELOPER-only — see 1.1.
+  payables. It is DEVELOPER-only — see 1.1 — and **it has no screen**. The API answers
+  (`{pending, deadLettered, retrying, oldestPendingAgeSeconds, maxAttempts}`), but the web app
+  contains no reference to it at all and `/admin/outbox` renders the not-found page. Reaching it
+  today needs a bearer token and a command line. Until it has a screen, whoever holds DEVELOPER
+  needs the curl written down somewhere they will find it at 2am.
+- **An assayer cannot use the web app for anything.** They route correctly to two pages, and until
+  `c1e62361` they could not even get past the forced password change there — the form posted to
+  the staff endpoint, which 404s for a principal that is not a `users` row. Fixed for the password;
+  "Save Profile" on that same page still posts `PUT /users/me` and there is no assayer counterpart
+  to send it to. Field staff belong in the mobile app.
 - **A completed audit closes its branch to further assignments**, twice over. This is a rule, not a
   fault, and it is the first thing that will confuse somebody re-running the acceptance probes.
 - **The seed refuses to run against a populated database**, and on a hardened one it must run as
