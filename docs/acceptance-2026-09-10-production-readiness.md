@@ -1,80 +1,165 @@
-# Production acceptance — 10 September 2026
+# Production acceptance — final report, 10 September 2026
 
-## Executive conclusion
+## Executive verdict
 
-**READY.**
+**READY WITH ACCEPTED RISKS.**
 
-Take the good news first, because it is the larger part. The complete operational loop — hire a
-person, deploy them to work, execute it, complete it, pay for it — runs correctly end to end,
-refuses the illegal version of every step it was asked to refuse, survives concurrent operators,
-and reconciles to the rupee under independent recomputation. Segregation of duties holds in both
-directions and says so by name. The audit trail is now tamper-proof against the application's own
-database credential, which closes the most serious control gap this project has carried. Not one
-defect was found in how this system decides anything about money, work or people.
+The software is fit to run the business. Every blocking defect discovered during the acceptance
+campaign was fixed and re-verified against the production-shaped acceptance environment, and one
+complete scenario — hire a person, verify their papers, activate them, empanel, assign, execute in
+the field, complete, approve and pay under segregation of duties, then leave and rehire — passes
+29 of 29 checks with the database read back after every step and the API, database, audit trail
+and financial state agreeing at the end. What remains is not in the product: **the target
+production environment has never been exercised from this machine**, the DEVELOPER account the
+platform requires does not exist yet, and the mobile client has not been run. Those three are
+documented below with named owners and are the whole of the accepted risk.
 
-**Nothing now blocks it.** Every defect this campaign raised as blocking has been fixed and
-re-verified here, not taken on report:
+## What the system can now reliably do
 
-- **Six in deployment mechanics** — provisioning that could not migrate, an incomplete extension
-  list, hardening that aborted half-done, an installer out of step with its own compose file, a
-  crash-looping edge proxy, and a seed the hardened database refused. Re-run **from destroyed
-  volumes**: torn down, rebuilt, the whole path from nothing, first attempt, no manual steps.
-- **The RBAC grant repair** — the seed was not failing to add permissions, it was **removing**
-  them: nineteen across four roles, including the only `SYSTEM:APPROVE:PLATFORM` in the system, so
-  the two-person data-wipe rule could not be completed by anyone. Verified restored, and with it
-  Operations can open an assayer record again and a desk operator's own page loads.
-- **The two front-door defects** — the blank screen when signing in from the site root, and
-  sign-out handing the next person the previous user's page. Both were one key written where it
-  should not have been. **Checked in a real browser from a cleared session**, not inferred from a
-  diff: the site root now lands on the role's home with real content, and a second persona signing
-  in after the first lands on its own.
-- **The cron that died in silence** — every scheduled job could stop for ever with health green and
-  nothing logged, which for the outbox means completed work quietly not becoming payables. The
-  reconciler was proven on a real Bull queue: key deleted, the schedule observed genuinely dead
-  across two ticks, then restored and **actually firing** again.
+**HR.** Create a person, record and verify their identity documents, walk them through document
+verification, background verification and training to ACTIVE, record payout details encrypted at
+rest, put them on leave, take their resignation, and rehire them back to the start of onboarding
+rather than straight back to work.
 
-**Two things need an owner before go-live, and neither is a defect.** The first is AC-F21: nobody
-holds the DEVELOPER role, and six controllers answer to it alone — including the outbox
-dead-letter queue, which is the one surface that would have shown the stalled cron in AC-F20.
-Every account on this deployment gets 403 there today. Creating that account and deciding who
-holds it is a provisioning decision, not a code change, and widening the boundary instead would be
-the wrong answer. There is no workaround to reach for first: the outbox controller is `@RoleOnly()`,
-and a custom role holding every platform SYSTEM permission is still refused — proven here.
+**Operations.** Empanel a person with a client, assign them to a branch within the client's
+distance rules and the project's window, and see the work through acceptance, check-in and
+completion. Reassign it to somebody else with a recorded reason and an ownership interval that
+says who held it when.
 
-**The second is a product decision.** AC-F09: a client's rejection of an
-assayer is reversible in one call because `EmpanelmentStatus` has no state machine. Whether
-reversing a rejection should require a separate recorded act is a **product decision for the
-organisation**, not a bug to fix quietly, and the assignment-time hard block already refuses the
-work either way. It is recorded for the owner to settle, and it does not gate the release.
+**Field execution.** Accept and check in against the branch's real coordinates, over the same API
+the mobile client calls.
 
-Everything else on the list is closed or genuinely low-risk.
+**Finance.** Book exactly one payable and one client line per completed assignment, priced by one
+formula; approve and pay under segregation of duties where the booker, the approver and the payer
+must be three different people; reconcile; and show management figures that reproduce from the
+base tables.
 
-What this rests on: a purpose-built production-shaped stack (caddy, ClamAV, Postgres, Redis,
-MinIO, and a separate API and worker) brought up from empty volumes on this machine, migrated,
-hardened and seeded, then driven over HTTP as five real user accounts with the database inspected
-after every mutation. No deployed system was touched. Nothing here is a statement about live
-production data.
+**Audit.** Answer who did what, when, to which record, with the previous and new value — and
+refuse to be altered by the application's own database credential.
 
----
+## What happens when users do the wrong thing
 
-## Core business evidence
+Illegal lifecycle moves are refused and the record does not move. Unauthorised actions are refused
+by the API whether or not the interface offered them, and a before-and-after comparison shows
+nothing changed. A stale write is answered with a conflict rather than silently overwriting.
+Duplicated clicks produce one business event: three simultaneous completions gave one audit row,
+one version bump and one payable. A redelivered worker event books nothing extra. A payment
+reference sent twice is one payment. A document cannot be verified with no scan on file, nor with
+a scan but none of the card's data recorded — *"a verification that compares nothing attests to
+nothing."* A fee cannot exceed twice the contracted quote. An appraiser who lives too close to a
+branch cannot be assigned to it by anyone, at any level.
 
-| Business capability | Result | Evidence |
+None of these leave a half-finished state behind: the refusals unwind completely, including one
+where a pessimistic lock had already begun writing a banking snapshot.
+
+## Deployment status — two separate answers
+
+| | status | basis |
 |---|---|---|
-| HR / lifecycle | **PASS with findings** | `assayer-lifecycle-certification.db.spec.ts` 150/150 against the running system: all 98 illegal transitions refused with no mutation and no audit event; reason enforcement; departure effects; rehire routes RESIGNED and TERMINATED back to INVITED. Plus 32/32 on the paths that suite does not cover — the bulk walker refuses to launder a rehire (`RESIGNED → ACTIVE` is skipped, "No valid path"), the reason gate is genuinely per-hop, `reset-onboarding-stage` rewinds only, and `DELETE /assayers/:id` needs ADMIN and a reason. AC-F10 and AC-F11 came out of this |
-| Operations / deployment | **PASS with a finding** | Eligibility, distance ceiling, project window and double-booking each refused a real attempt with an actionable message; override requires a stated reason and records it against the actor. The **conflict-of-interest rule is correctly unwaivable** — an appraiser 1.6 km from a branch is refused with `RULE_NOT_OVERRIDABLE` and told, in the message, that it is not an operator's to waive. A REJECTED empanelment is a hard block that ADMIN cannot lift even with a written reason. But AC-F09: that same REJECTED standing can be flipped to ACTIVE in one unguarded call first |
-| Assignment | **PASS** | E2E-01…E2E-14; state machine, ownership, versioning; completed work cannot be cancelled; a second completion is not a second business event |
-| Field execution | **PASS** (API path) | Accept, check-in with GPS, and completion; `checked_in_at` stamped; an assayer cannot complete their own job (403) or price it (`fee: 99999` ignored). Mobile app itself not exercised — see *not tested* |
-| Financial | **PASS** | Money recomputed independently and matching: 2500 − TDS 250 = 2250; client GST 2500 × 18% = 450; client TDS on the base, never the GST; line total 2700. Segregation of duties refuses booker-approves and approver-pays, by name. Duplicate payment reference yields one payment |
-| Audit / history | **PASS** | Every mutation carries an actor; refusals recorded as `SEGREGATION_OF_DUTIES_REFUSED` with `outcome: DENIED`, never success-shaped. **The audit trail is now tamper-proof against the application's own credential** — 7 destructive vectors refused as `fapoms_runtime` (including `DISABLE TRIGGER`, which fails with *"must be owner"*) while append still works, and `verify:runtime-role` refuses 87/87 including escalation, `DROP TRIGGER`, replacing the trigger function, and abusing the SECURITY DEFINER partition helper. This closes the open finding in `docs/incident-2026-09-09-audit-truncate.md` |
-| Authorization | **PASS** | DESK_OPERATOR refused on six privileged writes over direct HTTP with a before/after database comparison showing nothing changed; assayer horizontal isolation on work, acceptance and bank details |
-| UI / usability | **PASS with findings** | Driven in a real browser as three roles. Per-role landing correct, every core screen renders real data cross-checked against SQL, refresh discipline holds (transition → navigate away → hard reload → return → server truth), authorization redirects are honest, and 375px is clean — no horizontal body scroll, wide content scrolls inside its own containers, sidebar goes off-canvas with a bottom nav. **No mismatched numbers anywhere**: 8 assayers, ₹5,400 unbilled and 10 branches each agree across three screens and the database. Four defects found — AC-F14 to AC-F17 |
-| Management figures | **PASS** | Every headline number on the finance overview recomputed from base tables with independent SQL and matching to the rupee |
-| Reliability | **PASS with a serious finding** | 25/25: a duplicated booking event is absorbed and still yields one payable and one client line; stopping the worker proves it is what drains the outbox (not dispatched for 135 s, dispatched 24 s after restart); a refused approval unwinds completely — even the banking snapshot a pessimistic lock had begun — leaving one `DENIED` row and no `SUCCESS`; six simultaneous completions produce one audit row, one version bump, one payable. But AC-F20: every cron schedule can stop for ever, silently |
+| **Software readiness** | **READY** | Exercised end to end on a production-shaped stack built from destroyed volumes: caddy, ClamAV, Postgres, Redis, MinIO, and a separate API and worker, provisioned through the real three-role path, migrated, hardened and seeded. |
+| **Production environment readiness** | **NOT ASSESSED** | Neither deployment was reachable from this machine. The homeserver was offline throughout; the AWS box's address lives in `/etc/default/fapoms-deploy` on the box itself and is not in the repository. No health endpoint, TLS, proxy, backup or worker check was performed against either. |
 
----
+**This report is not evidence that production is ready.** It is evidence that the software is, on
+an environment shaped like production. The environment checklist — health endpoints, environment
+configuration, migrations applied, database credentials, Redis, worker, storage, proxy, TLS, backup
+configuration — remains to be run by somebody with access, and the two repair migrations
+(`ReconcileRolePermissions3`, `BackfillTenantOwnership2`) must reach it before the grants are
+correct there.
 
-## Findings
+## Owner decisions
+
+| decision | outcome |
+|---|---|
+| **DEVELOPER OWNER** | **A named platform owner, on a personal named account, MFA enrolled, credentials held in a password manager outside source control.** Chosen over a shared break-glass account so audit rows name a person, and over granting DEVELOPER to the existing admin, which would have collapsed the separation the role split created. **The account does not exist yet** — creating it is an outstanding go-live action, and until it exists six controllers answer to nobody. |
+| **AC-F09 — rejected empanelment** | **Option A: rejection stays reversible, and reversing it requires a written reason.** Implemented and shipped: moving away from `REJECTED` without a reason is refused, the reason is recorded in the `EMPANELMENT_SET` audit row beside the actor and previous value, and every other standing change is untouched. Not made terminal, because a client changing its mind is ordinary and a terminal state would push the correction into a database edit where nobody would see it. |
+
+## Mobile client
+
+**MOBILE CLIENT — NOT EXERCISED.** A genuine attempt was made and it is not achievable on this
+machine:
+
+- The app requires a **dev-client build** — `expo-dev-client` plus LiveKit WebRTC native modules —
+  so it cannot run in Expo Go.
+- **No iOS toolchain:** `xcode-select` points at CommandLineTools, `xcodebuild` refuses, **zero
+  simulators available**, CocoaPods not installed.
+- **No Android runtime:** `ANDROID_HOME` unset, no `emulator` binary, no device attached.
+- Prebuilt APKs exist, but the release one is from 16 August and **95 mobile source files are newer
+  than it**, so even with a runtime it would not be testing the delivered code.
+
+This is distinct from the field-execution API contract, which **is** proven: accept, check-in and
+the completion that follows were exercised over the same endpoints the app calls, including a
+temporary-password issue, forced rotation and sign-in as the assayer. What is unproven is the
+client that calls them — its screens, permission prompts, offline retry and resubmission.
+
+## Evidence by capability, with the level of proof
+
+Levels are used strictly. `REAL API TESTED` means requests against a running deployment;
+`DATABASE VERIFIED` means the rows were read back afterwards; `BROWSER TESTED` means driven in a
+browser. API evidence is not reported as browser evidence, the acceptance rig is not reported as
+production, and source inspection is never reported as runtime proof.
+
+| Capability | Level | Evidence |
+|---|---|---|
+| HR / lifecycle | `END-TO-END TESTED` · `BROWSER TESTED` · `DATABASE VERIFIED` | 150/150 lifecycle certification against the running system (98 illegal transitions refused with no mutation); 32/32 bulk, recovery, delete-cascade and empanelment probes; final scenario HR-1…HR-4; browser transition with refresh discipline |
+| KYC / document integrity | `REAL API TESTED` · `DATABASE VERIFIED` | Verification refused with no scan on file, refused again with a scan but no card data, then accepted and stored VERIFIED; EICAR refused on the KYC upload path; clean PDF accepted with SHA-256 and sniffed MIME recorded |
+| Operations / deployment of people | `END-TO-END TESTED` · `DATABASE VERIFIED` | Eligibility, distance ceiling, conflict-of-interest (unwaivable), project window, double-booking and the fee ceiling each refused a real attempt with an actionable message; override requires a stated reason and records it against the actor |
+| Assignment | `END-TO-END TESTED` · `DATABASE VERIFIED` | Full state machine; reassignment lineage with one open ownership interval; stale `expectedVersion` answered 409; three simultaneous completions produced one audit row and one payable |
+| Field execution | `REAL API TESTED` · `DATABASE VERIFIED` · **client `NOT EXERCISED`** | Accept and GPS check-in as the assayer over the app's own endpoints, `checked_in_at` stamped. The mobile client itself was not run — see above |
+| Financial | `END-TO-END TESTED` · `DATABASE VERIFIED` · `BROWSER TESTED` | Money recomputed independently rather than read back: 2000 − TDS 200 = 1800; GST 2000 × 18% = 360. Segregation of duties refused booker-approves and approver-pays by name; a third person paid; the same reference twice is one payment |
+| Audit / history | `END-TO-END TESTED` · `DATABASE VERIFIED` | Every mutation names an actor (25 rows for the scenario's assayer); refusals recorded as `DENIED`, never success-shaped; seven destructive vectors refused as `fapoms_runtime`; `verify-runtime-role` 87/87 across two provisioning shapes |
+| Authorization / IDOR | `END-TO-END TESTED` · `DATABASE VERIFIED` | 20/20 — six privileged writes refused for DESK_OPERATOR with a before/after comparison showing nothing changed; assayer horizontal isolation on work, acceptance and bank details; tenant isolation 39/39 |
+| Reliability | `END-TO-END TESTED` · `DATABASE VERIFIED` | 25/25 — duplicate outbox delivery yields one payable; worker stopped, event undelivered, worker started, event delivered; a refused approval unwinds completely; the schedule reconciler proven on a real Bull queue by deleting its repeat key and watching it recover and fire |
+| Migration path | `END-TO-END TESTED` | `verify:migrations` from `template0`: 79 migrations, 94 tables, second run a no-op; the full provisioning path re-run from destroyed volumes, first attempt, no manual steps; the transition exercised on a populated pre-split database with a witness audit row that survived |
+| UI / usability | `BROWSER TESTED` | Three roles across eight screens, per-role landing, refresh discipline, 375px responsive, cross-screen figures reconciled. AUDITOR and DEVELOPER not driven; one mutation exercised under refresh discipline, not all |
+| Management figures | `BROWSER TESTED` · `REAL API TESTED` · `DATABASE VERIFIED` | Independent SQL, the API and the browser agree to the rupee: unbilled ₹31,320, paid out ₹21,600, GST ₹5,220, revenue ex-GST ₹29,000 |
+| Production environment | `NOT EXERCISED` | No route from this machine to either deployment |
+
+## Final regression — exact numbers
+
+Run clean at the end, nothing disabled, no `--forceExit`, no `retryTimes`, no raised timeouts
+outside the `.db.spec.ts` files that talk to a real database.
+
+| gate | result |
+|---|---|
+| `tsc --noEmit` backend / frontend / mobile | clean, clean, clean |
+| lint backend / frontend | 0 errors, 0 errors |
+| backend suite | **310 suites, 4,382 tests, all pass** |
+| frontend suite | **83 suites, 1,031 tests, all pass** |
+| shared suite | **10 suites, 413 tests, all pass** |
+| mobile suite | **23 suites, 263 tests, all pass** |
+| production builds | `build:backend` and `build:frontend` both succeed |
+| `npm run verify:migrations` | 79 migrations, 94 tables, second run a no-op |
+| `npm run verify:runtime-role` | **87/87** across two provisioning shapes |
+
+**Totals: 426 suites, 6,089 tests.** Live evidence on top of that: final business scenario 29/29,
+authorization and audit 20/20, reliability 25/25, lifecycle bypass 32/32, lifecycle certification
+150/150, tenant isolation 39/39, business loop 25/25, adversarial guard mutations 3/3.
+
+## Remaining findings — classified
+
+Every remaining item, with a disposition. Nothing here is called a product decision to avoid
+calling it an engineering problem.
+
+| ID | Severity | Disposition | Why |
+|---|---|---|---|
+| AC-F21 | HIGH | **FIX before go-live** | Nobody holds DEVELOPER; six controllers answer to it alone, including the outbox dead-letter queue that would show a stalled cron. Proven there is no workaround: a custom role with all three platform SYSTEM grants is still refused, because those controllers are `@RoleOnly()`. The action is to create the account, not to widen the boundary |
+| AC-F05 | LOW | **ACCEPT** | `clamav/clamav` publishes no arm64 image at any tag. Recorded in the compose file. No effect on an x86 host; on arm64 it needs an explicit `platform` override. Forcing emulation in production has a real cost and is not a default to set silently |
+| AC-F08 | LOW | **DEFER** | The distance-ceiling override accepts a short justification where the eligibility override demands ten characters. The decision is still audited and attributable; the inconsistency is cosmetic against the audit trail |
+| AC-F10 | MEDIUM | **DEFER** | A bulk lifecycle walk can commit its first hop and refuse the second, reporting only the failure. Real, and worth fixing — but it needs a two-hop path with a reason gate in the middle, the operator sees the person's actual state on the roster immediately afterwards, and no money or authorization depends on it |
+| AC-F11 | MEDIUM | **DEFER** | Archiving a person cancels their open assignments with no per-assignment audit row; only the aggregate `ASSAYER_DELETED` exists. The cancellation itself is correct and the aggregate names the actor and the reason. The gap is traceability from the assignment's side |
+| AC-F12 | LOW | **NOT APPLICABLE** | `STRICTLY_NON_OVERRIDABLE_STANDINGS` names `EXPIRED` and `SUSPENDED`, which the enum and the CHECK constraint do not define. No protection is lost — every reachable standing is covered — and the strings are unreachable |
+| AC-F13 | LOW | **DEFER** (test quality) | `billing-overview-region-scope.db.spec.ts` asserts absolute amounts in the region it calls empty and fails when anything else books money there. It fails safe and loudly; it is a test-suite robustness item |
+| AC-F19 | LOW | **DEFER** | Google Fonts violate the `font-src` CSP, which is report-only. Fonts load today. It becomes a real item the day CSP moves to enforce, and that move is its own piece of work |
+| AC-F23 | LOW | **ACCEPT** | Dead-lettering could not be driven from outside the process because no reachable subscriber throws on a malformed payload. It is covered by unit tests and by the previous record's replay evidence |
+| Mobile client | — | **DEFER, owned** | Not exercisable on this machine. Needs a current dev-client build and a device or emulator. The API contract beneath it is proven |
+| Production environment | — | **FIX before go-live, owned** | The environment checklist must be run by somebody with access, and both repair migrations must reach it |
+
+Everything else raised by this campaign is closed: 15 of the 27 findings are fixed and verified,
+including both blockers and every item touching money, lifecycle, authorization, audit or
+deployment startup.
+
+## The full findings ledger
+
 
 Full detail, with reproductions, in the campaign findings ledger. Severity per §20.
 
@@ -138,38 +223,10 @@ podman and homeserver paths; the orphaned-endpoint list in `integration-audit-ha
 
 ---
 
-## Evidence summary
-
-| Suite / probe | Result |
-|---|---|
-| Backend unit | 306 suites, **4341 tests**, all pass |
-| Shared | 10 suites, **413 tests**, all pass |
-| Frontend | 82 suites, **1012 tests**, all pass |
-| Lint | backend and frontend both 0 errors |
-| Backend `.db.spec.ts`, self-contained | 6 suites, **92 tests**, all pass against the rig. On a later re-run 241/242 — the one failure is AC-F13, this campaign's own fixture money landing in the region that suite calls empty |
-| `assayer-lifecycle-certification.db.spec.ts` | **150/150** — first time run in this working copy |
-| Core business loop (E2E + SoD + money) | **25/25** |
-| Authorization, isolation, audit defences | **20/20** |
-| Lifecycle bypass, bulk and empanelment probes | **32/32** (`scripts/acceptance/lifecycle-bypass.mjs`) |
-| `npm run verify:migrations` | 79 migrations, 94 tables, second run a no-op, all named constraints present |
-| Runtime-role assertions at boot | 10/10 |
-| `npm run verify:runtime-role`, disposable database | **87/87** across two provisioning shapes |
-| Typecheck | backend, frontend, mobile — all clean |
-| Adversarial guard checks | 3/3 — each control removed in source, its test observed going red, the file restored and checksum-verified |
-| Browser pass | 3 roles, 8 screens, refresh discipline, 375px responsive — 4 defects found |
-| Reliability, outbox and worker probes | **25/25** (`scripts/acceptance/reliability.mjs`) |
-| Tenant isolation (`assayer-tenant-isolation.db.spec.ts`) | **38/39** — run for the first time; the one failure is the suite's own invalid enum value |
-| Browser re-verification of the front-door fixes | site root → role home with real content; sign-out leaks nothing; next persona lands on its own home; desk-entry tiles resolve |
-| Malware scanning | EICAR refused (400, `Rejected infected upload: Eicar-Test-Signature`); a clean PDF accepted (201) |
-| Deployment path, from empty volumes | Exercised; failed three times before succeeding (AC-F01/02/03) |
-
-The last two are checked in as `scripts/acceptance/business-loop.mjs` and
-`scripts/acceptance/authorization-and-audit.mjs`, with a README covering how to run them and the
-two environment traps that will otherwise waste an afternoon. Both are idempotent — the business
-loop cancels its own leftovers through the product rather than deleting them, and every
-destructive audit probe runs inside a transaction that is always rolled back.
 
 ---
+
+# Appendix — how each of these was proven
 
 ## The deployment's own refusals, observed
 
@@ -289,15 +346,6 @@ payables appear under `attention` as `UNSETTLED_FEE` — *"Booked from the propo
 ever agreed."* That is exactly right for how these were created, and it is the difference between
 a dashboard that reports and one that explains.
 
-## Where this work sits
-
-Everything is committed on `test` and **deliberately not pushed**. `origin/test` is 17 commits
-behind, and those commits include another session's deployment overhaul as well as this
-campaign's evidence. Pushing that branch triggers CI and the AWS box's auto-deploy, and that box
-has an unresolved data-loss incident from 5 September; sequencing a deployment-path change onto it
-is a decision for whoever owns that box, not a side effect of finishing an acceptance run. The
-tree is green at every commit, so pushing is a decision and not a repair.
-
 ## What was not tested, and why
 
 - **The browser pass covered three roles and one mutation, not all of either.** ADMIN, OPERATIONS
@@ -330,15 +378,7 @@ tree is green at every commit, so pushing is a decision and not a repair.
   default (300 requests/minute per IP) was observed working — it refused the suite with 429 before
   it was raised — but the production value was not otherwise exercised.
 
-## What is intentionally deferred
+---
 
-The eight findings above are the campaign's own; the carried-forward list is unchanged from the
-previous record and none of it was re-litigated. AC-F01 through AC-F03 must close before a new
-installation is attempted. AC-F04, AC-F06 and AC-F07 should close in the same pass, because each
-of them independently stops a fresh install from reaching a usable state. AC-F05 and AC-F08 are
-genuinely low-risk and can wait.
-
-The single most valuable thing the next session can do is close AC-F14, AC-F15 and AC-F16. None
-of them corrupts anything, and all three are the first thing a real user meets: a blank screen on
-the way in, the wrong landing page after a shift change, and a desk operator whose own home page
-never finishes loading.
+*Everything in this report was produced on a purpose-built acceptance rig on 10 September 2026.
+No deployed system was touched. Nothing here is a statement about live production data.*
