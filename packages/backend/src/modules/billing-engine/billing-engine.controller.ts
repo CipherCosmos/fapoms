@@ -248,7 +248,22 @@ export class BillingEngineController {
   }
 
   @Get('assayers/:assayerId/statement')
-  @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
+  /**
+   * `BILLING_READ_ROLES`, like every other read on this controller — this was the one that
+   * still said `BILLING_ROLES`, and so the one that left the auditor out.
+   *
+   * The cost, reproduced in a browser: an AUDITOR opens `/billing`, follows the ungated
+   * "Assayer statements →" link, gets a picker filled with the whole roster (`GET /assayers`
+   * answers 200 for them), chooses somebody — and the page renders **nothing at all**. No error,
+   * no empty state. A blank money screen for an auditor is not a broken page; it reads as
+   * "this person has never been paid anything."
+   *
+   * `billing-roles.ts` already decided this exact question for the export route: "the auditor
+   * could read every billing figure on screen and got a 403 the moment they pressed Export, on a
+   * button the page rendered for them unconditionally. Auditing is a reading job, and an export
+   * is a read." A statement is a read too.
+   */
+  @Roles(...BILLING_READ_ROLES, SystemRole.ASSAYER)
   // Deliberately no @RequirePermissions: an assayer authenticates from the `assayers` table and
   // holds no permission rows at all, so any declaration here would be checked against an empty
   // set and lock the field app out of its own earnings screen. Custom roles reach this route by
@@ -257,7 +272,14 @@ export class BillingEngineController {
   async assayerStatement(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // An assayer may read only their own statement; the path id is attacker-controlled.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
-    const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
+    /**
+     * Read against the same list the gate uses, not the narrower one.
+     *
+     * Widening only the decorator would have admitted the auditor and then refused them here with
+     * "You may only view your own statement" — a worse answer than the 403 it replaced, because
+     * it accuses. An auditor reads the full book by definition; that is what auditing is.
+     */
+    const isBillingStaff = roles.some((r) => (BILLING_READ_ROLES as string[]).includes(r));
     if (!isBillingStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only view your own statement.');
     }
