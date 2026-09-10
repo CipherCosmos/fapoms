@@ -137,7 +137,6 @@ async function main() {
   // reason that has nothing to do with the migration. The deployed image provides these.
   await withClient(scratch, async (c) => {
     await c.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
-    await c.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
   });
 
   console.log('→ first run: building the schema from nothing');
