@@ -20,7 +20,7 @@ import { ProjectEntity } from '../../modules/project/project.entity';
 import { ProjectBranchEntity } from '../../modules/project/project-branch.entity';
 import { HolidayEntity } from '../../modules/holiday/holiday.entity';
 import { ValidationCaseEntity } from '../../modules/validation/validation-case.entity';
-import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority } from '@fapoms/shared';
+import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority, Region } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
 
 /**
@@ -1190,7 +1190,7 @@ async function seed() {
           pincode: '411001',
           latitude: 18.5204,
           longitude: 73.8567,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Maharashtra West',
           branchType: 'MAIN',
           riskScore: 2.5,
@@ -1215,7 +1215,7 @@ async function seed() {
           pincode: '400001',
           latitude: 18.9696,
           longitude: 72.8240,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Mumbai Metro',
           branchType: 'MAIN',
           riskScore: 3.0,
@@ -1239,7 +1239,7 @@ async function seed() {
           pincode: '560001',
           latitude: 12.9716,
           longitude: 77.5946,
-          region: 'South',
+          region: Region.SOUTH,
           territory: 'Karnataka South',
           branchType: 'MAIN',
           riskScore: 2.0,
@@ -1263,7 +1263,7 @@ async function seed() {
           pincode: '411007',
           latitude: 18.5580,
           longitude: 73.8075,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Maharashtra West',
           branchType: 'SUB',
           riskScore: 1.5,
@@ -1287,7 +1287,7 @@ async function seed() {
           pincode: '411006',
           latitude: 18.5529,
           longitude: 73.8796,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Maharashtra West',
           branchType: 'SUB',
           riskScore: 2.0,
@@ -1311,7 +1311,7 @@ async function seed() {
           pincode: '411057',
           latitude: 18.5912,
           longitude: 73.7389,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Maharashtra West',
           branchType: 'SUB',
           riskScore: 1.0,
@@ -1335,7 +1335,7 @@ async function seed() {
           pincode: '411001',
           latitude: 18.5362,
           longitude: 73.8930,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Maharashtra West',
           branchType: 'SUB',
           riskScore: 1.5,
@@ -1359,7 +1359,7 @@ async function seed() {
           pincode: '422001',
           latitude: 20.0063,
           longitude: 73.7902,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Maharashtra North',
           branchType: 'MAIN',
           riskScore: 2.5,
@@ -1383,7 +1383,7 @@ async function seed() {
           pincode: '422005',
           latitude: 20.0140,
           longitude: 73.7700,
-          region: 'West',
+          region: Region.WEST,
           territory: 'Maharashtra North',
           branchType: 'SUB',
           riskScore: 1.5,
@@ -1407,7 +1407,7 @@ async function seed() {
           pincode: '440012',
           latitude: 21.1458,
           longitude: 79.0882,
-          region: 'Central',
+          region: Region.CENTRAL,
           territory: 'Maharashtra Central',
           branchType: 'MAIN',
           riskScore: 3.0,

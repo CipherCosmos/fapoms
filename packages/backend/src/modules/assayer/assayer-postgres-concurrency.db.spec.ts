@@ -460,6 +460,10 @@ describe('Phase 3 — Real PostgreSQL Concurrency Race Test Suite (Races A–F)'
           // Controlled synchronization point: T1 holds FOR UPDATE on payable and FOR SHARE on assayer
           await barrier.waitToProceed('T1');
 
+          // The source is named because the row is otherwise a verification claim with nothing
+          // behind it, and chk_assayer_payables_destination_evidence refuses that. `versionId`
+          // here is a VERIFIED bank passbook version, which is what makes BANK_PASSBOOK the
+          // honest answer — the same rung `resolvePayoutDestination` picks for this assayer.
           await c.query(
             `UPDATE assayer_payables SET
                status = 'APPROVED',
@@ -469,6 +473,7 @@ describe('Phase 3 — Real PostgreSQL Concurrency Race Test Suite (Races A–F)'
                destination_account_holder_name = $4,
                payout_evidence_version_id = $5,
                destination_verified_at = now(),
+               destination_verified_source = 'BANK_PASSBOOK',
                updated_at = now()
              WHERE id = $6`,
             [
@@ -727,9 +732,13 @@ describe('Phase 3 — Real PostgreSQL Concurrency Race Test Suite (Races A–F)'
           // Synchronization barrier: T2 has acquired row lock to upload superseding version
           await barrier.waitToProceed('T2');
 
+          // A real 64-hex digest, not a placeholder: `chk_assayer_document_versions_sha256`
+          // requires the column to look like a SHA-256, and 'hash-v2-sha256' was refused. The
+          // race under test is about ordering, so any valid digest serves — but an invalid one
+          // fails the INSERT and the race never runs at all.
           await c.query(
             `INSERT INTO assayer_document_versions (id, document_id, assayer_id, requirement, version, file_path, content_sha256, storage_object_id, verification_status, uploaded_at)
-             VALUES ($1, $2, $3, 'PAN_CARD', 2, '/docs/pan_v2.pdf', 'hash-v2-sha256', 's3://bucket/pan_v2.pdf', 'PENDING', now())`,
+             VALUES ($1, $2, $3, 'PAN_CARD', 2, '/docs/pan_v2.pdf', '3d406990cfce20a5c1e43c4f905ec1ddf53c5437f40d9e4d35102e9c80bc503f', 's3://bucket/pan_v2.pdf', 'PENDING', now())`,
             [v2Id, docId, assayerId],
           );
           await c.query(

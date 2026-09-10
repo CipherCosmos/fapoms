@@ -33,7 +33,7 @@ import {
  * treats NULL as satisfied. Reading the constraint did not show that. Inserting the row did.
  */
 describe('payout destination evidence, against the real constraints', () => {
-  jest.setTimeout(120000);
+  jest.setTimeout(60000);
 
   const CHECK_VIOLATION = '23514';
   let ds: DataSource;
