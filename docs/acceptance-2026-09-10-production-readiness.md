@@ -94,12 +94,12 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F17 | MEDIUM | **The navigation offers a page the API refuses.** `/documents` is listed for DESK_OPERATOR in `route-permissions.ts`, so the sidebar renders the link, but `GET /documents/operations/overview` answers 403 and the page shows a permission error with a Retry button that will fail identically forever. The message is honest; the link should not be there | Open |
 | AC-F18 | MEDIUM | **A role-scoped dashboard states a global fact that is false.** As DESK_OPERATOR the dashboard reads *"Nothing blocked. No audits at risk, no paperwork waiting, nothing unbilled."* while ₹5,400 was unbilled and the admin dashboard said so. The scoped view is defensible; the sentence is not | Open |
 | AC-F19 | LOW | Every Google Fonts file violates the `font-src 'self' data:` CSP. The policy is report-only so fonts load today, but switching CSP to enforce breaks the app's webfonts | Open |
-| AC-F20 | **HIGH** | **Every scheduled job can stop for ever, and nothing notices.** Observed on this healthy deployment: all seven cron schedules registered at 06:42, audit-seal fired once, then **nothing for nine minutes** — while the worker stayed `healthy`, `/health` said `ok`, ordinary Bull jobs kept succeeding, and no error was logged. Measured consequences: a due outbox row undispatched for 181 s across three tick boundaries, and 134 audit events left unsealed (`audit_events` 154 vs `audit_chain` 20). Redis held zero `bull:*:repeat` keys for all seven queues. Proven in isolation on a throwaway queue: delete the repeat key and the schedule fires 0 more times, keys are never recreated, 0 errors emitted. `repeatable-schedules.ts` converges once at `onModuleInit` and never re-verifies; Bull only schedules the next firing if the repeat ZSET member still exists, and a miss returns silently. Only a process restart recovers it — which restored all seven and let the seal catch up to 155/155. **Because the outbox books payables, completed work can silently stop turning into money** | Open |
+| AC-F20 | **HIGH** | **FIXED AND VERIFIED.** A reconciler now re-converges the schedules on a plain `setInterval` (`SCHEDULE_RECONCILE_MS`, default 300 s), deliberately not a Bull repeatable. Proven on a real queue at the shipped default, nothing mocked: repeat key deleted → the seeded row stayed undispatched for 120 s across two full one-minute ticks (so the schedule was genuinely dead, not merely keyless) → key restored at 07:41:50 → **the row actually dispatched at 07:42:00**. Recovery is real end to end, not just re-registration. Originally: **every scheduled job could stop for ever, and nothing noticed.** Observed on this healthy deployment: all seven cron schedules registered at 06:42, audit-seal fired once, then **nothing for nine minutes** — while the worker stayed `healthy`, `/health` said `ok`, ordinary Bull jobs kept succeeding, and no error was logged. Measured consequences: a due outbox row undispatched for 181 s across three tick boundaries, and 134 audit events left unsealed (`audit_events` 154 vs `audit_chain` 20). Redis held zero `bull:*:repeat` keys for all seven queues. Proven in isolation on a throwaway queue: delete the repeat key and the schedule fires 0 more times, keys are never recreated, 0 errors emitted. `repeatable-schedules.ts` converges once at `onModuleInit` and never re-verifies; Bull only schedules the next firing if the repeat ZSET member still exists, and a miss returns silently. Only a process restart recovers it — which restored all seven and let the seal catch up to 155/155. **Because the outbox books payables, completed work can silently stop turning into money** | Open |
 | AC-F21 | MEDIUM | **Nobody on this deployment can see the backlog.** `GET /admin/outbox/health` and the dead-letter queue are `@Roles(DEVELOPER)`, and the deployment has **zero active DEVELOPER accounts**. The Prometheus gauge `queue_depth{queue="outbox",state="delayed"}` is exported, but a dead cron is indistinguishable from an idle queue without an alert on "delayed ≥ 1", and no such alert exists. AC-F20 was therefore invisible from every surface an operator has | Open |
-| AC-F22 | MEDIUM | **Delivery to nobody is recorded as delivery.** An event whose name no subscriber handles is marked `dispatched_at` with `attempts = 0` — `deliverLocallyAsync` iterates an empty listener array and returns. A renamed or deleted subscriber discards events silently and the dead-letter queue never learns of them | Open |
+| AC-F22 | MEDIUM | **Delivery to nobody is recorded as delivery — a fix was attempted and is inert.** The relay now throws when `publishAsync` returns `0` handlers, but the count is `list.length + globalCallbacks.length`, and `events.gateway.ts:79` registers one global callback for the life of the process. So the count is ≥ 1 for every event name that will ever exist and `handled === 0` is unreachable. Verified after the fix: an event with genuinely no subscriber, seeded post-rebuild, was still marked `dispatched_at` with `attempts = 0`, and the process has never logged the "no subscriber" warning. The unit tests pass because a mocked publisher returns 0. The count the guard wants is the named-listener count, excluding catch-alls | Open, reported |
 | AC-F23 | LOW | Dead-lettering could not be exercised from outside the process: no reachable subscriber throws on a malformed payload, so `attempts` climbing to `failed_at` remains unverified on a live deployment (it is covered by unit tests and by the previous record's replay evidence) | Open |
 | AC-F24 | LOW | Provisioning **asserts** rather than verifies the role passwords — `ALTER ROLE … PASSWORD <supplied>` runs every time — so a mistyped `FAPOMS_MIGRATION_PASSWORD` succeeds and silently rotates the deploy credential. Verified: after passing a deliberately wrong value, `fapoms_migrator` accepted it and refused the real one. Documented as intentional in `role-model.ts`; worth a warning when the role already exists | Open (by design) |
-| AC-F25 | LOW | `STARTUP_CHECKS_STRICT=true` against a provisioned-but-not-hardened database refuses the boot, but on `permission denied for table geo_states` rather than on the runtime-identity checks: `GeoSeedService.onModuleInit` runs before `StartupChecksService.onApplicationBootstrap`. Fail-closed is preserved; the operator is told the wrong thing about why | Open |
+| AC-F25 | LOW | **FIXED AND VERIFIED.** The identity assertions now run on their own connection before `NestFactory.create`, so they are the first thing to touch the database. Re-verified against a freshly built `bootstrap migrate`-only database: *"FATAL: the database this application is connecting to has not been hardened … Run `npm run db:harden` against it"*, and not one word about `geo_states`. Originally the boot failed closed but blamed a geo table, because `GeoSeedService.onModuleInit` ran before `StartupChecksService.onApplicationBootstrap` | Closed |
 
 ### The clean-install run
 
@@ -193,6 +193,26 @@ database provisioned with `bootstrap migrate` and no `harden` refuses the boot w
 `onApplicationBootstrap`, where `StartupChecksService` lives — so the check written to catch a
 skipped hardening step is pre-empted by an ordinary query failing on the grants that step would
 have made. The safety property holds; the diagnosis does not (AC-F25).
+
+## The transition onto an existing deployment
+
+The role split's adoption path was exercised on a **populated pre-split database built
+independently** — created owned by the old `fapoms` superuser, migrated the old way through
+`npm run migration:run` rather than through provisioning, seeded, and given an audit row written
+before the transition so there was a witness to lose.
+
+| | before | after |
+|---|---|---|
+| users / branches / assayers | 5 / 10 / 8 | 5 / 10 / 8 |
+| audit rows | 1 | 1, and the witness still reads *"written as the old superuser, before the role split"* |
+| database owner | `fapoms` | `fapoms_migrator` |
+| `audit_events` owner | `fapoms` | `fapoms_audit_owner` (cannot log in) |
+| `users` owner | `fapoms` | `fapoms_migrator` |
+
+Afterwards, as `fapoms_runtime` on that same transitioned database: `UPDATE audit_events` and
+`DELETE FROM audit_events` refused for want of privilege, `ALTER TABLE … DISABLE TRIGGER` refused
+with *"must be owner"*, ordinary reads working, and append still allowed. No row was touched by
+the transition.
 
 ## The management figures reconcile
 
