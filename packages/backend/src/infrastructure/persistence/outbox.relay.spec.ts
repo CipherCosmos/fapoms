@@ -1,5 +1,5 @@
 import { Repository } from 'typeorm';
-import { OutboxRelay } from './outbox.relay';
+import { OutboxRelay, MAX_ATTEMPTS } from './outbox.relay';
 import { OutboxEntity } from './outbox.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../cache/cache.service';
@@ -55,6 +55,67 @@ describe('OutboxRelay', () => {
     } as unknown as CacheService;
 
     relay = new OutboxRelay(outbox, publisher, cache);
+  });
+
+  /**
+   * A subscriber that is not there is not a delivery.
+   *
+   * `publishAsync` resolves happily over an empty listener array, and the relay used to count that
+   * as success and stamp `dispatched_at`. A renamed or unregistered subscriber therefore discarded
+   * every event of that name for ever — no error, no retry, and nothing in the dead-letter queue
+   * to say so. For `assignment:status-changed` that is a payable never booked.
+   *
+   * The default double above has no `publishAsync` at all, which is why the rest of this file
+   * exercises the synchronous branch and never saw this.
+   */
+  describe('an event nothing is listening for', () => {
+    const withAsyncPublisher = (handled: number) => {
+      (publisher as unknown as { publishAsync: unknown }).publishAsync = jest.fn(
+        async (event: string, payload: any) => {
+          published.push({ event, payload });
+          return handled;
+        },
+      );
+    };
+
+    it('is not marked dispatched, and retries', async () => {
+      due = [row({ id: 'e1', eventName: 'assignment:status-changed' })];
+      withAsyncPublisher(0);
+
+      await relay.drain();
+
+      // It went out — the publisher was called — but nothing received it.
+      expect(published).toHaveLength(1);
+      const dispatch = updates.find((u) => u.patch?.dispatchedAt);
+      expect(dispatch).toBeUndefined();
+      const failure = updates.find((u) => u.id === 'e1' && u.patch?.lastError);
+      expect(failure).toBeDefined();
+      expect(failure!.patch.attempts).toBe(1);
+      expect(failure!.patch.lastError).toMatch(/no subscriber is registered/i);
+      expect(failure!.patch.lastError).toContain('assignment:status-changed');
+    });
+
+    it('dead-letters once it runs out of retries, so a person can see it', async () => {
+      // The whole point of refusing to call it delivered: it ends up somewhere visible rather
+      // than nowhere at all.
+      due = [row({ id: 'e1', eventName: 'assignment:status-changed', attempts: MAX_ATTEMPTS - 1 })];
+      withAsyncPublisher(0);
+
+      await relay.drain();
+
+      const failure = updates.find((u) => u.id === 'e1')!;
+      expect(failure.patch.failedAt).toBeInstanceOf(Date);
+    });
+
+    it('still dispatches normally when somebody is listening', async () => {
+      due = [row({ id: 'e1', eventName: 'assignment:status-changed' })];
+      withAsyncPublisher(1);
+
+      await relay.drain();
+
+      expect(updates.find((u) => u.patch?.lastError)).toBeUndefined();
+      expect(updates.find((u) => u.patch?.dispatchedAt)).toBeDefined();
+    });
   });
 
   describe('what it claims', () => {

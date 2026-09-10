@@ -34,7 +34,7 @@ import {
 } from './infrastructure/queue/worker-concurrency';
 import { DataSource } from 'typeorm';
 import { ROLE_PERMISSIONS } from './modules/auth/role-permissions';
-import { MIGRATION_ROLE, RUNTIME_ROLE } from './infrastructure/database/roles/role-model';
+import { MIGRATION_ROLE, RUNTIME_ROLE, RUNTIME_ASSERTIONS } from './infrastructure/database/roles/role-model';
 
 /**
  * Configuration that must never reach production, checked before anything connects.
@@ -242,8 +242,76 @@ async function warnOnRoleGrantDrift(app: any, logger: Logger): Promise<void> {
   }
 }
 
+/**
+ * Ask the database what this connection can do, BEFORE Nest builds anything.
+ *
+ * `StartupChecksService` already runs this list, and on the one database it was written for it
+ * never gets to speak. It lives in `onApplicationBootstrap`, and Nest runs every `onModuleInit`
+ * first — so against a provisioned-but-unhardened database `GeoSeedService` queries `geo_states`,
+ * dies on the grants `db:harden` would have created, and the operator is told a geo table is
+ * unreadable. Fail-closed survived; the diagnosis did not.
+ *
+ * So the same list runs here, on its own connection, before `NestFactory.create`. It is the first
+ * thing to touch the database and therefore the first thing that can explain it.
+ *
+ * Fatal only where the answer means something: in production, or under `STARTUP_CHECKS_STRICT`.
+ * A developer running against a single-role database gets one warning and their application.
+ */
+async function assertDatabaseIdentity(): Promise<void> {
+  const strict = process.env.NODE_ENV === 'production' || process.env.STARTUP_CHECKS_STRICT === 'true';
+  // Nothing to check before the roles exist. A developer on one role is not a misconfiguration.
+  if (!strict && process.env.DB_USERNAME !== RUNTIME_ROLE) return;
+
+  const ds = new DataSource({
+    type: 'postgres',
+    host: process.env.DB_HOST || 'localhost',
+    port: Number(process.env.DB_PORT || 5432),
+    username: process.env.DB_USERNAME,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE || 'fapoms',
+    entities: [],
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  });
+
+  const failures: string[] = [];
+  try {
+    await ds.initialize();
+    for (const { what, sql } of RUNTIME_ASSERTIONS) {
+      const rows = await ds.query(sql);
+      if (rows?.[0]?.ok !== true) failures.push(what);
+    }
+  } catch (err) {
+    // Cannot reach the database, or cannot read its catalogue. Not this check's job to decide
+    // whether that is fatal — TypeORM is about to say so far more precisely.
+    console.warn(`[startup] could not determine the database identity: ${(err as Error).message}`);
+    return;
+  } finally {
+    if (ds.isInitialized) await ds.destroy().catch(() => undefined);
+  }
+
+  if (failures.length === 0) return;
+
+  const detail = failures.map((f) => `  - ${f}`).join('\n');
+  if (!strict) {
+    console.warn(
+      `[startup] this database has not been hardened:\n${detail}\n`
+      + '  Run `npm run db:harden`. Continuing because this is not production.',
+    );
+    return;
+  }
+
+  console.error(
+    `FATAL: the database this application is connecting to has not been hardened.\n${detail}\n\n`
+    + '  Run `npm run db:harden` against it, and check DB_USERNAME is the runtime role.\n'
+    + '  See docs/database-roles.md. Refusing to start: an unhardened database is not a reduced\n'
+    + '  deployment, it is one where the application credential can remove the audit triggers.',
+  );
+  process.exit(1);
+}
+
 async function bootstrap() {
   assertProductionSafeConfig();
+  await assertDatabaseIdentity();
 
   const app = await NestFactory.create(AppModule, { bufferLogs: false });
   const logger = new Logger('Bootstrap');

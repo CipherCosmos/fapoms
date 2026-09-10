@@ -150,14 +150,20 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
    * publishAsync rethrows so the UnitOfWork fast-path or OutboxRelay does NOT mark the outbox record
    * as dispatched!
    */
-  async publishAsync(eventName: string, payload: any): Promise<void> {
-    await this.deliverLocallyAsync(eventName, payload);
+  async publishAsync(eventName: string, payload: any): Promise<number> {
+    const handled = await this.deliverLocallyAsync(eventName, payload);
 
-    if (!this.redisClient) return;
+    if (!this.redisClient) return handled;
     const envelope: EventEnvelope = { originId: this.originId, eventName, payload };
     this.redisClient.publish(CHANNEL, JSON.stringify(envelope)).catch((err: any) => {
       this.logger.warn(`Could not publish ${eventName} to ${CHANNEL}: ${err?.message}`);
     });
+    return handled;
+  }
+
+  /** How many local handlers an event name would reach right now. Zero means nobody is listening. */
+  subscriberCount(eventName: string): number {
+    return (this.listeners[eventName] || []).length + this.globalCallbacks.length;
   }
 
   /**
@@ -173,8 +179,16 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** The listener/global-callback fan-out with Promise awaiting. Rethrows subscriber errors. */
-  private async deliverLocallyAsync(eventName: string, payload: any): Promise<void> {
+  /**
+   * The listener/global-callback fan-out with Promise awaiting. Rethrows subscriber errors.
+   *
+   * Returns HOW MANY handlers ran, which the outbox relay needs and used not to have. With no
+   * subscriber registered for an event name this resolves happily over an empty array, the relay
+   * counted that as a delivery and set `dispatched_at` — so a renamed or unregistered subscriber
+   * discarded every event of that name in silence, and the dead-letter queue never learned there
+   * was anything to learn. "Nothing threw" and "somebody received it" are different facts.
+   */
+  private async deliverLocallyAsync(eventName: string, payload: any): Promise<number> {
     const list = this.listeners[eventName] || [];
     for (const cb of list) {
       await cb(payload);
@@ -183,6 +197,7 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     for (const cb of this.globalCallbacks) {
       await cb(eventName, payload);
     }
+    return list.length + this.globalCallbacks.length;
   }
 
   /** The listener/global-callback fan-out. Shared by a local publish() and a remote message. */

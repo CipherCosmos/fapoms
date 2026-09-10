@@ -58,14 +58,42 @@ export interface WantedSchedule {
  *
  * Bull dedupes a repeatable job by (name, cron, tz), so N replicas registering the same schedule
  * produce one schedule. Removing a stale one on two replicas at once is a no-op on the second.
+ *
+ * ## Why it keeps checking
+ *
+ * Converging once at boot is not enough, and the gap is silent. Bull schedules the NEXT firing of
+ * a repeatable only while its `bull:<queue>:repeat` member still exists; if that key goes — a
+ * Redis restart without persistence, an eviction, somebody's `FLUSHALL` — the job simply stops
+ * firing and Bull reports nothing, because from its point of view there is no schedule to run.
+ *
+ * Observed on a real deployment: nine minutes with no cron of any kind. `audit-seal` fired once
+ * and stopped, the outbox sat undispatched across three tick boundaries, 134 audit events went
+ * unsealed — while `/health` said ok, the worker stayed healthy, ordinary Bull jobs kept
+ * succeeding and nothing was logged. Reproduced in isolation on a throwaway queue: drop the
+ * repeat key, and there are zero further firings, for ever, with no error. Only a restart
+ * recovered it.
+ *
+ * The outbox is what books payables, so "the cron stopped and nobody noticed" is money quietly
+ * not being booked.
+ *
+ * So the convergence repeats on a plain `setInterval`. Deliberately NOT a Bull repeatable itself:
+ * a scheduled job that checks whether scheduled jobs are running dies of the same illness it is
+ * meant to detect. And every re-convergence that has to RE-ADD something says so at warn level,
+ * because self-healing in silence is how a recurring fault becomes invisible.
  */
 export function ensureRepeatableSchedules(
   queue: Queue,
   wanted: WantedSchedule[],
   logger: Logger,
-  opts: { retryDelaysMs?: number[] } = {},
+  opts: { retryDelaysMs?: number[]; reconcileIntervalMs?: number } = {},
 ): void {
   const delays = opts.retryDelaysMs ?? [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+  /**
+   * Five minutes: short enough that the worst case is one missed tick of the most frequent
+   * schedule plus the interval, long enough that a `getRepeatableJobs` per queue is nothing.
+   * `0` disables it, which is what the unit tests use — they assert one convergence, not a timer.
+   */
+  const reconcileEvery = opts.reconcileIntervalMs ?? Number(process.env.SCHEDULE_RECONCILE_MS ?? 300_000);
 
   const attempt = async (n: number): Promise<void> => {
     try {
@@ -83,6 +111,42 @@ export function ensureRepeatableSchedules(
   };
 
   void attempt(0);
+
+  if (reconcileEvery > 0) {
+    const timer = setInterval(() => {
+      void reconcile(queue, wanted, logger);
+    }, reconcileEvery);
+    // Never keep the process alive just to re-check a cron registration.
+    timer.unref?.();
+  }
+}
+
+/**
+ * Re-check, and say something only when there was something to say.
+ *
+ * A quiet pass must stay quiet — this runs every five minutes on every queue, and a log line per
+ * pass would bury the one that matters. A pass that finds a wanted schedule MISSING is the
+ * opposite: that is the failure this exists for, and it is reported at warn level with the queue
+ * and the job named, whether or not the re-add succeeds.
+ */
+async function reconcile(queue: Queue, wanted: WantedSchedule[], logger: Logger): Promise<void> {
+  try {
+    const existing = await queue.getRepeatableJobs();
+    const present = new Set(existing.map((j) => scheduleKey(j.name, (j as { id?: string | null }).id)));
+    const missing = wanted.filter((w) => !present.has(scheduleKey(w.name, w.jobId)));
+    if (missing.length === 0) return;
+
+    logger.warn(
+      `Repeatable schedule(s) had disappeared from queue "${queue.name}" and were not firing: ` +
+        `${missing.map((m) => `${m.name} (${m.cron})`).join(', ')}. Re-registering. ` +
+        'A schedule vanishing from Redis is silent in Bull — nothing else would have reported this.',
+    );
+    await convergeOnce(queue, wanted, logger);
+  } catch (err) {
+    // Never throw out of a timer. Redis being unreachable is already the louder symptom, and the
+    // next pass will try again.
+    logger.warn(`Could not re-check repeatable schedules on queue "${queue.name}": ${(err as Error).message}`);
+  }
 }
 
 /** A schedule's identity: the job name, plus the jobId when one distinguishes it from a sibling. */

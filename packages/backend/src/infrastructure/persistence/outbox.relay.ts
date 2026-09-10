@@ -81,7 +81,26 @@ export class OutboxRelay {
     for (const row of due) {
       try {
         if (typeof this.eventPublisher.publishAsync === 'function') {
-          await this.eventPublisher.publishAsync(row.eventName, row.payload);
+          const handled = await this.eventPublisher.publishAsync(row.eventName, row.payload);
+          /**
+           * Nobody listening is not a delivery.
+           *
+           * `publishAsync` resolves happily over an empty listener array, and this used to count
+           * that as success and stamp `dispatched_at` — so a renamed or unregistered subscriber
+           * discarded every event of that name for ever, with no error, no retry and nothing in
+           * the dead-letter queue. For `assignment:status-changed` that is a payable never booked.
+           *
+           * Throwing puts the row on the ordinary failure path: it retries, and if the subscriber
+           * is genuinely gone it dead-letters and appears in `GET /admin/outbox/dead-letters` for
+           * a person to look at. A dead letter somebody can see beats a silent discard, even when
+           * the event turns out to be one nothing needs to handle.
+           */
+          if (typeof handled === 'number' && handled === 0) {
+            throw new Error(
+              `no subscriber is registered for "${row.eventName}" — the event was not delivered to anything. `
+              + 'Either a subscriber was renamed or removed, or this process does not register one.',
+            );
+          }
         } else {
           this.eventPublisher.publish(row.eventName, row.payload);
         }

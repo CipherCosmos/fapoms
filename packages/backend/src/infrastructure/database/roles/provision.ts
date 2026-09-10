@@ -122,6 +122,42 @@ async function using<T>(ds: DataSource, fn: (ds: DataSource) => Promise<T>): Pro
 }
 
 /**
+ * Can this role sign in with this password right now?
+ *
+ * Its own short-lived connection, because a failed authentication is the answer rather than an
+ * error to propagate. Any failure that is NOT an authentication rejection — the database not
+ * existing yet on a first provision, say — counts as "cannot tell", and the caller stays quiet
+ * rather than warning about a rotation that may not be happening.
+ */
+async function canSignIn(adminUrl: string, database: string, username: string, password: string): Promise<boolean> {
+  // Host and port from the admin URL, credentials from the arguments — NOT `url` plus overrides.
+  // TypeORM lets the URL's own credentials win, so a probe built that way signs in as the admin
+  // every time and cheerfully reports that any password works. It did, and this check silently
+  // never fired.
+  const url = new URL(adminUrl);
+  const probe = new DataSource({
+    type: 'postgres',
+    host: url.hostname,
+    port: Number(url.port || 5432),
+    database,
+    username,
+    password,
+    entities: [],
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  });
+  try {
+    await probe.initialize();
+    return true;
+  } catch (err) {
+    const message = (err as Error).message ?? '';
+    // 28P01 / "password authentication failed" is a real answer. Anything else is not.
+    return !/password authentication failed|28P01/i.test(message);
+  } finally {
+    if (probe.isInitialized) await probe.destroy().catch(() => undefined);
+  }
+}
+
+/**
  * Create the roles, the database and the extensions. The one step needing an administrative login.
  *
  * Re-running sets the passwords again and leaves everything else alone, so a credential rotation
@@ -147,8 +183,38 @@ export async function bootstrapRoles(
     // created, and "permission denied for CREATE ROLE" does not obviously mean "wrong login".
     log(`Connected as ${who[0]?.who} (superuser: ${who[0]?.super === true}).`);
 
+    /**
+     * Say when a password is being CHANGED rather than set.
+     *
+     * `createRolesSql` runs `ALTER ROLE … PASSWORD` on every pass, which is what makes rotation
+     * this script with new secrets rather than hand-written SQL on a production box. The cost is
+     * that the variable declares what the password should be, not what it is: a mistyped or
+     * accidentally-changed `FAPOMS_MIGRATION_PASSWORD` succeeds silently and rotates the deploy
+     * credential, and anything still holding the old one breaks later, a long way from the cause.
+     *
+     * A warning rather than a refusal, deliberately — refusing would break the legitimate case
+     * this behaviour exists for. What it buys is that an unintended rotation is visible in the
+     * deploy log at the moment it happens instead of being inferred from a failure days later.
+     */
+    const known = await ds.query('SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])', [
+      [MIGRATION_ROLE, RUNTIME_ROLE],
+    ]);
+    const existing = new Set((known ?? []).map((r: { rolname: string }) => r.rolname));
+    const rotating: string[] = [];
+    for (const [role, password] of [[MIGRATION_ROLE, migrationPassword], [RUNTIME_ROLE, runtimePassword]] as const) {
+      if (!existing.has(role)) continue;
+      if (!(await canSignIn(adminUrl, target.database, role, password))) rotating.push(role);
+    }
+
     for (const statement of createRolesSql(runtimePassword, migrationPassword)) {
       await ds.query(statement);
+    }
+    if (rotating.length > 0) {
+      log(
+        `! ${rotating.join(' and ')} already existed and did NOT accept the supplied password, so it has ` +
+          'been ROTATED to the value in this environment. If that was not intended, the old secret is ' +
+          'gone and anything still using it will fail: put the previous value back and re-run.',
+      );
     }
     log(`Roles ready: ${MIGRATION_ROLE} (deploy), ${AUDIT_OWNER_ROLE} (owns audit, no login), ${RUNTIME_ROLE} (the app).`);
 
