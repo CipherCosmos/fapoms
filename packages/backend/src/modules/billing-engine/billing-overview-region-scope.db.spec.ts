@@ -65,6 +65,7 @@ describe('billing overview region scoping, reconciled against the real schema', 
     qr = ds.createQueryRunner();
     await qr.connect();
     await qr.startTransaction('REPEATABLE READ');
+    await assertRegionsAreEmpty();
     await seed();
 
     const stagedEnforce: any = { get: async () => 'enforce' };
@@ -87,6 +88,43 @@ describe('billing overview region scoping, reconciled against the real schema', 
     }
     if (ds?.isInitialized) await ds.destroy();
   });
+
+  /**
+   * Refuse to run at all if anything else already has money in region A or B.
+   *
+   * Several cases below assert ABSOLUTE amounts — `receivables.unbilled` is 10800 for region A,
+   * full stop — because a figure built from round thousands is unmistakable in a way a computed
+   * expectation is not. That only holds while this file's fixture is the ONLY thing in those two
+   * regions, which is why CENTRAL and NORTH_EAST were chosen. It is an assumption about the
+   * database, and it was silently untrue the first time somebody put three CENTRAL billing rows
+   * in this database for an unrelated reason: three arithmetic assertions failed with numbers
+   * 47,200 apart, which reads exactly like the region predicate having broken.
+   *
+   * So the assumption is now checked, and a violation says what it is. The reconciliation cases —
+   * the ones that compute their expectation from the same rows — are unaffected either way; it is
+   * only the fixed numbers that need the regions to themselves.
+   */
+  async function assertRegionsAreEmpty(): Promise<void> {
+    const rows = await qr.query(
+      `SELECT b.region, count(*)::int AS n
+         FROM billing_entries e
+         JOIN assignments a ON a.id = e.assignment_id
+         JOIN project_branches pb ON pb.id = a.project_branch_id
+         JOIN branches b ON b.id = pb.branch_id
+        WHERE b.region = ANY($1::text[])
+        GROUP BY b.region`,
+      [[A, B]],
+    );
+    if (rows.length > 0) {
+      const found = rows.map((r: any) => `${r.n} in ${r.region}`).join(', ');
+      throw new Error(
+        `This suite needs ${A} and ${B} to itself — its fixed amounts are only unmistakable while ` +
+          `nothing else has money there — and found ${found}. Clear those rows, or point the suite ` +
+          `at a database that does not have them. (Its reconciliation cases would still be valid; ` +
+          `the fixed-amount ones would not.)`,
+      );
+    }
+  }
 
   // ── The controlled dataset ────────────────────────────────────────────────
   //
