@@ -8,7 +8,7 @@ import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TelemetryTracker } from './components/TelemetryTracker';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { PostLoginRedirect, RETURN_TO_KEY } from './components/PostLoginRedirect';
+import { PostLoginRedirect, RememberAndRedirectToLogin } from './components/PostLoginRedirect';
 import { api } from './services/api';
 import { AppError } from './services/errors';
 import { clearSession, endSession } from './services/session';
@@ -88,18 +88,6 @@ const ClarificationsPage = React.lazy(() => import('./pages/dataentry/Clarificat
 const ViewMark = React.lazy(() => import('./pages/ViewMark').then((m) => ({ default: m.ViewMark })));
 
 /**
- * Records the requested path, then sends the visitor to sign in.
- *
- * A component rather than an inline `<Navigate>` because the write has to happen as an effect —
- * doing it during render would be a side effect in the render phase.
- *
- * Its counterpart — `PostLoginRedirect`, which spends what this saves — moved out to
- * components/PostLoginRedirect.tsx so it can be tested: this file cannot be mounted in jest at
- * all (Login.tsx uses `import.meta`), which for a long time meant the rule deciding where every
- * signed-in person lands was the one rule no test could reach.
- */
-
-/**
  * Turns `/assayers/:id` into the roster's own deep link, so the record opens where it lives.
  * The query string rides along — `?section=`/`?edit=` address a part of the record (see
  * record-sections.ts), and a redirect that strips them turns a precise link into a vague one.
@@ -110,18 +98,6 @@ const AssayerDeepLink: React.FC = () => {
   return <Navigate to={id ? `/hr/roster/${encodeURIComponent(id)}${search}` : '/hr/roster'} replace />;
 };
 
-
-const RememberAndRedirectToLogin: React.FC = () => {
-  const location = useLocation();
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(RETURN_TO_KEY, `${location.pathname}${location.search}`);
-    } catch {
-      // Storage unavailable (private mode, quota) — fall back to the role home after sign-in.
-    }
-  }, [location.pathname, location.search]);
-  return <Navigate to="/login" replace />;
-};
 
 /**
  * The boundary that wraps the routed screen, reset by the URL.

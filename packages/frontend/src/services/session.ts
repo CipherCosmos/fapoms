@@ -167,5 +167,29 @@ export async function endSession(): Promise<void> {
     // person from signing out of this device.
   } finally {
     clearSession();
+    forgetPendingReturn();
+  }
+}
+
+/**
+ * Drop the pending return path and the sign-out explanation.
+ *
+ * Only `endSession` calls this, and that is the whole point. `clearSession` is shared with the
+ * 401 handler, which writes the return path a line before tearing the session down — clearing it
+ * there would delete the destination the expiry is trying to preserve.
+ *
+ * A deliberate sign-out has neither. There is nowhere to come back to, and nothing to explain.
+ * Left behind, both belong to the person who just left: the next person to sign in on that tab
+ * was handed the previous user's page, and `fapoms_return_to` is not covered by `SESSION_KEYS`
+ * because those are localStorage and this is sessionStorage — so sign-out cleared everything
+ * about the previous session except where they had been.
+ */
+export function forgetPendingReturn(): void {
+  for (const key of [RETURN_TO_KEY, SIGNED_OUT_REASON_KEY]) {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      // Same as everywhere else here: a storage failure must not stop a sign-out.
+    }
   }
 }

@@ -182,6 +182,36 @@ organisation, and it is the only migration that runs. `verify-migrations-from-em
 all five tenant-owned tables after a fresh seed; without the fix it exits 1 and names
 `branches: 10 of 10; projects: 1 of 1`.
 
+### Signing in at the site root, and signing out on a shared machine
+
+Two symptoms, one storage key. `fapoms_return_to` holds where an unauthenticated visitor was
+trying to go, and it was written when it should not have been at one end and never cleared at the
+other.
+
+**The blank screen.** The catch-all that bounces an unauthenticated visitor to sign-in recorded
+every path it saw, `/` included. But `/` is not a destination: it is the route that decides where
+a signed-in person belongs. `/` and `/login` deliberately render the same element so that
+decision exists once, which means React reuses the component instance across the move between
+them — the `useState` initialiser does not re-run, so the reused instance went on rendering
+`<Navigate to="/" />` while sitting at `/`, and `Navigate` re-navigates on every render. An update
+loop, and from outside it is a blank page after signing in at the site root.
+
+**The handover.** `clearSession` walks `SESSION_KEYS`, which is a localStorage list. The return
+path is sessionStorage. So a sign-out cleared the tokens, the query cache, the scope selection and
+the socket, and left behind the one value that decides where the next sign-in lands. The next
+person on that tab was taken to the page the previous user had been trying to open.
+
+The recorder now skips `/`, the consumer refuses any destination equal to where it is already
+rendering, and `endSession` forgets both the return path and the sign-out reason.
+`clearSession` deliberately does not: the 401 handler writes the return path one line before
+calling it, because carrying the destination across an expiry is what that path is for.
+
+The recorder also moved out of `App.tsx` to sit beside the component that spends what it saves.
+That file cannot be mounted in jest, so both halves of "where does somebody end up" were the one
+rule no test could reach, and both halves had a defect. 14 cases in
+`PostLoginRedirect.spec.tsx` and 5 more in `session.spec.ts`; without the fixes, three of the
+first fail — the site-root case by timing out on the redirect loop — and four of the second.
+
 ---
 
 ## Data integrity
@@ -369,23 +399,28 @@ Closing the cause does not restore the evidence.
 
 Only items for which no evidence could be obtained here.
 
-1. **Tenant isolation is unproven, and that is a stronger statement than "not run".**
+1. **Both certification suites — run by the parallel acceptance session, not here.**
    `assayer-tenant-isolation.db.spec.ts` needs the deployed server, the long-lived certification
    accounts and a password supplied at run time, and the homeserver was offline throughout this
    session.
 
-   The parallel acceptance session has since run it on their own rig: **19 of 39 fail**, across
-   four causes, and only one of the four is about tenancy. Eight are same-tenant operations
-   refused 403 where 200 was expected, and eight more are cross-tenant assertions that got 403
-   where they expected 404 — which, as they point out, is the same answer a system with no tenant
-   scoping at all would give, because the permission guard refuses before the organisation
-   predicate is ever consulted. Those sixteen were the grant defect above, now fixed and repaired
-   by migration. Two more were the suite sending an empanelment status that is not a member of
-   `EmpanelmentStatus`, corrected here. The last was the unowned-rows finding, also above.
+   Its first run there failed 19 of 39, across four causes, and only one of the four was about
+   tenancy. Sixteen were the grant defect above: eight same-tenant operations refused 403 where
+   200 was expected, and eight cross-tenant assertions that got 403 where they expected 404 —
+   which is the same answer a system with no tenant scoping at all would give, because the
+   permission guard refuses before the organisation predicate is ever consulted. Two were the
+   suite sending an empanelment status that is not a member of `EmpanelmentStatus`, corrected
+   here. The last was the unowned-rows finding, also above.
 
-   So the cross-tenant half of that suite has never yet asserted what it claims to. It should be
-   re-run after the repair migrations land, and a pass then is new evidence rather than a restored
-   one. Until that run, tenant isolation is untested, not confirmed.
+   After `ReconcileRolePermissions3` and `BackfillTenantOwnership2` — `migration:run` alone, no
+   re-seed — they report **38 of 39**, the remaining failure being the `EmpanelmentStatus` bug
+   fixed here after their run. All eight cross-tenant assertions cleared, and they are now
+   asserting what they claim for the first time rather than being satisfied by a permission
+   refusal: organisation A is refused B's profile read, code lookup, roster list, typeahead, map,
+   dossier, identity scan, rate card, past payables, activity timeline, invitation revocation and
+   password reset, the lifecycle transition is refused with the row unmoved, a bulk batch naming a
+   foreign id changes nothing, and the cleartext bank reveal is refused and not audited. All eight
+   own-tenant operations work. Theirs, cited, not adopted.
 
    Its sibling `assayer-lifecycle-certification.db.spec.ts` **has been run** — not here. The
    parallel acceptance session stood up a prod-shaped rig and reports 150/150: 98 illegal

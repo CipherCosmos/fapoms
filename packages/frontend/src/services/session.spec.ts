@@ -11,6 +11,15 @@ const store = new Map<string, string>();
   clear: () => store.clear(),
 };
 
+/** The same stand-in for the tab-scoped half. The return path and the sign-out reason live here. */
+const tabStore = new Map<string, string>();
+(globalThis as any).sessionStorage = {
+  getItem: (k: string) => (tabStore.has(k) ? tabStore.get(k)! : null),
+  setItem: (k: string, v: string) => void tabStore.set(k, String(v)),
+  removeItem: (k: string) => void tabStore.delete(k),
+  clear: () => tabStore.clear(),
+};
+
 jest.mock('./socket', () => ({ disconnectSocket: jest.fn() }));
 
 import { clearSession, endSession } from './session';
@@ -149,5 +158,79 @@ describe('the two copies of the return-to storage key', () => {
     // Named rather than compared alone, so a rename of BOTH still has to be a deliberate edit
     // here — the key is persisted state and changing it strands whatever a live tab has stored.
     expect(fromService).toBe('fapoms_return_to');
+  });
+});
+
+/**
+ * SIGNING OUT MUST NOT HAND THE NEXT PERSON THE PREVIOUS USER'S PAGE.
+ *
+ * `SESSION_KEYS` is a localStorage list, and the pending return path is sessionStorage — so a
+ * sign-out cleared the tokens, the cache, the scope and the socket, and left behind the one thing
+ * that decides where the NEXT sign-in lands. Whoever signed in on that tab afterwards was taken
+ * to the page the previous user had been trying to open.
+ *
+ * The asymmetry with `clearSession` is deliberate and is the reason this cannot simply be added
+ * to that function: the 401 handler in `api.ts` writes the return path one line before calling
+ * `clearSession`, because preserving the destination across an expiry is the whole point of that
+ * path. Clearing it there would delete what was just written.
+ */
+describe('what a deliberate sign-out forgets', () => {
+  const RETURN_TO = 'fapoms_return_to';
+  const REASON = 'fapoms_signed_out_reason';
+
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    queryClient.clear();
+    (globalThis as any).fetch = jest.fn().mockResolvedValue({ ok: true });
+  });
+
+  it('forgets where the previous person was going', async () => {
+    localStorage.setItem('fapoms_token', 'jwt');
+    sessionStorage.setItem(RETURN_TO, '/billing');
+
+    await endSession();
+
+    expect(sessionStorage.getItem(RETURN_TO)).toBeNull();
+  });
+
+  it('forgets the explanation too, which belonged to a sign-out that did not happen', async () => {
+    // Left behind, it tells the next person their session expired. It did not; they just arrived.
+    localStorage.setItem('fapoms_token', 'jwt');
+    sessionStorage.setItem(REASON, 'expired');
+
+    await endSession();
+
+    expect(sessionStorage.getItem(REASON)).toBeNull();
+  });
+
+  it('forgets it even when the revoke call fails, because the sign-out happens anyway', async () => {
+    localStorage.setItem('fapoms_token', 'jwt');
+    sessionStorage.setItem(RETURN_TO, '/billing');
+    (globalThis as any).fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    await endSession();
+
+    expect(sessionStorage.getItem(RETURN_TO)).toBeNull();
+  });
+
+  it('forgets it when there was no token to revoke at all', async () => {
+    sessionStorage.setItem(RETURN_TO, '/billing');
+
+    await endSession();
+
+    expect(sessionStorage.getItem(RETURN_TO)).toBeNull();
+  });
+
+  /**
+   * The other direction, and the one that would break the expiry feature if it were wrong.
+   * `clearSession` is shared with the 401 handler, which has just recorded the destination.
+   */
+  it('leaves the return path alone when only clearSession runs, which the 401 path depends on', () => {
+    sessionStorage.setItem(RETURN_TO, '/billing');
+
+    clearSession();
+
+    expect(sessionStorage.getItem(RETURN_TO)).toBe('/billing');
   });
 });
