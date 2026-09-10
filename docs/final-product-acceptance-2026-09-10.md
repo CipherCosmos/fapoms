@@ -230,10 +230,9 @@ the endpoint that produced it. Source inspection is never reported as runtime pr
   the router. Worth certifying deliberately, by somebody who can mint one.
 - **The data-entry case workspace.** No packet was in a workable state on this stack.
 - **MFA enrolment.** No factor was enrolled on any certification account.
-- **The contents of a downloaded export.** The browser sandbox blocks page-initiated downloads, so
-  no export file was opened. Whether any export carries unmasked PAN, Aadhaar or bank details to a
-  role that only sees them masked on screen is the single most valuable unanswered question left,
-  and it is the subject of a workstream that was still running when this report was written.
+- ~~**The contents of a downloaded export.**~~ **Answered.** The browser sandbox blocks
+  page-initiated downloads, so the workbooks were fetched over the API instead and decompressed —
+  see "No export carries an identity or bank number" below.
 
 
 ## What the product does well, measured
@@ -267,6 +266,14 @@ returns exactly one right answer.
 
 **Reading a person's record is itself audited.** `ASSAYER_RECORD_VIEWED`, with the reader named.
 Few systems record who looked.
+
+**No export carries an identity or bank number.** Four roles × three workbooks, searched for the
+**real decrypted values** taken from the product's own audited reveal route: not one full value,
+and in the roster workbook not even a last-four fragment. Two corrections were needed before that
+"no" meant anything — an xlsx is a ZIP, so the first pass searched compressed bytes and would have
+found nothing either way; and a negative needs a positive control, so the probe also searches for
+every assayer's code and first name and scores **8 of 8** in the roster workbook. DESK is refused
+the billing workbook outright, 403.
 
 **The export says whether it follows your filters.** The classic export defect is a file that
 quietly ignores the filters the screen had on. The roster's dialog puts both options side by side
