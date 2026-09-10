@@ -34,6 +34,7 @@ import {
 } from './infrastructure/queue/worker-concurrency';
 import { DataSource } from 'typeorm';
 import { ROLE_PERMISSIONS } from './modules/auth/role-permissions';
+import { MIGRATION_ROLE, RUNTIME_ROLE } from './infrastructure/database/roles/role-model';
 
 /**
  * Configuration that must never reach production, checked before anything connects.
@@ -68,6 +69,32 @@ export function assertProductionSafeConfig(): void {
    */
   if (process.env.DB_SYNCHRONIZE === 'true') {
     fatal.push('DB_SYNCHRONIZE=true is not permitted in production — it rewrites the live schema from the entity classes and drops anything it does not recognise. Run migrations instead.');
+  }
+
+  /**
+   * The application must not be the identity that can change the schema.
+   *
+   * The audit trail is append-only by trigger, and a trigger can be removed by whoever owns the
+   * table. FAPOMS used to connect as a superuser, so the application's own credential could
+   * `ALTER TABLE audit_events DISABLE TRIGGER` and then delete freely — demonstrated in a
+   * throwaway database on 2026-09-09. `database/roles/role-model.ts` splits the deploy identity
+   * from the runtime one; these two checks are what stop a deployment quietly putting them back
+   * together.
+   *
+   * Migrations running in the API process is the way that happens by accident: it is the reason
+   * the connection would need DDL at all. `StartupChecksService` then asks the database what the
+   * runtime identity can actually do, which is the check that cannot be satisfied by configuration
+   * alone.
+   */
+  if (process.env.DB_USERNAME === RUNTIME_ROLE && process.env.DB_MIGRATIONS_RUN !== 'false') {
+    fatal.push(
+      `DB_MIGRATIONS_RUN must be "false" when the API connects as ${RUNTIME_ROLE}. Migrations are a deploy step run as ${MIGRATION_ROLE}; an API that migrates needs schema privileges, and a runtime identity with schema privileges can remove the audit triggers.`,
+    );
+  }
+  if (process.env.DB_USERNAME === MIGRATION_ROLE) {
+    fatal.push(
+      `The API must not connect as ${MIGRATION_ROLE}. That credential exists for migrations and for \`npm run db:harden\`, and it can alter the audit structures; set DB_USERNAME to ${RUNTIME_ROLE}.`,
+    );
   }
 
   if (!process.env.CORS_ORIGINS) {

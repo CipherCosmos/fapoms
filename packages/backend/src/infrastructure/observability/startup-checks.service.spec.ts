@@ -19,6 +19,8 @@ function makeService(opts: {
   email?: boolean | null;
   push?: boolean | null;
   dbNow?: Date;
+  /** How a database would answer the runtime-privilege questions. `false` = not hardened. */
+  dbRole?: boolean;
 }) {
   const roles = opts.roles ?? ALL_ROLES;
   const staffed = opts.staffed ?? ALL_ROLES;
@@ -27,6 +29,10 @@ function makeService(opts: {
     query: jest.fn(async (sql: string) => {
       if (/now\(\)/.test(sql)) return [{ now: opts.dbNow ?? new Date() }];
       if (/user_roles/.test(sql)) return staffed.map((name) => ({ name }));
+      // The database-identity checks each ask one boolean question of the catalogue. `opts.dbRole`
+      // says how a hardened database would answer; the default is "correctly hardened", so the
+      // "everything is fine" case below stays a statement about roles and transports.
+      if (/\bok\b/.test(sql)) return [{ ok: opts.dbRole ?? true }];
       return roles.map((name) => ({ name }));
     }),
   };
@@ -63,6 +69,32 @@ describe('startup checks', () => {
   it('passes when every role exists, is staffed, and both transports are up', async () => {
     const checks = await makeService({}).run();
     expect(checks.every((c) => c.ok)).toBe(true);
+  });
+
+  it('refuses a database where the runtime identity is still privileged', async () => {
+    // The finding this check exists for: FAPOMS connected as a superuser, so anything holding the
+    // application's credential could disable the audit triggers and delete. A deployment that has
+    // not run `db:harden` must be told at boot, not during an incident — and marked critical, so
+    // STARTUP_CHECKS_STRICT refuses to start rather than degrading politely.
+    const checks = await makeService({ dbRole: false }).run();
+    const identity = checks.filter((c) => c.name.startsWith('Database identity'));
+    expect(identity.length).toBeGreaterThanOrEqual(9);
+    expect(identity.every((c) => c.ok)).toBe(false);
+    expect(identity.every((c) => c.critical)).toBe(true);
+    expect(identity[0].detail).toMatch(/db:harden/);
+  });
+
+  it('reports database identity as critical and failed when the catalogue cannot be read', async () => {
+    const service = makeService({});
+    (service as any).dataSource.query = jest.fn(async (sql: string) => {
+      if (/\bok\b/.test(sql)) throw new Error('permission denied for table pg_roles');
+      return [];
+    });
+    const checks = await service.run();
+    const identity = checks.filter((c) => c.name.startsWith('Database identity'));
+    expect(identity).toHaveLength(1);
+    expect(identity[0].ok).toBe(false);
+    expect(identity[0].critical).toBe(true);
   });
 
   it('warns when the app and database clocks disagree (a missing NTP sync)', async () => {

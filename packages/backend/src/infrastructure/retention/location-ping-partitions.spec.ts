@@ -10,8 +10,13 @@ import {
 
 /**
  * Two things matter here and nothing else: the name/boundary arithmetic is exactly what the
- * migration and the CREATE TABLE ... PARTITION OF statements agree on, and retention now retires
- * an old partition with DROP TABLE rather than deleting its rows one at a time.
+ * migration and the partition statements agree on, and retention now retires an old partition
+ * rather than deleting its rows one at a time.
+ *
+ * Both the create and the drop go through `fapoms_manage_location_ping_partition`, a SECURITY
+ * DEFINER function, because the API connects as a role that owns nothing and may not alter the
+ * schema — see `database/roles/role-model.ts`. What these tests hold is that the module asks for
+ * the partition it wants and issues no DDL of its own.
  */
 describe('location-ping-partitions', () => {
   describe('partition naming and boundaries', () => {
@@ -58,7 +63,7 @@ describe('location-ping-partitions', () => {
   });
 
   describe('ensureFuturePartitions', () => {
-    it('creates only the partitions that do not already exist, via CREATE TABLE ... PARTITION OF', async () => {
+    it('creates only the partitions that do not already exist, through the privileged function', async () => {
       const queries: Array<{ sql: string; params?: unknown[] }> = [];
       const dataSource = {
         query: jest.fn(async (sql: string, params?: unknown[]) => {
@@ -75,12 +80,33 @@ describe('location-ping-partitions', () => {
       const created = await ensureFuturePartitions(dataSource as any, logger, new Date('2026-09-03T00:00:00Z'));
 
       expect(created).toEqual(['assayer_location_pings_y2026m10', 'assayer_location_pings_y2026m11']);
-      const createStatements = queries.filter((q) => q.sql.includes('PARTITION OF'));
-      expect(createStatements).toHaveLength(2);
-      expect(createStatements[0].sql).toMatch(/CREATE TABLE IF NOT EXISTS "assayer_location_pings_y2026m10"/);
-      expect(createStatements[0].sql).toMatch(
-        /FOR VALUES FROM \('2026-10-01T00:00:00\.000Z'\) TO \('2026-11-01T00:00:00\.000Z'\)/,
-      );
+
+      // Through `fapoms_manage_location_ping_partition`, never as direct DDL. The API runs as
+      // `fapoms_runtime`, which holds no CREATE on the schema — a runtime identity that can alter
+      // schema objects can take the audit triggers away, which is the whole reason for the split.
+      const createCalls = queries.filter((q) => q.sql.includes('fapoms_manage_location_ping_partition'));
+      expect(createCalls).toHaveLength(2);
+      expect(createCalls[0].sql).toContain("fapoms_manage_location_ping_partition('create'");
+      expect(createCalls[0].params).toEqual([
+        'assayer_location_pings_y2026m10',
+        '2026-10-01T00:00:00.000Z',
+        '2026-11-01T00:00:00.000Z',
+      ]);
+      // And the bounds are bound as parameters, not interpolated: the function validates the name
+      // it is given, and a name arriving inside the statement text would never reach that check.
+      expect(createCalls[0].sql).not.toContain('2026-10-01');
+    });
+
+    it('issues no schema DDL of its own', () => {
+      // The property, stated directly. A future edit that "simplifies" this back to a CREATE
+      // TABLE would work on a developer's superuser database and fail on every deployment.
+      const source = jest.requireActual('fs').readFileSync(
+        require.resolve('./location-ping-partitions'),
+        'utf8',
+      ) as string;
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+      expect(code).not.toMatch(/\bCREATE TABLE\b/i);
+      expect(code).not.toMatch(/\bDROP TABLE\b/i);
     });
   });
 
@@ -147,15 +173,21 @@ describe('location-ping-partitions', () => {
       expect(dropped).toEqual(['assayer_location_pings_y2025m01']);
       expect(failures).toEqual([]);
 
-      const dropStatements = statements.filter((s) => /DROP TABLE/i.test(s));
+      // Retiring the partition, not emptying it — and through the privileged function, because
+      // the runtime role owns nothing and `DROP TABLE` consults ownership before any grant.
+      const dropCalls = statements.filter((s) => s.includes("fapoms_manage_location_ping_partition('drop'"));
       const deleteStatements = statements.filter((s) => /^\s*DELETE/i.test(s));
-      expect(dropStatements).toEqual(['DROP TABLE IF EXISTS "assayer_location_pings_y2025m01"']);
+      expect(dropCalls).toHaveLength(1);
+      expect(statements.filter((s) => /\bDROP TABLE\b/i.test(s))).toEqual([]);
       expect(deleteStatements).toEqual([]);
     });
 
     it('collects a failed drop rather than throwing, so one bad partition does not stop the others', async () => {
       const dataSource = {
-        query: jest.fn(async (sql: string) => {
+        // The partition name is now a bound parameter rather than part of the statement text, so
+        // the failure this fixture injects has to be keyed on the parameter. That is the point of
+        // binding it: the name never reaches the SQL string.
+        query: jest.fn(async (sql: string, params?: unknown[]) => {
           if (sql.includes('pg_inherits')) {
             return [
               {
@@ -168,7 +200,7 @@ describe('location-ping-partitions', () => {
               },
             ];
           }
-          if (sql.includes('assayer_location_pings_y2025m01')) {
+          if (params?.[0] === 'assayer_location_pings_y2025m01') {
             throw new Error('lock not available');
           }
           return [];

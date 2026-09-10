@@ -57,7 +57,10 @@ describe('RetentionService', () => {
       statements.push({ sql, params });
       if (sql.includes('pg_class')) return []; // "does this partition already exist?" — no.
       if (sql.includes('pg_inherits')) return []; // "what partitions exist?" — none to drop.
-      if (sql.includes('PARTITION OF') || sql.includes('DROP TABLE')) return [];
+      // Partition maintenance goes through the privileged function now, not through DDL of its
+      // own. Named here so it does not fall through and consume a `deleteResults` entry, which
+      // would silently give a batching test one fewer round than it asked for.
+      if (sql.includes('fapoms_manage_location_ping_partition')) return [];
       const n = deleteResults.length > 0 ? deleteResults.shift()! : 0;
       // How node-postgres reports a DELETE through TypeORM's raw `query`.
       return [[], n];
@@ -371,11 +374,15 @@ describe('RetentionService', () => {
       });
     });
 
-    it('issues DROP TABLE for the expired partition', async () => {
+    it('retires the expired partition through the privileged function, issuing no DDL itself', async () => {
+      // The API connects as `fapoms_runtime`, which owns nothing, and `DROP TABLE` consults
+      // ownership before any grant. `fapoms_manage_location_ping_partition` is the narrow
+      // SECURITY DEFINER route — see `database/roles/role-model.ts`.
       await service.runOnce();
-      const dropStatements = statements.filter((s) => /DROP TABLE/i.test(s.sql));
-      expect(dropStatements).toHaveLength(1);
-      expect(dropStatements[0].sql).toContain('"assayer_location_pings_y2020m01"');
+      const drops = statements.filter((s) => s.sql.includes("fapoms_manage_location_ping_partition('drop'"));
+      expect(drops).toHaveLength(1);
+      expect(drops[0].params).toEqual(['assayer_location_pings_y2020m01']);
+      expect(statements.filter((s) => /\bDROP TABLE\b/i.test(s.sql))).toEqual([]);
     });
 
     it('never issues a row-level DELETE against the expired partition by name', async () => {
@@ -398,7 +405,7 @@ describe('RetentionService', () => {
     it('reports the tick as failed, without dropping the notification/outbox phases, if the drop itself fails', async () => {
       const withFailingDrop = dataSource.query.getMockImplementation()!;
       dataSource.query.mockImplementation(async (sql: string, params: unknown[]) => {
-        if (sql.trim().startsWith('DROP TABLE')) {
+        if (sql.includes("fapoms_manage_location_ping_partition('drop'")) {
           statements.push({ sql, params });
           throw new Error('partition is being read by a long export');
         }

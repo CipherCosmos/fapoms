@@ -100,11 +100,14 @@ export async function ensureFuturePartitions(
     );
     if (Array.isArray(result) && result.length > 0) continue;
 
-    await dataSource.query(`
-      CREATE TABLE IF NOT EXISTS "${month.name}"
-      PARTITION OF "${PARENT_TABLE}"
-      FOR VALUES FROM ('${month.from.toISOString()}') TO ('${month.to.toISOString()}')
-    `);
+    // Through the function, never as direct DDL. The API runs as `fapoms_runtime`, which holds
+    // no CREATE on the schema and owns nothing — see `database/roles/role-model.ts`. The function
+    // is `SECURITY DEFINER`, accepts only a name of this shape, and only ever attaches it to this
+    // one parent, so the privilege borrowed here is one month of location pings and nothing else.
+    await dataSource.query(
+      `SELECT fapoms_manage_location_ping_partition('create', $1, $2, $3)`,
+      [month.name, month.from.toISOString(), month.to.toISOString()],
+    );
     created.push(month.name);
     logger.log(`Created location-ping partition ${month.name} (${month.from.toISOString()} .. ${month.to.toISOString()}).`);
   }
@@ -174,7 +177,9 @@ export async function dropExpiredPartitions(
   const failures: Array<{ name: string; error: unknown }> = [];
   for (const partition of await droppablePartitions(dataSource, cutoff)) {
     try {
-      await dataSource.query(`DROP TABLE IF EXISTS "${partition.name}"`);
+      // Same function, same reason as the create above. It refuses a name that is not a
+      // location-ping partition and returns quietly for one that is already gone.
+      await dataSource.query(`SELECT fapoms_manage_location_ping_partition('drop', $1)`, [partition.name]);
       dropped.push(partition.name);
       logger.log(`Dropped expired location-ping partition ${partition.name} (ended ${partition.to.toISOString()}).`);
     } catch (error) {

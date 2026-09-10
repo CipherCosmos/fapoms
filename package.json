@@ -18,7 +18,9 @@
     "build:frontend": "npm run build --workspace=packages/frontend",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "verify:migrations": "node scripts/verify-migrations-from-empty.mjs"
+    "verify:migrations": "node scripts/verify-migrations-from-empty.mjs",
+    "verify:runtime-role": "node scripts/verify-runtime-role.mjs",
+    "db:provision": "node scripts/db-provision.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

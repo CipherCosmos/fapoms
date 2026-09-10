@@ -6,6 +6,7 @@ import { SystemRole } from '@fapoms/shared';
 import { EmailProvider } from '../notifications/email-provider';
 import { FcmProvider } from '../notifications/fcm-provider';
 import { NOTIFICATION_CATALOG } from '../../modules/notifications/notification-catalog';
+import { RUNTIME_ASSERTIONS } from '../database/roles/role-model';
 
 /**
  * One loud block at boot saying what this deployment can and cannot actually do.
@@ -171,8 +172,58 @@ export class StartupChecksService implements OnApplicationBootstrap {
     // reminder in the boot log when they have not.
     checks.push(this.dataResidencyCheck());
 
+    // ── Database identity ────────────────────────────────────────────────────
+    // The audit trail is append-only by trigger, and a trigger is only as strong as the identity
+    // that could remove it. This deployment used to connect as a superuser, so anything holding
+    // the application's credential could `ALTER TABLE audit_events DISABLE TRIGGER` and then
+    // delete at will — demonstrated in a throwaway database on 2026-09-09. The role split in
+    // `database/roles/role-model.ts` closes that, and this is where a deployment finds out it was
+    // not applied: at boot, in the log, rather than during an incident.
+    checks.push(...(await this.databaseIdentityChecks()));
+
     this.last = checks;
     return checks;
+  }
+
+  /**
+   * What the runtime's own database identity can do, asked of the database rather than assumed.
+   *
+   * The list is `RUNTIME_ASSERTIONS`, shared with `db:harden` and with
+   * `runtime-privileges.db.spec.ts`, so the property the deployment verifies and the property the
+   * tests assert are one list rather than three that can drift apart.
+   *
+   * Critical, so `STARTUP_CHECKS_STRICT=true` refuses the boot. A deployment running as a
+   * superuser is not degraded, it is unprotected, and the whole point of the split is that the
+   * protection cannot be assumed from the fact that the code is correct.
+   *
+   * A failure to RUN the queries is reported as one failed check rather than thrown: a database
+   * that cannot answer `SELECT rolsuper FROM pg_roles` has a bigger problem than this, and the
+   * other checks above should still get to say what they found.
+   */
+  private async databaseIdentityChecks(): Promise<StartupCheck[]> {
+    try {
+      const out: StartupCheck[] = [];
+      for (const { what, sql } of RUNTIME_ASSERTIONS) {
+        const rows = await this.dataSource.query(sql);
+        const ok = rows?.[0]?.ok === true;
+        out.push({
+          name: `Database identity: ${what}`,
+          ok,
+          detail: ok
+            ? 'yes'
+            : 'NO — run `npm run db:harden` against this database, and check DB_USERNAME is the runtime role',
+          critical: true,
+        });
+      }
+      return out;
+    } catch (err) {
+      return [{
+        name: 'Database identity',
+        ok: false,
+        detail: `could not be determined: ${(err as Error).message}`,
+        critical: true,
+      }];
+    }
   }
 
   /** App-vs-database clock drift — the observable symptom of a missing NTP sync. */
