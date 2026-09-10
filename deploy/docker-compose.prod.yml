@@ -400,6 +400,16 @@ services:
       # A failed migration stops the deploy with the previous containers still serving, rather
       # than starting an API against a half-migrated schema.
       db-migrate: {condition: service_completed_successfully}
+      # Service Logs is one of only two DEVELOPER-exclusive screens, and it reads containers
+      # through this proxy. The service has been declared in this file since the split, but
+      # nothing depended on it, so `compose up` never started it and no other service noticed:
+      # the screen answered 503, "Cannot reach the Docker log proxy at http://dockerproxy:2375.
+      # Is the 'dockerproxy' service running?" — an accurate message nobody was reading, on a
+      # screen the go-live checklist tells the platform owner to use on day one.
+      #
+      # `service_started`, not `service_healthy`: the proxy image ships no healthcheck, and a
+      # proxy that is down degrades this one screen to a 503 rather than stopping the API booting.
+      dockerproxy: {condition: service_started}
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "5" }
