@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { readdirSync, readFileSync } from 'fs';
-import { join, relative } from 'path';
+import { dirname, join, relative, sep } from 'path';
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import * as classValidator from 'class-validator';
 import { AssignmentController } from '../../modules/assignment/assignment.controller';
@@ -156,21 +156,117 @@ describe('request DTOs and the decorators the global pipe whitelists against', (
     return { decorators, declaration: rest };
   };
 
+  const byFile = new Map(sources.map((s) => [s.file, s.text]));
+
+  /**
+   * The declaration statement for a top-level `const` / `let` / `function` named `name`.
+   *
+   * Ends at the `;` that closes the declarator, or — for a `function` — at the `}` that closes
+   * its body, tracking bracket depth so an initialiser containing either character does not end
+   * the statement early. The text is what tells the rules below whether the declaration reaches
+   * `ValidateBy` itself, or reaches it through something else.
+   */
+  const declarationOf = (text: string, name: string): string | null => {
+    const at = new RegExp(`(?:^|\\n)\\s*(?:export\\s+)?(const|let|function)\\s+${name}\\b`).exec(text);
+    if (!at) return null;
+    const isFn = at[1] === 'function';
+    const start = at.index;
+    let depth = 0;
+    let opened = false;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (c === '(' || c === '[' || c === '{') { depth++; opened = true; }
+      else if (c === ')' || c === ']' || c === '}') {
+        depth--;
+        if (isFn && opened && depth === 0 && c === '}') return text.slice(start, i + 1);
+      } else if (c === ';' && depth === 0) return text.slice(start, i);
+    }
+    return text.slice(start);
+  };
+
+  /** The repo-local module and original name a file imported `local` from, if it did. */
+  const importOriginOf = (file: string, local: string): { file: string; name: string } | null => {
+    const text = byFile.get(file);
+    if (text === undefined) return null;
+    const re = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const spec = m[2];
+      if (!spec.startsWith('.')) continue; // a package, not this repo — nothing to read
+      const bound = m[1]
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => {
+          const aliased = /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(part);
+          return aliased ? { name: aliased[1], as: aliased[2] } : { name: part, as: part };
+        })
+        .find((b) => b.as === local);
+      if (!bound) continue;
+      const base = join(dirname(file), spec).split(sep).join('/');
+      for (const candidate of [`${base}.ts`, `${base}/index.ts`]) {
+        if (byFile.has(candidate)) return { file: candidate, name: bound.name };
+      }
+      return null;
+    }
+    return null;
+  };
+
+  /**
+   * Whether `name`, as it is bound in `file`, reaches a `ValidateBy` call.
+   *
+   * `ValidateBy` is the only thing in class-validator that registers metadata under a name of
+   * the repo's own choosing, so "reaches ValidateBy" is the whole of what makes a repo-local
+   * decorator real to the pipe. A name reaches it when its own declaration calls it, or when its
+   * initialiser calls — or is a bare alias of — another name that does, in this file or in a
+   * repo-local module it was imported from.
+   *
+   * The indirection is not hypothetical. `IsPanFormat` is `identityFormatRule('isPanFormat', …)`;
+   * `identityFormatRule` is an alias of `formatRule`; and `formatRule`, which is the declaration
+   * that actually calls `ValidateBy`, lives in `infrastructure/http/format-validators.ts` because
+   * `POST /clients` needed the same phone and URL rules the assayer routes already had. The
+   * earlier version of this check asked only whether the DTO's own file mentioned `ValidateBy`,
+   * so the day the factory moved out of `assayer.controller.ts` every identity rule in it stopped
+   * counting as a validator.
+   *
+   * That direction of breakage is the safe one — an unrecognised rule makes its property look
+   * bare and fails the check below rather than passing it — which is why this was a red suite and
+   * not a quiet hole. The positive assertions in the next test are what turned it red.
+   */
+  const reachesValidateBy = (name: string, file: string, seen = new Set<string>()): boolean => {
+    const key = `${file}::${name}`;
+    if (seen.has(key)) return false; // an import cycle proves nothing; stop rather than recur
+    seen.add(key);
+    const text = byFile.get(file);
+    if (text === undefined) return false;
+
+    const decl = declarationOf(text, name);
+    if (decl) {
+      if (/\bValidateBy\s*\(/.test(decl)) return true;
+      const eq = decl.indexOf('=');
+      if (eq < 0) return false;
+      const initialiser = decl.slice(eq + 1).trim();
+      // `someRule(...)` — built by a factory; or `someRule` — a plain alias of one.
+      const from = /^([A-Za-z_$][\w$]*)\s*(?:\(|$)/.exec(initialiser);
+      return from ? reachesValidateBy(from[1], file, seen) : false;
+    }
+
+    const origin = importOriginOf(file, name);
+    return origin ? reachesValidateBy(origin.name, origin.file, seen) : false;
+  };
+
   /**
    * A name counts as a validator when class-validator itself exports it — the honest definition,
-   * because that export IS what writes the metadata the pipe reads. Names declared in the same
-   * file are accepted too, but only where that file imports `ValidateBy`: the repo's custom rules
-   * (`IsPanFormat`, `IsIfscFormat`, `IsAadhaarNumber`, `IsGstinOrPanFormat`) are `ValidateBy`
-   * wrappers, and they register real metadata under their own constraint names.
+   * because that export IS what writes the metadata the pipe reads — or when it is a repo-local
+   * rule that reaches `ValidateBy`, which registers metadata under its own constraint name and
+   * is therefore just as real to the pipe.
    *
    * `@Type()`, `@Transform()` and `@ApiProperty()` are correctly NOT validators: a property
    * carrying only those is still stripped, and the route still dies.
    */
   const isValidator = (name: string, file: string): boolean => {
     if (Object.prototype.hasOwnProperty.call(classValidator, name)) return true;
-    const src = sources.find((s) => s.file === file);
-    if (!src || !/ValidateBy/.test(src.text)) return false;
-    return new RegExp(`(?:const|function|let)\\s+${name}\\b`).test(src.text);
+    return reachesValidateBy(name, file);
   };
 
   type Prop = { name: string; validators: string[]; decorators: string[]; typeText: string };
@@ -243,10 +339,22 @@ describe('request DTOs and the decorators the global pipe whitelists against', (
     const create = dtos.find((d) => d.name === 'CreateAssignmentRequestDto')!;
     expect(create.props.find((p) => p.name === 'projectBranchId')!.validators).toEqual(['IsUUID']);
     expect(create.props.find((p) => p.name === 'proposedFee')!.validators).toEqual(['IsOptional', 'IsNumber', 'Min']);
-    // A repo-local ValidateBy rule counts, and @Type()/@ApiProperty() must not.
+    // A repo-local ValidateBy rule counts, in both shapes it takes. `IsPanFormat` is declared in
+    // the DTO's own file but reaches `ValidateBy` only through an alias and an imported factory;
+    // `IsHttpUrl` is not declared in its DTO's file at all and is imported ready-made. Neither
+    // was recognised while this check asked only whether the file itself said `ValidateBy`.
     const assayer = dtos.find((d) => d.name === 'CreateAssayerRequestDto')!;
     expect(assayer.props.find((p) => p.name === 'panNumber')!.validators).toContain('IsPanFormat');
+    const client = dtos.find((d) => d.name === 'CreateClientRequestDto')!;
+    expect(client.props.find((p) => p.name === 'website')!.validators).toContain('IsHttpUrl');
+    expect(client.props.find((p) => p.name === 'contactPhone')!.validators).toContain('IsIndianMobile');
+    // And the factory is reached, not guessed: the name that actually calls `ValidateBy` lives
+    // two hops away, in a file neither DTO declares anything in.
+    expect(isValidator('formatRule', 'infrastructure/http/format-validators.ts')).toBe(true);
+    // Not everything a DTO file declares is a validator, and neither is a class-transformer or
+    // Swagger decorator — a property carrying only those is still stripped by the pipe.
     expect(isValidator('Type', 'modules/billing-engine/billing-engine.controller.ts')).toBe(false);
+    expect(isValidator('assayerUploadMulterOptions', 'modules/assayer/assayer.controller.ts')).toBe(false);
   });
 
   it('gives every declared property of every request DTO at least one validator', () => {

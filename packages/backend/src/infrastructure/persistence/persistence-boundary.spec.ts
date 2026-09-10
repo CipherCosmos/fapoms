@@ -245,6 +245,28 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   'modules/assayer/assayer.service.ts',
 ];
 
+/**
+ * The one directory the boundary does not apply to, because it IS the boundary.
+ *
+ * Everything under `infrastructure/persistence/` is the TypeORM implementation the rest of the
+ * codebase is being kept away from: `typeorm-unit-of-work.ts` wraps a `DataSource`,
+ * `outbox.relay.ts` and `outbox.worker.ts` read and write `outbox_events` through repositories,
+ * and `outbox.entity.ts` declares the table. Asking those files not to import TypeORM would be
+ * asking them not to exist.
+ *
+ * They were invisible to this walker only because none of them happened to be named
+ * `*.service.ts`. `outbox-dead-letter.service.ts` — the operator surface over the same table,
+ * beside the relay that writes it — was the first that did, and it failed a rule that was never
+ * about it. Naming the directory says so once, instead of adding a name to a list whose header
+ * reads "never add to it" and leaving the next file in this directory to argue the same case.
+ *
+ * The exemption is a directory prefix and nothing wider, so it cannot be reached by a domain
+ * service: moving one here to dodge the check would put a module's aggregate inside the
+ * persistence layer, which is a change no review would pass and this file's own test below
+ * would report as a stale allowlist entry.
+ */
+const PERSISTENCE_LAYER = 'infrastructure/persistence/';
+
 const serviceFiles = (): string[] => {
   const found: string[] = [];
   const walk = (dir: string) => {
@@ -253,7 +275,8 @@ const serviceFiles = (): string[] => {
       if (entry.isDirectory()) {
         walk(full);
       } else if (entry.name.endsWith('.service.ts') && !entry.name.endsWith('.spec.ts')) {
-        found.push(path.relative(SRC, full).split(path.sep).join('/'));
+        const rel = path.relative(SRC, full).split(path.sep).join('/');
+        if (!rel.startsWith(PERSISTENCE_LAYER)) found.push(rel);
       }
     }
   };
@@ -275,6 +298,24 @@ describe('persistence boundary', () => {
   it('finds the services to check', () => {
     // Guards the walker itself: a broken path would make every check below pass vacuously.
     expect(files.length).toBeGreaterThan(40);
+  });
+
+  it('exempts the persistence layer itself, and nothing outside it', () => {
+    // The exemption has to be proven against a file that would otherwise fail, or widening it
+    // later to `infrastructure/` — or to everything — would go unnoticed. This one imports
+    // `Repository` and three query operators from typeorm and is not on the allowlist, so it
+    // fails the check below the moment the prefix stops matching it.
+    const deadLetter = 'infrastructure/persistence/outbox-dead-letter.service.ts';
+    expect(fs.existsSync(path.join(SRC, deadLetter))).toBe(true);
+    expect(IMPORTS_TYPEORM_PATTERN.test(read(deadLetter))).toBe(true);
+    expect(IMPORTS_TYPEORM.includes(deadLetter)).toBe(false);
+    expect(files).not.toContain(deadLetter);
+
+    // And the exemption is that directory only: every other service is still walked, including
+    // the ones in sibling infrastructure directories that the allowlist accounts for by name.
+    expect(files.filter((f) => f.startsWith(PERSISTENCE_LAYER))).toEqual([]);
+    expect(files).toContain('infrastructure/retention/retention.service.ts');
+    expect(files).toContain('modules/assayer/assayer.service.ts');
   });
 
   describe('direct TypeORM imports', () => {

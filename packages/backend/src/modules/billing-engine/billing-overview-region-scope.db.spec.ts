@@ -214,8 +214,14 @@ describe('billing overview region scoping, reconciled against the real schema', 
     await payable('pMA', 'aMA', 'clM', 'PENDING', true, 4000, 400, 440, 3960, 0, { settled: true, feeAmount: 4000 });
     await payable('pB1', 'aB1', 'clE', 'PENDING', false, 7000, 700, 770, 6930, 0, { settled: false, feeAmount: 7000 });
     await payable('pMB', 'aMB', 'clM', 'PAID', false, 8000, 800, 880, 7920, 7920, { settled: true, feeAmount: 8000 });
-    await payable('pMX', 'aMX', 'clM', 'PENDING', false, 5000, 500, 550, 4950, 0, { settled: true, feeAmount: 5000 });
-    await payable('pOR', 'aOR', 'clM', 'PENDING', false, 6000, 600, 660, 5940, 0, { settled: true, feeAmount: 6000 });
+    // The two unattributable assignments each raise ONE attention item, and they have to: the
+    // "region A names nothing unattributable" test below asserts their absence, and an absence is
+    // only evidence when the row would otherwise be there. `aMX`'s snapshot disagrees with its
+    // 5000 agreed fee (FEE_CHANGED) and `aOR`'s says the fee was never agreed (UNSETTLED_FEE).
+    // Neither field is summed into any figure — `rate_snapshot` is read by the attention queries
+    // and by nothing else — so this changes what the list names and no amount anywhere.
+    await payable('pMX', 'aMX', 'clM', 'PENDING', false, 5000, 500, 550, 4950, 0, { settled: true, feeAmount: 4500 });
+    await payable('pOR', 'aOR', 'clM', 'PENDING', false, 6000, 600, 660, 5940, 0, { settled: false, feeAmount: 6000 });
 
     const invoice = async (
       tag: string, client: string, status: string, subtotal: number, tax: number, tds: number,
@@ -677,9 +683,14 @@ describe('billing overview region scoping, reconciled against the real schema', 
         .toEqual([`${RUN}-aA4`, `${RUN}-aA5`, `${RUN}-aA6`]);
       expect(mineOf(out, 'UNSETTLED_FEE').map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aA1`]);
       expect(mineOf(out, 'FEE_CHANGED').map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aA2`]);
-      expect(mineOf(out, 'HELD').map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aMA`]);
-      expect(mineOf(out, 'HELD_LINE').map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aA2`]);
-      expect(mineOf(out, 'OVERDUE').map((i: any) => i.invoiceNumber)).toEqual([`${RUN}-invA`]);
+      // A held payout and a held client line are both `HELD` — `BillingAttentionItem` has no
+      // separate kind for the second — and are told apart by which id the item carries. Both
+      // sub-queries are narrowed, by different fragments (`rg.payable` and `rg.entry`), so both
+      // are checked separately here rather than as one set.
+      const held = mineOf(out, 'HELD');
+      expect(held.filter((i: any) => i.payableId).map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aMA`]);
+      expect(held.filter((i: any) => i.entryId).map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aA2`]);
+      expect(mineOf(out, 'OVERDUE_INVOICE').map((i: any) => i.invoiceNumber)).toEqual([`${RUN}-invA`]);
     });
 
     it('names nothing from region B, and nothing unattributable', async () => {
@@ -820,9 +831,16 @@ describe('billing overview region scoping, reconciled against the real schema', 
       const actions = out.recentActivity.map((h) => h.action);
       expect(actions).toContain(`${RUN}_X_BOOKED`);
       expect(actions).toContain(`${RUN}_NO_ASSIGNMENT`);
-      const numbers = out.attention.map((i: any) => i.assignmentNumber ?? i.invoiceNumber);
-      expect(numbers).toContain(`${RUN}-invX`);
-      expect(numbers).toContain(`${RUN}-aOR`);
+      // The three shapes of "cannot be attributed", each reaching the list through a different
+      // one of the six sub-queries: an invoice whose only line sits on a null-region branch, an
+      // assignment on that same branch, and an assignment with no project branch at all. A
+      // scoped caller sees none of them (asserted above); the national caller sees all three,
+      // which is what makes those absences a filter rather than a fixture that raises nothing.
+      const named = (kind: string) =>
+        out.attention.filter((i: any) => i.kind === kind).map((i: any) => i.assignmentNumber ?? i.invoiceNumber);
+      expect(named('OVERDUE_INVOICE')).toContain(`${RUN}-invX`);
+      expect(named('FEE_CHANGED')).toContain(`${RUN}-aMX`);
+      expect(named('UNSETTLED_FEE')).toContain(`${RUN}-aOR`);
     });
 
     it('the national figures are strictly larger than any one region\'s', async () => {

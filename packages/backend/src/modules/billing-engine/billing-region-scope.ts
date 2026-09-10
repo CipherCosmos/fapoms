@@ -56,6 +56,82 @@
  * `$1::text[]`, which is what every caller in `overview()` binds it to.
  */
 
+/**
+ * ## The fifteen statements, one row each
+ *
+ * The instruction on this finding was not to add a predicate to eight queries and call it done:
+ * a wrong join in an aggregate produces incorrect financial figures, which is worse than the leak
+ * it was meant to close. So every statement `overview()` runs is written down here — what it
+ * selects from, what decides its region, how it gets there, and what it is allowed to count —
+ * and every figure is reconciled against an independently written calculation over the same rows
+ * in `billing-overview-region-scope.db.spec.ts`.
+ *
+ * "Slot" is the position in `overview()`'s `Promise.all`; eight slots, fifteen statements,
+ * because `byClient` is three grouped sub-selects and the attention list is six queries.
+ * `billing-overview-region-scope.spec.ts` drives the real method and asserts, per statement, that
+ * the predicate is present and the regions are bound rather than inlined.
+ *
+ * Every row reaches a region through `branches.region` and through nothing else, because nothing
+ * else carries one. The "path" column is therefore the same walk in every row, differing only in
+ * where it starts, which is the point: one rule, one path, fifteen uses.
+ *
+ * | # | Slot | Selects from | Fragment | Starts at | Counts a row when | Row filter it is added to |
+ * |---|------|--------------|----------|-----------|-------------------|---------------------------|
+ * | 1 | 1 payouts | `assayer_payables p` | `payable` | `p.assignment_id` | its assignment's branch is in the list | `is_active` |
+ * | 2 | 2 client lines | `billing_entries e` | `entry` | `e.assignment_id` | its assignment's branch is in the list | `is_active` |
+ * | 3 | 3 invoices | `billing_invoices i` | `invoice` | `i.id` -> its lines | it has a line in the list and none outside it | `is_active` |
+ * | 4 | 4 ageing | `billing_invoices i` | `invoice` | `i.id` -> its lines | same as 3 | `is_active AND status = 'ISSUED'` |
+ * | 5 | 5 cashflow | `billing_payments pm` | `payment` | `pm.payable_id` or `pm.invoice_id` | the row it settles counts, by rule 1 or rule 3 | `is_active` |
+ * | 6 | 6 by client | `billing_entries be` | `entry` | `be.assignment_id` | as row 2 | `is_active`, grouped by `client_id` |
+ * | 7 | 6 by client | `billing_invoices bi` | `invoice` | `bi.id` -> its lines | as row 3 | `is_active`, grouped by `client_id` |
+ * | 8 | 6 by client | `assayer_payables ap` | `payable` | `ap.assignment_id` | as row 1 | `is_active`, grouped by `client_id` |
+ * | 9 | 7 recent activity | `billing_history h` | `history` | `h.assignment_id` | its assignment's branch is in the list | none; `ORDER BY created_at DESC LIMIT 30` |
+ * | 10 | 8a unbooked | `assignments a` | `assignment` | `a.id` | its own branch is in the list | `status = 'COMPLETED' AND (no line OR no payout)` |
+ * | 11 | 8b unsettled fee | `assayer_payables p` | `payable` | `p.assignment_id` | as row 1 | `is_active`, no expense, snapshot says the fee was never agreed |
+ * | 12 | 8c fee changed | `assayer_payables p` | `payable` | `p.assignment_id` | as row 1 | `is_active`, no expense, snapshot fee <> the assignment's fee |
+ * | 13 | 8d held payout | `assayer_payables p` | `payable` | `p.assignment_id` | as row 1 | `is_active AND on_hold` |
+ * | 14 | 8e held line | `billing_entries e` | `entry` | `e.assignment_id` | as row 2 | `is_active AND on_hold` |
+ * | 15 | 8f overdue | `billing_invoices i` | `invoice` | `i.id` -> its lines | as row 3 | `is_active`, `ISSUED`, past due, still outstanding |
+ *
+ * ### The ownership relationship each fragment relies on
+ *
+ * Each `EXISTS` is only ever a filter because the hop it walks is many-to-one on a primary key,
+ * and that is what makes it safe to reason about a SUM through it:
+ *
+ *  - a payable, a client line and a history row each name AT MOST ONE assignment
+ *    (`assignment_id`, nullable), an assignment names at most one `project_branch`, and a
+ *    `project_branch` names exactly one branch. So rows 1, 2, 6, 8, 9, 11-14 resolve to at most
+ *    one region, and "every region it resolves to" is one region or none;
+ *  - an invoice owns MANY lines, so rows 3, 4, 7 and 15 are the only ones where "every region"
+ *    can mean more than one — which is why `invoiceInRegion` is two predicates and not one;
+ *  - a payment settles at most one payable and at most one invoice, and takes that parent's
+ *    answer rather than deriving its own. That is what makes `cashflow.out` reconcile with
+ *    `payouts.paid`, and `cashflow.in` with `receivables.collected`, for a scoped caller.
+ *
+ * ### Two things deliberately NOT narrowed
+ *
+ *  - The outer `clients` query in slot 6. Its three sub-selects are narrowed instead, so a client
+ *    with no in-region rows produces no group and is dropped by the existing `IS NOT NULL` guard
+ *    — it disappears rather than appearing with zeros, because naming a client at all discloses
+ *    that it exists.
+ *  - Every statement, for an unrestricted caller or in `off` mode. `billingRegionFilters(null)`
+ *    returns fragments that add nothing, so the national SQL is character-for-character the text
+ *    it was before this file existed. The db spec pins that against a frozen copy of the pre-fix
+ *    queries: a fix that quietly narrowed the national view would be a worse defect than the leak.
+ *
+ * ### What "reconciled" means here
+ *
+ * Not "the service agrees with itself". The db spec re-implements the rule in TypeScript —
+ * resolving each assignment's region through `project_branches -> branches` and deciding
+ * membership row by row — then sums the money with plain `SUM(...) WHERE id = ANY($1)` over the
+ * base tables, on a fixture with two populated regions, a branch whose region is NULL, an
+ * assignment with no branch, an invoice spanning both regions, an invoice with no lines and a
+ * payment settling nothing. Two independently written formulations have to agree on every figure.
+ * Two further checks are the ones that would catch a join that double-counts: the regions must
+ * PARTITION the attributable money (A + B = the caller holding both), and each region's by-client
+ * rows must add up to that region's own headline figures.
+ */
+
 /** Default placeholder for the caller's region list. Bound as `text[]` by every caller. */
 const DEFAULT_REGIONS_EXPR = '$1::text[]';
 
