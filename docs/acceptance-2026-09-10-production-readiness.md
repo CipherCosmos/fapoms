@@ -35,8 +35,8 @@ production data.
 
 | Business capability | Result | Evidence |
 |---|---|---|
-| HR / lifecycle | **PASS** | `assayer-lifecycle-certification.db.spec.ts` 150/150 against the running system: all 98 illegal transitions refused with no mutation and no audit event; reason enforcement; departure effects; rehire routes RESIGNED and TERMINATED back to INVITED |
-| Operations / deployment | **PASS** | Eligibility, distance ceiling, project window and double-booking each refused a real attempt with an actionable message; override requires a stated reason and records it against the actor |
+| HR / lifecycle | **PASS with findings** | `assayer-lifecycle-certification.db.spec.ts` 150/150 against the running system: all 98 illegal transitions refused with no mutation and no audit event; reason enforcement; departure effects; rehire routes RESIGNED and TERMINATED back to INVITED. Plus 32/32 on the paths that suite does not cover — the bulk walker refuses to launder a rehire (`RESIGNED → ACTIVE` is skipped, "No valid path"), the reason gate is genuinely per-hop, `reset-onboarding-stage` rewinds only, and `DELETE /assayers/:id` needs ADMIN and a reason. AC-F10 and AC-F11 came out of this |
+| Operations / deployment | **PASS with a finding** | Eligibility, distance ceiling, project window and double-booking each refused a real attempt with an actionable message; override requires a stated reason and records it against the actor. The **conflict-of-interest rule is correctly unwaivable** — an appraiser 1.6 km from a branch is refused with `RULE_NOT_OVERRIDABLE` and told, in the message, that it is not an operator's to waive. A REJECTED empanelment is a hard block that ADMIN cannot lift even with a written reason. But AC-F09: that same REJECTED standing can be flipped to ACTIVE in one unguarded call first |
 | Assignment | **PASS** | E2E-01…E2E-14; state machine, ownership, versioning; completed work cannot be cancelled; a second completion is not a second business event |
 | Field execution | **PASS** (API path) | Accept, check-in with GPS, and completion; `checked_in_at` stamped; an assayer cannot complete their own job (403) or price it (`fee: 99999` ignored). Mobile app itself not exercised — see *not tested* |
 | Financial | **PASS** | Money recomputed independently and matching: 2500 − TDS 250 = 2250; client GST 2500 × 18% = 450; client TDS on the base, never the GST; line total 2700. Segregation of duties refuses booker-approves and approver-pays, by name. Duplicate payment reference yields one payment |
@@ -65,6 +65,10 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F06 | HIGH | caddy crash-looped on a fresh host over a bind-mounted file nothing created — seven healthy containers and an app answering nothing | **FIXED AND VERIFIED** — caddy comes up and serves; the installer creates the snippet |
 | AC-F07 | HIGH | The documented seed could not run on a hardened deployment: `seed.js --if-empty` issued an unconditional `TRUNCATE`, which the runtime role correctly refuses | **FIXED AND VERIFIED** — the documented command now completes as the runtime user |
 | AC-F08 | LOW | The distance-ceiling override accepts a 9-character justification where the eligibility override demands 10. The decision is still audited and attributable | Open |
+| AC-F09 | **HIGH** | **A client's rejection can be reversed in one unguarded call.** `PUT /assayers/:id/empanelment/:clientId` is a free-form upsert with no state machine: `REJECTED → ACTIVE` in a single request returns 200 and the standing is ACTIVE. No reason is required, no second approver, and any holder of `assayer:edit:organization` can do it. Mitigated only after the fact by the `EMPANELMENT_SET` audit row, which does record the previous value and the actor | Open |
+| AC-F10 | MEDIUM | **A bulk lifecycle move can half-succeed and report only the failure.** `INVITED → INACTIVE` routes through DOCUMENT_VERIFICATION; the first hop needs no reason and commits, the second is refused for want of one. The person ends at DOCUMENT_VERIFICATION when INACTIVE was asked for, one audit row is written, and the response lists the id under `failed` only — it never mentions the hop that landed. A roster batch can silently advance people the operator believes were refused | Open |
+| AC-F11 | MEDIUM | **The assayer-delete cascade cancels assignments with no per-assignment trail.** Archiving a person raw-`UPDATE`s their open assignments to CANCELLED and bumps `entity_version`, but writes **zero** audit rows against those assignments; only the aggregate `ASSAYER_DELETED` row on the assayer exists, and it names neither the assignments nor how many. "Why was my job cancelled?" is answerable only by already knowing to look at the assayer's deletion | Open |
+| AC-F12 | LOW | `STRICTLY_NON_OVERRIDABLE_STANDINGS` names `EXPIRED` and `SUSPENDED`, which are not members of `EmpanelmentStatus` and are forbidden by `chk_empanelment_status` — two of the four "strictly non-overridable" standings are unreachable strings. No protection is lost (the reachable ones are covered) but the list overstates what it guards | Open |
 
 ### The clean-install run
 
@@ -104,6 +108,7 @@ podman and homeserver paths; the orphaned-endpoint list in `integration-audit-ha
 | `assayer-lifecycle-certification.db.spec.ts` | **150/150** — first time run in this working copy |
 | Core business loop (E2E + SoD + money) | **25/25** |
 | Authorization, isolation, audit defences | **20/20** |
+| Lifecycle bypass, bulk and empanelment probes | **32/32** (`scripts/acceptance/lifecycle-bypass.mjs`) |
 | `npm run verify:migrations` | 79 migrations, 94 tables, second run a no-op, all named constraints present |
 | Runtime-role assertions at boot | 10/10 |
 | Typecheck | backend, frontend, mobile — all clean |
