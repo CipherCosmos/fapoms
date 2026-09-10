@@ -2,26 +2,43 @@
 
 ## Executive conclusion
 
-**READY WITH ACCEPTED RISKS.**
+**NOT READY — by a short, well-understood list that is nowhere near the business logic.**
 
-The business logic is sound and, where it matters most, provably so. The complete operational
-loop — hire a person, deploy them to work, execute it, complete it, pay for it — runs correctly
-end to end, refuses the illegal versions of every step it was asked to refuse, survives
-concurrent operators, and reconciles to the rupee under independent recomputation. The audit
-trail is now tamper-proof against the application's own database credential, which closes the
-most serious control gap this project has carried.
+Take the good news first, because it is the larger part. The complete operational loop — hire a
+person, deploy them to work, execute it, complete it, pay for it — runs correctly end to end,
+refuses the illegal version of every step it was asked to refuse, survives concurrent operators,
+and reconciles to the rupee under independent recomputation. Segregation of duties holds in both
+directions and says so by name. The audit trail is now tamper-proof against the application's own
+database credential, which closes the most serious control gap this project has carried. Not one
+defect was found in how this system decides anything about money, work or people.
 
-This campaign found six defects in **deployment mechanics** — not one of them in the product's
-business logic. Provisioning a fresh installation failed three times before it succeeded, the
-one-command installer had drifted out of step with the compose file it drives, caddy crash-looped
-over a missing file, and the documented seed could not run against the hardened database it had
-just created. All six were reported to the session that owns those files, fixed by it during this
-campaign, and then re-verified here **from destroyed volumes**: the rig was torn down, rebuilt,
-and the whole path run again from nothing, first attempt, no manual steps. It now comes up clean.
+What stops it shipping is the front door. Signing in from the site root — the normal way anyone
+opens the app — leaves a blank screen with no error and no spinner (AC-F14). Signing out hands the
+next person the previous user's page (AC-F15). And a DESK_OPERATOR's own landing page never
+finishes loading: three of its four tiles sit on an ellipsis for ever because the route wants a
+permission that role does not hold (AC-F16). A desk operator cannot use the system today. That is
+not a risk to accept, it is a morning's work to fix, and calling it accepted because the campaign
+ran out of days would be the wrong kind of report.
 
-The residual risk is what was **not examined**: no browser workflow was driven, so the user
-interface is unassessed rather than passed. That, and a short list of low-severity items carried
-forward from the previous record, are the whole of the accepted risk.
+Two more belong on that list, in the product rather than the interface. A client's rejection of an
+assayer can be reversed in a single unguarded call, with no reason and no second approver (AC-F09);
+the assignment-time hard block still refuses the work, so nothing unsafe reaches the field, but the
+standing should not be one PUT away from ACTIVE. And the one that would worry me most in
+production: **every scheduled job can stop for ever and nothing reports it** (AC-F20). It happened
+on this deployment — nine minutes with no cron at all, while health said `ok`, the worker stayed
+healthy, ordinary jobs kept succeeding and nothing was logged. The outbox is what turns completed
+work into payables, so the failure mode is money quietly not being booked. A restart fixes it; the
+problem is that nobody would know to restart. AC-F21 compounds it: the only screen that would show
+the backlog is DEVELOPER-only, and this deployment has no DEVELOPER accounts.
+
+Six further defects in deployment mechanics were found, reported, fixed by the session that owns
+those files, and **re-verified here from destroyed volumes** — torn down, rebuilt, and the whole
+path run again from nothing, first attempt, no manual steps. Those are closed.
+
+Fix AC-F14, AC-F15, AC-F16, AC-F09 and AC-F20 — the last of which may be no more than
+re-converging the schedules periodically instead of once at boot, plus an alert on a non-empty
+delayed queue — then re-run the four probe scripts and the browser pass. That is what stands
+between this and READY. Nothing else on the list needs to block it.
 
 What this rests on: a purpose-built production-shaped stack (caddy, ClamAV, Postgres, Redis,
 MinIO, and a separate API and worker) brought up from empty volumes on this machine, migrated,
@@ -44,7 +61,7 @@ production data.
 | Authorization | **PASS** | DESK_OPERATOR refused on six privileged writes over direct HTTP with a before/after database comparison showing nothing changed; assayer horizontal isolation on work, acceptance and bank details |
 | UI / usability | **PASS with findings** | Driven in a real browser as three roles. Per-role landing correct, every core screen renders real data cross-checked against SQL, refresh discipline holds (transition → navigate away → hard reload → return → server truth), authorization redirects are honest, and 375px is clean — no horizontal body scroll, wide content scrolls inside its own containers, sidebar goes off-canvas with a bottom nav. **No mismatched numbers anywhere**: 8 assayers, ₹5,400 unbilled and 10 branches each agree across three screens and the database. Four defects found — AC-F14 to AC-F17 |
 | Management figures | **PASS** | Every headline number on the finance overview recomputed from base tables with independent SQL and matching to the rupee |
-| Reliability | **PARTIAL** | Concurrency proven (races, duplicate submits, stale versions, idempotent money). Worker failure injection and outbox replay were probed separately — see the reliability track |
+| Reliability | **PASS with a serious finding** | 25/25: a duplicated booking event is absorbed and still yields one payable and one client line; stopping the worker proves it is what drains the outbox (not dispatched for 135 s, dispatched 24 s after restart); a refused approval unwinds completely — even the banking snapshot a pessimistic lock had begun — leaving one `DENIED` row and no `SUCCESS`; six simultaneous completions produce one audit row, one version bump, one payable. But AC-F20: every cron schedule can stop for ever, silently |
 
 ---
 
@@ -77,6 +94,10 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F17 | MEDIUM | **The navigation offers a page the API refuses.** `/documents` is listed for DESK_OPERATOR in `route-permissions.ts`, so the sidebar renders the link, but `GET /documents/operations/overview` answers 403 and the page shows a permission error with a Retry button that will fail identically forever. The message is honest; the link should not be there | Open |
 | AC-F18 | MEDIUM | **A role-scoped dashboard states a global fact that is false.** As DESK_OPERATOR the dashboard reads *"Nothing blocked. No audits at risk, no paperwork waiting, nothing unbilled."* while ₹5,400 was unbilled and the admin dashboard said so. The scoped view is defensible; the sentence is not | Open |
 | AC-F19 | LOW | Every Google Fonts file violates the `font-src 'self' data:` CSP. The policy is report-only so fonts load today, but switching CSP to enforce breaks the app's webfonts | Open |
+| AC-F20 | **HIGH** | **Every scheduled job can stop for ever, and nothing notices.** Observed on this healthy deployment: all seven cron schedules registered at 06:42, audit-seal fired once, then **nothing for nine minutes** — while the worker stayed `healthy`, `/health` said `ok`, ordinary Bull jobs kept succeeding, and no error was logged. Measured consequences: a due outbox row undispatched for 181 s across three tick boundaries, and 134 audit events left unsealed (`audit_events` 154 vs `audit_chain` 20). Redis held zero `bull:*:repeat` keys for all seven queues. Proven in isolation on a throwaway queue: delete the repeat key and the schedule fires 0 more times, keys are never recreated, 0 errors emitted. `repeatable-schedules.ts` converges once at `onModuleInit` and never re-verifies; Bull only schedules the next firing if the repeat ZSET member still exists, and a miss returns silently. Only a process restart recovers it — which restored all seven and let the seal catch up to 155/155. **Because the outbox books payables, completed work can silently stop turning into money** | Open |
+| AC-F21 | MEDIUM | **Nobody on this deployment can see the backlog.** `GET /admin/outbox/health` and the dead-letter queue are `@Roles(DEVELOPER)`, and the deployment has **zero active DEVELOPER accounts**. The Prometheus gauge `queue_depth{queue="outbox",state="delayed"}` is exported, but a dead cron is indistinguishable from an idle queue without an alert on "delayed ≥ 1", and no such alert exists. AC-F20 was therefore invisible from every surface an operator has | Open |
+| AC-F22 | MEDIUM | **Delivery to nobody is recorded as delivery.** An event whose name no subscriber handles is marked `dispatched_at` with `attempts = 0` — `deliverLocallyAsync` iterates an empty listener array and returns. A renamed or deleted subscriber discards events silently and the dead-letter queue never learns of them | Open |
+| AC-F23 | LOW | Dead-lettering could not be exercised from outside the process: no reachable subscriber throws on a malformed payload, so `attempts` climbing to `failed_at` remains unverified on a live deployment (it is covered by unit tests and by the previous record's replay evidence) | Open |
 
 ### The clean-install run
 
@@ -123,6 +144,7 @@ podman and homeserver paths; the orphaned-endpoint list in `integration-audit-ha
 | Typecheck | backend, frontend, mobile — all clean |
 | Adversarial guard checks | 3/3 — each control removed in source, its test observed going red, the file restored and checksum-verified |
 | Browser pass | 3 roles, 8 screens, refresh discipline, 375px responsive — 4 defects found |
+| Reliability, outbox and worker probes | **25/25** (`scripts/acceptance/reliability.mjs`) |
 | Malware scanning | EICAR refused (400, `Rejected infected upload: Eicar-Test-Signature`); a clean PDF accepted (201) |
 | Deployment path, from empty volumes | Exercised; failed three times before succeeding (AC-F01/02/03) |
 
