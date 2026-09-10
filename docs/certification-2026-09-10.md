@@ -420,8 +420,16 @@ Only items for which no evidence could be obtained here.
    here. The last was the unowned-rows finding, also above.
 
    After `ReconcileRolePermissions3` and `BackfillTenantOwnership2` — `migration:run` alone, no
-   re-seed — they report **38 of 39**, the remaining failure being the `EmpanelmentStatus` bug
-   fixed here after their run. All eight cross-tenant assertions cleared, and they are now
+   re-seed — they report **38 of 39**. The remaining failure was the same vocabulary bug a second
+   time: the cross-tenant case sent `BLACKLISTED`, which no enum contains, so the DTO refused the
+   body with a 400 before the request reached the organisation check. That case asserts a refusal,
+   and a 400 is a refusal, so it would have read as proof of a boundary it was never touching.
+   Probing the route directly showed the boundary does hold — an OPERATIONS user gets 404 with
+   nothing written, an ADMIN gets 200 and the standing is written, which is the documented
+   platform-operator behaviour. Corrected here, along with a guard: `db-spec-status-vocabulary.spec.ts`
+   reads every `.db.spec.ts` and fails the unit build on a status no enum defines, which is what
+   these suites needed, since they cannot run without a live deployment and can sit wrong for a
+   long time. All eight cross-tenant assertions cleared, and they are now
    asserting what they claim for the first time rather than being satisfied by a permission
    refusal: organisation A is refused B's profile read, code lookup, roster list, typeahead, map,
    dossier, identity scan, rate card, past payables, activity timeline, invitation revocation and

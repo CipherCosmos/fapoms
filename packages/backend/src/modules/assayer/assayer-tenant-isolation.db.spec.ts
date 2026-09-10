@@ -584,11 +584,24 @@ describe('assayer tenant isolation — F-03 acceptance matrix against the runnin
     });
 
     it('PUT /assayers/:assayerId/empanelment/:clientId — the standing is not written', async () => {
+      /**
+       * TERMINATED, and it has to be a real member for this case to mean anything.
+       *
+       * It sent BLACKLISTED, which `EmpanelmentStatus` has never had. The DTO refused the body
+       * with a 400 before the request came anywhere near the organisation check, so the case
+       * asserting that a foreign standing is not written was never reaching the code that decides
+       * that. Probing the route directly afterwards showed the boundary does hold: an OPERATIONS
+       * user gets 404 and nothing is written, while an ADMIN gets 200 and the standing is written,
+       * which is the documented platform-operator behaviour the section below covers.
+       *
+       * A destructive standing on purpose. If the refusal ever stops working, the row this case
+       * reads back should have changed in a way nobody could mistake for noise.
+       */
       const before = await empanelmentStatus(fixtureB.assayerId, fixtureB.clientId);
       const auditBefore = await auditCount(fixtureB.assayerId);
       const res = await call(
         A, 'PUT', `/assayers/${fixtureB.assayerId}/empanelment/${fixtureB.clientId}`,
-        { status: 'BLACKLISTED', statusReason: 'Cross-tenant empanelment attempt.' },
+        { status: EmpanelmentStatus.TERMINATED, statusReason: 'Cross-tenant empanelment attempt.' },
       );
       expect(res.status).toBe(404);
       expect(await empanelmentStatus(fixtureB.assayerId, fixtureB.clientId)).toBe(before);
