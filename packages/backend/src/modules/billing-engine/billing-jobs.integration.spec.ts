@@ -353,7 +353,10 @@ describe('Phase 0.1 Financial Durability — End-to-End Boundary & Idempotency V
     expect(mockQueue.add).toHaveBeenCalledWith(
       'book-assignment',
       { assignmentId: 'asn-fail-test-1', userId: 'admin-1', outboxEventId: 'outbox-uuid-1' },
-      expect.objectContaining({ jobId: 'book-assignment:asn-fail-test-1' }),
+      // Keyed on the completion event, not the assignment: a redelivery of this same event
+      // collapses to this id, while a later legitimate completion of the same assignment gets
+      // its own. See `enqueueBookAssignment`.
+      expect.objectContaining({ jobId: 'book-assignment:outbox-uuid-1' }),
     );
     expect(outboxStore.get('outbox-uuid-1')?.dispatchedAt).toBeInstanceOf(Date);
   });

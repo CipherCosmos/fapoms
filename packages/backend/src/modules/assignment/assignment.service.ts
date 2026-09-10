@@ -1,6 +1,6 @@
 import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, LessThan, Raw, EntityManager, IsNull } from 'typeorm';
+import { DataSource, Repository, In, LessThan, Raw, EntityManager, IsNull , Not } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
@@ -46,7 +46,10 @@ import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { withCode } from '../../infrastructure/http/api-error';
 import { EventCategory, ScheduleStatus, AssignmentStatus, AssayerStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, expandRoles,
-  AssignmentRule, canOverrideAssignmentRule, overrideAdviceFor, ASSIGNMENT_ERROR_CODES } from '@fapoms/shared';
+  AssignmentRule, canOverrideAssignmentRule, overrideAdviceFor, ASSIGNMENT_ERROR_CODES,
+  DEAD_PAYABLE_STATUSES,
+  DEAD_BILLING_STATES,
+} from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -1977,10 +1980,20 @@ export class AssignmentService {
       const assignment = await manager.findOne(AssignmentEntity, { where: { id } });
       if (!assignment) throw new NotFoundException(`Assignment ${id} not found`);
 
-      // Financial State Machine Validation
-      // 1. Assayer Payable state verification
+      /**
+       * Financial State Machine Validation
+       * 1. Assayer Payable state verification — the LIVE payable, not any payable.
+       *
+       * An assignment that has been reopened and redone carries more than one fee payable: the
+       * voided one from the earlier completion and the live one from the redo. This looked one up
+       * by assignment alone, so a second reopen could pick the already-voided row, void it again
+       * to no effect, and leave the live payout standing on an assignment that had just gone back
+       * to ACCEPTED — money owed for work no longer recorded as done. It is the mirror image of
+       * the defect on the booking side, and the same mistake: "a row" standing in for "the row
+       * that is current".
+       */
       const payable = await manager.findOne(AssayerPayableEntity, {
-        where: { assignmentId: id, expenseId: IsNull() },
+        where: { assignmentId: id, expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
       });
       if (payable) {
         if (payable.status === AssayerPayableStatus.PAID) {
@@ -2005,9 +2018,9 @@ export class AssignmentService {
         await this.billingEngine.voidPayable(payable.id, statedReason, userId, { manager, emit });
       }
 
-      // 2. Client Billing Entry state verification
+      // 2. Client Billing Entry state verification — the LIVE line, for the same reason.
       const billingEntry = await manager.findOne(BillingEntryEntity, {
-        where: { assignmentId: id },
+        where: { assignmentId: id, state: Not(In(DEAD_BILLING_STATES)) },
       });
       if (billingEntry) {
         if (billingEntry.state === BillingState.INVOICED || billingEntry.state === BillingState.PAID) {

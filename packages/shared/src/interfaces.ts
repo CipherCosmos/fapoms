@@ -837,11 +837,28 @@ export interface AssignmentMoneyLine {
   assignmentId: string;
   assignmentNumber: string | null;
   assignmentStatus: string | null;
+  /**
+   * Does THIS completion have a live financial effect?
+   *
+   * Not "has a row ever existed for this assignment" — that reading is true forever once
+   * anything has been booked, and it is what let a reopened, redone and re-completed audit
+   * report itself as booked while nobody was paid for it. Both legs must be present and neither
+   * may be voided or cancelled. See `billing-liveness.ts`.
+   */
   booked: boolean;
   /** The fee the money was (or would be) booked from, and whether it was ever agreed. */
   fee: { amount: number; settled: boolean; source: 'AGREED' | 'PROPOSED' | 'NONE' } | null;
+  /** The LIVE fee payable, or null when this completion has none. */
   payable: AssayerPayable | null;
+  /**
+   * Money booked for an EARLIER completion of this same assignment and since withdrawn — the
+   * voided payables and cancelled lines a reopen leaves behind. They are shown because the
+   * history is the explanation for why an assignment has been billed more than once; they are
+   * kept out of `payable`/`entry` because they are not what is owed now.
+   */
+  superseded: { payables: AssayerPayable[]; entries: BillingEntry[] };
   reimbursements: AssayerPayable[];
+  /** The LIVE client line, or null when this completion has none. */
   entry: BillingEntry | null;
   invoice: Pick<BillingInvoice, 'id' | 'invoiceNumber' | 'status' | 'issueDate' | 'dueDate' | 'total' | 'paidAmount' | 'outstandingAmount'> | null;
   payments: BillingPayment[];

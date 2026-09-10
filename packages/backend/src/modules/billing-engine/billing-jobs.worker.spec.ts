@@ -46,8 +46,17 @@ describe('BillingJobsWorker & BillingJobsService (Financial Processing Durabilit
   });
 
   describe('BillingJobsService.enqueueBookAssignment', () => {
-    it('enqueues with deterministic jobId, outboxEventId, and durable retry options', async () => {
-      const mockJob = { id: 'book-assignment:asn-123' };
+    /**
+     * The job id keys on the completion EVENT, not the assignment.
+     *
+     * Bull refuses a job whose id already exists, which is what makes this idempotent against a
+     * redelivered event. Keyed on the assignment, that same mechanism silently dropped every
+     * booking after the first one the assignment ever had: an audit reopened, redone and
+     * completed again enqueued a job with the id of the first — already succeeded — and Bull
+     * discarded it without a word, so the assayer was never paid for the work they redid.
+     */
+    it('keys the job on the completion event, so a redo is a new job', async () => {
+      const mockJob = { id: 'book-assignment:outbox-uuid-1' };
       queue.add.mockResolvedValueOnce(mockJob);
 
       const job = await service.enqueueBookAssignment('asn-123', 'user-1', 'outbox-uuid-1');
@@ -57,13 +66,50 @@ describe('BillingJobsWorker & BillingJobsService (Financial Processing Durabilit
         BILLING_JOB.BOOK_ASSIGNMENT,
         { assignmentId: 'asn-123', userId: 'user-1', outboxEventId: 'outbox-uuid-1' },
         expect.objectContaining({
-          jobId: 'book-assignment:asn-123',
+          jobId: 'book-assignment:outbox-uuid-1',
           attempts: 5,
           backoff: { type: 'exponential', delay: 2000 },
           timeout: 60000,
         }),
       );
       expect(job).toBe(mockJob);
+    });
+
+    /**
+     * Two completions of one assignment — the original and the redo after a reopen — carry
+     * different event ids and must therefore produce different jobs. This is the case the old
+     * key could not express, and the one the assayer's pay depends on.
+     */
+    it('gives a redo of the same assignment its own job', async () => {
+      queue.add.mockResolvedValue({ id: 'x' });
+
+      await service.enqueueBookAssignment('asn-123', 'user-1', 'event-first-completion');
+      await service.enqueueBookAssignment('asn-123', 'user-1', 'event-after-redo');
+
+      const jobIds = queue.add.mock.calls.map((c: any[]) => c[2].jobId);
+      expect(jobIds).toEqual(['book-assignment:event-first-completion', 'book-assignment:event-after-redo']);
+      expect(new Set(jobIds).size).toBe(2);
+    });
+
+    /**
+     * And the redelivery it protects against still collapses: the at-least-once bus replaying one
+     * event twice yields one job id, so Bull drops the second and the assignment is booked once.
+     */
+    it('gives a redelivery of the SAME completion event the same job id', async () => {
+      queue.add.mockResolvedValue({ id: 'x' });
+
+      await service.enqueueBookAssignment('asn-123', 'user-1', 'event-one');
+      await service.enqueueBookAssignment('asn-123', 'user-1', 'event-one');
+
+      const jobIds = queue.add.mock.calls.map((c: any[]) => c[2].jobId);
+      expect(new Set(jobIds).size).toBe(1);
+    });
+
+    /** No event id (a direct or legacy call) keeps the old key rather than becoming unbounded. */
+    it('falls back to the assignment id when there is no event id', async () => {
+      queue.add.mockResolvedValue({ id: 'x' });
+      await service.enqueueBookAssignment('asn-123', 'user-1');
+      expect(queue.add.mock.calls[0][2].jobId).toBe('book-assignment:asn-123');
     });
 
     it('removes a dead/failed job with same ID so manual replay or relay can enqueue cleanly', async () => {

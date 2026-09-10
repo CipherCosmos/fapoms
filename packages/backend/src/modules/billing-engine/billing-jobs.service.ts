@@ -65,8 +65,27 @@ export class BillingJobsService {
   /**
    * Enqueue a durable job to book a completed assignment.
    *
-   * Uses deterministic jobId `book-assignment:${assignmentId}` to prevent duplicate pending jobs in Redis.
-   * Leverages BOOK_ASSIGNMENT_JOB_OPTIONS (5 attempts, exponential backoff, dead-letter visibility).
+   * The job id keys on the **completion event**, not the assignment.
+   *
+   * Bull refuses a job whose id already exists, which is what makes this path idempotent against
+   * an at-least-once bus: a redelivered `assignment:status-changed` carries the same
+   * `outboxEventId`, produces the same job id, and is dropped instead of booking twice.
+   *
+   * Keyed on the assignment id instead, as it was, that same mechanism silently dropped every
+   * booking after the first one the assignment ever had. An audit completed, reopened, redone and
+   * completed again enqueued a second job with the id of the first — which had already succeeded
+   * — so Bull discarded it without a word. No error, no dead letter, no log beyond "Enqueued".
+   * The assayer was never paid for the work they redid.
+   *
+   * This is the same assumption as the existence check and the unique indexes it sat behind:
+   * one booking per assignment, forever. An assignment can legitimately be booked more than once
+   * over its life; it must never be booked twice for the *same* completion. The event id is
+   * exactly that distinction, so it is what the id is built from. Where a caller has no event id
+   * (a direct or legacy invocation), this falls back to the old key rather than to something
+   * unbounded — dropping a duplicate is a safer default than booking one.
+   *
+   * `bookAssignment` remains idempotent underneath regardless: it looks for LIVE legs, and the
+   * partial unique indexes refuse a second live row per assignment.
    *
    * If a previous job with this ID failed permanently and remains in Redis failed retention:
    * checks its state and removes the dead job so an operator-triggered outbox replay or reconcile
@@ -77,7 +96,7 @@ export class BillingJobsService {
     userId = 'system',
     outboxEventId?: string,
   ): Promise<Job> {
-    const jobId = `book-assignment:${assignmentId}`;
+    const jobId = `book-assignment:${outboxEventId ?? assignmentId}`;
 
     // Bull retains failed jobs. If a job exists in 'failed' state, remove it to allow replay.
     try {

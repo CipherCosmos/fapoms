@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull, EntityManager } from 'typeorm';
+import { Repository, In, IsNull, Not, EntityManager } from 'typeorm';
 import { BillingJobsService } from './billing-jobs.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { isUniqueViolation } from '../../infrastructure/database/unique-violation';
@@ -49,6 +49,12 @@ import {
 } from '../notifications/notification-dispatch.service';
 import {
   BillingState,
+  DEAD_BILLING_STATES,
+  DEAD_PAYABLE_STATUSES,
+  isLiveBillingEntry,
+  isLivePayable,
+  liveBillingEntrySql,
+  livePayableSql,
   InvoiceStatus,
   PaymentMethod,
   PaymentDirection,
@@ -271,20 +277,34 @@ export class BillingEngineService implements OnModuleInit {
         const clientId = project?.clientId;
         if (!clientId) return { booked: false, reason: 'no client for assignment' };
 
-        const [existingEntry, existingPayable] = await Promise.all([
-          m.findOne(BillingEntryEntity, { where: { assignmentId } }),
-          m.findOne(AssayerPayableEntity, { where: { assignmentId, expenseId: IsNull() } }),
+        /**
+         * LIVE rows only — a voided payable and a cancelled line are history, not a booking.
+         *
+         * This read used to ask whether a row existed at all, which is true forever once an
+         * assignment has ever been billed. So a reopened audit, redone and completed again,
+         * found its own voided payable here, concluded "already booked", and wrote nothing: the
+         * assayer was never paid for the work they redid and the client was never billed for it,
+         * while the money view beside this reported `booked: true`. See `billing-liveness.ts`.
+         */
+        const [liveEntry, livePayable] = await Promise.all([
+          m.findOne(BillingEntryEntity, { where: { assignmentId, state: Not(In(DEAD_BILLING_STATES)) } }),
+          m.findOne(AssayerPayableEntity, {
+            where: { assignmentId, expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
+          }),
         ]);
-        if (existingEntry && existingPayable) {
-          return { booked: false, reason: 'already booked', entryId: existingEntry.id, payableId: existingPayable.id };
+        if (liveEntry && livePayable) {
+          return { booked: false, reason: 'already booked', entryId: liveEntry.id, payableId: livePayable.id };
         }
 
         const ctx = await this.moneyContextFor(clientId, a.assayerId, a.quotedTravelFee, m);
         const money = assignmentMoney(a, ctx);
         if (money.fee.source === 'NONE') return { booked: false, reason: 'NO_FEE' };
 
-        const payable = existingPayable ?? await this.insertFeePayable(m, a, clientId, money, ctx, userId);
-        const entry = existingEntry ?? await this.insertClientLine(m, a, clientId, money, ctx, userId);
+        // Reuse only a LIVE leg. Where the only row is voided or cancelled, this inserts a new
+        // one alongside it — which the partial unique indexes permit precisely because they
+        // exclude the dead states. The history stays; the new completion gets its own effect.
+        const payable = livePayable ?? await this.insertFeePayable(m, a, clientId, money, ctx, userId);
+        const entry = liveEntry ?? await this.insertClientLine(m, a, clientId, money, ctx, userId);
 
         emit('billing:booked', {
           assignmentId: a.id,
@@ -302,9 +322,15 @@ export class BillingEngineService implements OnModuleInit {
         isUniqueViolation(err, 'UQ_billing_entries_root_per_assignment') ||
         isUniqueViolation(err, 'UQ_assayer_payables_fee_per_assignment')
       ) {
+        // The same liveness rule as the read above. Since the indexes became partial, a unique
+        // violation can only mean a LIVE row got there first, so that is what to look for —
+        // finding a voided one here and reporting "already booked" would recreate the defect
+        // inside the race handler.
         const [entry, payable] = await Promise.all([
-          this.entryRepository.findOne({ where: { assignmentId } }),
-          this.payableRepository.findOne({ where: { assignmentId, expenseId: IsNull() } }),
+          this.entryRepository.findOne({ where: { assignmentId, state: Not(In(DEAD_BILLING_STATES)) } }),
+          this.payableRepository.findOne({
+            where: { assignmentId, expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
+          }),
         ]);
         // CRITICAL INVARIANT: Only treat as 'already booked' if BOTH legs exist in the database.
         // If one leg is missing, this is an inconsistent partial state that MUST NOT be acknowledged
@@ -473,11 +499,18 @@ export class BillingEngineService implements OnModuleInit {
     // and a COMPLETED audit that happened does not stop having happened because the assayer who
     // did it was later removed. Filtering on is_active hid exactly the work most likely to still
     // need billing — a deleted assayer's outstanding payable is not deleted with them.
+    /**
+     * The joins match LIVE rows only, so a completion whose money was voided and never re-booked
+     * is visible here. They previously matched any row, which made this blind to exactly the
+     * damage it exists to repair: a reopened-and-redone assignment kept its cancelled line and
+     * voided payable, the LEFT JOINs found them, and `count` came back 0 while the assayer went
+     * unpaid. Detection and repair share this query, so a blind detector is also a blind repair.
+     */
     const rows: Array<{ id: string }> = await this.assignmentRepository.manager.query(
       `SELECT a.id
          FROM assignments a
-         LEFT JOIN billing_entries e ON e.assignment_id = a.id
-         LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL
+         LEFT JOIN billing_entries e ON e.assignment_id = a.id AND ${liveBillingEntrySql('e')}
+         LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL AND ${livePayableSql('p')}
         WHERE a.status = 'COMPLETED'
           AND (e.id IS NULL OR p.id IS NULL)
           AND ($1::date IS NULL OR a.completion_date >= $1::date)
@@ -489,10 +522,14 @@ export class BillingEngineService implements OnModuleInit {
 
   /**
    * Find completed assignments that are in an inconsistent PARTIAL financial state:
-   * exactly one leg exists (entry without payable, or payable without entry).
+   * exactly one LIVE leg exists (entry without payable, or payable without entry).
    *
    * Used by operations and monitoring to pinpoint data inconsistencies caused by
    * historical bugs, partial migrations, or legacy records.
+   *
+   * Liveness matters here for the same reason it does in `unbookedAssignmentIds`: a voided
+   * payable beside a live client line is a half-booked assignment, and counting the voided row
+   * as a leg would report it as healthy.
    */
   async partialFinancialStates(since: string | null = null): Promise<Array<{
     assignmentId: string;
@@ -505,8 +542,8 @@ export class BillingEngineService implements OnModuleInit {
                 (e.id IS NOT NULL) AS has_entry,
                 (p.id IS NOT NULL) AS has_payable
            FROM assignments a
-           LEFT JOIN billing_entries e ON e.assignment_id = a.id
-           LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL
+           LEFT JOIN billing_entries e ON e.assignment_id = a.id AND ${liveBillingEntrySql('e')}
+           LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL AND ${livePayableSql('p')}
           WHERE a.status = 'COMPLETED'
             AND (
               (e.id IS NULL AND p.id IS NOT NULL)
@@ -2920,12 +2957,27 @@ export class BillingEngineService implements OnModuleInit {
       const region = await this.projectBranchRegion(a.projectBranchId);
       await this.regionGuard.assertRegionAllowedStaged(region, scope, 'billing-engine:assignment-money');
     }
-    const [entry, payables, history] = await Promise.all([
-      this.entryRepository.findOne({ where: { assignmentId } }),
+    const [entries, payables, history] = await Promise.all([
+      this.entryRepository.find({ where: { assignmentId }, order: { createdAt: 'ASC' } }),
       this.payableRepository.find({ where: { assignmentId, isActive: true }, order: { createdAt: 'ASC' } }),
       this.historyRepository.find({ where: { assignmentId }, order: { createdAt: 'DESC' }, take: 50 }),
     ]);
-    const payable = payables.find((p) => !p.expenseId) ?? null;
+    /**
+     * The LIVE leg is the headline; the dead ones stay in `superseded` as history.
+     *
+     * A reopened-and-redone assignment legitimately has two fee payables — the voided one from
+     * the first completion and the live one from the redo — and this used to take whichever came
+     * first by `createdAt`, which is the voided one. The screen then presented a voided payable
+     * as *the* payable and reported `booked: true` beside it, on an assignment whose live money
+     * this same bug had failed to book at all.
+     */
+    const feePayables = payables.filter((p) => !p.expenseId);
+    const payable = feePayables.find((p) => isLivePayable(p.status)) ?? null;
+    const entry = entries.find((e) => isLiveBillingEntry(e.state)) ?? null;
+    const superseded = {
+      payables: feePayables.filter((p) => !isLivePayable(p.status)) as any,
+      entries: entries.filter((e) => !isLiveBillingEntry(e.state)) as any,
+    };
     const reimbursements = payables.filter((p) => !!p.expenseId);
     const payableIds = payables.map((p) => p.id);
     const [invoice, outbound, inbound] = await Promise.all([
@@ -2938,9 +2990,13 @@ export class BillingEngineService implements OnModuleInit {
       assignmentId,
       assignmentNumber: a.assignmentNumber ?? null,
       assignmentStatus: a.status ?? null,
+      // `booked` means "this completion has a live financial effect", not "a row has ever
+      // existed for it". Both legs, both live. See `billing-liveness.ts`.
       booked: !!(entry && payable),
       fee: fee.source === 'NONE' ? null : fee,
       payable: payable as any,
+      /** Voided payables and cancelled lines from earlier completions of this same assignment. */
+      superseded,
       reimbursements: reimbursements as any,
       entry: entry as any,
       invoice: invoice
@@ -3182,13 +3238,15 @@ export class BillingEngineService implements OnModuleInit {
                (e.id IS NULL) AS no_entry, (p.id IS NULL) AS no_payable,
                CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END AS fee
           FROM assignments a
-          LEFT JOIN billing_entries e ON e.assignment_id = a.id
-          LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL
+          LEFT JOIN billing_entries e ON e.assignment_id = a.id AND ${liveBillingEntrySql('e')}
+          LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL AND ${livePayableSql('p')}
           LEFT JOIN projects pr ON pr.id = a.project_id
           LEFT JOIN clients c ON c.id = pr.client_id
           LEFT JOIN assayers s ON s.id = a.assayer_id
          -- No a.is_active filter, matching unbookedAssignmentIds: a deleted assayer's cascade
          -- deactivates their assignments, but a COMPLETED audit still needs billing regardless.
+         -- LIVE legs only, also matching unbookedAssignmentIds — a voided payable is history, and
+         -- counting it as a leg is what kept a redone-but-unpaid audit off this very tile.
          WHERE a.status = 'COMPLETED' AND (e.id IS NULL OR p.id IS NULL)${rg.assignment('a')}
          ORDER BY a.completion_date DESC NULLS LAST LIMIT ${ATTENTION_LIMIT}`, 'unbooked'),
       q(`
