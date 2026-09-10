@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { KeyRound, ShieldAlert } from 'lucide-react';
 import { api } from '../services/api';
 import BrandLogo from '../components/BrandLogo';
+import { changeOwnPasswordPath } from '../config/self-service-endpoints';
 
 /**
- * Forced password change for staff.
+ * Forced password change.
  *
  * Shown in place of the application when the signed-in account still holds a password
  * somebody else chose — a seeded credential or an administrator reset. It is deliberately
@@ -12,6 +13,11 @@ import BrandLogo from '../components/BrandLogo';
  * password, and an optional banner would be ignored indefinitely.
  *
  * Sign-out stays available so nobody is trapped if they cannot complete the change.
+ *
+ * `roles` decides which self-service endpoint the change goes to. This screen used to be
+ * staff-only in fact as well as in its heading, posting a literal `/users/me/change-password` —
+ * so an assayer, who is not a `users` row, was shown this gate on the web and could never pass
+ * it. See `config/self-service-endpoints.ts`.
  */
 
 const MIN_LENGTH = 8;
@@ -19,9 +25,11 @@ const MIN_LENGTH = 8;
 interface Props {
   onChanged: () => void;
   onLogout: () => void;
+  /** The signed-in principal's roles, so the change goes to the right door. */
+  roles?: { name: string }[];
 }
 
-export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout }) => {
+export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout, roles }) => {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -52,7 +60,7 @@ export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout }) =>
 
     setBusy(true);
     try {
-      await api.request('/users/me/change-password', {
+      await api.request(changeOwnPasswordPath(roles), {
         method: 'POST',
         body: JSON.stringify({ currentPassword, newPassword }),
       });

@@ -346,6 +346,7 @@ export const App: React.FC = () => {
   if (!isLoadingUser && currentUser?.mustChangePassword) {
     return (
       <ForcePasswordChange
+        roles={currentUser.roles}
         onChanged={() => {
           setCurrentUser((prev) => (prev ? { ...prev, mustChangePassword: false } : prev));
           try {

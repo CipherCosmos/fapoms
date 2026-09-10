@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
+import { changeOwnPasswordPath } from '../config/self-service-endpoints';
 import { SessionsPanel } from './account/SessionsPanel';
 import { MfaPanel } from './account/MfaPanel';
 import {
@@ -108,7 +109,9 @@ export const Settings: React.FC = () => {
 
     setChangingPassword(true);
     try {
-      await api.request('/users/me/change-password', {
+      // The right door for this principal — an assayer is not a `users` row, and posting them at
+      // the staff endpoint answered 404 while this screen blamed their current password.
+      await api.request(changeOwnPasswordPath(userRoles), {
         method: 'POST',
         body: JSON.stringify({ currentPassword, newPassword }),
       });
