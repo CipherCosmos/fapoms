@@ -43,7 +43,8 @@ export const TdsReportModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
     const period = `${report.from ?? 'start'} to ${report.to ?? 'date'}`;
     const headers = ['Assayer', 'Assayer Code', 'PAN', `Section`, 'Payouts', 'Gross Paid', 'TDS Withheld', 'Net Paid', 'Period'];
     const rows = report.rows.map((r) => [
-      r.assayerName ?? '', r.assayerCode ?? '', r.pan ?? 'PAN not on file', report.section,
+      r.assayerName ?? '', r.assayerCode ?? '',
+      r.pan ? (r.panMasked ? `${r.pan} (last 4 only)` : r.pan) : 'PAN not on file', report.section,
       r.count, r.gross.toFixed(2), r.tds.toFixed(2), r.net.toFixed(2), period,
     ]);
     // Totals row, so the CSV foots to the same figures shown on screen.
@@ -98,7 +99,22 @@ export const TdsReportModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
                         {r.assayerName ?? r.assayerId}
                         {r.assayerCode && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 6 }}>{r.assayerCode}</span>}
                       </td>
-                      <td style={td}>{r.pan ?? <span style={{ color: 'var(--danger)' }}>Not on file</span>}</td>
+                      <td style={td}>
+                        {r.pan
+                          ? (
+                            <>
+                              {r.pan}
+                              {/* Say which it is. A masked PAN that looks like a whole one is
+                                  worse than no PAN: somebody files it. */}
+                              {r.panMasked && (
+                                <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 6 }}>
+                                  last 4
+                                </span>
+                              )}
+                            </>
+                          )
+                          : <span style={{ color: 'var(--danger)' }}>Not on file</span>}
+                      </td>
                       <td style={tdNum}>{r.count}</td>
                       <td style={tdNum}>{money(r.gross)}</td>
                       <td style={{ ...tdNum, color: 'var(--text-primary)', fontWeight: 600 }}>{money(r.tds)}</td>

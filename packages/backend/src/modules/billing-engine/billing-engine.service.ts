@@ -73,6 +73,8 @@ import {
   resolveGstStateCode,
   numberToIndianWords,
   OnboardingDocument,
+  maskTail,
+  SystemRole,
 } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY, SEGREGATION_OF_DUTIES_SETTING_KEY } from '../../infrastructure/settings/settings.registry';
@@ -2887,9 +2889,30 @@ export class BillingEngineService implements OnModuleInit {
    * `from`/`to` are inclusive calendar dates (YYYY-MM-DD) on the booking date; omit for the whole
    * book. Only assayers with TDS in the window appear.
    */
-  async tdsReport(filters: { from?: string | null; to?: string | null } = {}): Promise<{
+  /**
+   * PAN follows the same rule here as everywhere else: masked to the last four unless the caller
+   * is one of the roles entitled to the whole number, and audited when it is handed over.
+   *
+   * This route returned every payee's PAN in the clear to anyone who could open it. AUDITOR is
+   * the sharp case — `scopeAssayerForRoles` strips identity fields from that role entirely, so an
+   * auditor reading the person's own record gets no `panNumber` key at all, and could read five
+   * PANs off this report in one call. No audit row was written either, while the single-field
+   * reveal writes one per number.
+   *
+   * It slipped past the existing protection because that protection masks by key NAME
+   * (`panNumber`, `aadhaarNumber`, `bankAccountNumber`) over objects shaped like an assayer, and
+   * these rows are hand-built with a key called `pan`. Redaction keyed on names cannot cover a
+   * payload that renames the key, which is why the decision is made here, explicitly, from the
+   * caller's roles.
+   *
+   * `actor` is optional so the internal callers that build reports without a principal keep
+   * working — and they get the masked form, which is the safe default.
+   */
+  async tdsReport(filters: { from?: string | null; to?: string | null } = {}, actor?: {
+    id?: string; displayName?: string | null; roles?: string[]; ipAddress?: string | null;
+  }): Promise<{
     from: string | null; to: string | null; section: string;
-    rows: Array<{ assayerId: string; assayerName: string | null; assayerCode: string | null; pan: string | null; gross: number; tds: number; net: number; count: number }>;
+    rows: Array<{ assayerId: string; assayerName: string | null; assayerCode: string | null; pan: string | null; panMasked: boolean; gross: number; tds: number; net: number; count: number }>;
     totals: { gross: number; tds: number; net: number; count: number };
   }> {
     const from = filters.from || null;
@@ -2924,19 +2947,58 @@ export class BillingEngineService implements OnModuleInit {
     const assayers = assayerIds.length ? await this.assayerRepository.find({ where: { id: In(assayerIds) } }) : [];
     const byId = new Map(assayers.map((a) => [a.id, a]));
 
+    /**
+     * The same list `scopeAssayerForRoles` uses for the whole number, matched on raw role names
+     * because that is what a principal carries here. Anyone else gets the last four — which is
+     * what the report is read for day to day (telling one payee's row from another's), while the
+     * filing itself needs the reveal an entitled role performs deliberately.
+     */
+    const maySeeWholePan = (actor?.roles ?? []).some((r) =>
+      r === SystemRole.ADMIN || r === SystemRole.OPERATIONS || r === SystemRole.DEVELOPER);
+
     const rows = agg.map((r: any) => {
       const a = byId.get(r.assayer_id);
+      const pan = a?.panNumber ?? null;
       return {
         assayerId: r.assayer_id,
         assayerName: a?.displayName ?? null,
         assayerCode: a?.assayerCode ?? null,
-        pan: a?.panNumber ?? null,
+        pan: pan ? (maySeeWholePan ? pan : maskTail(pan)) : null,
+        /** So a reader knows whether they are looking at a number or a tail. */
+        panMasked: !!pan && !maySeeWholePan,
         gross: round2(Number(r.gross)),
         tds: round2(Number(r.tds)),
         net: round2(Number(r.net)),
         count: Number(r.n),
       };
     });
+
+    /**
+     * A bulk reveal is still a reveal, and the trail has to say so.
+     *
+     * The single-field route writes one `ASSAYER_SENSITIVE_FIELD_REVEALED` row per number. This
+     * hands over many at once and wrote none, so a compliance report could not tell that anybody
+     * had ever read them. One row naming the actor, the count and the window — never the values,
+     * for the same reason the single-field audit records the field and not the number.
+     */
+    const revealed = rows.filter((row: any) => row.pan && !row.panMasked);
+    if (revealed.length && actor?.id) {
+      await this.auditService.recordEvent({
+        category: EventCategory.USER,
+        eventType: 'ASSAYER_SENSITIVE_FIELD_REVEALED',
+        entityType: 'ASSAYER',
+        entityId: revealed[0].assayerId,
+        userId: actor.id,
+        userDisplayName: actor.displayName ?? undefined,
+        ipAddress: actor.ipAddress ?? undefined,
+        remarks: `Read the PAN of ${revealed.length} payee(s) from the TDS report`
+          + `${from || to ? ` for ${from ?? 'the start of the book'} to ${to ?? 'today'}` : ' for the whole book'}.`,
+        metadata: {
+          field: 'pan', via: 'tds-report', count: revealed.length, from, to,
+          assayerCodes: revealed.map((row: any) => row.assayerCode).filter(Boolean),
+        },
+      }).catch((err) => this.logger.error(`Failed to audit the TDS report PAN reveal: ${(err as Error).message}`));
+    }
     const totals = rows.reduce(
       (t: { gross: number; tds: number; net: number; count: number }, r: any) => ({
         gross: round2(t.gross + r.gross), tds: round2(t.tds + r.tds), net: round2(t.net + r.net), count: t.count + r.count,

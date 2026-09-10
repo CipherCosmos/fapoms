@@ -233,8 +233,24 @@ export class BillingEngineController {
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'PAN-wise TDS withheld from assayers over a period, for TDS substantiation' })
-  async tdsReport(@Query() q: TdsReportQuery) {
-    return { success: true, data: await this.service.tdsReport({ from: q.from || null, to: q.to || null }) };
+  async tdsReport(@Query() q: TdsReportQuery, @Req() req: any) {
+    /**
+     * The caller decides whether the PANs come back whole or as last-4, and a whole one is
+     * audited. This route used to hand every payee's PAN in the clear to anybody who could open
+     * it — including AUDITOR, which is stripped of the field entirely on the person's own record.
+     */
+    return {
+      success: true,
+      data: await this.service.tdsReport(
+        { from: q.from || null, to: q.to || null },
+        {
+          id: req?.user?.id,
+          displayName: req?.user?.displayName ?? null,
+          roles: (req?.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean),
+          ipAddress: req?.ip ?? null,
+        },
+      ),
+    };
   }
 
   @Patch('payouts/:id/hold')

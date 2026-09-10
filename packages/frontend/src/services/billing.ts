@@ -209,7 +209,10 @@ export interface TdsReportRow {
   assayerId: string;
   assayerName: string | null;
   assayerCode: string | null;
+  /** Whole for a role entitled to it, otherwise the last four. `panMasked` says which. */
   pan: string | null;
+  /** True when `pan` is a tail rather than the number, so the screen can say so. */
+  panMasked: boolean;
   gross: number;
   tds: number;
   net: number;
