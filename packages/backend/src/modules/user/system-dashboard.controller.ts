@@ -2,14 +2,20 @@ import { Controller, Get, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { JwtAuthGuard, RolesGuard, Roles, RequirePermissions, RoleOnly } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RoleOnly } from '../auth/guards';
 import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 @ApiTags('System Dashboard')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+// `PermissionsGuard` as well as `RolesGuard`, because the two ask different questions and only
+// the second one enforces the lines below. `RolesGuard` returns true the moment a role matches
+// `@Roles` by name and reads `@RequirePermissions` only in its custom-role fallback branch — so
+// without this guard the `project:view:organization` on both handlers was documentation, and the
+// six named roles reached the dashboard whether or not they held the grant. The frontend's
+// route-permissions.ts states that requirement for `/dashboard`; this is what makes it true.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('system-dashboard')
 export class SystemDashboardController {
   constructor(

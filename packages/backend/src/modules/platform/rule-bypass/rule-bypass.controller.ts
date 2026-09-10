@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Delete, Body, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsArray, IsString, IsNumber, IsOptional, IsNotEmpty } from 'class-validator';
-import { JwtAuthGuard, RolesGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly, AllowPermissionFallback } from '../../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly, AllowPermissionFallback } from '../../auth/guards';
 import { SystemRole, BypassableRule, BYPASSABLE_RULES, DEFAULT_BYPASS_HOURS } from '@fapoms/shared';
 import { RuleBypassService } from './rule-bypass.service';
 
@@ -21,7 +21,12 @@ export class EnableBypassDto {
 
 @ApiTags('Rule Bypass')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+// `PermissionsGuard` belongs in this chain, and its absence was the gap. `RolesGuard` consults
+// `@RequirePermissions` only in the fallback branch it runs for roles `@Roles` did not match by
+// name, so `configuration:view:platform` on `catalogue()` and `history()` was enforced against a
+// role built in Admin -> Roles and never against ADMIN itself. The `@AllowPermissionFallback()`
+// pairing on those two routes only means anything with this guard present.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('admin/rule-bypass')
 export class RuleBypassController {
   constructor(private readonly ruleBypass: RuleBypassService) {}

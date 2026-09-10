@@ -33,17 +33,32 @@ describe('routes and the permissions their roles hold', () => {
     return [...new Set([...named, ...spread])];
   };
 
+  /** Every controller that declares `@RequirePermissions` at all. Both checks below read it. */
+  const CONTROLLERS = execSync(
+    // Controllers only: the guard defines the decorator, and this spec quotes its name.
+    "grep -rl '@RequirePermissions(' . --include '*.ts' "
+      + "| grep -v _historical | grep 'controller\\.ts$'",
+    { cwd: SRC, encoding: 'utf8' },
+  ).trim().split('\n').filter(Boolean);
+
+  /** Every `@UseGuards(...)` argument list in a file, each folded back onto one line. */
+  const guardBlobs = (lines: string[]): string[] => {
+    const blobs: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].includes('@UseGuards(')) continue;
+      let blob = lines[i];
+      for (let k = i; blob.split('(').length > blob.split(')').length && k + 1 < lines.length; ) {
+        blob += ' ' + lines[++k];
+      }
+      blobs.push(blob);
+    }
+    return blobs;
+  };
+
   /** Every (route, roles, permissions) triple in the codebase. */
   const routes = (() => {
-    const files = execSync(
-      // Controllers only: the guard defines the decorator, and this spec quotes its name.
-      "grep -rl '@RequirePermissions(' . --include '*.ts' "
-        + "| grep -v _historical | grep 'controller\\.ts$'",
-      { cwd: SRC, encoding: 'utf8' },
-    ).trim().split('\n').filter(Boolean);
-
     const found: Array<{ where: string; roles: string[]; perms: string[] }> = [];
-    for (const file of files) {
+    for (const file of CONTROLLERS) {
       const lines = readFileSync(join(SRC, file), 'utf8').split('\n');
       const classAt = lines.findIndex((l) => /^export class /.test(l));
 
@@ -73,6 +88,29 @@ describe('routes and the permissions their roles hold', () => {
   it('finds the routes to check, so a broken search cannot pass as a clean result', () => {
     expect(routes.length).toBeGreaterThan(50);
     expect(routes.every((r) => r.perms.length > 0)).toBe(true);
+  });
+
+  /**
+   * `@RequirePermissions` is inert unless `PermissionsGuard` is in the chain.
+   *
+   * `RolesGuard` returns true the moment `@Roles` matches a name, and reads PERMISSIONS_KEY only
+   * inside the custom-role fallback branch it runs for roles that did NOT match. So a controller
+   * listing `RolesGuard` alone enforces its permission lines against roles built in Admin -> Roles
+   * and against nobody else — every built-in role the route names walks straight past them.
+   *
+   * Two controllers were in exactly that state: the system dashboard, and the rule-bypass
+   * catalogue and history. Nothing here could tell. The routes declared permissions, the roles
+   * held them, and every check in this file passed while the guard that reads them never ran.
+   */
+  it('puts PermissionsGuard in the chain of every controller that requires a permission', () => {
+    const unguarded = CONTROLLERS.filter((file) => {
+      const blobs = guardBlobs(readFileSync(join(SRC, file), 'utf8').split('\n'));
+      // A comment naming the guard is not the guard: only `@UseGuards(...)` puts it in the chain,
+      // which is why this reads the argument list rather than grepping the file.
+      return !blobs.some((b) => /\bPermissionsGuard\b/.test(b));
+    });
+
+    expect(unguarded).toEqual([]);
   });
 
   it('grants every role a route names the permission that route requires', () => {
