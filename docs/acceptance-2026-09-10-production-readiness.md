@@ -98,6 +98,8 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F21 | MEDIUM | **Nobody on this deployment can see the backlog.** `GET /admin/outbox/health` and the dead-letter queue are `@Roles(DEVELOPER)`, and the deployment has **zero active DEVELOPER accounts**. The Prometheus gauge `queue_depth{queue="outbox",state="delayed"}` is exported, but a dead cron is indistinguishable from an idle queue without an alert on "delayed ≥ 1", and no such alert exists. AC-F20 was therefore invisible from every surface an operator has | Open |
 | AC-F22 | MEDIUM | **Delivery to nobody is recorded as delivery.** An event whose name no subscriber handles is marked `dispatched_at` with `attempts = 0` — `deliverLocallyAsync` iterates an empty listener array and returns. A renamed or deleted subscriber discards events silently and the dead-letter queue never learns of them | Open |
 | AC-F23 | LOW | Dead-lettering could not be exercised from outside the process: no reachable subscriber throws on a malformed payload, so `attempts` climbing to `failed_at` remains unverified on a live deployment (it is covered by unit tests and by the previous record's replay evidence) | Open |
+| AC-F24 | LOW | Provisioning **asserts** rather than verifies the role passwords — `ALTER ROLE … PASSWORD <supplied>` runs every time — so a mistyped `FAPOMS_MIGRATION_PASSWORD` succeeds and silently rotates the deploy credential. Verified: after passing a deliberately wrong value, `fapoms_migrator` accepted it and refused the real one. Documented as intentional in `role-model.ts`; worth a warning when the role already exists | Open (by design) |
+| AC-F25 | LOW | `STARTUP_CHECKS_STRICT=true` against a provisioned-but-not-hardened database refuses the boot, but on `permission denied for table geo_states` rather than on the runtime-identity checks: `GeoSeedService.onModuleInit` runs before `StartupChecksService.onApplicationBootstrap`. Fail-closed is preserved; the operator is told the wrong thing about why | Open |
 
 ### The clean-install run
 
@@ -155,6 +157,42 @@ loop cancels its own leftovers through the product rather than deleting them, an
 destructive audit probe runs inside a transaction that is always rolled back.
 
 ---
+
+## The deployment's own refusals, observed
+
+Everything proven about the role split until now was the success path. These are the controls that
+catch somebody skipping a step, watched doing their job — or not.
+
+**The provisioning gate holds.** With `DB_ADMIN_URL` empty, `docker compose up -d backend` runs
+`db-migrate` first, it exits 1 saying *"DB_ADMIN_URL is not set. This step writes real credentials
+and schema; it will not guess one"*, and compose stops there: `service "db-migrate" didn't complete
+successfully: exit 1`. The API is never started, **the already-running container is not replaced
+(same container id before and after), and it keeps answering `/health` throughout**. Absent
+`FAPOMS_MIGRATION_PASSWORD` behaves identically.
+
+**A "wrong" migration password is not a state that can exist.** Passing a deliberately wrong one
+succeeds, exit 0 — and afterwards `fapoms_migrator` accepts the wrong password and refuses the
+real one. `role-model.ts:105` runs `ALTER ROLE fapoms_migrator … PASSWORD <supplied>` on every
+run: the variable *declares* what the password should be rather than proving what it is, and the
+file's own comment says rotation is meant to happen exactly this way. That is a defensible design,
+but it means a mistyped value silently rotates the deploy credential with no signal, and anything
+else holding the old one breaks later, far from the cause (AC-F24).
+
+**Both `main.ts` production refusals fire, and explain themselves.**
+
+| configuration | result |
+|---|---|
+| `DB_USERNAME=fapoms_runtime` with `DB_MIGRATIONS_RUN=true` | exit 1 — *"DB_MIGRATIONS_RUN must be \"false\" when the API connects as fapoms_runtime … a runtime identity with schema privileges can remove the audit triggers"* |
+| `DB_USERNAME=fapoms_migrator` | exit 1 — *"The API must not connect as fapoms_migrator. That credential exists for migrations and for `npm run db:harden` … set DB_USERNAME to fapoms_runtime"* |
+
+**Strict startup checks against an unhardened database: fails closed, but never speaks.** A
+database provisioned with `bootstrap migrate` and no `harden` refuses the boot with
+`STARTUP_CHECKS_STRICT=true` — exit 1, nothing serves. But the message is
+`permission denied for table geo_states`, not anything about hardening. `GeoSeedService`'s
+`onModuleInit` queries that table, and NestJS runs every `onModuleInit` **before**
+`onApplicationBootstrap`, where `StartupChecksService` lives — so the check written to catch a
+skipped hardening step is pre-empted by an ordinary query failing on the grants that step would
+have made. The safety property holds; the diagnosis does not (AC-F25).
 
 ## The management figures reconcile
 
