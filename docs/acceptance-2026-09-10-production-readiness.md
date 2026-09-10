@@ -186,11 +186,12 @@ tree is green at every commit, so pushing is a decision and not a repair.
 
 ## What was not tested, and why
 
-- **The browser.** No UI workflow was driven. The two days' budget went into standing the
-  deployment up and into the API/database layers underneath it; the deployment defects consumed
-  the window the browser pass would have used. The UI is therefore **unassessed**, not passed —
-  no claim is made about loaders, stale views, empty states or navigation. This is the largest
-  single gap in this report.
+- **The browser pass covered three roles and one mutation, not all of either.** ADMIN, OPERATIONS
+  and DESK_OPERATOR were driven across eight screens; AUDITOR and DEVELOPER were not. The mutation
+  exercised under refresh discipline was a lifecycle transition — the money screens were read and
+  reconciled, but no payout was approved from the browser. The mobile drawer was confirmed
+  off-canvas from its computed CSS rather than watched sliding open. Tablet width (768px) was not
+  checked.
 - **The mobile app.** Assayer accept and check-in were exercised over the API, which is the same
   path the app calls, but no Expo build was run. Field execution is proven at the contract, not
   in the client.
@@ -198,9 +199,10 @@ tree is green at every commit, so pushing is a decision and not a repair.
   single-organisation product and the brief explicitly excludes tenant-versus-tenant testing.
   Standing up a second organisation to satisfy it would have been building an artificial
   requirement. The suite remains available for anyone who wants it.
-- **Worker failure injection and outbox replay.** Already proven in the previous record and not
-  re-run; the worker was live throughout and delivered every payable within a minute, which is
-  the behaviour those probes protect, but kill-and-recover was not re-exercised here.
+- **Dead-lettering could not be driven from outside the process.** No reachable subscriber throws
+  on a malformed payload, so `attempts` climbing to `failed_at` was not observed live (AC-F23); it
+  remains covered by unit tests and by the previous record's replay evidence. Worker kill-and-
+  recover, duplicate redelivery and concurrent completion *were* exercised here and passed.
 - **Deployed environments.** The homeserver was not reachable and the AWS box was deliberately
   left alone; both are excluded by the evidence-environment decision. Real TLS, real S3
   server-side encryption, FCM delivery and off-site backups are all outside this rig.
