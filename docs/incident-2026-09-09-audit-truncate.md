@@ -81,6 +81,21 @@ not the owner of the audit tables, or ship audit records off-box where the appli
 them. It is recorded here as an open hardening item rather than attempted against a live deployment,
 because a mistaken ownership change locks the application out of its own database.
 
+### Closed, 10 September 2026
+
+The first of those two options is now implemented. The API and the worker connect as
+`fapoms_runtime`, which owns nothing and is a member of nothing; the audit tables and their trigger
+functions are owned by `fapoms_audit_owner`, which cannot log in. Every statement in the block
+above is refused for the runtime identity — not by a trigger, but by PostgreSQL's ownership check,
+before a grant is consulted.
+
+The migration role can still do it, and that is the stated boundary: it is a deploy-time credential
+a running process never holds. `npm run verify:runtime-role` proves the whole of it on a disposable
+database it builds and drops, 43 checks. See `docs/database-roles.md`.
+
+**Nothing in the recovery figures above changes.** The destroyed rows stay destroyed and the count
+stays interrupted. This closes the cause; it does not and cannot restore the evidence.
+
 ## Reading the audit count afterwards
 
 The current `audit_events` count is **not** an uninterrupted history. It is the 02:31 backup plus
