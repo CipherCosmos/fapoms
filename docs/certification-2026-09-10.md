@@ -504,6 +504,15 @@ Only items for which no evidence could be obtained here.
    `@RoleOnly()`, so the permission fallback does not apply and a custom role built in
    Admin → Roles cannot reach it either. Only an account actually holding DEVELOPER can.
 
+   That last sentence was read off the source here, and then tested against a running API by the
+   acceptance session, who built the role an administrator would actually build — all three
+   platform SYSTEM grants, view, edit and approve — and were refused 403 on both the dead-letter
+   and health routes. The probe role and user were removed afterwards. It matters that both were
+   done: a source gate says what the code intends, a live refusal says what the deployment does,
+   and this campaign turned up three places where those diverged — grants declared in
+   `ROLE_PERMISSIONS` and absent from `role_permissions`, a guard that read correctly and could
+   never fire, and a suite asserting a boundary it never reached.
+
    The fix is to create the account, not to widen the boundary because one deployment has no
    holder. Who holds it is a decision, which is why the seed does not make one. Verified here from
    the source and against the live database, and independently by the acceptance session against
