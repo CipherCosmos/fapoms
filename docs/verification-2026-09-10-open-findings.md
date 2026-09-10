@@ -110,7 +110,11 @@ join in an aggregate produces incorrect financial figures, which is worse than t
   payment settling nothing. Two of the 37 were wrong and were fixed: the attention-list cases
   expected kinds the type does not have, and the fixture gave its two unattributable assignments
   no reason to be flagged, so "region A names nothing unattributable" was asserting the absence of
-  rows that were never there.
+  rows that were never there. A third weakness surfaced when the live check below put three
+  CENTRAL rows in the same database: several cases assert absolute amounts, which holds only while
+  this suite's fixture is the only thing with money in its two regions, and three of them failed
+  47,200 apart in a way that reads exactly like the region predicate having broken. The suite now
+  checks that assumption before it seeds and names the rows it found.
 - **Proven to catch the leak.** Reverting the fix — `billingRegionFilters(enforced)` to `(null)` —
   fails 30 of the 37, across all eight slots.
 
