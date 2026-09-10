@@ -153,4 +153,95 @@ describe('a dead financial row is history, not a booking', () => {
       expect(service).toContain("isUniqueViolation(err, 'UQ_assayer_payables_fee_per_assignment')");
     });
   });
+
+  /**
+   * The aggregates.
+   *
+   * Fixing the booking path made two rows per assignment the NORMAL outcome of a reopen and redo,
+   * which turned a family of latent bugs live: `voidPayable` sets the status and nothing else, so
+   * a withdrawn payable keeps its full amounts, stays `is_active`, and has `on_hold` cleared. Any
+   * SUM filtering only on those columns counts it at face value.
+   */
+  describe('every sum over the money tables counts live rows only', () => {
+    const src = stripComments(readFileSync(SERVICE, 'utf8'));
+
+    /** The Form 26Q feed. Double-counting here misstates a filing to the tax authority. */
+    it('excludes voided payables from the TDS report', () => {
+      const i = src.indexOf('HAVING SUM(tds_amount) > 0');
+      expect(i).toBeGreaterThan(-1);
+      const q = src.slice(Math.max(0, i - 1400), i);
+      expect(q).toContain("livePayableSql('assayer_payables')");
+    });
+
+    /**
+     * `assayerTotals.outstanding` is written into `billing_payments.running_balance` on every
+     * outbound disbursement — a stored, immutable figure on a real payment. A voided payable is
+     * GUARANTEED to land in it without this, because `voidPayable` clears `on_hold` and that is
+     * the only column the clause filters on.
+     */
+    it('excludes voided payables from what an assayer is owed', () => {
+      const i = src.indexOf('async assayerTotals');
+      const q = src.slice(i, i + 900);
+      expect(q).toContain("andLivePayableSql('p')");
+    });
+
+    it('excludes voided payables from cost and margin, as revenue already excludes cancelled', () => {
+      expect(src).toContain("SUM(base_amount + travel_amount) FILTER (WHERE ${livePayableSql('assayer_payables')})");
+      expect(src).toContain("andLivePayableSql('ap')");
+    });
+
+    /** A fee correction belongs to the money owed now, never to money a reopen withdrew. */
+    it('reprices the live legs only', () => {
+      const i = src.indexOf('async repriceAssignment');
+      const q = src.slice(i, i + 1200);
+      expect(q).toContain('state: Not(In(DEAD_BILLING_STATES))');
+      expect(q).toContain('status: Not(In(DEAD_PAYABLE_STATUSES))');
+    });
+
+    /** Otherwise every adjustment and hold on the live line is refused, with no way through. */
+    it('edits the live client line', () => {
+      const i = src.indexOf('This assignment has no client line yet.');
+      const q = src.slice(Math.max(0, i - 700), i);
+      expect(q).toContain('state: Not(In(DEAD_BILLING_STATES))');
+    });
+
+    /**
+     * Voiding a payout must cancel the CURRENT client line. Finding a cancelled one from an
+     * earlier completion short-circuits the guard and leaves the live line to ride the next
+     * invoice — billing the client for work the business decided not to pay for.
+     */
+    it('cancels the live client line when a payout is voided', () => {
+      const i = src.indexOf('if (saved.assignmentId && !saved.expenseId)');
+      const q = src.slice(i, i + 900);
+      expect(q).toContain('state: Not(In(DEAD_BILLING_STATES))');
+    });
+  });
+
+  /**
+   * The entity decorators must carry the same predicate as the migration.
+   *
+   * This repository has learned twice that `synchronize` cannot parse raw migration SQL and treats
+   * an index it cannot see as drift — `notification.entity.ts` and `platform-setting.entity.ts`
+   * both say so in their own comments. Production refuses to boot with synchronize on, but dev and
+   * staging do not: left undeclared, TypeORM would drop these partial indexes and recreate the
+   * total ones, silently restoring the defect in the environments where a redo is most likely to
+   * be tried.
+   */
+  describe('the entity metadata matches the migration', () => {
+    const payable = readFileSync(join(__dirname, 'payable.entity.ts'), 'utf8');
+    const entry = readFileSync(join(__dirname, 'billing-entry.entity.ts'), 'utf8');
+
+    it('declares the fee payable index as partial on the dead status', () => {
+      const i = payable.indexOf("@Index('UQ_assayer_payables_fee_per_assignment'");
+      const decl = payable.slice(i, i + 260);
+      expect(decl).toContain('"expense_id" IS NULL');
+      expect(decl).toContain(`"status" NOT IN ('VOIDED')`);
+    });
+
+    it('declares the client line index as partial on the dead state', () => {
+      const i = entry.indexOf("@Index('UQ_billing_entries_root_per_assignment'");
+      const decl = entry.slice(i, i + 220);
+      expect(decl).toContain(`"state" NOT IN ('CANCELLED')`);
+    });
+  });
 });

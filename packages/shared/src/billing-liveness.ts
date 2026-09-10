@@ -49,3 +49,15 @@ const quoted = (values: readonly string[]) => values.map((v) => `'${v}'`).join('
  */
 export const livePayableSql = (alias = 'p') => `${alias}.status NOT IN (${quoted(DEAD_PAYABLE_STATUSES)})`;
 export const liveBillingEntrySql = (alias = 'e') => `${alias}.state NOT IN (${quoted(DEAD_BILLING_STATES)})`;
+
+/**
+ * The same rule for an aggregate that already has its own WHERE clause.
+ *
+ * Every SUM over these tables answers a question about money that is still owed or still to be
+ * collected, and a voided payable keeps its full amount — `voidPayable` sets the status and
+ * nothing else, so an aggregate filtering only on `is_active` and `on_hold` counts a withdrawn
+ * payout at face value. That was harmless while an assignment could hold one payable; it stopped
+ * being harmless the moment a reopened-and-redone assignment could hold two.
+ */
+export const andLivePayableSql = (alias = 'p') => ` AND ${livePayableSql(alias)}`;
+export const andLiveBillingEntrySql = (alias = 'e') => ` AND ${liveBillingEntrySql(alias)}`;

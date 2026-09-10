@@ -55,6 +55,7 @@ import {
   isLivePayable,
   liveBillingEntrySql,
   livePayableSql,
+  andLivePayableSql,
   InvoiceStatus,
   PaymentMethod,
   PaymentDirection,
@@ -362,9 +363,27 @@ export class BillingEngineService implements OnModuleInit {
     return this.inTx(async (m, emit) => {
       const a = await m.findOne(AssignmentEntity, { where: { id: assignmentId } });
       if (!a) return { repriced: false, reason: 'assignment not found' };
+      /**
+       * The LIVE legs. A fee correction applies to the money that is owed now, never to the
+       * money a reopen already withdrew.
+       *
+       * Without the status filter this picked whichever row Postgres reached first — heap order,
+       * so in practice the older one, which after a redo is the voided one. The guard further
+       * down (`status !== PAID && paidAmount === 0`) admits a VOIDED row happily, so the new
+       * price and a fresh rate snapshot would be written onto the dead payable, a
+       * `PAYABLE_REPRICED` history row would record that the correction was applied, and the
+       * live payable would keep the old price. The assayer would be paid the uncorrected fee
+       * while the trail said otherwise.
+       */
       const [entry, payable] = await Promise.all([
-        m.findOne(BillingEntryEntity, { where: { assignmentId }, lock: { mode: 'pessimistic_write' } }),
-        m.findOne(AssayerPayableEntity, { where: { assignmentId, expenseId: IsNull() }, lock: { mode: 'pessimistic_write' } }),
+        m.findOne(BillingEntryEntity, {
+          where: { assignmentId, state: Not(In(DEAD_BILLING_STATES)) },
+          lock: { mode: 'pessimistic_write' },
+        }),
+        m.findOne(AssayerPayableEntity, {
+          where: { assignmentId, expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
+          lock: { mode: 'pessimistic_write' },
+        }),
       ]);
       if (!entry && !payable) return { repriced: false, reason: 'not booked' };
 
@@ -907,7 +926,17 @@ export class BillingEngineService implements OnModuleInit {
     userId: string,
   ): Promise<BillingEntryEntity> {
     return this.inTx(async (m, emit) => {
-      const entry = await m.findOne(BillingEntryEntity, { where: { assignmentId }, lock: { mode: 'pessimistic_write' } });
+      /**
+       * The LIVE line. A cancelled one from an earlier completion is history and must not stand
+       * in for the current one: finding it here answers every adjustment and every hold with
+       * "This line is cancelled — cancel the invoice first", on an assignment that has no invoice
+       * to cancel and a perfectly good live line sitting beside it. There is no way through that
+       * from the interface, so a credit the client was promised could never be applied.
+       */
+      const entry = await m.findOne(BillingEntryEntity, {
+        where: { assignmentId, state: Not(In(DEAD_BILLING_STATES)) },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!entry) throw new NotFoundException('This assignment has no client line yet.');
       if (entry.state !== BillingState.UNBILLED) {
         throw new BadRequestException(
@@ -1252,7 +1281,20 @@ export class BillingEngineService implements OnModuleInit {
       // not stand alone as the only surviving half of a job that has been un-billed on the
       // assayer side.
       if (saved.assignmentId && !saved.expenseId) {
-        const entry = await m.findOne(BillingEntryEntity, { where: { assignmentId: saved.assignmentId } });
+        /**
+         * The LIVE line, or this does nothing at all.
+         *
+         * Looking one up by assignment alone could return the cancelled line from an earlier
+         * completion, and the `!== CANCELLED` guard below would then short-circuit — leaving the
+         * *current* client line UNBILLED while the assayer's payout for the same work was voided.
+         * The client is then invoiced for work the business has decided it will not pay for,
+         * which is exactly what the comment above this block forbids. Reopen cancels the live
+         * line itself, but `voidPayable` is also reachable straight from finance, where nothing
+         * else does.
+         */
+        const entry = await m.findOne(BillingEntryEntity, {
+          where: { assignmentId: saved.assignmentId, state: Not(In(DEAD_BILLING_STATES)) },
+        });
         if (entry && entry.state !== BillingState.INVOICED && entry.state !== BillingState.PAID && entry.state !== BillingState.CANCELLED) {
           const entryFromState = entry.state;
           entry.state = BillingState.CANCELLED;
@@ -2093,7 +2135,24 @@ export class BillingEngineService implements OnModuleInit {
     };
   }
 
-  /** The one predicate for "what is owed to this assayer", used by every screen that says so. */
+  /**
+   * The one predicate for "what is owed to this assayer", used by every screen that says so.
+   *
+   * LIVE payables only, for three reasons that all cost money:
+   *
+   *  1. `recordDisbursement` writes this `outstanding` into `billing_payments.running_balance` on
+   *     every outbound payment. That is a stored, immutable figure on a real payment, and a
+   *     voided payable inflates it permanently — it cannot be recomputed away later.
+   *  2. The finance-facing assayer statement shows it as "Outstanding", so finance would chase
+   *     money that does not exist, and a second disbursement on a redone assignment would look
+   *     like it still left a balance owed.
+   *  3. `tdsWithheld` on the same statement would double-count the same withholding.
+   *
+   * A voided payable is guaranteed to land in `outstanding` without this, because `voidPayable`
+   * explicitly sets `on_hold = false` and `on_hold` is the only status-ish column that clause
+   * filters on. `assayerVisibleTotals` below — the assayer-facing fork of this very query — has
+   * carried `status <> 'VOIDED'` all along; only the internal one that writes to the ledger did not.
+   */
   async assayerTotals(assayerId: string, manager?: EntityManager): Promise<{
     earned: number; paid: number; outstanding: number; awaitingApproval: number; onHoldOrDisputed: number;
     tdsWithheld: number; payableCount: number;
@@ -2101,7 +2160,7 @@ export class BillingEngineService implements OnModuleInit {
     const rows = await (manager ?? this.payableRepository.manager).query(
       `SELECT ${BillingEngineService.ASSAYER_TOTALS_SELECT}
          FROM assayer_payables p
-        WHERE p.assayer_id = $1 AND p.is_active = true`,
+        WHERE p.assayer_id = $1 AND p.is_active = true${andLivePayableSql('p')}`,
       [assayerId],
     );
     return this.totalsFromRow(rows?.[0]);
@@ -2929,6 +2988,18 @@ export class BillingEngineService implements OnModuleInit {
             -- Fee payables only: TDS is withheld on the professional fee, not on expense
             -- reimbursements (which carry no TDS and would inflate the gross on a TDS report).
             AND expense_id IS NULL
+            /*
+             * LIVE payables only. This is the Form 26Q feed, and a voided payable keeps its full
+             * amounts -- voidPayable sets the status and nothing else. A reopened-and-redone
+             * audit now produces two fee payables in one quarter, and summing both would report
+             * roughly double the professional fee and double the TDS deducted, against tax that
+             * was never withheld or deposited. That is a misstatement to the tax authority and on
+             * the assayer's Form 16A, correctable only by a revised return.
+             *
+             * The reasoning two lines above about what "would inflate the gross on a TDS report"
+             * is right and stopped one line short.
+             */
+            AND ${livePayableSql('assayer_payables')}
             -- Bucketed by the IST calendar day, like every other date-window in this file
             -- (BUSINESS_TODAY_SQL): created_at is timestamptz on a UTC server, so a bare ::date
             -- files a payable booked 1 April 04:00 IST under 31 March — the previous financial
@@ -3118,8 +3189,8 @@ export class BillingEngineService implements OnModuleInit {
                COUNT(*) FILTER (WHERE status = 'PENDING'  AND on_hold = false)::int                              AS due_count,
                COUNT(*) FILTER (WHERE status = 'APPROVED' AND on_hold = false)::int                              AS approved_count,
                COUNT(*) FILTER (WHERE on_hold = true)::int                                                       AS held_count,
-               COALESCE(SUM(base_amount + travel_amount), 0)                                                     AS gross_cost,
-               COALESCE(SUM(tds_amount), 0)                                                                      AS tds_from_assayers
+               COALESCE(SUM(base_amount + travel_amount) FILTER (WHERE ${livePayableSql('assayer_payables')}), 0) AS gross_cost,
+               COALESCE(SUM(tds_amount) FILTER (WHERE ${livePayableSql('assayer_payables')}), 0)                     AS tds_from_assayers
           FROM assayer_payables${rg.as('p')} WHERE is_active = true${rg.payable('p')}`, rgp),
       mgr.query(`
         SELECT ${UNBILLED_RECEIVABLE_SQL} AS unbilled,
@@ -3163,7 +3234,9 @@ export class BillingEngineService implements OnModuleInit {
                             SUM(bi.outstanding_amount) FILTER (WHERE bi.status = 'ISSUED') AS outstanding
                        FROM billing_invoices bi WHERE bi.is_active = true${rg.invoice('bi')} GROUP BY bi.client_id) i ON i.client_id = c.id
           LEFT JOIN (SELECT ap.client_id, SUM(ap.base_amount + ap.travel_amount) AS cost
-                       FROM assayer_payables ap WHERE ap.is_active = true${rg.payable('ap')} GROUP BY ap.client_id) p ON p.client_id = c.id
+                       FROM assayer_payables ap
+                      WHERE ap.is_active = true${rg.payable('ap')}${andLivePayableSql('ap')}
+                      GROUP BY ap.client_id) p ON p.client_id = c.id
          WHERE c.is_active = true AND (e.client_id IS NOT NULL OR i.client_id IS NOT NULL OR p.client_id IS NOT NULL)
          ORDER BY c.name`, rgp),
       this.recentBillingActivity(rg.history('h'), rgp),

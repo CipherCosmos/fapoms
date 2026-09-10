@@ -25,11 +25,19 @@ import { PayoutDestinationEvidence } from './payout-destination';
 // The invoice's lines are read together (totals recompute, approval, the reveal) — indexed so
 // none of those is a table scan.
 @Index(['assayerInvoiceId'])
-// One FEE payable per assignment, enforced by the database. Reimbursements carry `expense_id`
+// One LIVE fee payable per assignment, enforced by the database. Reimbursements carry `expense_id`
 // and are excluded. The name is load-bearing: `isUniqueViolation` matches on it.
+//
+// The status half of the `where` must match 1798000000000-LiveMoneyUniquePerAssignment exactly.
+// A reopened-and-redone assignment legitimately holds more than one fee payable — the voided one
+// from the first completion and the live one from the redo — and a unique index that ignores
+// status refuses the second, which is half of why a redone audit was never paid for. Declared
+// here as well as in the migration because `synchronize` cannot parse raw migration SQL and
+// treats an index it cannot see as drift: it would drop the partial one and recreate the total
+// one on boot, silently restoring the defect wherever synchronize is on.
 @Index('UQ_assayer_payables_fee_per_assignment', ['assignmentId'], {
   unique: true,
-  where: '"expense_id" IS NULL',
+  where: `"expense_id" IS NULL AND "status" NOT IN ('VOIDED')`,
 })
 // One payable per approved expense claim — the database's answer to the double-reimbursement
 // window a retried approval used to open.

@@ -23,10 +23,21 @@ import { BillingState } from '@fapoms/shared';
 // `SELECT … FOR UPDATE WHERE invoice_id = …` in createInvoice/recordPayment — a sequential scan
 // held under a row lock without this. Also in 1790300000000-RestoreScaleIndexes.
 @Index('IDX_billing_entries_invoice_id', ['invoiceId'])
-// One client line per assignment, enforced by the database. Booking runs from an at-least-once
-// event under a fail-open lock; without this a duplicate delivery could produce two lines for
-// one job. The name is load-bearing: `isUniqueViolation` matches on it.
-@Index('UQ_billing_entries_root_per_assignment', ['assignmentId'], { unique: true })
+// One LIVE client line per assignment, enforced by the database. Booking runs from an
+// at-least-once event under a fail-open lock; without this a duplicate delivery could produce two
+// lines for one job. The name is load-bearing: `isUniqueViolation` matches on it.
+//
+// The `where` is not decoration and must match 1798000000000-LiveMoneyUniquePerAssignment exactly.
+// An assignment that is reopened and redone legitimately holds more than one line — the cancelled
+// one from the first completion and the live one from the redo — and a total unique index refuses
+// the second, which is half of why a redone audit was never billed. It is declared here as well as
+// in the migration because `synchronize` does not parse raw migration SQL and treats an index it
+// cannot see as drift: it would drop the partial one and recreate this total one on boot, silently
+// restoring the defect in every environment that runs with synchronize on.
+@Index('UQ_billing_entries_root_per_assignment', ['assignmentId'], {
+  unique: true,
+  where: `"state" NOT IN ('CANCELLED')`,
+})
 export class BillingEntryEntity extends BaseEntity {
   @Column({ name: 'entry_number', length: 50, unique: true })
   entryNumber: string;

@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { branchStatusLabel, ProjectBranchStatus, BUSINESS_TODAY_SQL } from '@fapoms/shared';
+import { branchStatusLabel, ProjectBranchStatus, BUSINESS_TODAY_SQL,
+  liveBillingEntrySql,
+} from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import {
@@ -186,8 +188,13 @@ export class OperationsSnapshotService {
       this.dataSource.query(`
         SELECT
           ${UNBILLED_RECEIVABLE_SQL}          AS unbilled,
-          COALESCE(SUM(outstanding_amount),0) AS outstanding,
-          COALESCE(SUM(paid_amount),0)        AS collected
+          -- LIVE lines only, like the fragment above them. A cancelled line keeps its
+          -- outstanding_amount -- nothing zeroes it -- so counting one here reports money the
+          -- business has decided it will never collect, and a reopened-and-redone audit leaves
+          -- one behind every time. The unbilled figure was already correct because the shared
+          -- fragment requires state = UNBILLED; these two beside it had no state filter at all.
+          COALESCE(SUM(outstanding_amount) FILTER (WHERE ${liveBillingEntrySql('billing_entries')}),0) AS outstanding,
+          COALESCE(SUM(paid_amount) FILTER (WHERE ${liveBillingEntrySql('billing_entries')}),0)        AS collected
           FROM billing_entries WHERE is_active = true`),
 
       this.dataSource.query(`
