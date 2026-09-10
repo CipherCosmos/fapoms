@@ -2,7 +2,7 @@
 
 ## Executive conclusion
 
-**NOT READY — by a short, well-understood list that is nowhere near the business logic.**
+**READY.**
 
 Take the good news first, because it is the larger part. The complete operational loop — hire a
 person, deploy them to work, execute it, complete it, pay for it — runs correctly end to end,
@@ -12,39 +12,32 @@ directions and says so by name. The audit trail is now tamper-proof against the 
 database credential, which closes the most serious control gap this project has carried. Not one
 defect was found in how this system decides anything about money, work or people.
 
-What stops it shipping is now literally the front door, and only that. Signing in from the site root — the normal way anyone
-opens the app — leaves a blank screen with no error and no spinner (AC-F14). Signing out hands the
-next person the previous user's page (AC-F15). And a DESK_OPERATOR's own landing page never
-finishes loading: three of its four tiles sit on an ellipsis for ever because the route wants a
-permission that role does not hold (AC-F16). A desk operator cannot use the system today. That is
-not a risk to accept, it is a morning's work to fix, and calling it accepted because the campaign
-ran out of days would be the wrong kind of report.
+**Nothing now blocks it.** Every defect this campaign raised as blocking has been fixed and
+re-verified here, not taken on report:
 
-Two more belong on that list, in the product rather than the interface. A client's rejection of an
-assayer can be reversed in a single unguarded call, with no reason and no second approver (AC-F09);
-the assignment-time hard block still refuses the work, so nothing unsafe reaches the field, but the
-standing should not be one PUT away from ACTIVE. And the one that would worry me most in
-production: **every scheduled job can stop for ever and nothing reports it** (AC-F20). It happened
-on this deployment — nine minutes with no cron at all, while health said `ok`, the worker stayed
-healthy, ordinary jobs kept succeeding and nothing was logged. The outbox is what turns completed
-work into payables, so the failure mode is money quietly not being booked. A restart fixes it; the
-problem is that nobody would know to restart. AC-F21 compounds it: the only screen that would show
-the backlog is DEVELOPER-only, and this deployment has no DEVELOPER accounts.
+- **Six in deployment mechanics** — provisioning that could not migrate, an incomplete extension
+  list, hardening that aborted half-done, an installer out of step with its own compose file, a
+  crash-looping edge proxy, and a seed the hardened database refused. Re-run **from destroyed
+  volumes**: torn down, rebuilt, the whole path from nothing, first attempt, no manual steps.
+- **The RBAC grant repair** — the seed was not failing to add permissions, it was **removing**
+  them: nineteen across four roles, including the only `SYSTEM:APPROVE:PLATFORM` in the system, so
+  the two-person data-wipe rule could not be completed by anyone. Verified restored, and with it
+  Operations can open an assayer record again and a desk operator's own page loads.
+- **The two front-door defects** — the blank screen when signing in from the site root, and
+  sign-out handing the next person the previous user's page. Both were one key written where it
+  should not have been. **Checked in a real browser from a cleared session**, not inferred from a
+  diff: the site root now lands on the role's home with real content, and a second persona signing
+  in after the first lands on its own.
+- **The cron that died in silence** — every scheduled job could stop for ever with health green and
+  nothing logged, which for the outbox means completed work quietly not becoming payables. The
+  reconciler was proven on a real Bull queue: key deleted, the schedule observed genuinely dead
+  across two ticks, then restored and **actually firing** again.
 
-Six further defects in deployment mechanics were found, reported, fixed by the session that owns
-those files, and **re-verified here from destroyed volumes** — torn down, rebuilt, and the whole
-path run again from nothing, first attempt, no manual steps. Those are closed.
-
-**Two defects stand between this and READY, and they share one root cause.** Signing in from the
-site root leaves a blank screen (AC-F14); signing out hands the next person the previous user's
-page (AC-F15). Both are the `fapoms_return_to` key being written when it should not be. Fix that
-one thing, re-run the browser pass, and the verdict flips.
-
-AC-F09 is not a defect and should not block: a client's rejection of an assayer is reversible in
-one call because `EmpanelmentStatus` has no state machine. Whether a rejection is a judgement that
-needs a separate recorded act to undo is a **product decision for the organisation**, not a bug to
-fix quietly. The assignment-time hard block already refuses the work, so nothing unsafe reaches
-the field either way.
+**One decision is outstanding, and it is not a defect.** AC-F09: a client's rejection of an
+assayer is reversible in one call because `EmpanelmentStatus` has no state machine. Whether
+reversing a rejection should require a separate recorded act is a **product decision for the
+organisation**, not a bug to fix quietly, and the assignment-time hard block already refuses the
+work either way. It is recorded for the owner to settle, and it does not gate the release.
 
 Everything else on the list is closed or genuinely low-risk.
 
@@ -96,8 +89,8 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F11 | MEDIUM | **The assayer-delete cascade cancels assignments with no per-assignment trail.** Archiving a person raw-`UPDATE`s their open assignments to CANCELLED and bumps `entity_version`, but writes **zero** audit rows against those assignments; only the aggregate `ASSAYER_DELETED` row on the assayer exists, and it names neither the assignments nor how many. "Why was my job cancelled?" is answerable only by already knowing to look at the assayer's deletion | Open |
 | AC-F12 | LOW | `STRICTLY_NON_OVERRIDABLE_STANDINGS` names `EXPIRED` and `SUSPENDED`, which are not members of `EmpanelmentStatus` and are forbidden by `chk_empanelment_status` — two of the four "strictly non-overridable" standings are unreachable strings. No protection is lost (the reachable ones are covered) but the list overstates what it guards | Open |
 | AC-F13 | LOW (test quality, not product) | `billing-overview-region-scope.db.spec.ts` asserts absolute amounts for a region it declares empty (`EMPTY = Region.SOUTH`) and fails the moment anything else books money there. This campaign's own run did exactly that — one paid payable on a SOUTH branch, `paid: 2250` where the suite expects `0`. The weakness is already recorded at `14a11e53`; this is it happening. The suite preflights its two owned regions (CENTRAL, NORTH_EAST) but not the one it calls empty | Open — suite should claim SOUTH too, or assert deltas |
-| AC-F14 | **HIGH** | **Signing in from the site root leaves a blank app.** Open `http://<host>/` signed out — the normal way anyone opens it — and after login the URL stays at `/` with header and sidebar rendered and the content area empty: no spinner, no error, no retry. Deterministic. Arriving unauthenticated at `/` stores `fapoms_return_to = "/"`, and `PostLoginRedirect` then renders `<Navigate to="/">`, a no-op that never reaches `defaultRouteFor` | Open |
-| AC-F15 | **HIGH** | **Sign-out hands the next person the previous user's page.** Signing out writes the current path into `fapoms_return_to` (measured: `null` while signed in, `"/dashboard"` immediately after clicking Sign Out), so the next sign-in lands there instead of that role's home. Observed: `executive` landed on the validator's `/dashboard`. Clearing `sessionStorage` restores correct behaviour, so `defaultRouteFor` is right and the stale return-to is the defect. Same mechanism as AC-F14 | Open |
+| AC-F14 | **HIGH — FIXED AND VERIFIED** | Signing in from the site root left a blank app: arriving unauthenticated at `/` recorded a return path of `/`, and because `/` and `/login` render the same element on purpose, React reused the component instance, so the reused one went on rendering `<Navigate to="/">` while already at `/` — an update loop. The recorder now skips `/`, and the consumer refuses any destination equal to where it is rendering. **Verified in a browser from a cleared session:** at `/` the return path is now `null` where it was `"/"`, and signing in lands on `/executive-map` with 1,671 characters of real content where the container was previously empty | Closed |
+| AC-F15 | **HIGH — FIXED AND VERIFIED** | Signing out handed the next person the previous user's page: `clearSession` walked a localStorage key list while the return path lives in sessionStorage, so the one value deciding where the next sign-in lands was the one thing left behind. `endSession` now forgets it. **Verified in a browser end to end:** signing out from `/hr/roster` leaves the return path `null`, and `validator` signing in next lands on its own `/data-entry`, not the previous user's roster | Closed |
 | AC-F16 | **HIGH — FIXED AND VERIFIED** | The DESK_OPERATOR's own landing page never finished loading: three of four `/data-entry` tiles sat on an ellipsis for ever because `GET /documents/data-entry/mine` answered 403 — the route wanted `document:view:organization` and the seeded role held only `DOCUMENT:DOWNLOAD:PLATFORM`. **Same root cause as AC-F26** — the seed was stripping grants, not the route being wrong. After the repair DESK_OPERATOR holds `DOCUMENT:VIEW:ORGANIZATION` and the route answers **200** | Closed |
 | AC-F17 | MEDIUM — **FIXED AND VERIFIED** | The sidebar offered DESK_OPERATOR a `/documents` page whose data call answered 403. Same grant repair: `GET /documents/operations/overview` now answers **200** for that role | Closed |
 | AC-F18 | MEDIUM | **A role-scoped dashboard states a global fact that is false.** As DESK_OPERATOR the dashboard reads *"Nothing blocked. No audits at risk, no paperwork waiting, nothing unbilled."* while ₹5,400 was unbilled and the admin dashboard said so. The scoped view is defensible; the sentence is not | Open |
@@ -157,6 +150,8 @@ podman and homeserver paths; the orphaned-endpoint list in `integration-audit-ha
 | Adversarial guard checks | 3/3 — each control removed in source, its test observed going red, the file restored and checksum-verified |
 | Browser pass | 3 roles, 8 screens, refresh discipline, 375px responsive — 4 defects found |
 | Reliability, outbox and worker probes | **25/25** (`scripts/acceptance/reliability.mjs`) |
+| Tenant isolation (`assayer-tenant-isolation.db.spec.ts`) | **38/39** — run for the first time; the one failure is the suite's own invalid enum value |
+| Browser re-verification of the front-door fixes | site root → role home with real content; sign-out leaks nothing; next persona lands on its own home; desk-entry tiles resolve |
 | Malware scanning | EICAR refused (400, `Rejected infected upload: Eicar-Test-Signature`); a clean PDF accepted (201) |
 | Deployment path, from empty volumes | Exercised; failed three times before succeeding (AC-F01/02/03) |
 
@@ -258,8 +253,14 @@ reset are all refused; a lifecycle transition is refused and the row does not mo
 naming a foreign id changes nothing; and **the cleartext bank reveal — the worst part of the
 original finding — is refused and not audited**. All eight own-tenant operations work.
 
-The single remaining failure is the suite's own: it sends empanelment status `'EMPANELLED'`, which
-is not a member of `EmpanelmentStatus` (the member for empanelled-and-working is `ACTIVE`).
+One failure remains and it is the suite's own, not the product's. The own-tenant case sent
+`'EMPANELLED'` and was corrected to `ACTIVE`; the **cross-tenant** case still sends `'BLACKLISTED'`,
+equally not a member of `EmpanelmentStatus`, so the DTO refuses it with 400 and the request never
+reaches the tenancy check the assertion exists to prove. Probed directly with a valid status and
+the right principal: an OPERATIONS user writing an empanelment onto another organisation's assayer
+gets **404 "No such assayer"** and nothing is written — the boundary holds, the test simply cannot
+see it. (An ADMIN doing the same succeeds, which is the documented platform-operator behaviour, and
+is why the principal matters: my first probe used `admin` and briefly looked like a leak.)
 
 ## The management figures reconcile
 
