@@ -45,6 +45,13 @@ tenancy bug. Publish the deployment's postgres on a port you chose, and use it.
 alongside them are not; `THROTTLE_LIMIT` defaults to 300 requests a minute per IP and refuses the
 rest. A 429 in a run is the brake working, not the product failing.
 
+## The loop consumes branches
+
+Each completed audit closes its branch to further assignments, which is a real business rule. So
+`business-loop.mjs` uses up one project-branch per run, and on a rig it has run against ten times
+there is nothing left to book — it stops and says so explicitly rather than looking like a failure.
+Seed more branches, or point it at a fresh deployment, to keep going.
+
 ## What they leave behind
 
 `business-loop.mjs` creates assignments tagged `ACC-` and cancels any still open from an earlier

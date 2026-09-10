@@ -166,7 +166,15 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
   if (far) record('ELIG-01', true, `out-of-radius work is refused until a reason is given`);
 
   if (!pb || !created) {
-    throw new Error(`no branch this assayer may work: ${JSON.stringify(refusals.slice(0, 4))}`);
+    // Every completed audit closes its branch to further work, so a rig this probe has run
+    // against many times eventually has no branch left to book. That is the rule working, not a
+    // regression — but it looks like a failure, so say which it is.
+    const exhausted = refusals.every(([, , msg]) => /AUDIT COMPLETED/i.test(String(msg)));
+    throw new Error(exhausted
+      ? `every branch on this deployment has already completed its audit, so there is nothing left `
+        + `to book. That is the business rule, not a defect. Seed more branches, or point this at a `
+        + `fresh rig, to run the loop again. Refusals: ${JSON.stringify(refusals.slice(0, 2))}`
+      : `no branch this assayer may work: ${JSON.stringify(refusals.slice(0, 4))}`);
   }
   console.log(`\n  working branch: "${pb.branch}"\n`);
 
