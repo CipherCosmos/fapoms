@@ -60,6 +60,7 @@
 
 // @ts-ignore — `pg` is a transitive dependency, as in the two db specs next door.
 import { Pool } from 'pg';
+import { EmpanelmentStatus } from '@fapoms/shared';
 
 const API = process.env.TI_API || 'http://127.0.0.1:3999/api/v1';
 
@@ -743,12 +744,18 @@ describe('assayer tenant isolation — F-03 acceptance matrix against the runnin
     });
 
     it('sets an empanelment on its own assayer', async () => {
+      /**
+       * ACTIVE, not EMPANELLED. `EmpanelmentStatus` has no EMPANELLED member — ACTIVE is
+       * "empanelled and taking work" — and `EmpanelmentStatusIntegrity` (1796700000000) mapped
+       * the one legacy row that said otherwise and added a CHECK that refuses it. This case sent
+       * EMPANELLED and read its 400 as a tenancy result; it was the vocabulary.
+       */
       const res = await call(
         B, 'PUT', `/assayers/${fixtureB.assayerId}/empanelment/${fixtureB.clientId}`,
-        { status: 'EMPANELLED', statusReason: 'Same-tenant empanelment.' },
+        { status: EmpanelmentStatus.ACTIVE, statusReason: 'Same-tenant empanelment.' },
       );
       expect(res.status).toBe(200);
-      expect(await empanelmentStatus(fixtureB.assayerId, fixtureB.clientId)).toBe('EMPANELLED');
+      expect(await empanelmentStatus(fixtureB.assayerId, fixtureB.clientId)).toBe(EmpanelmentStatus.ACTIVE);
     });
 
     it('edits its own rate card', async () => {

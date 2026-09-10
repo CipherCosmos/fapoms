@@ -369,11 +369,25 @@ Closing the cause does not restore the evidence.
 
 Only items for which no evidence could be obtained here.
 
-1. **`assayer-tenant-isolation.db.spec.ts`** — needs the deployed server, the long-lived
-   certification accounts and a password supplied at run time. The homeserver was offline
-   throughout this session.
+1. **Tenant isolation is unproven, and that is a stronger statement than "not run".**
+   `assayer-tenant-isolation.db.spec.ts` needs the deployed server, the long-lived certification
+   accounts and a password supplied at run time, and the homeserver was offline throughout this
+   session.
 
-   Its sibling `assayer-lifecycle-certification.db.spec.ts` **has since been run** — not here. The
+   The parallel acceptance session has since run it on their own rig: **19 of 39 fail**, across
+   four causes, and only one of the four is about tenancy. Eight are same-tenant operations
+   refused 403 where 200 was expected, and eight more are cross-tenant assertions that got 403
+   where they expected 404 — which, as they point out, is the same answer a system with no tenant
+   scoping at all would give, because the permission guard refuses before the organisation
+   predicate is ever consulted. Those sixteen were the grant defect above, now fixed and repaired
+   by migration. Two more were the suite sending an empanelment status that is not a member of
+   `EmpanelmentStatus`, corrected here. The last was the unowned-rows finding, also above.
+
+   So the cross-tenant half of that suite has never yet asserted what it claims to. It should be
+   re-run after the repair migrations land, and a pass then is new evidence rather than a restored
+   one. Until that run, tenant isolation is untested, not confirmed.
+
+   Its sibling `assayer-lifecycle-certification.db.spec.ts` **has been run** — not here. The
    parallel acceptance session stood up a prod-shaped rig and reports 150/150: 98 illegal
    transitions refused with no mutation, rehire routing RESIGNED and TERMINATED to INVITED, every
    concurrency race admitting exactly one winner. That is their evidence, attributed, and it
@@ -401,7 +415,9 @@ Only items for which no evidence could be obtained here.
 ## What has to happen before this ships
 
 1. Bring the homeserver up and run the two certification suites against it, with `TI_PASSWORD` and
-   `TI_ADMIN_PASSWORD` supplied at run time.
+   `TI_ADMIN_PASSWORD` supplied at run time. `assayer-tenant-isolation.db.spec.ts` must run
+   **after** the grant repair migration, because its cross-tenant assertions cannot distinguish a
+   working organisation predicate from a permission refusal until then.
 2. Push and let CI run the new `database` job; confirm it is green.
 3. Follow the transition procedure in `docs/database-roles.md` on the existing deployment, take the
    backup it asks for first, and read the ten `Database identity` lines in the boot log.
