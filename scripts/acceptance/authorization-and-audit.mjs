@@ -93,8 +93,8 @@ const signIn = async (username, seedPw, changePath) => {
 
   const before = {
     lifecycle: victim.lifecycle_status,
-    payable: anyPayable?.status,
-    assignment: anyAssignment?.status,
+    payable: anyPayable?.status ?? null,
+    assignment: anyAssignment?.status ?? null,
     assignments: Number((await q(`SELECT count(*)::int c FROM assignments`))[0].c),
   };
 
@@ -106,8 +106,8 @@ const signIn = async (username, seedPw, changePath) => {
 
   const after = {
     lifecycle: (await q(`SELECT lifecycle_status FROM assayers WHERE id=$1`, [victim.id]))[0].lifecycle_status,
-    payable: anyPayable ? (await q(`SELECT status FROM assayer_payables WHERE id=$1`, [anyPayable.id]))[0].status : null,
-    assignment: anyAssignment ? (await q(`SELECT status FROM assignments WHERE id=$1`, [anyAssignment.id]))[0].status : null,
+    payable: anyPayable ? (await q(`SELECT status FROM assayer_payables WHERE id=$1`, [anyPayable.id]))[0].status ?? null : null,
+    assignment: anyAssignment ? (await q(`SELECT status FROM assignments WHERE id=$1`, [anyAssignment.id]))[0].status ?? null : null,
     assignments: Number((await q(`SELECT count(*)::int c FROM assignments`))[0].c),
   };
   record('AZ-07', JSON.stringify(before) === JSON.stringify(after),

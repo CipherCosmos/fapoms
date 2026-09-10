@@ -11,13 +11,17 @@ concurrent operators, and reconciles to the rupee under independent recomputatio
 trail is now tamper-proof against the application's own database credential, which closes the
 most serious control gap this project has carried.
 
-The accepted risk is entirely in **deployment mechanics, not in the product**. Provisioning a
-fresh installation currently fails three times before it succeeds, and the one-command installer
-is out of step with the compose file it drives. None of this corrupts data or weakens a control;
-all of it stops a new environment from coming up, and all of it is being actively fixed by the
-session that owns those files. FAPOMS should not be installed anywhere new until AC-F01, AC-F02
-and AC-F03 are closed and the path is re-run clean from empty volumes. An **existing, running**
-deployment is not affected by any of them.
+This campaign found six defects in **deployment mechanics** — not one of them in the product's
+business logic. Provisioning a fresh installation failed three times before it succeeded, the
+one-command installer had drifted out of step with the compose file it drives, caddy crash-looped
+over a missing file, and the documented seed could not run against the hardened database it had
+just created. All six were reported to the session that owns those files, fixed by it during this
+campaign, and then re-verified here **from destroyed volumes**: the rig was torn down, rebuilt,
+and the whole path run again from nothing, first attempt, no manual steps. It now comes up clean.
+
+The residual risk is what was **not examined**: no browser workflow was driven, so the user
+interface is unassessed rather than passed. That, and a short list of low-severity items carried
+forward from the previous record, are the whole of the accepted risk.
 
 What this rests on: a purpose-built production-shaped stack (caddy, ClamAV, Postgres, Redis,
 MinIO, and a separate API and worker) brought up from empty volumes on this machine, migrated,
@@ -47,16 +51,37 @@ production data.
 
 Full detail, with reproductions, in the campaign findings ledger. Severity per §20.
 
+All six deployment findings were reported to the session that owns those files, fixed by it during
+this campaign, and then **re-verified here from destroyed volumes** — the rig was torn down with
+`down -v`, rebuilt, and the documented path run again from nothing.
+
 | ID | Severity | Business impact | Status |
 |---|---|---|---|
-| AC-F01 | **BLOCKER** | A fresh deployment cannot migrate: `permission denied for schema public`. The compose's postgres pre-creates the database owned by the superuser, so provisioning takes its "already exists" branch and leaves the migrator without CREATE. The grant that would fix it runs one step too late, in `harden` | Reported; fix validated (`ALTER DATABASE … OWNER TO fapoms_migrator`) |
-| AC-F02 | **BLOCKER** | Behind AC-F01: bootstrap installs three extensions but the migrations need `pg_trgm` and `btree_gist` too | Reported; covered by the same ownership fix, list still worth completing |
-| AC-F03 | **HIGH** | Behind AC-F02: hardening aborts on `tiger`/`tiger_data`/`topology`, whose tables the postgis image leaves owned by the superuser — a half-finished deploy with the schema current and grants missing | Reported; fix suggested (tolerate what it cannot grant) |
-| AC-F04 | MEDIUM | `setup.sh` never generates the three credentials the deploy path requires, still writes `DB_MIGRATIONS_RUN=true`, and never rewrites an existing `.env.docker`. `DEPLOYMENT.md` does not mention provisioning | Reported, unowned; offered to fix |
-| AC-F05 | MEDIUM | `clamav/clamav:1.4` publishes no arm64 image at any tag; `compose up` dies at image pull on an arm64 host | Reported; worked around under emulation |
-| AC-F06 | HIGH | caddy crash-loops on a fresh host because it bind-mounts a file nothing creates; the result is seven healthy containers and an app that answers nothing. `publish-apk.sh` and the compose also disagree about `APK_DIR` | Open, unowned |
-| AC-F07 | HIGH | The documented seed step cannot run on a hardened deployment: `seed.js --if-empty` issues an unconditional `TRUNCATE`, which the runtime role correctly refuses | Reported |
+| AC-F01 | **BLOCKER** | A fresh deployment could not migrate: `permission denied for schema public`. The compose's postgres pre-creates the database owned by the superuser, so provisioning took its "already exists" branch and left the migrator without CREATE. The grant that would have fixed it ran one step too late, in `harden` | **FIXED AND VERIFIED** — provisioning now reports *"Database fapoms exists, owned by fapoms; ownership moved to fapoms_migrator"* |
+| AC-F02 | **BLOCKER** | Behind AC-F01: bootstrap installed three extensions but the migrations need `pg_trgm` and `btree_gist` too | **FIXED AND VERIFIED** — `REQUIRED_EXTENSIONS` now lists all four and the log confirms them |
+| AC-F03 | **HIGH** | Behind AC-F02: hardening aborted on `tiger`/`tiger_data`/`topology`, whose tables the postgis image leaves owned by the superuser — a half-finished deploy, schema current and grants missing | **FIXED AND VERIFIED** — hardening completes and all ten runtime assertions pass |
+| AC-F04 | MEDIUM | `setup.sh` never generated the three credentials the deploy path requires, still wrote `DB_MIGRATIONS_RUN=true`, and never repaired an existing `.env.docker` | **FIXED** — it now mints all three, adds them to an existing env file, sets `DB_MIGRATIONS_RUN=false` and warns if it finds `true` |
+| AC-F05 | LOW | `clamav/clamav:1.4` publishes no arm64 image at any tag; `compose up` dies at image pull on an arm64 host | **ACCEPTED, DOCUMENTED** — the compose now carries a note naming the constraint. Unaffected on x86; on arm64 it runs under emulation |
+| AC-F06 | HIGH | caddy crash-looped on a fresh host over a bind-mounted file nothing created — seven healthy containers and an app answering nothing | **FIXED AND VERIFIED** — caddy comes up and serves; the installer creates the snippet |
+| AC-F07 | HIGH | The documented seed could not run on a hardened deployment: `seed.js --if-empty` issued an unconditional `TRUNCATE`, which the runtime role correctly refuses | **FIXED AND VERIFIED** — the documented command now completes as the runtime user |
 | AC-F08 | LOW | The distance-ceiling override accepts a 9-character justification where the eligibility override demands 10. The decision is still audited and attributable | Open |
+
+### The clean-install run
+
+From destroyed volumes, with no manual intervention at any point:
+
+```
+══ roles, database, extensions ══
+Database fapoms exists, owned by fapoms; ownership moved to fapoms_migrator.
+Extensions checked: uuid-ossp, postgis, pg_trgm, btree_gist.
+══ migrations, as the deploy role ══
+Applied 79 migration(s).
+══ hardening, verified from the runtime side ══
+✓ fapoms_runtime is least-privileged and cannot reach the audit structures.
+```
+
+then the documented seed, then **27/27** on the business loop and **20/20** on authorization and
+the audit defences. That is the evidence the verdict rests on.
 
 **Carried forward, unchanged, from the previous record** (not re-opened by this campaign):
 audit rows have no idempotency key or schema version; outbox retries are fixed-interval with a

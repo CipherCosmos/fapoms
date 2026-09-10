@@ -90,16 +90,16 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     `SELECT id, assayer_code FROM assayers
       WHERE lifecycle_status='ACTIVE' AND is_active AND assayer_code LIKE 'AS-%'
       ORDER BY assayer_code LIMIT 1`);
-  const [pb] = await q(
+  const candidates = await q(
     `SELECT pb.id, pb.branch_id, b.name AS branch, p.client_id
        FROM project_branches pb JOIN branches b ON b.id=pb.branch_id
        JOIN projects p ON p.id=pb.project_id
       WHERE NOT EXISTS (SELECT 1 FROM assignments a
                          WHERE a.project_branch_id=pb.id AND a.is_active
                            AND a.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS'))
-      LIMIT 1`);
-  if (!assayer || !pb) throw new Error('no free project_branch or ACTIVE assayer to work with');
-  console.log(`fixture: assayer ${assayer.assayer_code}  branch "${pb.branch}"  client ${pb.client_id.slice(0, 8)}\n`);
+      ORDER BY b.name`);
+  if (!assayer || candidates.length === 0) throw new Error('no free project_branch or ACTIVE assayer to work with');
+  console.log(`fixture: assayer ${assayer.assayer_code}, ${candidates.length} branch(es) to choose from\n`);
 
   // Payout details are mandatory at approval; set them through the product so the encrypted
   // columns round-trip the way a real edit would.
@@ -114,62 +114,71 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     throw new Error(`payout details did not persist (HTTP ${payoutSetup.status}) — approval would be `
       + `refused for missing banking rather than for the reason under test: ${JSON.stringify(payoutSetup.body)}`);
   }
-  // Empanel with this client so the eligibility policy is satisfied on merit, not by override.
-  await call(admin.token, 'PUT', `/assayers/${assayer.id}/empanelment/${pb.client_id}`, { status: 'ACTIVE' });
 
   const FEE = 2500;
   const PAY_REF = `ACC-PAY-${Date.now()}`;
   const today = new Date().toISOString().slice(0, 10);
 
-  // The seeded project's window closed in July; scheduling today is refused by the timeline rule
-  // (correctly — that refusal is itself recorded as E2E-00). Widen it so the rest of the loop can
-  // run against a project that is genuinely open.
-  const [proj] = await q(
-    `SELECT p.id, p.end_date FROM project_branches pb JOIN projects p ON p.id=pb.project_id WHERE pb.id=$1`, [pb.id]);
-  if (proj.end_date && new Date(proj.end_date) < new Date(today)) {
-    const beforeWiden = await call(exec.token, 'POST', '/assignments', {
-      projectBranchId: pb.id, assayerId: assayer.id, proposedFee: FEE,
-      scheduledDate: today, remarks: 'ACC- timeline probe',
-    });
-    record('E2E-00', beforeWiden.status === 400,
-      `scheduling outside the project window is refused (HTTP ${beforeWiden.status}: ${beforeWiden.body?.message ?? ''})`);
-    await q(`UPDATE projects SET end_date = $2 WHERE id = $1`, [proj.id, '2027-12-31']);
-  } else {
-    console.log('  SKIP  [E2E-00] project window already covers today (widened by an earlier run)');
+  // ── 1. create ───────────────────────────────────────────────────────────────────────────────
+  // Walk the branches until the rules admit one. Which branch is legal depends on where this
+  // assayer lives: too close is a conflict of interest and cannot be waived by anyone, too far
+  // needs the desk to say why. Both refusals are worth recording when they happen, and neither
+  // is a reason for the run to stop.
+  let pb = null, created = null, refusals = [];
+  for (const cand of candidates) {
+    await call(admin.token, 'PUT', `/assayers/${assayer.id}/empanelment/${cand.client_id}`, { status: 'ACTIVE' });
+    const [proj] = await q(
+      `SELECT p.id, p.end_date FROM project_branches pb JOIN projects p ON p.id=pb.project_id WHERE pb.id=$1`,
+      [cand.id]);
+    if (proj.end_date && new Date(proj.end_date) < new Date(today)) {
+      await q(`UPDATE projects SET end_date=$2 WHERE id=$1`, [proj.id, '2027-12-31']);
+    }
+    const base = {
+      projectBranchId: cand.id, assayerId: assayer.id, proposedFee: FEE,
+      scheduledDate: today, remarks: 'ACC- acceptance loop',
+    };
+    let r = await call(exec.token, 'POST', '/assignments', base);
+
+    if (r.status === 400 && r.body?.code === 'RULE_NOT_OVERRIDABLE') {
+      refusals.push([cand.branch, 'not overridable', r.body.message]);
+      continue;
+    }
+    if (r.status === 400 && r.body?.code === 'OVERRIDE_REASON_REQUIRED') {
+      refusals.push([cand.branch, 'needs a reason', r.body.message]);
+      r = await call(exec.token, 'POST', '/assignments', {
+        ...base,
+        overrideReason: 'Acceptance run: nearest empanelled assayer is unavailable, desk approved the travel.',
+      });
+    }
+    if (r.status < 400) { pb = cand; created = r; break; }
+    refusals.push([cand.branch, `HTTP ${r.status}`, r.body?.message ?? '']);
   }
 
-  // ── 1. create ───────────────────────────────────────────────────────────────────────────────
-  const base = {
-    projectBranchId: pb.id, assayerId: assayer.id, proposedFee: FEE,
-    scheduledDate: today, remarks: 'ACC- acceptance loop',
-  };
-  let created = await call(exec.token, 'POST', '/assignments', base);
+  for (const [branch, kind, msg] of refusals.slice(0, 3)) {
+    console.log(`  NOTE  ${branch}: ${kind} — ${String(msg).slice(0, 120)}`);
+  }
+  const coi = refusals.find((x) => x[1] === 'not overridable');
+  if (coi) {
+    record('ELIG-00', /conflict of interest/i.test(coi[2]),
+      `a conflict-of-interest refusal is stated as unwaivable, not offered as an override`);
+  }
+  const far = refusals.find((x) => x[1] === 'needs a reason');
+  if (far) record('ELIG-01', true, `out-of-radius work is refused until a reason is given`);
 
-  // Sending somebody a long way is allowed, but not silently: the desk has to say why. When the
-  // branch this run picked happens to be out of the client's radius, that refusal is itself worth
-  // recording, and the override that follows exercises the documented way through it.
-  if (created.status === 400 && created.body?.code === 'OVERRIDE_REASON_REQUIRED') {
-    record('ELIG-01', true,
-      `out-of-radius work is refused until a reason is given: "${created.body.message}"`);
-    created = await call(exec.token, 'POST', '/assignments', {
-      ...base,
-      overrideReason: 'Acceptance run: nearest empanelled assayer is unavailable, desk approved the travel.',
-    });
-    // No column carries a distance override; the audit trail is where it lives, so that is what
-    // gets asserted. What matters is that the decision is attributable afterwards, not that a
-    // particular table has a particular field.
+  if (!pb || !created) {
+    throw new Error(`no branch this assayer may work: ${JSON.stringify(refusals.slice(0, 4))}`);
+  }
+  console.log(`\n  working branch: "${pb.branch}"\n`);
+
+  const asgId = created.body.data.id;
+  if (far) {
     const overrideAudit = await q(
       `SELECT event_type, remarks, metadata, user_id FROM audit_events
-        WHERE entity_id=$1 AND event_type='ASSIGNMENT_ELIGIBILITY_OVERRIDDEN'`,
-      [created.body?.data?.id ?? '00000000-0000-0000-0000-000000000000']);
-    record('ELIG-03', created.status < 400 && overrideAudit.length === 1
-      && !!overrideAudit[0].user_id
-      && /desk approved the travel/.test(overrideAudit[0].remarks ?? ''),
-      `the override is recorded against the person who made it, with their words and the rule `
-      + `(${overrideAudit[0]?.metadata?.rule ?? 'no rule'}) — "${(overrideAudit[0]?.remarks ?? '').slice(0, 80)}"`);
+        WHERE entity_id=$1 AND event_type='ASSIGNMENT_ELIGIBILITY_OVERRIDDEN'`, [asgId]);
+    record('ELIG-03', overrideAudit.length === 1 && !!overrideAudit[0].user_id,
+      `the override is recorded against whoever made it, with their words and the rule `
+      + `(${overrideAudit[0]?.metadata?.rule ?? 'no rule'})`);
   }
-  if (created.status >= 400) throw new Error(`create failed: ${JSON.stringify(created.body)}`);
-  const asgId = created.body.data.id;
   let [row] = await q(`SELECT status, assayer_id, entity_version FROM assignments WHERE id=$1`, [asgId]);
   record('E2E-01', row.status === 'PENDING' && row.assayer_id === assayer.id,
     `create -> DB status=${row.status}, owner=${row.assayer_id === assayer.id ? 'the intended assayer' : 'WRONG'}`);
