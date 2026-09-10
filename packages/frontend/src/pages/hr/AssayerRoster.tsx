@@ -201,14 +201,30 @@ export const AssayerRoster: React.FC<{
         succeeded: { id: string; from: string; to: string }[];
         skipped: { id: string; current: string; reason: string }[];
         failed: { id: string; reason: string }[];
+        /** Moved, but not all the way — stopped part-way along a multi-hop walk. */
+        partial: { id: string; from: string; reached: string; target: string; reason: string }[];
       }>('/assayers/bulk/lifecycle', {
         method: 'POST',
         body: JSON.stringify({ ids, targetStatus, reason }),
       });
 
-      const { succeeded = [], skipped = [], failed = [] } = res ?? {};
+      /**
+       * `partial` is a fourth outcome and has to be said out loud.
+       *
+       * A multi-hop walk that stops part-way leaves the person somewhere real but not where the
+       * operator asked. Destructuring only the other three dropped it silently: the row counted
+       * as neither moved nor skipped nor failed, so a partial result rendered as
+       * "0 moved, 0 skipped, 0 failed" in the success tone — the operator would read that as
+       * nothing having happened, on the one outcome where something did.
+       */
+      const { succeeded = [], skipped = [], failed = [], partial = [] } = res ?? {};
       const moved = succeeded.length;
       const details = [
+        ...partial.map(
+          (p) =>
+            `${nameById[p.id] ?? 'This assayer'} got as far as ${assayerLifecycleLabel(p.reached)} `
+            + `on the way to ${assayerLifecycleLabel(p.target)}, and stopped there: ${p.reason}`,
+        ),
         ...skipped.map(
           (s) =>
             `${nameById[s.id] ?? 'This assayer'} (is ${assayerLifecycleLabel(s.current)}): ${s.reason}`,
@@ -217,10 +233,12 @@ export const AssayerRoster: React.FC<{
       ];
 
       setNotice(
-        failed.length || skipped.length
+        failed.length || skipped.length || partial.length
           ? {
               tone: 'err',
-              text: `${moved} moved to ${assayerLifecycleLabel(targetStatus)}, ${skipped.length} skipped, ${failed.length} failed.`,
+              text: `${moved} moved to ${assayerLifecycleLabel(targetStatus)}`
+                + `${partial.length ? `, ${partial.length} part-way` : ''}`
+                + `, ${skipped.length} skipped, ${failed.length} failed.`,
               details,
             }
           : {
