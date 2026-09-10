@@ -296,13 +296,19 @@ returns exactly one right answer.
 **Reading a person's record is itself audited.** `ASSAYER_RECORD_VIEWED`, with the reader named.
 Few systems record who looked.
 
-**No export carries an identity or bank number.** Four roles × three workbooks, searched for the
-**real decrypted values** taken from the product's own audited reveal route: not one full value,
-and in the roster workbook not even a last-four fragment. Two corrections were needed before that
-"no" meant anything — an xlsx is a ZIP, so the first pass searched compressed bytes and would have
-found nothing either way; and a negative needs a positive control, so the probe also searches for
-every assayer's code and first name and scores **8 of 8** in the roster workbook. DESK is refused
-the billing workbook outright, 403.
+**The three roster and billing workbooks carry no identity or bank number.** Four roles × three
+workbooks, searched for the **real decrypted values** taken from the product's own audited reveal
+route: not one full value, and in the roster workbook not even a last-four fragment. Two
+corrections were needed before that "no" meant anything — an xlsx is a ZIP, so the first pass
+searched compressed bytes and would have found nothing either way; and a negative needs a positive
+control, so the probe also searches for every assayer's code and first name and scores **8 of 8**
+in the roster workbook. DESK is refused the billing workbook outright, 403.
+
+> **This claim was published in a broader form and was wrong.** An earlier version of this report
+> said "no export carries an identity or bank number". That generalised three workbooks to every
+> export. A wider sweep found a fourth path — the TDS report — that hands out PANs in the clear,
+> unaudited. See PA-F18. The narrow statement above is what the evidence supports; the broad one
+> was mine and it was too broad.
 
 **The export says whether it follows your filters.** The classic export defect is a file that
 quietly ignores the filters the screen had on. The roster's dialog puts both options side by side
@@ -410,6 +416,8 @@ was involved. Nothing here is inferred from source alone; where something is sou
 
 | id | severity | what | disposition |
 |---|---|---|---|
+| **PA-F18** | **HIGH** | `GET /billing-engine/tds-report` returns every payee's **PAN in the clear** to AUDITOR — a role the record read strips the field from entirely — and writes **no** reveal audit row, where the single-field reveal writes one per number | **FIX before go-live.** Live today: AUDITOR is an ordinary role and needs no special configuration |
+| **PA-F19** | **HIGH** (dormant with PA-F06) | `GET /reports/billing` ignores the region ceiling: an EAST-scoped account is shown **0** client lines on the screen and handed **all 13** in the workbook. The queued twin does the same | **FIX with PA-F06.** Same class, read side — and it means fixing the write surface alone would leave the book readable by export |
 | **PA-F14** | **BLOCKER** | Redoing a reopened audit books no money at all — the assayer is not paid, the client is not billed — and the money card says `booked: true` while `reconcile/preview` says `count: 0`, so neither detection nor repair can see it | **FIX before go-live.** Needs two changes together: partial unique indexes excluding the dead states (`assayer_payables` `WHERE status <> 'VOIDED'`, `billing_entries` `WHERE state <> 'CANCELLED'`) **and** the same status filter on the five existence checks. A migration on the money tables — specified, not attempted |
 | **PA-F02** | **HIGH** | A region-scoped account is refused *reading* an out-of-region assignment and can *create* one — 201, `ASN-2026-000016`, a real row it then cannot see | **FIXED and re-verified against HEAD** — now 403, no row written. Committed `69ae3491`, pinned in `write-region-parity.spec.ts`, and its removal turns that spec red |
 | **PA-F06** | **HIGH** (dormant) | The same class on **18 more routes** — approve a payout, mint an invoice, adjust a client line, set a commercial rate, and move a branch out of your own region so you lose sight of it. Every one confirmed at runtime with the row read back | **FIX before anyone is region-scoped** — see the verdict |
