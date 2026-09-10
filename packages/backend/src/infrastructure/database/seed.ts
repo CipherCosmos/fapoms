@@ -147,11 +147,46 @@ async function seed() {
       );
     }
 
-    if (toTruncate.length) {
+    /**
+     * Nothing to truncate is not the same as truncating nothing.
+     *
+     * `occupied` was computed over exactly `toTruncate`, so an empty list here means every one of
+     * those tables already has no rows and the statement would change nothing — the statement
+     * carries no `RESTART IDENTITY`, so not even a sequence moves. Issuing it anyway cost the
+     * documented fresh-install seed its ability to run.
+     *
+     * TRUNCATE needs a privilege the application role deliberately does not have, and must not:
+     * `fapoms_runtime` holds SELECT/INSERT/UPDATE/DELETE and nothing else, which is the whole of
+     * the audit boundary (see database/roles/role-model.ts). The backend container runs as that
+     * role, so DEPLOYMENT.md's own `docker compose exec backend … seed.js --if-empty` failed on
+     * "permission denied for table users" against a completely empty database. Two correct
+     * decisions composing into a broken whole.
+     *
+     * Skipping the no-op is the smaller half of the fix. It makes the documented command true for
+     * the case it exists to serve — a fresh install — without giving the runtime role a privilege
+     * back. A truncate that WOULD do something still needs the deploy identity, and the catch
+     * below says so instead of reporting a bare permission error.
+     */
+    if (toTruncate.length && occupied.length > 0) {
       // Identifiers cannot be parameterised, so they are quoted individually. Every value comes
       // from the hardcoded list above and is matched against information_schema, never from input.
       const quoted = toTruncate.map((t) => `"${t}"`).join(', ');
-      await AppDataSource.query(`TRUNCATE TABLE ${quoted} CASCADE;`);
+      try {
+        await AppDataSource.query(`TRUNCATE TABLE ${quoted} CASCADE;`);
+      } catch (err) {
+        const message = (err as Error)?.message ?? '';
+        if (!/permission denied/i.test(message)) throw err;
+        throw new Error(
+          'Seeding needs to TRUNCATE, and this database connection is not allowed to.\n\n'
+          + `    Connected as ${process.env.DB_USERNAME ?? 'fapoms'}, which is the least-privileged `
+          + 'application role: it may read and write rows and may not TRUNCATE, deliberately.\n\n'
+          + '    Seeding over existing data is a deploy-time act. Re-run it as the migration role:\n'
+          + '      DB_USERNAME=fapoms_migrator DB_PASSWORD=$FAPOMS_MIGRATION_PASSWORD npm run seed -- --force\n\n'
+          + '    See docs/database-roles.md. The underlying error was: ' + message,
+        );
+      }
+    } else if (toTruncate.length) {
+      console.log('  nothing to truncate — every table this would clear is already empty.');
     }
 
     // 1. Seed Default Organization

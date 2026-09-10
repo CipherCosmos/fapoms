@@ -202,7 +202,7 @@ export function hardenSql(database: string): string[] {
     // ── PostGIS lives in whichever schema the extension chose ────────────────────────────────
     // Read-only: the runtime calls its functions, and never installs or alters an extension.
     `DO $$
-       DECLARE s text;
+       DECLARE s text; t record;
      BEGIN
        FOR s IN SELECT DISTINCT n.nspname
                   FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
@@ -224,9 +224,27 @@ export function hardenSql(database: string): string[] {
                  -- being a reason the deployment cannot finish.
                    AND pg_has_role(current_user, n.nspowner, 'USAGE')
        LOOP
+         -- Per object, and only where this role may grant. Owning the SCHEMA does not mean owning
+         -- the tables in it: reassigning the tiger schema and then hitting "permission denied for
+         -- table featnames" is a real sequence somebody walked into, and it happens AFTER migrations
+         -- have applied — so the deploy stops with the schema current, the grants missing and the
+         -- API still gated off. The blanket ON ALL form cannot express "what I am allowed to do".
          EXECUTE format('GRANT USAGE ON SCHEMA %I TO ${RUNTIME_ROLE}', s);
-         EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO ${RUNTIME_ROLE}', s);
-         EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO ${RUNTIME_ROLE}', s);
+         FOR t IN SELECT c.oid::regclass AS ident
+                    FROM pg_class c JOIN pg_namespace n2 ON n2.oid = c.relnamespace
+                   WHERE n2.nspname = s
+                     AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                     AND pg_has_role(current_user, c.relowner, 'USAGE')
+         LOOP
+           EXECUTE format('GRANT SELECT ON %s TO ${RUNTIME_ROLE}', t.ident);
+         END LOOP;
+         FOR t IN SELECT p.oid::regprocedure AS ident
+                    FROM pg_proc p JOIN pg_namespace n2 ON n2.oid = p.pronamespace
+                   WHERE n2.nspname = s
+                     AND pg_has_role(current_user, p.proowner, 'USAGE')
+         LOOP
+           EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO ${RUNTIME_ROLE}', t.ident);
+         END LOOP;
        END LOOP;
        FOR s IN SELECT DISTINCT n.nspname
                   FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace

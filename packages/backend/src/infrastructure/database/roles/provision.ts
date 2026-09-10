@@ -60,11 +60,23 @@ import {
  * `postgis` is not trusted and needs a superuser at any privilege level. Doing all four the same
  * way here means a cluster with a stricter policy on extension creation still provisions.
  *
- * `pg_trgm` was missing from this list and the omission was invisible: on a database the migrator
- * owns, the migration created it itself as a trusted extension. It only surfaced on a database
- * somebody else had created.
+ * `pg_trgm` and `btree_gist` were both missing and the omission was invisible: on a database the
+ * migrator owns, the migration creates a trusted extension itself. It only surfaces on a database
+ * somebody else created. `required-extensions.spec.ts` now derives the list from the migrations,
+ * so this cannot silently fall behind a third time.
+ *
+ * `pg_stat_statements` is deliberately absent. Migration 1790700000000 creates it inside a guard,
+ * because it is useless — and its views unreadable — unless the server was started with
+ * `shared_preload_libraries=pg_stat_statements`, which is a compose concern rather than a
+ * provisioning one.
+ *
+ * `pgcrypto` was here and is gone. No migration creates it and no SQL in this repository calls a
+ * function it provides: `gen_random_uuid()` has been core since PostgreSQL 13 and this deployment
+ * is 16, and every `digest`/`hmac`/`crypt` in the codebase is Node's own crypto module. An
+ * extension nothing uses is surface for no benefit. If something needs it later, a migration will
+ * create it and the spec beside this file will require it here.
  */
-const REQUIRED_EXTENSIONS = ['uuid-ossp', 'pgcrypto', 'postgis', 'pg_trgm'];
+export const REQUIRED_EXTENSIONS = ['uuid-ossp', 'postgis', 'pg_trgm', 'btree_gist'];
 
 export interface ProvisionTarget {
   host: string;

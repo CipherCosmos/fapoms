@@ -18,7 +18,11 @@
 # on <date>" always has an answer.
 set -euo pipefail
 
-APK_DIR="${APK_DIR:-/home/shivam/fapoms-downloads}"
+# Must match deploy/docker-compose.prod.yml's own default for the same directory. It did not —
+# this said /home/shivam/fapoms-downloads while compose said /srv/fapoms-downloads — so publishing
+# wrote the snippet and the APK somewhere caddy was not looking, on any host where APK_DIR was not
+# exported. One directory, one default.
+APK_DIR="${APK_DIR:-/srv/fapoms-downloads}"
 COMPOSE=~/apps/fapoms/deploy/docker-compose.prod.yml
 ENVFILE=~/apps/fapoms/.env.docker
 LOG=~/apps/fapoms-ops/publish-apk.log

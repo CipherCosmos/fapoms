@@ -35,6 +35,19 @@ docker compose exec backend sh -c 'cd /app/packages/backend && npm run seed:prod
 against `src/`, neither of which exists in the production image — it fails with
 `command failed: sh -c ts-node ...`, which reads like a broken script rather than the wrong one.
 
+**Which identity seeds.** The `backend` container connects as `fapoms_runtime`, which may read and
+write rows and may not `TRUNCATE` — that is the audit boundary, not an oversight. Seeding an EMPTY
+database needs no truncate and works as it stands, which is the case this step exists for. Seeding
+*over existing data* does need one, so it is a deploy-time act:
+
+```bash
+docker compose exec -e DB_USERNAME=fapoms_migrator -e DB_PASSWORD="$FAPOMS_MIGRATION_PASSWORD" \
+  backend sh -c 'cd /app/packages/backend && npm run seed:prod -- --force'
+```
+
+The seed says so itself if you get it wrong, naming the role and the command, rather than failing
+with `permission denied for table users`.
+
 Sign in as `admin` / `admin123` and **change that password immediately**.
 
 ### Verify it worked

@@ -252,6 +252,35 @@ else
   warn "back up PII_ENCRYPTION_KEY somewhere durable — it encrypts PAN, Aadhaar and bank details, and losing it makes that data unrecoverable"
 fi
 
+# ── The download snippet caddy imports ───────────────────────────────────────────────────────
+#
+# `deploy/Caddyfile` does `import /etc/caddy/apk-redirect.caddy`, bind-mounted from
+# `$APK_DIR/apk-redirect.caddy`. A missing import is a hard error in Caddy, and a missing
+# bind-mount SOURCE is worse: Docker creates a directory in its place, and caddy then refuses to
+# start with "Could not import /etc/caddy/apk-redirect.caddy: is a directory".
+#
+# On a fresh host nothing created that file, so a clean install came up with seven healthy
+# containers and a proxy in a crash loop — an application that answers nothing, with the only
+# evidence in one container's log. The Caddyfile's own comment says the snippet "is written once
+# with a local-file fallback and kept in place forever"; nothing was doing the writing.
+#
+# The fallback serves whatever APK is on disk. `deploy/publish-apk.sh` overwrites it with a redirect
+# to the EAS artifact on the next real publish.
+APK_DIR="${APK_DIR:-/srv/fapoms-downloads}"
+APK_SNIPPET="$APK_DIR/apk-redirect.caddy"
+if [ -f "$APK_SNIPPET" ]; then
+  ok "apk-redirect.caddy already present — leaving it as it is"
+elif mkdir -p "$APK_DIR" 2>/dev/null && cat > "$APK_SNIPPET" <<'SNIPPET'
+root * /srv/fapoms-downloads
+rewrite * /app.apk
+file_server
+SNIPPET
+then
+  ok "wrote a local-file fallback to $APK_SNIPPET (publish-apk.sh replaces it with a redirect)"
+else
+  warn "could not create $APK_SNIPPET — caddy will refuse to start with \"is a directory\". Create it by hand, or set APK_DIR to somewhere writable and re-run."
+fi
+
 # The trap, removed — for both compose files, because each fails a different way without it.
 #
 #   deploy/docker-compose.prod.yml has no fallbacks, so a missing env file empties the values and
