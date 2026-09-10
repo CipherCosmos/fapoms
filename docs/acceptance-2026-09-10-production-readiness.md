@@ -122,6 +122,15 @@ destructive audit probe runs inside a transaction that is always rolled back.
 
 ---
 
+## Where this work sits
+
+Everything is committed on `test` and **deliberately not pushed**. `origin/test` is 17 commits
+behind, and those commits include another session's deployment overhaul as well as this
+campaign's evidence. Pushing that branch triggers CI and the AWS box's auto-deploy, and that box
+has an unresolved data-loss incident from 5 September; sequencing a deployment-path change onto it
+is a decision for whoever owns that box, not a side effect of finishing an acceptance run. The
+tree is green at every commit, so pushing is a decision and not a repair.
+
 ## What was not tested, and why
 
 - **The browser.** No UI workflow was driven. The two days' budget went into standing the
