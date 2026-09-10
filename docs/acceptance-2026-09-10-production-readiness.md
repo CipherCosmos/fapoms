@@ -40,7 +40,7 @@ production data.
 | Assignment | **PASS** | E2E-01…E2E-14; state machine, ownership, versioning; completed work cannot be cancelled; a second completion is not a second business event |
 | Field execution | **PASS** (API path) | Accept, check-in with GPS, and completion; `checked_in_at` stamped; an assayer cannot complete their own job (403) or price it (`fee: 99999` ignored). Mobile app itself not exercised — see *not tested* |
 | Financial | **PASS** | Money recomputed independently and matching: 2500 − TDS 250 = 2250; client GST 2500 × 18% = 450; client TDS on the base, never the GST; line total 2700. Segregation of duties refuses booker-approves and approver-pays, by name. Duplicate payment reference yields one payment |
-| Audit / history | **PASS** | Every mutation carries an actor; refusals recorded as `SEGREGATION_OF_DUTIES_REFUSED` with `outcome: DENIED`, never success-shaped; 7 destructive vectors refused as the runtime role while append still works |
+| Audit / history | **PASS** | Every mutation carries an actor; refusals recorded as `SEGREGATION_OF_DUTIES_REFUSED` with `outcome: DENIED`, never success-shaped. **The audit trail is now tamper-proof against the application's own credential** — 7 destructive vectors refused as `fapoms_runtime` (including `DISABLE TRIGGER`, which fails with *"must be owner"*) while append still works, and `verify:runtime-role` refuses 87/87 including escalation, `DROP TRIGGER`, replacing the trigger function, and abusing the SECURITY DEFINER partition helper. This closes the open finding in `docs/incident-2026-09-09-audit-truncate.md` |
 | Authorization | **PASS** | DESK_OPERATOR refused on six privileged writes over direct HTTP with a before/after database comparison showing nothing changed; assayer horizontal isolation on work, acceptance and bank details |
 | UI / usability | **NOT ASSESSED** | See *not tested* — the browser pass was displaced by the deployment defects |
 | Reliability | **PARTIAL** | Concurrency proven (races, duplicate submits, stale versions, idempotent money). Worker failure injection and outbox replay not re-run — see *not tested* |
@@ -111,6 +111,7 @@ podman and homeserver paths; the orphaned-endpoint list in `integration-audit-ha
 | Lifecycle bypass, bulk and empanelment probes | **32/32** (`scripts/acceptance/lifecycle-bypass.mjs`) |
 | `npm run verify:migrations` | 79 migrations, 94 tables, second run a no-op, all named constraints present |
 | Runtime-role assertions at boot | 10/10 |
+| `npm run verify:runtime-role`, disposable database | **87/87** across two provisioning shapes |
 | Typecheck | backend, frontend, mobile — all clean |
 | Deployment path, from empty volumes | Exercised; failed three times before succeeding (AC-F01/02/03) |
 
