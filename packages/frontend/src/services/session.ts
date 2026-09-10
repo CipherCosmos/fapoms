@@ -28,11 +28,16 @@ const SESSION_KEYS = [
 /**
  * Where an unauthenticated visitor was trying to go, held until they have signed in.
  *
- * The literal is owned by `App.tsx`, which writes it whenever the router bounces someone to
- * /login, and `PostLoginRedirect` consumes it. It is repeated here — rather than imported from
- * `App.tsx` — because a service importing the root component would close an import cycle through
- * every route in the app. The two must stay in step; that is why the name is a constant on both
- * sides and not an inline string.
+ * The literal is owned by `components/PostLoginRedirect.tsx`, which consumes it; `App.tsx` writes
+ * it whenever the router bounces someone to /login. It is repeated here rather than imported
+ * because the import would have to go one way or the other and both are wrong: this module
+ * pulls in the query client and the socket at load time, so a redirect component importing it
+ * would drag both into every render of that component, and a service importing a React component
+ * inverts the dependency between the two layers.
+ *
+ * So there are deliberately two constants with one value, and `session.spec.ts` asserts they are
+ * still equal — a duplicated storage key whose halves drift is a bug with no symptom until
+ * somebody signs in and lands on the wrong page.
  *
  * It matters here because the 401 handler in `api.ts` does NOT go through the router: it calls
  * `location.replace('/login')` directly, so `RememberAndRedirectToLogin` never mounts and never

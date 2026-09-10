@@ -132,3 +132,22 @@ describe('endSession', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * `RETURN_TO_KEY` exists twice, on purpose (see the comment above it in `session.ts`): this module
+ * loads the query client and the socket, and `PostLoginRedirect` must not. Two constants with one
+ * value only work while they hold the same value, and nothing about a drift would fail — the 401
+ * handler would write one key, the redirect would read another, and everybody would simply land
+ * on their role's home page after an expiry instead of where they were. That is a silent loss of
+ * the exact behaviour the pair was added for.
+ */
+describe('the two copies of the return-to storage key', () => {
+  it('still name the same sessionStorage entry', async () => {
+    const { RETURN_TO_KEY: fromService } = await import('./session');
+    const { RETURN_TO_KEY: fromRedirect } = await import('../components/PostLoginRedirect');
+    expect(fromRedirect).toBe(fromService);
+    // Named rather than compared alone, so a rename of BOTH still has to be a deliberate edit
+    // here — the key is persisted state and changing it strands whatever a live tab has stored.
+    expect(fromService).toBe('fapoms_return_to');
+  });
+});

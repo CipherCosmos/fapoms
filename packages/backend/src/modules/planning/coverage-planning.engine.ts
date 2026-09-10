@@ -296,6 +296,21 @@ export class CoveragePlanningEngine {
     }
 
     const totalBranchesCount = activeBranches.length;
+    /**
+     * NOT the project's coverage. This is the PLAN's: the share of branches this proposal found
+     * an assayer for, before anything is committed.
+     *
+     * `coverageFromStatuses` / `coverageFromCounts` in `@fapoms/shared` answer the other
+     * question — how much of the project IS covered, read off `project_branches.status` — and
+     * the planning endpoint, the workbook and the planning header all go through them. The two
+     * numbers share a name and nothing else: the numerator here is what the matcher matched on
+     * this run, not a status any branch holds.
+     *
+     * Said out loud because three copies of the status-based definition drifted 36 percentage
+     * points apart before they were merged, and a fourth thing called `coveragePercentage` in
+     * the same module is precisely how a reader concludes there are still two definitions to
+     * reconcile. There is one, and this is not it.
+     */
     const coveragePercentage = totalBranchesCount > 0 ? parseFloat(((matchedCount / totalBranchesCount) * 100).toFixed(1)) : 0;
 
     // Confidence model calculation

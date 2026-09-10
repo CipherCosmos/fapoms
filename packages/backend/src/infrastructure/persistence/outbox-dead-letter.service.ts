@@ -139,7 +139,7 @@ export class OutboxDeadLetterService {
    * going straight back to terminal; `failed_at` clears so the relay's query matches it again.
    * The delivery itself is the relay's next tick — see the class comment.
    */
-  async replay(id: string, userId: string | null): Promise<OutboxDeadLetter> {
+  async replay(id: string, userId: string | null): Promise<OutboxDeadLetter & { previousAttempts: number }> {
     const row = await this.outbox.findOne({ where: { id } });
     if (!row) throw new NotFoundException(`Outbox event ${id} not found.`);
     if (row.dispatchedAt) {
@@ -165,7 +165,11 @@ export class OutboxDeadLetterService {
     );
 
     const reloaded = await this.outbox.findOne({ where: { id } });
-    return this.describe(reloaded ?? row);
+    // `attempts` on the returned row is 0 — that is the whole point of a replay — so the count
+    // that was undone is carried separately. The audit record of a replay reads
+    // "returned after failing N times", and reading it off the refreshed row made every one of
+    // them say 0.
+    return { ...this.describe(reloaded ?? row), previousAttempts: row.attempts };
   }
 
   private describe(row: OutboxEntity): OutboxDeadLetter {

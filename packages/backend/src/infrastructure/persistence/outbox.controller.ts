@@ -96,7 +96,7 @@ export class OutboxController {
     const event = await this.deadLetters.replay(id, user.id ?? null);
     await this.record(req, 'OUTBOX_EVENT_REPLAYED', id, 'SUCCESS',
       `Returned outbox event ${id} (${event.eventName}) to the relay for redelivery.`,
-      { eventName: event.eventName, subject: event.subject, previousAttempts: event.attempts });
+      { eventName: event.eventName, subject: event.subject, previousAttempts: event.previousAttempts });
     return { success: true, data: event };
   }
 

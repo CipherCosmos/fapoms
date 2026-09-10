@@ -977,8 +977,9 @@ export class BillingEngineService implements OnModuleInit {
     }
     // Expense-driven payables have no "booking" actor to compare against — only an
     // assignment-completion payable does. Check the mode before the lookup, not inside
-    // assertSegregationOfDuties, so a deployment running Off (the default) never pays for
-    // an extra query on every single approval.
+    // assertSegregationOfDuties, so a deployment that has deliberately turned the control Off
+    // never pays for an extra query on every single approval. Off is no longer the shipped
+    // default — see security.segregationOfDuties.mode — so this branch is now the common path.
     if (p.assignmentId && !p.expenseId && (await this.sodMode()) !== 'off') {
       const assignment = await m.findOne(AssignmentEntity, { where: { id: p.assignmentId } });
       await this.assertSegregationOfDuties(
