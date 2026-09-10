@@ -75,5 +75,46 @@ run_case G-min-override-reason \
   'export const MIN_OVERRIDE_REASON_LENGTH = 0;' \
   'assignment-target-eligibility.policy.spec'
 
+
+# ── Added 2026-09-10, during the role-by-role product acceptance campaign ──────────────────────
+# Each case removes one control that this campaign certified, and expects the suite that claims to
+# guard it to fail. A control whose removal nothing notices is a control in name only.
+
+run_case G4-region-ceiling-on-create \
+  packages/backend/src/modules/assignment/assignment.controller.ts \
+  'await this.regionGuard.assertProjectBranchInScope(dto.projectBranchId, scope);' \
+  'void dto.projectBranchId;' \
+  'write-region-parity'
+
+run_case G5-fee-self-dealing \
+  packages/backend/src/modules/assignment/assignment.controller.ts \
+  'const deskSuppliedFee = callerIsAssayer ? undefined : (body.fee ?? body.agreedFee);' \
+  'const deskSuppliedFee = (body.fee ?? body.agreedFee);' \
+  'fee-self-dealing'
+
+run_case G6-masked-pii-write-back \
+  packages/backend/src/modules/assayer/assayer.service.ts \
+  '&& looksMasked(incoming)) {' \
+  '&& false) {' \
+  'roster-masked-bank-account|sensitive-field-reveal'
+
+run_case G7-forced-password-gate \
+  packages/backend/src/modules/auth/guards.ts \
+  'if (user?.mustChangePassword === true) {' \
+  'if (false) {' \
+  'guards.spec|security-controls'
+
+run_case G8-permissions-guard-in-chain \
+  packages/backend/src/modules/user/system-dashboard.controller.ts \
+  '@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)' \
+  '@UseGuards(JwtAuthGuard, RolesGuard)' \
+  'route-permission-parity'
+
+run_case G9-rejected-empanelment-reason \
+  packages/backend/src/modules/assayer/roster-records.service.ts \
+  'if (previousStatus === EmpanelmentStatus.REJECTED && dto.status !== EmpanelmentStatus.REJECTED) {' \
+  'if (false) {' \
+  'empanelment-rejection-reversal'
+
 echo "=== final tree check (must be clean) ==="
 git status --short -- packages/backend/src | head -5 || true

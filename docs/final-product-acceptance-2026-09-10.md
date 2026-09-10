@@ -60,7 +60,7 @@ Nine roles signed in through the real login form in a real browser, every one la
 its job starts from, and across **351 route-visits not one role was shown data it was not entitled
 to**. Dashboard figures reproduce from the base tables to the rupee and the person. A record's
 history answers who did what, when and why, in plain English, without SQL. Exports carry no
-identity or bank numbers for any role. Eight of eight controls fail their own tests when removed.
+identity or bank numbers for any role. Nine of nine controls fail their own tests when removed.
 Four defects found here are fixed and re-verified against a container built from HEAD.
 
 ## What the verdict is about
@@ -318,9 +318,10 @@ the CSV option's count matches the screen and the database exactly. The download
 opened — the browser sandbox blocks downloads a page initiates — so what is certified is the
 dialog's contract and its counts.
 
-**The controls fail their own tests when removed.** Eight for eight — segregation of duties, the
+**The controls fail their own tests when removed.** Nine for nine — segregation of duties, the
 non-overridable standings, the override-reason minimum, the region ceiling, fee self-dealing,
-masked-PII write-back, the forced-password gate and the rejection-reversal reason. Each removed in
+masked-PII write-back, the forced-password gate, the rejection-reversal reason, and
+`PermissionsGuard` in the controller chain. Each removed in
 turn, its suite required to go red, then restored and checksum-verified.
 
 ## Three times this campaign was wrong before it was right
@@ -400,7 +401,7 @@ raised timeouts outside the `.db.spec.ts` files that talk to a real database.
 | frontend suite | **84 suites, 1,036 tests, all pass** |
 | shared suite | **10 suites, 413 tests, all pass** |
 | `tsc --noEmit` frontend | clean |
-| adversarial guard mutations | **8 of 8** go red on removal, restored byte for byte |
+| adversarial guard mutations | **9 of 9** go red on removal, restored byte for byte |
 
 The counts moved with this campaign's work: backend 310 → 311 suites and 4,382 → 4,394 tests,
 frontend 83 → 84 and 1,031 → 1,036. Every added test pins something this campaign found.
