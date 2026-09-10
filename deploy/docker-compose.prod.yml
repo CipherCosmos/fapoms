@@ -213,6 +213,14 @@ services:
   # is streamed here before it is stored; with FILE_SCAN_REQUIRED=true the backend fails CLOSED when
   # this is unreachable, so a file is never accepted unscanned. First boot is slow — freshclam has to
   # download the signature database — hence the long start_period; the deploy gate waits on health.
+  # NOTE ON ARCHITECTURE: clamav/clamav publishes no arm64 image — 1.4, 1.4.2, 1.5, latest and
+  # stable are all amd64-only. On an arm64 host `compose up` dies at image pull with "no matching
+  # manifest for linux/arm64/v8", before anything else runs. FILE_SCAN_REQUIRED is mandatory in
+  # production, so this stack currently requires an x86_64 host, or an explicit
+  # `platform: linux/amd64` here to run it emulated. That is a deployment decision with a real
+  # performance cost, not a default worth setting silently. The AWS box is arm64 but runs the root
+  # docker-compose.yml, which has no clamav service, so it is unaffected today — and would not be
+  # the moment it moved onto this file.
   clamav:
     image: docker.io/clamav/clamav:1.4
     restart: unless-stopped

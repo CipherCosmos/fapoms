@@ -58,11 +58,13 @@ describe('the database role split', () => {
       const grantAt = statements.findIndex((s) => /GRANT SELECT, INSERT ON .*audit_events/i.test(s));
       expect(revokeAt).toBeGreaterThan(-1);
       expect(grantAt).toBeGreaterThan(revokeAt);
-      // And the blanket table grant comes BEFORE the revoke, or it would re-open what the revoke
-      // had just closed — the ordering is the whole correctness of this function.
-      const blanketAt = statements.findIndex((s) => /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES/i.test(s));
-      expect(blanketAt).toBeGreaterThan(-1);
-      expect(blanketAt).toBeLessThan(revokeAt);
+      // And the broad table grant comes BEFORE the revoke, or it would re-open what the revoke
+      // had just closed — the ordering is the whole correctness of this function. That grant is a
+      // per-object loop rather than `ON ALL TABLES`, because `public` also holds whatever an
+      // extension put there and the blanket form dies on the first object this role does not own.
+      const broadAt = statements.findIndex((s) => /GRANT SELECT, INSERT, UPDATE, DELETE ON %s/i.test(s));
+      expect(broadAt).toBeGreaterThan(-1);
+      expect(broadAt).toBeLessThan(revokeAt);
     });
 
     it('moves every audit table and trigger function to the role that cannot log in', () => {
@@ -72,6 +74,17 @@ describe('the database role split', () => {
       }
       for (const fn of AUDIT_FUNCTIONS) {
         expect(sql).toContain(`ALTER FUNCTION ${fn} OWNER TO ${AUDIT_OWNER_ROLE}`);
+      }
+    });
+
+    it('contains no backtick, which would have ended the template literal that carries it', () => {
+      // Not style. These statements are built in template literals, so a backtick inside a SQL
+      // comment terminates the literal early — and TypeScript sometimes still compiles the wreck,
+      // leaving a module that only fails when Node parses the emitted JavaScript. That happened
+      // three times while this file was being written, each time costing a full provision run to
+      // diagnose. Markdown habits do not belong inside SQL.
+      for (const statement of [...hardenSql('fapoms'), ...createRolesSql('rt', 'mg')]) {
+        expect(statement).not.toContain('`');
       }
     });
 

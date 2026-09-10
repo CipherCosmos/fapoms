@@ -148,9 +148,48 @@ export function hardenSql(database: string): string[] {
     // USAGE, never CREATE: creating an object in `public` is altering the schema, which is the
     // privilege this whole change exists to remove from the running process.
     `GRANT USAGE ON SCHEMA public TO ${RUNTIME_ROLE}`,
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${RUNTIME_ROLE}`,
-    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${RUNTIME_ROLE}`,
-    `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${RUNTIME_ROLE}`,
+    /**
+     * Object by object, and only what this role may actually grant on.
+     *
+     * `GRANT … ON ALL FUNCTIONS IN SCHEMA public` reads as the obvious thing to write and is not
+     * safe here: `public` also holds whatever an extension put there. On a database that has ever
+     * had `pg_stat_statements` — which `deploy/docker-compose.prod.yml` preloads — it expands to
+     * include `pg_stat_statements_reset`, owned by the superuser, and the whole harden step dies
+     * on "permission denied for function pg_stat_statements_reset". A transitioned deployment
+     * therefore failed where a fresh one succeeded, which is the worst shape of bug to ship.
+     *
+     * Filtering on `pg_has_role(current_user, …, 'USAGE')` keeps the grant to objects this role
+     * owns or is a member of the owner of. An extension's objects keep whatever the extension gave
+     * them — `spatial_ref_sys` is readable by PUBLIC because postgis grants it, and nothing here
+     * takes that away.
+     */
+    `DO $$
+       DECLARE r record;
+     BEGIN
+       FOR r IN SELECT c.oid::regclass AS ident
+                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'public'
+                   AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                   AND pg_has_role(current_user, c.relowner, 'USAGE')
+       LOOP
+         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO ${RUNTIME_ROLE}', r.ident);
+       END LOOP;
+       FOR r IN SELECT c.oid::regclass AS ident
+                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'public'
+                   AND c.relkind = 'S'
+                   AND pg_has_role(current_user, c.relowner, 'USAGE')
+       LOOP
+         EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO ${RUNTIME_ROLE}', r.ident);
+       END LOOP;
+       FOR r IN SELECT p.oid::regprocedure AS ident
+                  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = 'public'
+                   AND pg_has_role(current_user, p.proowner, 'USAGE')
+       LOOP
+         EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO ${RUNTIME_ROLE}', r.ident);
+       END LOOP;
+     END $$;`,
     // Tables a later migration creates are covered without re-running anything, so a deployment
     // that forgets this script still fails closed rather than half-open.
     `ALTER DEFAULT PRIVILEGES FOR ROLE ${MIGRATION_ROLE} IN SCHEMA public
@@ -170,11 +209,31 @@ export function hardenSql(database: string): string[] {
                  -- plpgsql lives in pg_catalog, and GRANT SELECT ON ALL TABLES there reaches
                  -- pg_statistic, which even a superuser-owned grant is refused on. System
                  -- schemas are already readable by everyone; they are not what this loop is for.
-                 WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                 WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public')
+                 -- public is excluded because the loop above already granted on it, object by
+                 -- object and only where this role may. An extension installed INTO public — which
+                 -- pg_stat_statements is, and deploy/docker-compose.prod.yml preloads it — would
+                 -- otherwise be reached here by GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public
+                 -- and take the step down on pg_stat_statements_reset, owned by the superuser.
+                 -- And only schemas this role can actually grant on. The postgis image installs
+                 -- postgis_tiger_geocoder, which creates the tiger and tiger_data schemas owned by
+                 -- the superuser that ran the image's init scripts; granting on those is refused
+                 -- with "permission denied for schema tiger" and took the whole harden step down.
+                 -- The geocoder is not something this application calls, its PostGIS functions
+                 -- live in public, so a schema we cannot grant on is skipped and named rather than
+                 -- being a reason the deployment cannot finish.
+                   AND pg_has_role(current_user, n.nspowner, 'USAGE')
        LOOP
          EXECUTE format('GRANT USAGE ON SCHEMA %I TO ${RUNTIME_ROLE}', s);
          EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO ${RUNTIME_ROLE}', s);
          EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO ${RUNTIME_ROLE}', s);
+       END LOOP;
+       FOR s IN SELECT DISTINCT n.nspname
+                  FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+                 WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public')
+                   AND NOT pg_has_role(current_user, n.nspowner, 'USAGE')
+       LOOP
+         RAISE NOTICE 'extension schema % is owned by another role; ${RUNTIME_ROLE} was not granted on it', s;
        END LOOP;
      END $$;`,
 

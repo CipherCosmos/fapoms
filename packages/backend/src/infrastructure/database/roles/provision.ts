@@ -50,8 +50,21 @@ import {
   hardenSql,
 } from './role-model';
 
-/** Extensions the migrations assume are present. Installing one needs an administrative login. */
-const REQUIRED_EXTENSIONS = ['uuid-ossp', 'pgcrypto', 'postgis'];
+/**
+ * Extensions the migrations assume are present.
+ *
+ * Installed here, by the administrative login, rather than left to
+ * `EnableRequiredExtensions1783000000000` to create as the migrator. Three of these four are
+ * "trusted" in PostgreSQL 13+ and a non-superuser CAN create them — but only with `CREATE` on the
+ * DATABASE, which is a privilege the migrator only has because of the ownership convergence below.
+ * `postgis` is not trusted and needs a superuser at any privilege level. Doing all four the same
+ * way here means a cluster with a stricter policy on extension creation still provisions.
+ *
+ * `pg_trgm` was missing from this list and the omission was invisible: on a database the migrator
+ * owns, the migration created it itself as a trusted extension. It only surfaced on a database
+ * somebody else had created.
+ */
+const REQUIRED_EXTENSIONS = ['uuid-ossp', 'pgcrypto', 'postgis', 'pg_trgm'];
 
 export interface ProvisionTarget {
   host: string;
@@ -134,13 +147,123 @@ export async function bootstrapRoles(
       await ds.query(`CREATE DATABASE "${target.database}" OWNER ${MIGRATION_ROLE}`);
       log(`Created database ${target.database}, owned by ${MIGRATION_ROLE}.`);
     } else {
-      log(`Database ${target.database} already exists; leaving its owner alone.`);
+      /**
+       * The database usually already exists, and this branch used to leave it alone.
+       *
+       * That was the bug, and it was the branch every real deployment takes: the postgres image's
+       * entrypoint creates `POSTGRES_DB` — which `deploy/docker-compose.prod.yml` sets — before
+       * this code ever connects, owned by the superuser. So the migrator owned nothing, and since
+       * PostgreSQL 15 took `CREATE` on `public` away from `PUBLIC` and bound it to
+       * `pg_database_owner`, it had no `CREATE` there either. The first migration died on
+       * "permission denied for schema public", `db-migrate` exited 1, and the API — which gates on
+       * that container succeeding — never started.
+       *
+       * A `GRANT USAGE, CREATE ON SCHEMA public` would fix that one symptom and not the next two:
+       * a trusted extension needs `CREATE` on the DATABASE rather than the schema, and hardening
+       * later needs to own the audit tables in order to reassign them. Converging on the same end
+       * state the create-branch produces fixes all three at once, and removes the divergence that
+       * let the two branches behave differently in the first place.
+       *
+       * This changes ownership of the DATABASE, not of the objects in it: tables an earlier
+       * deployment created stay owned by whoever created them, which is why `REASSIGN OWNED` runs
+       * below. Nothing is dropped or recreated.
+       */
+      const owner = await ds.query(
+        'SELECT pg_get_userbyid(datdba) AS owner FROM pg_database WHERE datname = $1',
+        [target.database],
+      );
+      const currentOwner = owner?.[0]?.owner;
+      if (currentOwner !== MIGRATION_ROLE) {
+        await ds.query(`ALTER DATABASE "${target.database}" OWNER TO ${MIGRATION_ROLE}`);
+        log(`Database ${target.database} exists, owned by ${currentOwner}; ownership moved to ${MIGRATION_ROLE}.`);
+      } else {
+        log(`Database ${target.database} already exists and is already owned by ${MIGRATION_ROLE}.`);
+      }
     }
   });
 
   const url = new URL(adminUrl);
   url.pathname = `/${target.database}`;
   await using(new DataSource({ type: 'postgres', url: url.toString(), entities: [] }), async (ds) => {
+    /**
+     * Objects an earlier deployment created still belong to whoever created them.
+     *
+     * `ALTER DATABASE … OWNER` moves the database and nothing inside it, so on a deployment that
+     * has been running the tables are still the old role's. Hardening then cannot do its job: it
+     * runs as the migrator, and `ALTER TABLE audit_events OWNER TO fapoms_audit_owner` requires
+     * owning the table. Reassigning is the admin's work, not the migrator's, so it happens here
+     * while an administrative connection is still open.
+     *
+     * Scoped to the role that currently owns this schema, and to this database only — `REASSIGN
+     * OWNED` never crosses a database boundary. On a fresh provision it matches nothing.
+     */
+    const reassigned = await ds.query(`
+      DO $$
+        DECLARE r record; moved int := 0;
+      BEGIN
+        FOR r IN
+          SELECT c.oid::regclass AS ident
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public'
+             AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
+             -- An extension's own objects. spatial_ref_sys belongs to postgis and the database
+             -- system refuses to release it — which is what makes REASSIGN OWNED the wrong
+             -- instrument here: it is all-or-nothing over a role's whole estate and fails on the
+             -- first object it may not touch, having moved nothing.
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e')
+             -- A sequence behind a serial or identity column, and only that. Postgres refuses to
+             -- change its owner independently ("cannot change owner of sequence
+             -- audit_chain_seq_seq") because it follows its table, which this loop moves anyway.
+             --
+             -- Deliberately narrow: an earlier version excluded every 'a' and 'i' dependency and
+             -- skipped assayer_location_pings and both of its partitions, which carry exactly
+             -- those markers and ARE ours. Hardening then failed on "permission denied for table
+             -- assayer_location_pings_default", several steps later and pointing nowhere useful.
+             AND NOT (
+               c.relkind = 'S'
+               AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'a')
+             )
+             AND pg_get_userbyid(c.relowner) NOT IN ('${MIGRATION_ROLE}', '${AUDIT_OWNER_ROLE}')
+        LOOP
+          EXECUTE format('ALTER TABLE %s OWNER TO ${MIGRATION_ROLE}', r.ident);
+          moved := moved + 1;
+        END LOOP;
+        FOR r IN
+          SELECT p.oid::regprocedure AS ident
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'public'
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+             AND pg_get_userbyid(p.proowner) NOT IN ('${MIGRATION_ROLE}', '${AUDIT_OWNER_ROLE}')
+        LOOP
+          EXECUTE format('ALTER FUNCTION %s OWNER TO ${MIGRATION_ROLE}', r.ident);
+          moved := moved + 1;
+        END LOOP;
+        IF moved > 0 THEN
+          RAISE NOTICE 'reassigned % object(s) to ${MIGRATION_ROLE}', moved;
+        END IF;
+      END $$;
+      SELECT count(*)::int AS remaining
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public'
+         AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
+         AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e')
+         AND NOT (
+           c.relkind = 'S'
+           AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'a')
+         )
+         AND pg_get_userbyid(c.relowner) NOT IN ('${MIGRATION_ROLE}', '${AUDIT_OWNER_ROLE}')
+    `);
+    const remaining = Number(reassigned?.[0]?.remaining ?? 0);
+    if (remaining > 0) {
+      throw new Error(
+        `${remaining} object(s) in the public schema are still owned by neither ${MIGRATION_ROLE} ` +
+          `nor ${AUDIT_OWNER_ROLE} after reassignment. Hardening cannot reassign what it does not ` +
+          'own, so this would fail later and less clearly. Investigate before deploying.',
+      );
+    }
+
     for (const extension of REQUIRED_EXTENSIONS) {
       try {
         await ds.query(`CREATE EXTENSION IF NOT EXISTS "${extension}"`);

@@ -36,7 +36,28 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BACKEND = join(REPO_ROOT, 'packages', 'backend');
 
 const ADMIN_URL = process.env.DB_ADMIN_URL || 'postgres://pgadmin:pgadmin_dev@127.0.0.1:55433/postgres';
-const DB = `rolecheck_${Date.now()}_${process.pid}`;
+
+/**
+ * The two ways a FAPOMS database comes into existence, both of which must end in the same place.
+ *
+ * The second one is the one every real deployment takes, and it was broken for a week without
+ * anybody noticing — because this script only ever exercised the first. `bootstrapRoles` creates
+ * the database owned by the migration role, so provisioning worked; the postgres image's
+ * entrypoint creates `POSTGRES_DB` first, owned by the superuser, so provisioning did not. Since
+ * PostgreSQL 15 bound `CREATE` on `public` to `pg_database_owner`, the migrator had no CREATE, the
+ * first migration died on "permission denied for schema public", and `db-migrate` exited 1 — which
+ * the API gates on.
+ *
+ * A test that provisions its own database will always take the branch that works. That is the
+ * whole reason this list has two entries.
+ */
+const SHAPES = [
+  { name: 'provision creates the database itself', preCreate: false },
+  { name: 'the database already exists, created by the image entrypoint', preCreate: true },
+];
+
+let DB = `rolecheck_${Date.now()}_${process.pid}`;
+const created = [];
 // Throwaway credentials for a throwaway database, generated per run so nothing here is a secret
 // anybody could later mistake for a real one.
 const RUNTIME_PW = `rt_${randomUUID()}`;
@@ -47,8 +68,9 @@ const HOST = admin.hostname;
 const PORT = admin.port || '5432';
 
 const results = [];
+let group = '';
 const record = (ok, what, detail) => {
-  results.push({ ok, what, detail });
+  results.push({ group, ok, what, detail });
   console.log(`  ${ok ? '✓' : '✗'} ${what}${detail ? ` — ${detail}` : ''}`);
 };
 
@@ -111,7 +133,35 @@ async function succeeds(client, what, sql, params) {
   }
 }
 
-async function main() {
+async function runShape(shape) {
+  DB = `rolecheck_${Date.now()}_${process.pid}_${shape.preCreate ? 'pre' : 'new'}`;
+  created.push(DB);
+  group = shape.name;
+  console.log(`\n╔══ ${shape.name} ══`);
+
+  if (shape.preCreate) {
+    // Exactly what `POSTGRES_DB` makes the postgis entrypoint do: the database exists, owned by
+    // the superuser, before provisioning connects.
+    const admin = new Client({ connectionString: ADMIN_URL });
+    await admin.connect();
+    try {
+      await admin.query(`CREATE DATABASE "${DB}"`);
+    } finally {
+      await admin.end();
+    }
+    const inDb = new Client({ connectionString: ADMIN_URL.replace(/\/[^/]*$/, `/${DB}`) });
+    await inDb.connect();
+    try {
+      // The image's init scripts install these into the database they create.
+      for (const e of ['postgis', 'pg_stat_statements']) {
+        await inDb.query(`CREATE EXTENSION IF NOT EXISTS "${e}"`).catch(() => undefined);
+      }
+    } finally {
+      await inDb.end();
+    }
+    record(true, 'the database exists before provisioning, owned by the superuser');
+  }
+
   // The same entry point the deploy container runs, so what is proven here is the deployment
   // sequence itself and not a second implementation of it that happens to agree today.
   console.log(`→ provisioning ${DB} on ${HOST}:${PORT} — roles, schema, grants`);
@@ -120,7 +170,10 @@ async function main() {
     FAPOMS_RUNTIME_PASSWORD: RUNTIME_PW,
     FAPOMS_MIGRATION_PASSWORD: MIGRATION_PW,
   });
-  const applied = (log.match(/^ {2}[A-Za-z]+\d{10,}$/gm) || []).length;
+  // `\w`, not `[A-Za-z]`: class names carry digits in the middle too (Phase2…), and matching only
+  // letters silently under-counted 79 migrations as 75 — a wrong number in a report is worse than
+  // no number.
+  const applied = (log.match(/^ {2}\w+\d{10,}$/gm) || []).length;
   record(applied > 70, `${applied} migrations applied by a non-superuser role`);
 
   const runtime = connect('fapoms_runtime', RUNTIME_PW);
@@ -235,11 +288,16 @@ async function main() {
     await migrator.end();
   }
 
+}
+
+async function main() {
+  for (const shape of SHAPES) await runShape(shape);
+
   const failed = results.filter((r) => !r.ok);
-  console.log(`\n${failed.length === 0 ? '✓' : '✗'} ${results.length - failed.length}/${results.length} checks passed`);
+  console.log(`\n${failed.length === 0 ? '✓' : '✗'} ${results.length - failed.length}/${results.length} checks passed across ${SHAPES.length} provisioning shapes`);
   if (failed.length > 0) {
     console.error('\nFailed:');
-    for (const f of failed) console.error(`  - ${f.what}${f.detail ? ` (${f.detail})` : ''}`);
+    for (const f of failed) console.error(`  - [${f.group}] ${f.what}${f.detail ? ` (${f.detail})` : ''}`);
     process.exitCode = 1;
   }
 }
@@ -255,9 +313,13 @@ try {
   const cleanup = new Client({ connectionString: ADMIN_URL });
   try {
     await cleanup.connect();
-    await cleanup.query(`DROP DATABASE IF EXISTS "${DB}" WITH (FORCE)`);
+    // Every database this run created, not just the last one — a failure part way through the
+    // second shape must not leave the first one behind.
+    for (const name of created) {
+      await cleanup.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    }
   } catch (err) {
-    console.error(`! could not drop ${DB}: ${err.message}`);
+    console.error(`! could not drop ${created.join(', ')}: ${err.message}`);
   } finally {
     await cleanup.end().catch(() => undefined);
   }

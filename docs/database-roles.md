@@ -75,9 +75,10 @@ old containers already stopping.
 
 The steps, in order:
 
-1. **bootstrap** — as `DB_ADMIN_URL`. Creates the three roles, the database owned by the migrator,
-   and the extensions (`uuid-ossp`, `pgcrypto`, `postgis`). Skipped with `SKIP_BOOTSTRAP=true` on a
-   managed cluster whose identities somebody else owns.
+1. **bootstrap** — as `DB_ADMIN_URL`. Creates the three roles, makes the migrator the owner of the
+   database (creating it if it is not there), reassigns any objects an earlier deployment left
+   behind, and installs the extensions (`uuid-ossp`, `pgcrypto`, `postgis`, `pg_trgm`). Skipped
+   with `SKIP_BOOTSTRAP=true` on a managed cluster whose identities somebody else owns.
 2. **migrate** — as `fapoms_migrator`.
 3. **harden** — as `fapoms_migrator`: reassigns the audit objects to `fapoms_audit_owner`, grants
    the runtime its minimum, revokes the rest. Then re-connects **as `fapoms_runtime`** and checks
@@ -116,36 +117,50 @@ asks the database itself the ten questions in `RUNTIME_ASSERTIONS` at every boot
 ## Transitioning an existing deployment
 
 The existing database was created by, and is owned by, whatever `DB_USERNAME` was — typically
-`fapoms`, a superuser. Nothing below drops or recreates it.
+`fapoms`, a superuser. Nothing below drops or recreates it, and no row is touched. Ownership of
+the database and of the objects in it does change; that is what makes the rest work, and it is
+detailed below.
 
-**Before you start**, take a backup (`deploy/backup.sh`). The reassignment step changes ownership
-of two tables; a restore is the escape hatch if the deployment cannot start afterwards.
+**Before you start**, take a backup (`deploy/backup.sh`). The step changes ownership of the
+database and of every object in `public`; a restore is the escape hatch if the deployment cannot
+start afterwards.
 
 1. **Add the secrets** to the deploy environment: `DB_ADMIN_URL` (the existing superuser is fine —
    it is used only at deploy time from here on), `FAPOMS_MIGRATION_PASSWORD` and
    `FAPOMS_RUNTIME_PASSWORD`, both freshly generated.
-2. **Deploy the new compose file.** `db-migrate` runs first: it creates the three roles, sees the
-   database already exists and leaves its owner alone, applies any pending migrations as
+2. **Deploy the new compose file.** `db-migrate` runs first: it creates the three roles, takes
+   ownership of the existing database and its objects, applies any pending migrations as
    `fapoms_migrator`, and hardens. The API then starts as `fapoms_runtime`.
 3. **Read the boot log.** Ten `Database identity: …` lines, all `ok`. With
    `STARTUP_CHECKS_STRICT=true` a failure refuses the boot, so a wrong answer is a failed deploy
    rather than a silently unprotected one.
 
-Two things about an already-populated database:
+What the bootstrap step does to an existing database:
 
-- The existing tables are owned by the old role, not by `fapoms_migrator`. Harden's `GRANT … ON ALL
-  TABLES` still gives the runtime what it needs, because a grant does not require ownership of the
-  grantee, only of the object — and the old role, being the owner, is the one running it if you
-  keep `DB_ADMIN_URL` pointed at it. **If the old role and the migration role are different and the
-  old role is not a superuser**, run harden once as the old owner, or reassign the schema first
-  with `REASSIGN OWNED BY <old> TO fapoms_migrator`.
-- The audit tables move to `fapoms_audit_owner`. Anything outside FAPOMS that wrote to them
+- **It takes ownership of the database.** `ALTER DATABASE <db> OWNER TO fapoms_migrator`. Since
+  PostgreSQL 15, `CREATE` on `public` belongs to `pg_database_owner`, so a migrator that does not
+  own the database cannot create anything and the first migration fails. Nothing is dropped and
+  nothing is recreated; the old owner keeps every other privilege it had, and a superuser stays a
+  superuser.
+- **It reassigns the objects the old role created** — tables, partitions, sequences, views and
+  functions in `public` — to `fapoms_migrator`, so that hardening can then move the audit tables to
+  `fapoms_audit_owner`. Extension-owned objects (`spatial_ref_sys`, the `pg_stat_statements` views)
+  and sequences behind identity columns are left alone; they belong to the extension or follow
+  their table. If anything is left that neither role owns, provisioning stops and names the count
+  rather than failing later in hardening with a less useful message.
+- **The audit tables move to `fapoms_audit_owner`.** Anything outside FAPOMS that wrote to them
   directly — a reporting job, a maintenance script — stops working, deliberately.
+
+None of this touches row data. Verified on a populated pre-split database: schema migrated and
+seeded as the old superuser, an audit row written before the transition, and after it users,
+branches and that audit row were all still there with the audit tables owned by a role that cannot
+log in.
 
 **Rolling back** is `git revert` of the compose change plus setting `DB_USERNAME`/`DB_PASSWORD`
 back to the old role and `DB_MIGRATIONS_RUN=true`. The roles and grants can be left in place; they
 harm nothing while unused. The audit tables stay owned by `fapoms_audit_owner`, which the old
-superuser can still administer.
+superuser can still administer, and the database stays owned by `fapoms_migrator` — hand it back
+with `ALTER DATABASE <db> OWNER TO <old role>` if you want the previous state exactly.
 
 ## Verifying it
 
@@ -157,7 +172,10 @@ DB_ADMIN_URL=postgres://…/postgres npm run verify:runtime-role
 DB_ADMIN_URL=postgres://…/postgres npm run verify:migrations
 ```
 
-`verify:runtime-role` runs 43 checks: every audit-bypass attack in the brief (UPDATE, DELETE,
+`verify:runtime-role` runs the full battery against **both** ways a database comes into existence
+— provisioning creating it, and it already existing because the postgres image's entrypoint made
+it from `POSTGRES_DB` — because those two took different code paths and only one of them worked.
+Per shape: every audit-bypass attack in the brief (UPDATE, DELETE,
 TRUNCATE, TRUNCATE CASCADE, multi-table RESTART IDENTITY, ALTER TABLE, DROP TRIGGER, DISABLE
 TRIGGER, DISABLE TRIGGER ALL, ALTER/CREATE OR REPLACE/DROP of the trigger function, DROP TABLE,
 reassigning ownership to itself), every escalation attempt (SET ROLE, ALTER ROLE SUPERUSER, CREATE
