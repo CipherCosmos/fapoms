@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
-import { changeOwnPasswordPath } from '../config/self-service-endpoints';
+import { changeOwnPasswordPath, isAssayerPrincipal } from '../config/self-service-endpoints';
 import { SessionsPanel } from './account/SessionsPanel';
 import { MfaPanel } from './account/MfaPanel';
 import {
@@ -40,6 +40,8 @@ export const Settings: React.FC = () => {
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [userRoles, setUserRoles] = useState<string[]>([]);
+  /** An assayer is a different kind of principal; the field app owns their profile. */
+  const isAssayer = isAssayerPrincipal(userRoles);
 
   // Form State - Security Password Change
   const [currentPassword, setCurrentPassword] = useState('');
@@ -182,7 +184,44 @@ export const Settings: React.FC = () => {
       </div>
 
       {/* TAB 1: PROFILE */}
-      {activeTab === 'PROFILE' && (
+      {activeTab === 'PROFILE' && isAssayer && (
+        /*
+         * An assayer's profile is not editable here, and this says so instead of offering a form
+         * that cannot save.
+         *
+         * Profile edits post `PUT /users/me`, and an assayer is not a `users` row — they carry
+         * their own credentials on the `assayers` table. There is no assayer counterpart to that
+         * route, because the field app owns this screen: `mobile/src/screens/ProfileScreen.tsx`
+         * is where an assayer maintains their own details. Offering the form here produced a
+         * filled-in page, a working Save button, and a 404 naming an internal id.
+         *
+         * Their password IS changeable here — see `changeOwnPasswordPath` — so the Security tab
+         * beside this one stays available.
+         */
+        <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Personal Profile</h3>
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '18px' }}>
+            Your name, contact details and work preferences are kept in the FAPOMS field app, where
+            you can edit them yourself. They are not editable from this browser.
+          </p>
+          <div style={{
+            padding: '14px 16px', borderRadius: 'var(--radius-md)', fontSize: '13px',
+            background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+            color: 'var(--text-secondary)', lineHeight: 1.6,
+          }}>
+            <strong style={{ color: 'var(--text-primary)' }}>{[firstName, lastName].filter(Boolean).join(' ') || username}</strong>
+            {email && <div>{email}</div>}
+            {phone && <div>{phone}</div>}
+            <div style={{ marginTop: 10 }}>
+              To change your password, use <strong style={{ color: 'var(--text-primary)' }}>Security &amp; Password</strong> above.
+              For anything else — your address, bank details or documents — speak to your HR contact,
+              who keeps those on your record.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'PROFILE' && !isAssayer && (
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
           <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Personal Profile</h3>
           <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '24px' }}>

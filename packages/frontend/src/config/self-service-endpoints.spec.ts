@@ -49,4 +49,33 @@ describe('the self-service endpoint a principal\'s own account actions go to', (
       expect(stripped).toContain('changeOwnPasswordPath');
     }
   });
+
+  /**
+   * The assayer's profile is read-only on the web, and the screen says so rather than offering a
+   * Save button that cannot work.
+   *
+   * `PUT /users/me` has no assayer counterpart — the field app owns that screen
+   * (`mobile/src/screens/ProfileScreen.tsx`). Before this, an assayer got a filled-in form, a
+   * working-looking Save, and a 404 quoting an internal id.
+   */
+  it('does not offer an assayer a profile form that cannot save', () => {
+    const src = readFileSync(join(__dirname, '..', 'pages/Settings.tsx'), 'utf8');
+    const stripped = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    // The editable form is behind `!isAssayer`; the read-only explanation is behind `isAssayer`.
+    expect(stripped).toContain("activeTab === 'PROFILE' && isAssayer");
+    expect(stripped).toContain("activeTab === 'PROFILE' && !isAssayer");
+    // And the Save handler is reachable only from the staff branch.
+    const assayerBranch = stripped.slice(
+      stripped.indexOf("activeTab === 'PROFILE' && isAssayer"),
+      stripped.indexOf("activeTab === 'PROFILE' && !isAssayer"),
+    );
+    expect(assayerBranch).not.toContain('handleSaveProfile');
+  });
+
+  /** The Security tab stays available to them, because the password change now works. */
+  it('still offers an assayer the security tab', () => {
+    const src = readFileSync(join(__dirname, '..', 'pages/Settings.tsx'), 'utf8');
+    expect(src).toContain("activeTab === 'SECURITY'");
+    expect(src).not.toMatch(/activeTab === 'SECURITY' && !isAssayer/);
+  });
 });
