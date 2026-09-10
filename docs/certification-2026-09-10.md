@@ -421,8 +421,8 @@ Only items for which no evidence could be obtained here.
    here. The last was the unowned-rows finding, also above.
 
    After `ReconcileRolePermissions3` and `BackfillTenantOwnership2` — `migration:run` alone, no
-   re-seed — they report **38 of 39**. The remaining failure was the same vocabulary bug a second
-   time: the cross-tenant case sent `BLACKLISTED`, which no enum contains, so the DTO refused the
+   re-seed — they reported 38 of 39, and **39 of 39** once the last bug was fixed. That remaining
+   failure was the same vocabulary bug a second time: the cross-tenant case sent `BLACKLISTED`, which no enum contains, so the DTO refused the
    body with a 400 before the request reached the organisation check. That case asserts a refusal,
    and a 400 is a refusal, so it would have read as proof of a boundary it was never touching.
    Probing the route directly showed the boundary does hold — an OPERATIONS user gets 404 with
@@ -430,7 +430,9 @@ Only items for which no evidence could be obtained here.
    platform-operator behaviour. Corrected here, along with a guard: `db-spec-status-vocabulary.spec.ts`
    reads every `.db.spec.ts` and fails the unit build on a status no enum defines, which is what
    these suites needed, since they cannot run without a live deployment and can sit wrong for a
-   long time. All eight cross-tenant assertions cleared, and they are now
+   long time. The acceptance session mutation-tested that guard rather than taking it on report:
+   `BLACKLISTED` restored, guard red naming file and line, file restored and hashed to confirm the
+   tree was clean again. All eight cross-tenant assertions cleared, and they are now
    asserting what they claim for the first time rather than being satisfied by a permission
    refusal: organisation A is refused B's profile read, code lookup, roster list, typeahead, map,
    dossier, identity scan, rate card, past payables, activity timeline, invitation revocation and
@@ -445,8 +447,16 @@ Only items for which no evidence could be obtained here.
    belongs in their report rather than being restated here as mine. Nothing in this document was
    verified by watching somebody else's terminal.
 2. **The CI `database` job as a GitHub Actions run.** Implemented and locally command-verified; the
-   runner is unexecuted.
-3. **The production compose change as an actual deploy.** The `db-migrate` service, the
+   runner is unexecuted, because nothing has been pushed.
+3. **A green business-loop run since its abort message changed.** The acceptance session's
+   `business-loop.mjs` last passed 25 of 25 at their final regression gate, and its logic has not
+   changed since — only the message it prints when it cannot book a branch. That change is worth
+   knowing for its own sake: a completed audit closes its branch to further work, twice over, so
+   the probe consumes one project-branch per run and a rig it has run against a dozen times has
+   nothing left to book. The old abort printed a wall of 409s, which reads like a regression in the
+   thing being measured. It now says which it is, and only when EVERY refusal is that one — so a
+   rig refusing for some other reason still gets the honest wall rather than a reassurance.
+4. **The production compose change as an actual deploy.** The `db-migrate` service, the
    `depends_on` gate and the new environment variables are written and the command they run was
    executed locally exactly as the container will run it, from the image root, against a fresh
    database. Bringing the real stack up was not attempted here.
@@ -458,8 +468,9 @@ Only items for which no evidence could be obtained here.
    unhardened database naming `db:harden` rather than dying on an unreadable geo table. Theirs,
    cited, not adopted — and the three controls that catch somebody skipping a deployment step have
    now been observed doing their job, which they had not been when this document was written.
-4. **Browser workflows.** No end-to-end browser run was performed; the frontend evidence is its
-   1,012 unit and component tests.
+5. **Browser workflows from here.** No end-to-end browser run was performed in this session; the
+   frontend evidence is its 1,031 unit and component tests. The acceptance session did drive a real
+   browser for the two sign-in defects and confirmed both fixed, which is theirs and cited above.
 
 ---
 
