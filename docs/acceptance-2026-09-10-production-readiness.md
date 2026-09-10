@@ -12,7 +12,13 @@ directions and says so by name. The audit trail is now tamper-proof against the 
 database credential, which closes the most serious control gap this project has carried. Not one
 defect was found in how this system decides anything about money, work or people.
 
-What stops it shipping is the front door. Signing in from the site root — the normal way anyone
+What stops it shipping is the front door, and one thing behind it: **the seeded role grants do not
+match what the routes require.** Operations can create, edit and delete an assayer but cannot open
+one (AC-F26); a desk operator's own landing page never loads because its route wants a permission
+the seeded role does not hold (AC-F16). Those are the same defect wearing two faces, and between
+them two of the four staff roles cannot do their jobs on a fresh install.
+
+The rest of what stops it is literally the front door. Signing in from the site root — the normal way anyone
 opens the app — leaves a blank screen with no error and no spinner (AC-F14). Signing out hands the
 next person the previous user's page (AC-F15). And a DESK_OPERATOR's own landing page never
 finishes loading: three of its four tiles sit on an ellipsis for ever because the route wants a
@@ -35,7 +41,7 @@ Six further defects in deployment mechanics were found, reported, fixed by the s
 those files, and **re-verified here from destroyed volumes** — torn down, rebuilt, and the whole
 path run again from nothing, first attempt, no manual steps. Those are closed.
 
-Fix AC-F14, AC-F15, AC-F16, AC-F09 and AC-F20 — the last of which may be no more than
+Fix AC-F14, AC-F15, AC-F16 and AC-F26 (the last two being one grant problem), AC-F09 and AC-F20 — the last of which may be no more than
 re-converging the schedules periodically instead of once at boot, plus an alert on a non-empty
 delayed queue — then re-run the four probe scripts and the browser pass. That is what stands
 between this and READY. Nothing else on the list needs to block it.
@@ -100,6 +106,8 @@ this campaign, and then **re-verified here from destroyed volumes** — the rig 
 | AC-F23 | LOW | Dead-lettering could not be exercised from outside the process: no reachable subscriber throws on a malformed payload, so `attempts` climbing to `failed_at` remains unverified on a live deployment (it is covered by unit tests and by the previous record's replay evidence) | Open |
 | AC-F24 | LOW | Provisioning **asserts** rather than verifies the role passwords — `ALTER ROLE … PASSWORD <supplied>` runs every time — so a mistyped `FAPOMS_MIGRATION_PASSWORD` succeeds and silently rotates the deploy credential. Verified: after passing a deliberately wrong value, `fapoms_migrator` accepted it and refused the real one. Documented as intentional in `role-model.ts`; worth a warning when the role already exists | Open (by design) |
 | AC-F25 | LOW | **FIXED AND VERIFIED.** The identity assertions now run on their own connection before `NestFactory.create`, so they are the first thing to touch the database. Re-verified against a freshly built `bootstrap migrate`-only database: *"FATAL: the database this application is connecting to has not been hardened … Run `npm run db:harden` against it"*, and not one word about `geo_states`. Originally the boot failed closed but blamed a geo table, because `GeoSeedService.onModuleInit` ran before `StartupChecksService.onApplicationBootstrap` | Closed |
+| AC-F26 | **HIGH** | **Operations can create, edit and delete an assayer but cannot open one.** `GET /assayers/:id` declares `@Roles(ADMIN, OPERATIONS, AUDITOR, DESK, DESK_OPERATOR)` and `@RequirePermissions('assayer:view:organization')`. On a **freshly seeded** database the materialised grants are: ADMIN → CREATE/DELETE/EDIT/VIEW, AUDITOR → VIEW, **OPERATIONS → CREATE/DELETE/EDIT and no VIEW**, **DESK_OPERATOR → nothing at all**. `ROLE_PERMISSIONS:144` declares `ASSAYER:VIEW:ORGANIZATION` for OPERATIONS and the permission row exists, so the declaration is not reaching `role_permissions`. Live proof: `manager` and `executive` (both OPERATIONS) receive `403 Insufficient permissions` on their own organisation's assayer, and their JWTs carry `ASSAYER:CREATE/DELETE/EDIT` with no `ASSAYER:VIEW`. This is precisely the inversion `role-permissions.ts:23` warns about — "delete an assayer without holding ASSAYER:VIEW" — and Operations is the role that deploys people to work | Open |
+| AC-F27 | MEDIUM | **A fresh seed leaves rows with no organisation.** On this rig, immediately after seeding: 10 branches and 1 project have `organization_id IS NULL` (assayers, clients and users are attributed). The `BackfillTenantOwnership` migration runs before the seed creates the organisation, so it attributes nothing, and the seed sets `organizationId` for users, clients and assayers but not for branches or projects. Harmless while the deployment is single-organisation — but the product's own certification suite asserts "no assayer, client, project, branch or user is unowned", and that invariant is violated on day one | Open |
 
 ### The clean-install run
 
@@ -282,6 +290,12 @@ tree is green at every commit, so pushing is a decision and not a repair.
 - **Deployed environments.** The homeserver was not reachable and the AWS box was deliberately
   left alone; both are excluded by the evidence-environment decision. Real TLS, real S3
   server-side encryption, FCM delivery and off-site backups are all outside this rig.
+- **My own authorization sweep asserted refusals without asserting their reason**, which is how it
+  passed a system where OPERATIONS and DESK_OPERATOR cannot read an assayer at all. Every
+  `AZ-01..AZ-06` case expected 403 for a DESK_OPERATOR and got it — but for the wrong reason, and
+  the sweep could not tell. AC-F26 was found later, by a suite that expected a **200**. The lesson
+  is the one this campaign applied to SOD-01 and not here: a refusal is only evidence when the
+  refusal names the rule under test.
 - **Rate limiting was raised** on the acceptance rig so the certification suites could run. The
   default (300 requests/minute per IP) was observed working — it refused the suite with 429 before
   it was raised — but the production value was not otherwise exercised.
