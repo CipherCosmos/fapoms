@@ -114,6 +114,7 @@ podman and homeserver paths; the orphaned-endpoint list in `integration-audit-ha
 | Runtime-role assertions at boot | 10/10 |
 | `npm run verify:runtime-role`, disposable database | **87/87** across two provisioning shapes |
 | Typecheck | backend, frontend, mobile — all clean |
+| Adversarial guard checks | 3/3 — each control removed in source, its test observed going red, the file restored and checksum-verified |
 | Deployment path, from empty volumes | Exercised; failed three times before succeeding (AC-F01/02/03) |
 
 The last two are checked in as `scripts/acceptance/business-loop.mjs` and
