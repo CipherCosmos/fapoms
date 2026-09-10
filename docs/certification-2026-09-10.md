@@ -3,11 +3,18 @@
 **Final status: BLOCKED.**
 
 Not on an open defect. Every application and infrastructure finding raised in this cycle is closed
-and proven, the last of them an authorization defect that had reached the live database: the seed
-removed nineteen grants from four roles, including the only `SYSTEM:APPROVE:PLATFORM` in the
-system. It is fixed, the repair is a migration, and the deployed database still carries the
-shortfall until that migration runs. Beyond that it is blocked on the one thing that cannot be
-manufactured from this machine: the live certification run. The homeserver that hosts the deployment was offline for the whole session, and
+and proven, the last four of them today: an authorization defect that had reached the live
+database, where the seed removed nineteen grants from four roles including the only
+`SYSTEM:APPROVE:PLATFORM` in the system; rows that reached the live database with no owning
+organisation; and the two web defects behind signing in at the site root and signing out on a
+shared machine. All four are fixed, the two database repairs are migrations, and the deployed
+database carries both shortfalls until those migrations run.
+
+Both certification suites have since been run on a production-shaped rig by the parallel
+acceptance session, and after the repairs report 38 of 39 and 150 of 150 — the one remaining
+failure being a vocabulary bug in the suite itself, corrected here after their run. That is their
+evidence, cited where it appears. It is not the homeserver run this gate asks for, which is the
+one thing that cannot be manufactured from this machine, and that is what BLOCKED now stands on. The homeserver that hosts the deployment was offline for the whole session, and
 the two certification suites need it plus a credential that is deliberately not in this repository.
 The release gate requires that run, so the honest answer is BLOCKED pending it, not CLOSED with a
 caveat.
