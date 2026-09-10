@@ -43,7 +43,8 @@ production data.
 | Audit / history | **PASS** | Every mutation carries an actor; refusals recorded as `SEGREGATION_OF_DUTIES_REFUSED` with `outcome: DENIED`, never success-shaped. **The audit trail is now tamper-proof against the application's own credential** — 7 destructive vectors refused as `fapoms_runtime` (including `DISABLE TRIGGER`, which fails with *"must be owner"*) while append still works, and `verify:runtime-role` refuses 87/87 including escalation, `DROP TRIGGER`, replacing the trigger function, and abusing the SECURITY DEFINER partition helper. This closes the open finding in `docs/incident-2026-09-09-audit-truncate.md` |
 | Authorization | **PASS** | DESK_OPERATOR refused on six privileged writes over direct HTTP with a before/after database comparison showing nothing changed; assayer horizontal isolation on work, acceptance and bank details |
 | UI / usability | **NOT ASSESSED** | See *not tested* — the browser pass was displaced by the deployment defects |
-| Reliability | **PARTIAL** | Concurrency proven (races, duplicate submits, stale versions, idempotent money). Worker failure injection and outbox replay not re-run — see *not tested* |
+| Management figures | **PASS** | Every headline number on the finance overview recomputed from base tables with independent SQL and matching to the rupee |
+| Reliability | **PARTIAL** | Concurrency proven (races, duplicate submits, stale versions, idempotent money). Worker failure injection and outbox replay were probed separately — see the reliability track |
 
 ---
 
@@ -122,6 +123,25 @@ loop cancels its own leftovers through the product rather than deleting them, an
 destructive audit probe runs inside a transaction that is always rolled back.
 
 ---
+
+## The management figures reconcile
+
+Every headline number on `GET /billing-engine/overview` was recomputed from the base tables with
+independent SQL and compared. They agree to the rupee:
+
+| figure | independent SQL | the API |
+|---|---|---|
+| unbilled | 5,400.00 | 5,400 |
+| revenue, ex-GST | 5,000.00 | 5,000 |
+| GST collected | 900.00 | 900 |
+| TDS withheld by clients | 500.00 | 500 |
+| paid out | 2,250.00 | 2,250 |
+| payables booked | 4,500.00 | 2,250 approved + 2,250 paid |
+
+The overview also volunteers what it is unsure about rather than presenting a clean total: both
+payables appear under `attention` as `UNSETTLED_FEE` — *"Booked from the proposed fee — no fee was
+ever agreed."* That is exactly right for how these were created, and it is the difference between
+a dashboard that reports and one that explains.
 
 ## Where this work sits
 
