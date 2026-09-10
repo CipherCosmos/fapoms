@@ -214,6 +214,24 @@ Afterwards, as `fapoms_runtime` on that same transitioned database: `UPDATE audi
 with *"must be owner"*, ordinary reads working, and append still allowed. No row was touched by
 the transition.
 
+## An unplanned crash, which answered the question better than a probe would have
+
+The rig's PostgreSQL crashed under concurrent load near the end of the campaign — not a probe, an
+accident. The container never restarted; the postmaster did:
+
+```
+LOG: database system was not properly shut down; automatic recovery in progress
+LOG: redo starts at 0/7099960 … redo done
+LOG: database system is ready to accept connections
+```
+
+`/health/ready` went `degraded / database down` and came back `ok` on its own. Afterwards every
+business count was intact — 5 users, 8 assayers, 5 assignments, 5 payables, 48 outbox rows — and
+the hash chain had caught up completely: **348 audit events, 348 chain rows, no gap**. All seven
+Bull repeat keys survived, and had they not, the reconciler proven above would have restored them.
+Nobody planned this and it is the strongest single piece of evidence in the report that the system
+degrades predictably rather than corrupting anything.
+
 ## The management figures reconcile
 
 Every headline number on `GET /billing-engine/overview` was recomputed from the base tables with
