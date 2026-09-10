@@ -81,6 +81,15 @@ const REQUIRED_INDEXES = [
   ['assignments', 'idx_assignments_single_active_branch'],
 ];
 
+/**
+ * The roles a fresh install must come up with. Without a floor here a database whose `roles`
+ * table is empty would satisfy "every role holds what it declares" by holding nothing.
+ *
+ * PRODUCT_SUPPORT and ASSAYER are deliberately absent: the first declares no grants, and the
+ * second has no role row on any database — assayers authenticate through the mobile app.
+ */
+const REQUIRED_ROLES = ['ADMIN', 'DEVELOPER', 'OPERATIONS', 'DESK', 'DESK_OPERATOR', 'AUDITOR'];
+
 const scratch = `migcheck_${Date.now()}_${process.pid}`;
 
 async function withClient(database, fn) {
@@ -95,9 +104,9 @@ async function withClient(database, fn) {
 
 const one = async (client, sql) => (await client.query(sql)).rows[0];
 
-function runMigrations() {
+function runInBackend(args, label = args.join(' ')) {
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', '--silent', 'migration:run'], {
+    const child = spawn('npm', args, {
       cwd: join(REPO_ROOT, 'packages', 'backend'),
       env: {
         ...process.env,
@@ -117,8 +126,35 @@ function runMigrations() {
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`migration:run exited ${code}\n${out}`))));
+    child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`${label} exited ${code}\n${out}`))));
   });
+}
+
+const runMigrations = () => runInBackend(['run', '--silent', 'migration:run'], 'migration:run');
+const runSeed = () => runInBackend(['run', '--silent', 'seed'], 'seed');
+
+/**
+ * What `ROLE_PERMISSIONS` says each built-in role holds, read from the source rather than from a
+ * copy kept here — a copy would drift, and drift is the entire subject of this check.
+ *
+ * Transpile-only: this needs the value, not a type check, and the backend's own build covers the
+ * latter.
+ */
+async function readDeclaredGrants() {
+  const out = await new Promise((resolve, reject) => {
+    const child = spawn(
+      'npx',
+      ['ts-node', '-T', '-e', "console.log(JSON.stringify(require('./src/modules/auth/role-permissions').ROLE_PERMISSIONS))"],
+      { cwd: join(REPO_ROOT, 'packages', 'backend'), env: { ...process.env } },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve(stdout) : reject(new Error(`reading ROLE_PERMISSIONS exited ${code}\n${stderr}`))));
+  });
+  return JSON.parse(out.trim().split('\n').pop());
 }
 
 const appliedCount = (log) => (log.match(/has been executed successfully/g) || []).length;
@@ -168,7 +204,58 @@ async function main() {
     }
   });
 
-  console.log('✓ migrations build a complete schema from empty, and a repeated run changes nothing');
+  /**
+   * A fresh install is migrate THEN seed, and the seed used to undo part of what the migrations
+   * had just done.
+   *
+   * Loading a role without its `permissions` relation and then assigning the array made TypeORM
+   * delete every junction row the new array did not name, and the list it was given was itself
+   * twelve keys behind `ROLE_PERMISSIONS`. Measured on the live deployment on 2026-09-10: ADMIN
+   * held 57 of 63, DEVELOPER 57 of 64, OPERATIONS 36 of 39, DESK_OPERATOR 3 of 6 — nineteen
+   * grants gone, among them the only SYSTEM:APPROVE:PLATFORM in the system, so nobody could
+   * approve a destructive request and the two-person data-wipe rule could not be completed at all.
+   *
+   * Checking the schema was never going to find that: every table, constraint and index was
+   * present and correct. Only the rows were wrong. So the check runs the real seed against the
+   * real schema and compares what each role ends up holding to what the code table declares.
+   */
+  console.log('→ seeding, then checking every role holds what the code table declares');
+  await runSeed();
+
+  const declared = await readDeclaredGrants();
+  const held = await withClient(scratch, async (c) => {
+    const { rows } = await c.query(
+      `SELECT r.name AS role, p.resource || ':' || p.action || ':' || p.scope AS key
+         FROM roles r
+         JOIN role_permissions rp ON rp.role_id = r.id
+         JOIN permissions p ON p.id = rp.permission_id`,
+    );
+    const byRole = new Map();
+    for (const row of rows) {
+      if (!byRole.has(row.role)) byRole.set(row.role, new Set());
+      byRole.get(row.role).add(row.key);
+    }
+    return byRole;
+  });
+
+  for (const role of REQUIRED_ROLES) {
+    if (!held.has(role)) fail(`role ${role} holds no permissions after a fresh migrate and seed`);
+  }
+
+  let short = 0;
+  for (const [role, keys] of Object.entries(declared)) {
+    const have = held.get(role) ?? new Set();
+    if (!keys.length) continue;
+    const missing = keys.filter((k) => !have.has(k));
+    console.log(`   ${role.padEnd(16)} declared ${String(keys.length).padStart(3)}  held ${String(have.size).padStart(3)}`);
+    if (missing.length) {
+      short += missing.length;
+      console.error(`✗ ${role} is short ${missing.length}: ${missing.join(', ')}`);
+    }
+  }
+  if (short) fail(`${short} declared grant(s) are missing after a fresh migrate and seed`);
+
+  console.log('✓ migrations build a complete schema from empty, a repeated run changes nothing, and the seed leaves every role whole');
 }
 
 let exitCode = 0;

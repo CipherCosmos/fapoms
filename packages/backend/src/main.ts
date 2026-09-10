@@ -199,8 +199,16 @@ export function assertProductionSafeConfig(): void {
  * opened its routes and the permission table was never consulted — and became load-bearing the
  * moment permissions turned authoritative, because a role with no grants can be granted nothing.
  *
- * A warning, not a refusal: the union is safe to apply and the fix is one command, but a
- * deployment that is merely behind on its seed should not fail to boot over it.
+ * A warning, not a refusal: the reconciliation is additive and a deployment that is merely behind
+ * on it should not fail to boot over it.
+ *
+ * This warning was right, and its advice was the cause. It printed at every boot of the live
+ * deployment naming all nineteen missing grants, and told the reader to run the seed — which was
+ * the thing removing them. The seed loaded each role without its `permissions` relation and then
+ * assigned the array, and TypeORM deletes every junction row an assigned many-to-many does not
+ * name. Both faults are fixed in `seed.ts`, `ReconcileRolePermissions3` repairs the databases
+ * they already ran against, and `verify-migrations-from-empty.mjs` fails CI if a fresh migrate
+ * and seed ever leaves a role short again.
  */
 async function warnOnRoleGrantDrift(app: any, logger: Logger): Promise<void> {
   try {
@@ -232,8 +240,8 @@ async function warnOnRoleGrantDrift(app: any, logger: Logger): Promise<void> {
       logger.warn(
         `Role grants in this database are behind ROLE_PERMISSIONS: ${behind.join('; ')}. `
         + 'Routes are authorised from the DATABASE, so these roles can reach less than the code '
-        + 'says they should. Run the seed to reconcile — it only ever adds grants, never removes '
-        + 'them.',
+        + 'says they should. Deploying reconciles it: ReconcileRolePermissions replays the grant '
+        + 'table additively at migration time. Do not hand-write the rows.',
       );
     }
   } catch (err: any) {

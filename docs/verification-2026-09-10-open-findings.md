@@ -233,3 +233,23 @@ Changing `users.regions`, roles or `must_change_password` directly in the databa
 until the Redis cache is flushed. Two rounds of "the fix does not work" during the live
 verification above were the RBAC cache serving the pre-change user, with a 403 that names the old
 state and nothing that points at the cache.
+
+## Addendum, later the same day: the seed was removing grants
+
+Raised by the parallel acceptance session after this record was written, as "operations can delete
+an assayer and cannot open one". It is bigger than that. Running the seed against a correctly
+migrated database removed nineteen grants from four roles — ADMIN lost the only
+`SYSTEM:APPROVE:PLATFORM` in the system, DEVELOPER lost the whole technical estate, OPERATIONS and
+DESK_OPERATOR lost the view grants their screens are built on. The live deployment was in that
+state and had been warning about it in its own boot log, with advice that named the seed as the
+cure.
+
+Two causes, both in `seed.ts`: roles were loaded without their `permissions` relation, so the merge
+became a replace; and the hand-written permission list had fallen twelve keys behind
+`ROLE_PERMISSIONS`, with the shortfall swallowed by a `.filter(Boolean)`.
+
+The full account, with the before-and-after measurements from a disposable database and from the
+live one, is in `docs/certification-2026-09-10.md` under "The seed removed nineteen grants from
+four roles". Fixed in `seed-grants.ts`, repaired on existing databases by
+`ReconcileRolePermissions3`, and gated in CI by `verify-migrations-from-empty.mjs`, which now runs
+the real seed and fails if any role comes out short.

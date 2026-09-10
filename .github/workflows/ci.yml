@@ -164,9 +164,11 @@ jobs:
       - name: Build shared
         run: npm run build:shared
 
-      # From `template0`, then again to prove the second run is a no-op. Drops its own database on
-      # every exit path, so a failure here leaves nothing behind for the next run to trip over.
-      - name: Migrations build a schema from empty, idempotently
+      # From `template0`, then again to prove the second run is a no-op, then the real seed — a
+      # fresh install is migrate THEN seed, and the seed used to remove nineteen of the grants the
+      # migrations had just installed. Drops its own database on every exit path, so a failure here
+      # leaves nothing behind for the next run to trip over.
+      - name: A fresh install comes up migrated, idempotent and fully granted
         run: npm run verify:migrations
 
       # Provisions roles and a database, migrates as the non-superuser deploy role, hardens, and

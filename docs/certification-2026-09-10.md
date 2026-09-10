@@ -2,9 +2,12 @@
 
 **Final status: BLOCKED.**
 
-Not on a defect. Every application and infrastructure finding raised in this cycle is closed and
-proven. It is blocked on the one thing that cannot be manufactured from this machine: the live
-certification run. The homeserver that hosts the deployment was offline for the whole session, and
+Not on an open defect. Every application and infrastructure finding raised in this cycle is closed
+and proven, the last of them an authorization defect that had reached the live database: the seed
+removed nineteen grants from four roles, including the only `SYSTEM:APPROVE:PLATFORM` in the
+system. It is fixed, the repair is a migration, and the deployed database still carries the
+shortfall until that migration runs. Beyond that it is blocked on the one thing that cannot be
+manufactured from this machine: the live certification run. The homeserver that hosts the deployment was offline for the whole session, and
 the two certification suites need it plus a credential that is deliberately not in this repository.
 The release gate requires that run, so the honest answer is BLOCKED pending it, not CLOSED with a
 caveat.
@@ -108,6 +111,57 @@ a route that does not exist and accepted its 404 as an answer.
 happens before the method authorizes. 31 are listed with the reason their shortcut discloses
 nothing; a new one fails the build. Reintroducing the check-in half-fix turns two of its five tests
 red, naming the method and the line.
+
+### The seed removed nineteen grants from four roles
+
+Found by the parallel acceptance session as "operations can delete an assayer and cannot open one",
+and larger than that when traced. Fixed, and proven on a live database in both directions.
+
+**What was wrong.** A fresh install is migrate, then seed. The migrations end with
+`ReconcileRolePermissions`, which leaves every role matching `ROLE_PERMISSIONS` exactly. The seed
+then took grants away, for two independent reasons that had to meet:
+
+1. `roleRepository.find()` does not load the `permissions` relation, so `role.permissions` was
+   `undefined`. The merge the code's own comment calls "merge, never replace" started from an
+   empty map, and assigning a many-to-many in TypeORM deletes every junction row the new array
+   does not name.
+2. The hand-written permission list the seed writes had fallen twelve keys behind the grant table,
+   and a key with no row was dropped by `.filter(Boolean)` rather than reported.
+
+**What it cost, measured on the live deployment before the fix:**
+
+| role | declared | held | what was missing |
+|---|---|---|---|
+| ADMIN | 63 | 57 | `SYSTEM:APPROVE:PLATFORM`, all three `ORGANIZATION` grants, both `OCR` grants |
+| DEVELOPER | 64 | 57 | `SYSTEM:VIEW`, `SYSTEM:EDIT`, the same `ORGANIZATION` and `OCR` grants |
+| OPERATIONS | 39 | 36 | `ASSAYER:VIEW`, `DOCUMENT:VIEW`, `REFERENCE_DATA:VIEW` |
+| DESK_OPERATOR | 6 | 3 | `ASSAYER:VIEW`, `DOCUMENT:VIEW`, `VALIDATION:VIEW` |
+
+None of the four holds a PLATFORM-scoped grant that would have covered its loss through the
+guard's scope widening, so every one of the nineteen was a real refusal. `SYSTEM:APPROVE:PLATFORM`
+is held by ADMIN alone, so no principal could approve a destructive request and the two-person
+data-wipe rule could not be completed by anybody. OPERATIONS could create, edit and delete an
+assayer and not open one. DESK_OPERATOR could reach none of the screens it lands on.
+
+**The API had been saying so at every boot.** `warnOnRoleGrantDrift` named all four roles and all
+nineteen grants in the deployment's log, and then told the reader to run the seed to fix it — the
+one action that caused it. That advice is corrected.
+
+**Evidence.**
+
+- *Reproduced*: a database built from `template0`, migrated, then seeded, on a disposable
+  PostgreSQL instance. After migrations: 63 / 64 / 39 / 6. After the seed: 57 / 57 / 36 / 3.
+- *Same state live*: the deployed database held the identical nineteen-grant shortfall.
+- *Fixed*: same path with the fix — 63 / 64 / 39 / 6, and a second `--force` seed leaves them there.
+- *Repaired in place*: `ReconcileRolePermissions3` applied to a stripped database restores all
+  nineteen, and is the only migration that runs.
+
+**How it cannot come back.** `seed-grants.ts` holds the three decisions the seed makes about
+grants: the catalogue is derived from `ROLE_PERMISSIONS` rather than remembered, an unresolvable
+key throws instead of being filtered out, and merging a relation that was never loaded is refused
+rather than treated as empty. 13 cases in `seed-grants.spec.ts`.
+`verify-migrations-from-empty.mjs` now runs the real seed against the real schema and compares
+every role's rows to what it declares; without the fix it exits 1 and names all nineteen.
 
 ---
 
@@ -332,4 +386,6 @@ Only items for which no evidence could be obtained here.
 2. Push and let CI run the new `database` job; confirm it is green.
 3. Follow the transition procedure in `docs/database-roles.md` on the existing deployment, take the
    backup it asks for first, and read the ten `Database identity` lines in the boot log.
-4. Then, and only then, the status becomes CLOSED.
+4. Confirm the grant repair landed: after the deploy, the boot log should carry no
+   `behind ROLE_PERMISSIONS` warning. It carries one today naming all nineteen.
+5. Then, and only then, the status becomes CLOSED.

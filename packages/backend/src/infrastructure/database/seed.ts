@@ -1,4 +1,5 @@
 import { ROLE_PERMISSIONS } from '../../modules/auth/role-permissions';
+import { buildPermissionCatalogue, mergeRelation, resolveGrant } from './seed-grants';
 import { AppDataSource } from './data-source';
 import { UserEntity } from '../../modules/user/user.entity';
 import { RoleEntity } from '../../modules/user/role.entity';
@@ -304,7 +305,13 @@ async function seed() {
       { resource: PermissionResource.AUDIT_LOG, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View audit logs' },
     ];
 
-    for (const dp of defaultPermissions) {
+    /**
+     * Every grant `ROLE_PERMISSIONS` hands out must exist as a row, listed above or not — see
+     * `buildPermissionCatalogue`. The list above had fallen twelve keys behind the grant table.
+     */
+    const permissionCatalogue = buildPermissionCatalogue(defaultPermissions);
+
+    for (const dp of permissionCatalogue) {
       const existing = existingPermissions.find(p => p.resource === dp.resource && p.action === dp.action && p.scope === dp.scope);
       if (!existing) {
         const perm = permissionRepository.create({
@@ -321,6 +328,9 @@ async function seed() {
         permissionMap.set(`${dp.resource}:${dp.action}:${dp.scope}`, existing);
       }
     }
+
+    const resolvePermission = (key: string, heldBy: string): PermissionEntity =>
+      resolveGrant(permissionMap, key, heldBy);
 
     // 3. Seed Capabilities
     console.log('Seeding capabilities...');
@@ -362,9 +372,7 @@ async function seed() {
 
     for (const cd of capabilityDefinitions) {
       let capability = existingCapabilities.find(c => c.name === cd.name);
-      const capPerms = cd.permissionKeys
-        .map(key => permissionMap.get(key))
-        .filter((p): p is PermissionEntity => !!p);
+      const capPerms = cd.permissionKeys.map(key => resolvePermission(key, `capability ${cd.name}`));
 
       if (!capability) {
         capability = capabilityRepository.create({
@@ -410,9 +418,8 @@ async function seed() {
 
     for (const rd of responsibilityDefinitions) {
       let responsibility = existingResponsibilities.find(r => r.name === rd.name);
-      const respCapabilities = rd.capabilityNames
-        .map(name => capabilityMap.get(name))
-        .filter((c): c is CapabilityEntity => !!c);
+      const respCapabilities = rd.capabilityNames.map(name =>
+        resolveGrant(capabilityMap, name, `responsibility ${rd.name}`));
 
       if (!responsibility) {
         responsibility = responsibilityRepository.create({
@@ -433,7 +440,16 @@ async function seed() {
     // 5. Seed Roles
     console.log('Seeding roles...');
     const roleRepository = AppDataSource.getRepository(RoleEntity);
-    const existingRoles = await roleRepository.find();
+    /**
+     * With the relations, because the merge below reads them.
+     *
+     * `find()` on its own leaves `role.permissions` undefined, so the merge started from an
+     * empty map and `role.permissions = [...]` became a REPLACE — TypeORM deletes every junction
+     * row the array does not name. Running the seed against a correctly migrated database
+     * therefore stripped nineteen grants across four roles, which is the outage the merge below
+     * says in its own comment that it exists to prevent.
+     */
+    const existingRoles = await roleRepository.find({ relations: ['permissions', 'responsibilities'] });
     
     /**
      * Roles are built from the one grant table, not from a copy kept here.
@@ -534,13 +550,10 @@ async function seed() {
       // `existingRoles` is a snapshot taken before this loop, so it never sees a role created by
       // an earlier iteration; `rolesMap` covers that and keeps the lookup correct either way.
       let role = existingRoles.find(r => r.name === rd.name) ?? rolesMap.get(rd.name as SystemRole);
-      const rolePermissions = rd.permissionKeys
-        .map(key => permissionMap.get(key))
-        .filter((p): p is PermissionEntity => !!p);
+      const rolePermissions = rd.permissionKeys.map(key => resolvePermission(key, `role ${rd.name}`));
 
-      const roleResponsibilities = rd.responsibilityNames
-        .map(name => responsibilityMap.get(name))
-        .filter((r): r is ResponsibilityEntity => !!r);
+      const roleResponsibilities = rd.responsibilityNames.map(name =>
+        resolveGrant(responsibilityMap, name, `role ${rd.name}`));
 
       if (!role) {
         role = roleRepository.create({
@@ -566,13 +579,8 @@ async function seed() {
          *
          * A seed's job is to guarantee a baseline exists, not to assert it is the whole truth.
          */
-        const byId = new Map((role.permissions ?? []).map((p: any) => [p.id, p]));
-        for (const p of rolePermissions) byId.set(p.id, p);
-        role.permissions = [...byId.values()];
-
-        const respById = new Map((role.responsibilities ?? []).map((r: any) => [r.id, r]));
-        for (const r of roleResponsibilities) respById.set(r.id, r);
-        role.responsibilities = [...respById.values()];
+        role.permissions = mergeRelation(role.permissions, rolePermissions, `role ${rd.name} permissions`);
+        role.responsibilities = mergeRelation(role.responsibilities, roleResponsibilities, `role ${rd.name} responsibilities`);
       }
       const savedRole = await roleRepository.save(role);
       rolesMap.set(rd.name as SystemRole, savedRole);
