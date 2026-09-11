@@ -5,6 +5,7 @@ import { AlertTriangle, FileText, Search } from 'lucide-react';
 import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import {
   deskRole, deskCard, deskLabel, fmtWhen,
   PagedQueue, PacketRow, TeamMember,
@@ -67,6 +68,14 @@ export const PacketsQueue: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   /**
+   * The READ's failure, held apart from `err` — which every write on this screen reports to and
+   * which the operator is meant to read and dismiss. A failed read is not like that: the queue
+   * underneath keeps describing itself as empty for as long as the load is failing, so the
+   * sentence that corrects it has to stay up as long as the queue does.
+   */
+  const [loadErr, setLoadErr] = useState<unknown>(null);
+
+  /**
    * Who the head has picked for each waiting packet, before they press Assign.
    *
    * Rows fall back to `leastLoadedId` when they have no entry, so the dropdown opens on a
@@ -96,8 +105,10 @@ export const PacketsQueue: React.FC = () => {
     if (isHead && assignee) qs.set('assignedTo', assignee);
     const base = isHead ? '/documents/data-entry/queue' : '/documents/data-entry/mine';
     api.request<PagedQueue<PacketRow>>(`${base}?${qs}`)
-      .then((d) => { setData(d); setErr(null); })
-      .catch((e) => setErr(userMessage(e)));
+      .then((d) => { setData(d); setErr(null); setLoadErr(null); })
+      // The rows are dropped rather than left stale, so the table cannot go on showing another
+      // lane's packets under a banner saying this lane could not be read.
+      .catch((e) => { setData(null); setLoadErr(e); });
   }, [isHead, lane, search, assignee, page]);
 
   useEffect(() => { load(); }, [load]);
@@ -216,6 +227,8 @@ export const PacketsQueue: React.FC = () => {
         </div>
       )}
 
+      {loadErr != null && <LoadFailure loads={[{ label: 'the packet queue', query: caughtLoad(loadErr, load) }]} />}
+
       <section style={{ ...deskCard, padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
           <thead>
@@ -226,7 +239,10 @@ export const PacketsQueue: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {data?.items.length === 0 && (
+            {/* `data` is null on a failed read, so this row cannot appear beside the banner —
+                but say it explicitly rather than relying on that, because the null is also how
+                "not loaded yet" is spelled and the two must not merge again. */}
+            {loadErr == null && data?.items.length === 0 && (
               <tr><td colSpan={5} style={{ padding: '22px 14px', color: 'var(--text-muted)', textAlign: 'center' }}>
                 No packets{lane ? ' in this lane' : ''}{search ? ` matching “${search}”` : ''}.
               </td></tr>

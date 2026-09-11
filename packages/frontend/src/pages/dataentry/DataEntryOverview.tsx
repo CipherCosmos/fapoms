@@ -8,6 +8,7 @@ import {
 import { roleLabel, activityEventLabel } from '@fapoms/shared';
 import { counted, plural } from '../../utils/plural';
 import { api } from '../../services/api';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { deskRole, deskCard, deskLabel, QueueCounts, PagedQueue } from './deskRoles';
 
@@ -157,22 +158,52 @@ export const DataEntryOverview: React.FC = () => {
   const [activity, setActivity] = useState<ActivityRow[] | null>(null);
   const [attention, setAttention] = useState<DeskAttention | null>(null);
   const [openClarifications, setOpenClarifications] = useState<number | null>(null);
+  /**
+   * Which of this screen's five requests could not be read, and why.
+   *
+   * All five caught and discarded: `.catch(() => setCounts(null))`,
+   * `.catch(() => setActivity([]))`, and so on. There was no error variable on the component at
+   * all, so a desk head whose requests were failing saw:
+   *
+   *   - seven tiles reading "…", indefinitely, with nothing to say they never would resolve;
+   *   - NO "Needs attention" banner, because `attention` was null — so a desk with items past
+   *     their due date looked exactly like a desk with none. This screen's whole purpose is
+   *     management by exception, and the exception is the thing that disappears;
+   *   - "Nothing has happened on the desk yet", because the activity list defaulted to `[]`.
+   *
+   * The "Nothing needs doing right now" panel is the one part that was already safe — it
+   * requires every figure to have ARRIVED as a number — and that guard stays. Everything else
+   * needed the failures kept instead of thrown away. Keyed by what each request feeds, in the
+   * words the tiles above use, so the banner points at the numbers it is about.
+   */
+  const [loadErrors, setLoadErrors] = useState<Record<string, unknown>>({});
+  /** Bumped by the banner's Retry, which re-runs every request this screen makes. */
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoadErrors({});
+    const failed = (what: string) => (e: unknown) => {
+      if (!cancelled) setLoadErrors((prev) => ({ ...prev, [what]: e }));
+    };
     const queueUrl = isHead ? '/documents/data-entry/queue?limit=1' : '/documents/data-entry/mine?limit=1';
-    api.request<PagedQueue<unknown>>(queueUrl).then((q) => setCounts(q.counts)).catch(() => setCounts(null));
+    api.request<PagedQueue<unknown>>(queueUrl).then((q) => setCounts(q.counts))
+      .catch((e) => { setCounts(null); failed('the packet counts')(e); });
     if (isHead) {
-      api.request<Workload>('/validation/workload').then(setWorkload).catch(() => setWorkload(null));
+      api.request<Workload>('/validation/workload').then(setWorkload)
+        .catch((e) => { setWorkload(null); failed('the review workload')(e); });
       api.request<ActivityRow[]>('/validation/activity?limit=15')
         .then((r) => setActivity(Array.isArray(r) ? r : []))
-        .catch(() => setActivity([]));
-      api.request<DeskAttention>('/validation/attention').then(setAttention).catch(() => setAttention(null));
+        .catch((e) => { setActivity([]); failed("the desk's recent activity")(e); });
+      api.request<DeskAttention>('/validation/attention').then(setAttention)
+        .catch((e) => { setAttention(null); failed('what is past its due date')(e); });
     } else {
       api.request<Array<{ status: string }>>('/validation-queries')
         .then((r) => setOpenClarifications((Array.isArray(r) ? r : []).filter((q) => q.status !== 'RESOLVED').length))
-        .catch(() => setOpenClarifications(null));
+        .catch((e) => { setOpenClarifications(null); failed('your open clarifications')(e); });
     }
-  }, [isHead]);
+    return () => { cancelled = true; };
+  }, [isHead, attempt]);
 
   // Old notification links point at /data-entry?branch=<id>; the workspace lives on
   // its own route now.
@@ -209,6 +240,20 @@ export const DataEntryOverview: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/*
+        First, before any number on this page gets to be believed. The tiles below stay — they are
+        the links into the queues and a head still uses them to reach a queue — but a tile whose
+        figure never arrived shows "…", and "…" says nothing about why.
+      */}
+      {Object.keys(loadErrors).length > 0 && (
+        <LoadFailure
+          loads={Object.entries(loadErrors).map(([label, error]) => ({
+            label,
+            query: caughtLoad(error, () => setAttempt((n) => n + 1)),
+          }))}
+        />
+      )}
+
       {/* Management by exception: what has broken its SLA, loudest first. Absent when
           nothing is in breach — a clean desk needs no red banner. */}
       {isHead && breachedBuckets.length > 0 && (
@@ -368,10 +413,14 @@ export const DataEntryOverview: React.FC = () => {
         <section style={deskCard}>
           <div style={{ ...deskLabel, color: 'var(--text-primary)', marginBottom: '8px' }}>Recent activity</div>
           {activity === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>}
+          {/* The list defaults to `[]` on failure, which is the same value as "the desk has done
+              nothing". The banner at the top carries the reason; this only has to stop asserting
+              the opposite of it. */}
           {activity?.length === 0 && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-              Nothing has happened on the desk yet. Every packet handed out, typed up, checked or sent
-              to a client will be listed here, newest first.
+              {loadErrors["the desk's recent activity"] != null
+                ? 'The activity list could not be loaded — see the message at the top of this page. This is not saying the desk has been idle.'
+                : 'Nothing has happened on the desk yet. Every packet handed out, typed up, checked or sent to a client will be listed here, newest first.'}
             </div>
           )}
           {activity?.map((a, i) => (

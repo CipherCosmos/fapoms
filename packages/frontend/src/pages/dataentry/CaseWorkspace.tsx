@@ -12,6 +12,14 @@ import { PdfRegionViewer } from './PdfRegionViewer';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { ThreadPanel } from './ThreadPanel';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
+
+/** Drop one key, so a read that recovers stops being reported as failed. */
+const omit = <T,>(map: Record<string, T>, key: string): Record<string, T> => {
+  if (!(key in map)) return map;
+  const { [key]: _gone, ...rest } = map;
+  return rest;
+};
 import { useConfirm } from '../../components/ui';
 import { CORRECTION_NOTE_SUGGESTIONS } from '../../utils/reviewReasonSuggestions';
 
@@ -197,13 +205,25 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   // with who and when. Fetched lazily on first open; it's evidence, not a hot path.
   const [showTrail, setShowTrail] = useState(false);
   const [trail, setTrail] = useState<TrailRow[] | null>(null);
+  /**
+   * Which of this workspace's supporting reads failed, keyed by what the reader calls it.
+   *
+   * The case lookup itself already had `caseLoadFailed` (see below) because getting it wrong
+   * creates duplicate validation cases. The three beside it — packets, clarifications, trail —
+   * each caught and discarded, leaving `[]`, which on this screen means "nothing to type up",
+   * "no outstanding questions" and "nothing was done". All three are read before a report is
+   * signed off.
+   */
+  const [sideErr, setSideErr] = useState<Record<string, unknown>>({});
   const toggleTrail = () => {
     const next = !showTrail;
     setShowTrail(next);
     if (next && trail === null && validationCase?.id) {
       api.request<TrailRow[]>(`/validation/${validationCase.id}/trail`)
-        .then((r) => setTrail(Array.isArray(r) ? r : []))
-        .catch(() => setTrail([]));
+        .then((r) => { setTrail(Array.isArray(r) ? r : []); setSideErr((p) => omit(p, 'the audit trail for this case')); })
+        // This trail is evidence — who handed what to whom, and when. An empty one is read as
+        // "nothing was done", which is the opposite of what a failed read establishes.
+        .catch((e) => { setTrail([]); setSideErr((p) => ({ ...p, 'the audit trail for this case': e })); });
     }
   };
 
@@ -242,14 +262,18 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
 
   const loadQueries = useCallback(async (caseId: string) => {
     api.request<QueryRow[]>(`/validation-queries/validation-case/${caseId}`)
-      .then((r) => setQueries(Array.isArray(r) ? r : []))
-      .catch(() => setQueries([]));
+      .then((r) => { setQueries(Array.isArray(r) ? r : []); setSideErr((p) => omit(p, 'the clarifications on this case')); })
+      // An empty clarification list is what the desk reads before deciding a report is clean and
+      // signing it off. A refused read produced exactly that list.
+      .catch((e) => { setQueries([]); setSideErr((p) => ({ ...p, 'the clarifications on this case': e })); });
   }, []);
 
   useEffect(() => {
     api.request<DocRow[]>(`/documents/project-branch/${projectBranchId}`)
-      .then((r) => setDocs(Array.isArray(r) ? r : []))
-      .catch(() => setDocs([]));
+      .then((r) => { setDocs(Array.isArray(r) ? r : []); setSideErr((p) => omit(p, "this branch's packets")); })
+      // With `docs` at [] the workspace shows no packet to type up, which reads as a branch whose
+      // paperwork has not arrived.
+      .catch((e) => { setDocs([]); setSideErr((p) => ({ ...p, "this branch's packets": e })); });
     void loadCase();
   }, [projectBranchId, loadCase]);
 
@@ -406,6 +430,18 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           </button>
         )}
       </div>
+
+      {/* One line per supporting read that did not land. The panels below keep their shape —
+          the operator is mid-task and the PDF is still usable — but nothing under this banner
+          gets to be read as "there is none of that here". */}
+      {Object.keys(sideErr).length > 0 && (
+        <LoadFailure
+          loads={Object.entries(sideErr).map(([label, error]) => ({
+            label,
+            query: caughtLoad(error, () => window.location.reload()),
+          }))}
+        />
+      )}
 
       {showTrail && (
         <section style={{ ...panel, padding: '12px 14px', maxHeight: '260px', overflowY: 'auto' }}>

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, AlertTriangle, User, ArrowRight, ChevronDown, ChevronRight, Phone } from 'lucide-react';
 import { api } from '../../services/api';
-import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { counted } from '../../utils/plural';
 
 /**
@@ -109,7 +109,8 @@ export const ClarificationsPage: React.FC = () => {
   const [groups, setGroups] = useState<AuditorGroup[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  /** Held as the error itself so the banner can tell a refusal from an outage and decide Retry. */
+  const [error, setError] = useState<unknown>(null);
   const [filter, setFilter] = useState<Filter>('US');
 
   const openCase = (row: ClarificationRow) =>
@@ -121,6 +122,10 @@ export const ClarificationsPage: React.FC = () => {
    * and filter and count them in the browser. `validation_queries` is append-only, so that
    * request grew without limit for a page that shows one slice at a time.
    */
+  /** Bumped by the failure banner's Retry; re-runs the effect below unchanged. */
+  const [attempt, setAttempt] = useState(0);
+  const refresh = () => setAttempt((n) => n + 1);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -139,10 +144,10 @@ export const ClarificationsPage: React.FC = () => {
           setCounts(wr.counts ?? { US: 0, ASSAYER: 0, OVERDUE: 0, DONE: 0, total: 0 });
         }
       })
-      .catch((e) => { if (!cancelled) setError(`Could not load the clarification list. ${userMessage(e)}`); })
+      .catch((e) => { if (!cancelled) { setRows([]); setGroups([]); setError(e); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [view, filter]);
+  }, [view, filter, attempt]);
 
   const shown = rows;
   /** True when the server had more for this tab than it sent — say so rather than imply a total. */
@@ -182,8 +187,11 @@ export const ClarificationsPage: React.FC = () => {
 
       {loading ? (
         <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading clarifications…</div>
-      ) : error ? (
-        <div style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>
+      ) : error != null ? (
+        /* A red line reading "Could not load the clarification list. <sentence>" said the right
+           thing, in the wrong shape: no way to tell a refusal from an outage, and no Retry on the
+           failures where one helps. `refresh` re-runs the same effect. */
+        <LoadFailure loads={[{ label: 'the clarification list', query: caughtLoad(error, refresh) }]} />
       ) : view === 'status' ? (
         <>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

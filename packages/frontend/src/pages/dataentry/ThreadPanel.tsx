@@ -6,6 +6,7 @@ import { connectSocket, getSocket } from '../../services/socket';
 import { callManager } from '../../services/call.service';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { fmtWhen } from '../../utils/dates';
 import { safeHttpUrl } from '../../utils/url';
 import { REGION_FLAG_SUGGESTIONS } from '../../utils/reviewReasonSuggestions';
@@ -69,13 +70,23 @@ export const ThreadPanel: React.FC<Props> = ({
   // Pinned to `queryId` so both effects below can depend on it honestly. As a plain arrow it was a
   // new function on every render, and either effect listing it would have re-fetched the thread —
   // and, for the socket effect, torn down and re-joined the room — on every state change it caused.
+  /**
+   * Why the thread is empty, when it is empty because it could not be read.
+   *
+   * The catch left `messages` at `[]`, and the panel then said "Nothing has been said on this
+   * question yet" under an invitation to type the first message. On a clarification the field
+   * assayer may already have answered, that is how the same question gets asked twice — and the
+   * assayer sees a desk that ignored their reply.
+   */
+  const [loadErr, setLoadErr] = useState<unknown>(null);
+
   const load = useCallback(() => {
     api.request<ThreadMessage[]>(`/validation-queries/${queryId}/messages`)
-      .then((m) => setMessages(Array.isArray(m) ? m : []))
-      .catch(() => setMessages([]));
+      .then((m) => { setMessages(Array.isArray(m) ? m : []); setLoadErr(null); })
+      .catch((e) => { setMessages([]); setLoadErr(e); });
   }, [queryId]);
 
-  useEffect(() => { setMessages(null); setSigned({}); load(); }, [load]);
+  useEffect(() => { setMessages(null); setSigned({}); setLoadErr(null); load(); }, [load]);
 
   // Live thread: join this query's socket room and reload on every posted message.
   // Without this the desk only sees an assayer's reply after closing and reopening
@@ -240,7 +251,10 @@ export const ThreadPanel: React.FC<Props> = ({
             <Loader2 size={15} className="spin" /> Loading message history…
           </div>
         )}
-        {messages?.length === 0 && (
+        {loadErr != null && (
+          <LoadFailure loads={[{ label: 'this conversation', query: caughtLoad(loadErr, load) }]} />
+        )}
+        {loadErr == null && messages?.length === 0 && (
           <div style={{
             padding: '24px 16px', textAlign: 'center', borderRadius: '10px',
             background: 'var(--bg-surface-2)', border: '1px border-dashed var(--border-color)',

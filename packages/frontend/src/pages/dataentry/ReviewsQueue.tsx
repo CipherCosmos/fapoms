@@ -5,6 +5,7 @@ import { AlertTriangle, FileText, Search } from 'lucide-react';
 import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { deskRole, deskCard, deskLabel, CaseListRow, TeamMember } from './deskRoles';
 import { Select, useConfirm } from '../../components/ui';
 import { validationStatusLabel } from '@fapoms/shared';
@@ -55,6 +56,14 @@ export const ReviewsQueue: React.FC = () => {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * The READ's failure, held apart from `err` — which every write on this screen reports to and
+   * which the operator is meant to read and dismiss. A failed read is not like that: the queue
+   * underneath keeps describing itself as empty for as long as the load is failing, so the
+   * sentence that corrects it has to stay up as long as the queue does.
+   */
+  const [loadErr, setLoadErr] = useState<unknown>(null);
+
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
@@ -69,8 +78,8 @@ export const ReviewsQueue: React.FC = () => {
     if (isHead && unroutedOnly) qs.set('reviewerId', 'none');
     if (!isHead) qs.set('workedBy', 'me');
     api.request<{ data: CaseListRow[]; meta?: { pagination?: { total: number } } }>(`/validation?${qs}`, { method: 'GET', withMeta: true } as any)
-      .then((r) => { setRows(r.data ?? []); setTotal(r.meta?.pagination?.total ?? 0); setErr(null); })
-      .catch((e) => setErr(userMessage(e)));
+      .then((r) => { setRows(r.data ?? []); setTotal(r.meta?.pagination?.total ?? 0); setErr(null); setLoadErr(null); })
+      .catch((e) => { setRows([]); setTotal(0); setLoadErr(e); });
   }, [isHead, status, unroutedOnly, search, page]);
 
   useEffect(() => { load(); }, [load]);
@@ -210,6 +219,8 @@ export const ReviewsQueue: React.FC = () => {
         </div>
       )}
 
+      {loadErr != null && <LoadFailure loads={[{ label: 'the review queue', query: caughtLoad(loadErr, load) }]} />}
+
       {showBulk && (
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '12px' }}>
           <span style={{ color: 'var(--text-muted)' }}>{counted(selectedIds.length, 'report')} ticked</span>
@@ -259,7 +270,9 @@ export const ReviewsQueue: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
+            {/* Four different sentences, each a claim about what the desk has and has not done.
+                None of them may be printed over a read that never landed. */}
+            {loadErr == null && rows.length === 0 && (
               <tr><td colSpan={showBulk ? 5 : 4} style={{ padding: '22px 14px', color: 'var(--text-muted)', textAlign: 'center' }}>
                 {search
                   ? `No report matches “${search}”. Try a shorter branch name or code.`
