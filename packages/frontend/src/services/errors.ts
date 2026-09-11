@@ -391,6 +391,22 @@ export function fromResponse(status: number, body: any): AppError {
   let friendly = '';
   let category: ErrorCategory = status >= 500 ? 'system-failure' : 'user-correction-required';
 
+  /**
+   * The status decides the category; the message only decides the wording.
+   *
+   * These two were entangled: the `BY_STATUS` lookup lived inside `if (!friendly)`, so it was
+   * consulted only when nothing else had produced a sentence. A 503 arriving with a human-readable
+   * server message therefore kept the seeded `system-failure` and read as not worth retrying, while
+   * the same 503 with an empty body picked up `retryable` from `BY_STATUS`. Whether a failure was
+   * worth retrying depended on whether the backend had bothered to send prose, and a screen asking
+   * `classifyError(...).isRetryable` offered or withheld its Retry button on that basis.
+   */
+  const statusEntry = BY_STATUS[status];
+  if (statusEntry) {
+    category = statusEntry.category;
+  }
+
+  // A domain code is more specific than the status, so it still wins both fields.
   if (domainCode && DOMAIN_ERROR_TRANSLATIONS[domainCode]) {
     friendly = DOMAIN_ERROR_TRANSLATIONS[domainCode].message;
     category = DOMAIN_ERROR_TRANSLATIONS[domainCode].category;
@@ -399,13 +415,7 @@ export function fromResponse(status: number, body: any): AppError {
   }
 
   if (!friendly) {
-    const statusEntry = BY_STATUS[status];
-    if (statusEntry) {
-      friendly = statusEntry.message;
-      category = statusEntry.category;
-    } else {
-      friendly = 'Something went wrong. Please try again.';
-    }
+    friendly = statusEntry ? statusEntry.message : 'Something went wrong. Please try again.';
   }
 
   return new AppError(friendly, serverText || `HTTP ${status}`, status, category, domainCode);
