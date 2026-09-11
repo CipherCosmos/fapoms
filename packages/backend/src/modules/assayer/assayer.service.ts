@@ -1,5 +1,5 @@
 import {
-  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
+  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt, randomUUID, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
@@ -3147,10 +3147,22 @@ export class AssayerService implements OnModuleInit {
           ? await this.closeClientEmpanelmentsOnDeparture(saved.id, targetStatus, userId, manager)
           : 0;
 
+        /**
+         * One id for the whole departure, minted before the cascade and written onto both ends
+         * of it: every cancelled assignment's own audit row, and the single lifecycle row below.
+         * Without it the connection between "she resigned" and "this branch is unassigned" is a
+         * guess from two timestamps a second apart.
+         */
+        const departureEventId = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
+          ? randomUUID()
+          : null;
+
         // Same reasoning, same scope, same "after the save" ordering as the empanelment close
         // above — see `cancelOpenAssignmentsOnDeparture` for why this exists at all.
         const assignmentsCancelled = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
-          ? await this.cancelOpenAssignmentsOnDeparture(saved.id, targetStatus, userId, manager)
+          ? await this.cancelOpenAssignmentsOnDeparture(
+            saved.id, targetStatus, userId, manager, departureEventId ?? undefined,
+          )
           : 0;
 
         /**
@@ -3180,6 +3192,13 @@ export class AssayerService implements OnModuleInit {
             newState: targetStatus,
             userId,
             remarks: remarks || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+            /**
+             * The other end of the join. This row says how many assignments a departure closed;
+             * the `ASSIGNMENT_CANCELLED` rows carrying the same `departureEventId` say which.
+             */
+            ...(departureEventId
+              ? { metadata: { departureEventId, assignmentsCancelled, empanelmentsClosed } }
+              : {}),
           },
           manager ? { manager } : undefined,
         );
@@ -3398,16 +3417,56 @@ export class AssayerService implements OnModuleInit {
     target: AssayerLifecycleStatus,
     userId: string,
     manager?: EntityManager,
+    /**
+     * The departure this cascade belongs to. Written into every assignment's audit row so the
+     * cancellations and the lifecycle move that caused them can be joined back together — see
+     * `auditCancelledOnDeparture`.
+     */
+    departureEventId?: string,
   ): Promise<number> {
     const runner = manager ?? this.dataSource;
     const reason = `Assayer workforce record moved to ${target} on ${calendarDay(new Date())}; ` +
       'the work could not proceed as planned. Reassign it if it still needs doing.';
-    const [, assignmentsAffected] = await runner.query(
-      `UPDATE assignments SET status = $1, cancel_reason = $2, updated_by = $3,
-          entity_version = COALESCE(entity_version, 1) + 1, updated_at = NOW()
-        WHERE assayer_id = $4 AND is_active = true AND status = ANY($5)`,
+
+    /**
+     * One statement, and it hands back what it changed.
+     *
+     * The previous status has to come out of the same statement that overwrites it — read it
+     * first and a concurrent accept between the read and the update makes the audit row describe
+     * a state the assignment was no longer in. The self-join onto a `FOR UPDATE` subquery is how
+     * an UPDATE reports the value it replaced: `before` is the row as it stood under the lock,
+     * `a` is the row as it now stands.
+     *
+     * The predicate is unchanged — `OPEN_ASSIGNMENT_STATUSES`, is_active — so COMPLETED,
+     * CANCELLED and REJECTED work is neither mutated nor audited. Nothing about a delivered or
+     * already-closed assignment changes because somebody left.
+     */
+    const cancelled: Array<{
+      id: string; assignment_number: string | null; previous_status: string;
+      previous_version: number | null; new_version: number | null;
+      scheduled_date: string | null; project_branch_id: string | null;
+    }> = await runner.query(
+      `UPDATE assignments a
+          SET status = $1, cancel_reason = $2, updated_by = $3,
+              entity_version = COALESCE(a.entity_version, 1) + 1, updated_at = NOW()
+         FROM (
+           SELECT id, status, entity_version
+             FROM assignments
+            WHERE assayer_id = $4 AND is_active = true AND status = ANY($5)
+              FOR UPDATE
+         ) AS before
+        WHERE a.id = before.id
+    RETURNING a.id,
+              a.assignment_number,
+              before.status        AS previous_status,
+              before.entity_version AS previous_version,
+              a.entity_version      AS new_version,
+              a.scheduled_date,
+              a.project_branch_id`,
       [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssayerService.OPEN_ASSIGNMENT_STATUSES],
     ) ?? [];
+
+    await this.auditCancelledOnDeparture(cancelled, assayerId, target, userId, reason, manager, departureEventId);
 
     // Same follow-on `remove()` already applies: a cancelled assignment must not leave its
     // scheduled visit looking live on the calendar, the day plan or the dispatch view.
@@ -3419,7 +3478,81 @@ export class AssayerService implements OnModuleInit {
       [userId, assayerId, AssignmentStatus.CANCELLED],
     );
 
-    return typeof assignmentsAffected === 'number' ? assignmentsAffected : 0;
+    return cancelled.length;
+  }
+
+  /**
+   * AN ASSIGNMENT CANCELLED BY SOMEBODY'S DEPARTURE SAYS SO, ON ITS OWN RECORD.
+   *
+   * The cascade above used to write nothing against the assignments it cancelled. The only trail
+   * was a single row on the ASSAYER — `4 open assignments cancelled` — which names neither the
+   * assignments nor the branches nor the client whose work stopped. So the question an operations
+   * lead actually asks, standing in front of one job that vanished ("why is this branch
+   * unassigned, and who did it?"), had no answer anywhere in the system: the assignment's own
+   * trail simply skipped from ACCEPTED to nothing, and `cancel_reason` was the only clue, on a
+   * mutable column with no actor and no timestamp beside it.
+   *
+   * Every other cancel path in the product writes `ASSIGNMENT_CANCELLED` through
+   * `assignment.service.ts`. This one bypassed the service entirely — a raw UPDATE, for the good
+   * reason that the state machine's cancel demands things a cascade cannot supply — and took the
+   * audit row with it. The event is written here in the same vocabulary, so an assignment history
+   * reads the same whoever ended the work.
+   *
+   * `recordEvent`, not `recordEventSafe`, and on the transition's own `manager`: a cancellation
+   * that cannot be recorded must not commit. The alternative is the exact silence this fixes,
+   * reintroduced for the case where it matters most.
+   *
+   * `departureEventId` is the join key. The lifecycle row carries the same value, so "show me
+   * everything that happened when she left" is one query rather than a guess based on timestamps
+   * a second apart.
+   */
+  private async auditCancelledOnDeparture(
+    cancelled: Array<{
+      id: string; assignment_number: string | null; previous_status: string;
+      previous_version: number | null; new_version: number | null;
+      scheduled_date: string | null; project_branch_id: string | null;
+    }>,
+    assayerId: string,
+    target: AssayerLifecycleStatus,
+    userId: string,
+    reason: string,
+    manager?: EntityManager,
+    departureEventId?: string,
+  ): Promise<void> {
+    for (const row of cancelled) {
+      await this.auditService.recordEvent(
+        {
+          category: EventCategory.OPERATIONAL,
+          eventType: `ASSIGNMENT_${AssignmentStatus.CANCELLED}`,
+          entityType: 'ASSIGNMENT',
+          entityId: row.id,
+          previousState: row.previous_status,
+          newState: AssignmentStatus.CANCELLED,
+          userId,
+          remarks: reason,
+          metadata: {
+            /** What ended the work, so the row explains itself without the assayer's trail. */
+            cause: 'ASSAYER_DEPARTURE',
+            lifecycleTarget: target,
+            /**
+             * The assayer this work was taken from. `assayer_id` is deliberately NOT cleared by
+             * the cascade — the job stays attributed to whoever held it — but a reader looking at
+             * a cancelled assignment months later should not have to infer the connection.
+             */
+            previousAssayerId: assayerId,
+            /** The join key back to the one ASSAYER_LIFECYCLE_TRANSITION row for this departure. */
+            departureEventId: departureEventId ?? null,
+            assignmentNumber: row.assignment_number,
+            projectBranchId: row.project_branch_id,
+            scheduledDate: row.scheduled_date,
+            previousValue: { status: row.previous_status, entityVersion: row.previous_version },
+            newValue: { status: AssignmentStatus.CANCELLED, entityVersion: row.new_version },
+            entityVersion: row.new_version,
+          },
+        },
+        manager ? { manager } : undefined,
+      );
+    }
   }
 
   async verifyDocuments(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
