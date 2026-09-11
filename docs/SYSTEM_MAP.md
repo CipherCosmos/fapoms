@@ -110,9 +110,14 @@ Completing without a check-in demands a stated reason. Three status **sets** car
 distinctions (`assignment-workload.ts`): `COMMITTED` (capacity, no PENDING), `IN_FLIGHT` (+PENDING,
 backs the day-exclusivity index), `ENGAGED` (+COMPLETED, "branch busy").
 
-**Empanelment has no state machine.** Eight values, a CHECK constraint, and exactly one behavioural
-guard: reversing a REJECTED empanelment requires a written reason. `PUT` is otherwise a free-form
-upsert. This is a recorded, accepted product decision, not an oversight.
+**Empanelment has no state machine.** Eight values, a CHECK constraint, and one behavioural guard:
+reversing a REJECTED empanelment requires a written reason. That remains a recorded product
+decision, not an oversight.
+
+It is no longer a free-form upsert, though. Since the concurrency fix, editing an existing standing
+requires the `expectedVersion` the caller read, taken under a lock **before** the row is read — and
+the reversal guard is now answered from the locked status, where it was previously decided from an
+unlocked read, so a concurrent REJECTED could be reversed with no reason at all.
 
 **Money** is enforced imperatively in `billing-engine.service.ts`, not from a table. The dead-state
 vocabulary lives in `packages/shared/src/billing-liveness.ts` — `VOIDED` payables and `CANCELLED`
@@ -159,8 +164,11 @@ These are the consequences the certification has to follow, traced in code:
 - **SUSPENDED cascades nothing**, deliberately. Only `RESIGNED` and `TERMINATED` count as departure.
   Exclusion is by read-side predicates, not by cascade — "not right now", not "not any more".
 - **RESIGNED / TERMINATED** sets exit dates if absent without overwriting HR's, closes ACTIVE and
-  RECOMMENDED empanelments, and raw-cancels in-flight assignments while bumping `entity_version`.
-  Counts land in one aggregate audit row. **No per-assignment audit row is written** — open finding.
+  RECOMMENDED empanelments, and cancels in-flight assignments while bumping `entity_version`.
+  Since `74a82b4a` / `4d31563d` each cancelled assignment carries its **own** `ASSIGNMENT_CANCELLED`
+  row in the same transaction — previous and new status, reason, actor, branch, both versions, the
+  previous assayer, and a `departureEventId` linking it to the lifecycle row. `DELETE /assayers/:id`
+  does the same. A cancellation that cannot be recorded does not commit.
 - **ARCHIVED** additionally sets `is_active = false`, which hides the row from the ordinary reader.
 - **Assignment COMPLETED** publishes an event that becomes the payable and the client line via the
   worker, and closes the branch to further assignments.
@@ -194,6 +202,12 @@ Two live definitions that are not what they appear to be:
   `INVOICE_TRANSITIONS` and `PAYABLE_TRANSITIONS` have **zero consumers**, and `PAYABLE_TRANSITIONS`
   omits `VOIDED` entirely while the enum, the CHECK constraint and `voidPayable()` all have it.
   The same file's own docblock warns that a dead definition is worse than no definition.
-- `packages/shared/src/assayer-lifecycle.ts:214-236` documents, in its own comment, that **ACTIVE is
-  still a bulk waypoint**, so a bulk `INVITED → SUSPENDED` walks through an unearned activation and
-  writes all four hops. It appears in **no findings ledger**.
+- ~~`assayer-lifecycle.ts` — ACTIVE as a bulk waypoint~~ **closed in `403e6a08`.** `ACTIVE` now sits
+  in `NEVER_A_WAYPOINT`, fixed at the transition graph rather than in the response, because a
+  truthful account of a fabricated activation is still a fabricated activation.
+
+  **This withdrew moves, and that is the deliberate half.** `INVITED → SUSPENDED`,
+  `INVITED → RESIGNED`, `DOCUMENT_VERIFICATION → SUSPENDED`, `ON_LEAVE → SUSPENDED`,
+  `ON_LEAVE → RESIGNED` and `SUSPENDED → ARCHIVED` now have no bulk path and report `skipped` with
+  nothing written. Every one of them is a move the single-record route already refuses, so this is
+  parity with the one-person screen rather than a new restriction.
