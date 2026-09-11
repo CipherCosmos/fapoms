@@ -249,8 +249,17 @@ describe('BranchService', () => {
      * SOL ID is the field every import matches on, so a blank one makes the branch unmatchable and
      * surfaces later as a duplicate rather than as an error here.
      */
+    /**
+     * These stub the REPOSITORY read, not `BranchQueryService.findOne`.
+     *
+     * `update` loads through `loadForWrite`, which reads the branch row alone. It must not go
+     * through the aggregate reader: that one joins the `cascade: true` `contacts` and `documents`
+     * collections filtered to `isActive = true`, and saving a filtered collection makes TypeORM
+     * orphan the rows the filter excluded — `UPDATE branch_contacts SET branch_id = NULL` against
+     * a NOT NULL column, which is a 500. See `aggregate-write-orphans.db.spec.ts`.
+     */
     it('refuses to blank a SOL ID from the edit form', async () => {
-      mockBranchQueryService.findOne.mockResolvedValue({
+      mockBranchRepo.findOne.mockResolvedValue({
         id: 'b-1', solId: '0001', name: 'Fort', clientId: 'axis', isActive: true,
       });
 
@@ -259,7 +268,7 @@ describe('BranchService', () => {
     });
 
     it('refuses to point one branch at another branch\'s SOL ID from the edit form', async () => {
-      mockBranchQueryService.findOne.mockResolvedValue({
+      mockBranchRepo.findOne.mockResolvedValue({
         id: 'b-1', solId: '0001', name: 'Fort', clientId: 'axis', isActive: true,
       });
       mockBranchRepo.find.mockResolvedValue([
@@ -270,7 +279,7 @@ describe('BranchService', () => {
     });
 
     it('lets a branch keep its own SOL ID through an unrelated edit', async () => {
-      mockBranchQueryService.findOne.mockResolvedValue({
+      mockBranchRepo.findOne.mockResolvedValue({
         id: 'b-1', solId: '0001', name: 'Fort', clientId: 'axis', isActive: true,
       });
       mockBranchRepo.find.mockResolvedValue([]);

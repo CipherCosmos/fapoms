@@ -20,6 +20,44 @@ import { GeoPrecisionService } from '../geo/geo-precision.service';
 const normHeader = (s: unknown): string => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
+ * Where a branch write LANDS — the two functions below are the only statements of that rule.
+ *
+ * A branch is the region anchor for essentially everything in this system, and `region` is a
+ * column a caller can set. So "which region will this row be in when the write finishes" is an
+ * authorisation question, and it has to be answerable BEFORE the write, by the controller, not
+ * only inside `create`/`update` after the decision has already been made.
+ *
+ * These were the same two expressions inlined in `create` and `update`. They are lifted out —
+ * unchanged, deliberately — so `BranchController` can ask the same question the service is about
+ * to answer and get the identical value. A guard that recomputed the rule slightly differently
+ * would refuse the wrong writes and, worse, allow the right ones.
+ *
+ * `current` is the branch as it stands in the database. `update` assigns `branch.state` a few
+ * lines before it resolves the region, so the state the fallback sees is the NEW one where the
+ * caller sent one; that is why `branchRegionAfterUpdate` reads `dto.state ?? current.state`
+ * rather than `current.state`. Passing the pre-update row from the controller and the
+ * mid-update entity from the service therefore yields the same answer.
+ */
+export function branchRegionAtCreate(dto: { region?: string | null; state?: string | null }): string | null {
+  return resolveRegion(dto.region ?? undefined) ?? resolveRegion(dto.state ?? undefined) ?? null;
+}
+
+/** The region a branch will hold once this update is applied. */
+export function branchRegionAfterUpdate(
+  dto: { region?: string | null; state?: string | null },
+  current: { region?: string | null; state?: string | null },
+): string | null {
+  const state = dto.state !== undefined ? dto.state : current.state;
+  if (dto.region !== undefined) {
+    return resolveRegion(dto.region ?? undefined) ?? resolveRegion(state ?? undefined) ?? null;
+  }
+  if (dto.state !== undefined) {
+    return resolveRegion(state ?? undefined) ?? current.region ?? null;
+  }
+  return current.region ?? null;
+}
+
+/**
  * What each branch field may be called in a real bank's file — matched loosely, not exactly.
  *
  * Every bank exports its own headings: "BRANCH" for the SOL id, "BRANCH_NAME", "STATE",
@@ -248,8 +286,9 @@ export class BranchService {
       pincode: dto.pincode ?? null,
       // Canonicalised on write, state first. Letting a caller store an arbitrary string here
       // is what made the column unfilterable in the first place; the migration that cleaned it
-      // up would be undone by the next import otherwise.
-      region: resolveRegion(dto.region) ?? resolveRegion(dto.state) ?? null,
+      // up would be undone by the next import otherwise. `branchRegionAtCreate` is the same
+      // expression, lifted so the controller's region guard asks exactly this question.
+      region: branchRegionAtCreate(dto),
       territory: dto.territory ?? null,
       zoneId: dto.zoneId ?? null,
       branchType: dto.branchType ?? null,
@@ -323,6 +362,58 @@ export class BranchService {
     return this.branchQueryService.findOne(id);
   }
 
+  /**
+   * The branch row alone, for the paths that are going to SAVE it.
+   *
+   * `findOne` is the detail READ: it hydrates `contacts` and `documents` through
+   * `BranchQueryService`, filtered to `isActive = true` so the detail view does not show rows
+   * somebody deleted. That filter is correct for a read and poison for a write, because both
+   * relations are declared `cascade: true` on `BranchEntity`. Saving an entity whose collection
+   * was loaded with a filter tells TypeORM that the rows the filter EXCLUDED are no longer in the
+   * collection, so it orphans them — it issues `UPDATE branch_contacts SET branch_id = NULL`.
+   * `branch_id` is `NOT NULL`, Postgres refuses, the transaction rolls back and the whole request
+   * answers 500.
+   *
+   * The effect was that deleting any contact or document permanently broke editing that branch:
+   * `DELETE /branches/:id/contacts/:contactId` sets `is_active = false`, and from then on every
+   * `PUT /branches/:id` was a 500 — reproduced on both routes against the running stack.
+   *
+   * Loading without the relations is the fix rather than `orphanedRowAction`, because the write
+   * paths never read `branch.contacts` or `branch.documents` at all. Saving a whole aggregate to
+   * change one scalar is what created the bug; not loading the aggregate removes the class, while
+   * an orphan-handling flag would leave every branch save round-tripping children it does not
+   * want and would change that relation's meaning for `create`, which does rely on the cascade.
+   *
+   * Callers that only need to know the branch exists use this too — a filtered aggregate load is
+   * an expensive and fragile way to ask a yes/no question.
+   */
+  private async loadForWrite(id: string): Promise<BranchEntity> {
+    const branch = await this.branchRepository.findOne({ where: { id, isActive: true } });
+    if (!branch) {
+      throw new NotFoundException(`Branch ${id} not found.`);
+    }
+    return branch;
+  }
+
+  /**
+   * Just the two columns the region ceiling needs, for a branch that may not exist.
+   *
+   * `BranchController.update` has to know where a write will LAND before it lets the write
+   * happen, and `branchRegionAfterUpdate` needs the branch's current region and state to work
+   * that out. Going through `findOne` would hydrate contacts, documents, the client and the zone
+   * to answer a question about two strings — and would throw `NotFoundException` for an id that
+   * does not exist, turning what should be a 404 from the service into a 404 raised by the
+   * authorisation step, which is a confusing place for it to come from.
+   *
+   * A missing row answers `{ region: null, state: null }`: the guard then allows (a null region
+   * is a data gap, not a boundary — see `assertRegionSettable`) and `update` raises the 404 it
+   * was always going to raise.
+   */
+  async regionAnchorOf(id: string): Promise<{ region: string | null; state: string | null }> {
+    const row = await this.branchRepository.findOne({ where: { id }, select: ['id', 'region', 'state'] });
+    return { region: row?.region ?? null, state: row?.state ?? null };
+  }
+
   async findAll(
     page = 1,
     limit = 20,
@@ -344,7 +435,7 @@ export class BranchService {
   }
 
   async update(id: string, dto: UpdateBranchDto, userId: string): Promise<BranchEntity> {
-    const branch = await this.findOne(id);
+    const branch = await this.loadForWrite(id);
 
     /**
      * The SOL ID is checked on edit exactly as it is on create.
@@ -422,11 +513,12 @@ export class BranchService {
     if (dto.city !== undefined) branch.city = dto.city;
     if (dto.pincode !== undefined) branch.pincode = dto.pincode;
     // Region follows the state unless the caller names one explicitly, and is canonicalised
-    // either way — see the matching note on create().
-    if (dto.region !== undefined) {
-      branch.region = resolveRegion(dto.region) ?? resolveRegion(branch.state) ?? null;
-    } else if (dto.state !== undefined) {
-      branch.region = resolveRegion(dto.state) ?? branch.region;
+    // either way — see the matching note on create(). `branchRegionAfterUpdate` is that rule,
+    // lifted so `BranchController.update` can check where this write LANDS before allowing it:
+    // asserting only the branch's current region let a scoped operator move a branch they held
+    // into a region they did not, and then never see it again.
+    if (dto.region !== undefined || dto.state !== undefined) {
+      branch.region = branchRegionAfterUpdate(dto, { region: branch.region, state: branch.state });
     }
     if (dto.territory !== undefined) branch.territory = dto.territory;
     if (dto.zoneId !== undefined) branch.zoneId = dto.zoneId;
@@ -472,7 +564,15 @@ export class BranchService {
       console.error('Failed to publish branch:updated event:', err);
     }
 
-    return saved;
+    /**
+     * Read the aggregate back for the response.
+     *
+     * The write above deliberately loaded the branch row alone, so `saved` carries no `contacts`
+     * and no `documents`. Returning it would silently drop both collections from the `PUT` body
+     * that callers have always received. One extra read on an infrequent path keeps the response
+     * identical to `GET /branches/:id`.
+     */
+    return this.branchQueryService.findOne(saved.id);
   }
 
   /**
@@ -519,7 +619,7 @@ export class BranchService {
   }
 
   async remove(id: string, userId: string): Promise<void> {
-    const branch = await this.findOne(id);
+    const branch = await this.loadForWrite(id);
 
     // State-specific assignment integrity checks
     const assignments: Array<{
@@ -629,12 +729,12 @@ export class BranchService {
   // -----------------------------------------------------------------------
 
   async findContacts(branchId: string): Promise<BranchContactEntity[]> {
-    await this.findOne(branchId);
+    await this.loadForWrite(branchId);
     return this.contactRepository.find({ where: { branchId, isActive: true } });
   }
 
   async addContact(branchId: string, dto: CreateContactDto, userId: string): Promise<BranchContactEntity> {
-    await this.findOne(branchId);
+    await this.loadForWrite(branchId);
 
     if (dto.isPrimary) {
       await this.contactRepository.update({ branchId, isPrimary: true }, { isPrimary: false });
@@ -716,12 +816,12 @@ export class BranchService {
   // -----------------------------------------------------------------------
 
   async findDocuments(branchId: string): Promise<BranchDocumentEntity[]> {
-    await this.findOne(branchId);
+    await this.loadForWrite(branchId);
     return this.documentRepository.find({ where: { branchId, isActive: true }, order: { createdAt: 'DESC' } });
   }
 
   async addDocument(branchId: string, dto: CreateDocumentDto, userId: string): Promise<BranchDocumentEntity> {
-    await this.findOne(branchId);
+    await this.loadForWrite(branchId);
 
     const doc = this.documentRepository.create({
       branchId,

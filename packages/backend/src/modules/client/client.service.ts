@@ -424,6 +424,41 @@ export class ClientService implements OnModuleInit {
     return client;
   }
 
+  /**
+   * The client and the one relation its writers actually mutate, for the paths that will SAVE it.
+   *
+   * `findOne` is the detail READ. It joins `contacts` and `contracts` filtered to
+   * `isActive = true`, and both are declared `cascade: true` collections on `ClientEntity`.
+   * Handing a filtered collection to `save` tells TypeORM the excluded rows have left the
+   * collection, so it orphans them with `UPDATE client_contacts SET client_id = NULL`.
+   * `client_id` is `NOT NULL`, Postgres refuses, and the request answers 500.
+   *
+   * Reproduced against the running stack: create a client contact, `DELETE
+   * /clients/:id/contacts/:contactId` (which only sets `is_active = false`), and from then on
+   * every `PUT /clients/:id` is a 500. `DELETE /clients/:id/contracts/:contractId` does the same
+   * through `contracts`. This is the same defect that made branches uneditable after a contact
+   * was deleted — see `BranchService.loadForWrite`.
+   *
+   * `configuration` stays, because `update` really does edit it through the cascade, and it is
+   * joined with the same `isActive` filter `findOne` uses rather than left to the relation's
+   * `eager: true` — an eager load ignores the filter and would resurrect a soft-deleted
+   * configuration. It is a `@OneToOne`, so there is no excluded-row set for TypeORM to orphan.
+   * `billing` is left unloaded: no write path reads it, and an unloaded relation is the one
+   * state `save` is guaranteed not to touch.
+   */
+  private async loadForWrite(id: string): Promise<ClientEntity> {
+    const client = await this.clientRepository
+      .createQueryBuilder('client')
+      .leftJoinAndSelect('client.configuration', 'configuration', 'configuration.isActive = true')
+      .where('client.id = :id', { id })
+      .andWhere('client.isActive = true')
+      .getOne();
+    if (!client) {
+      throw new NotFoundException(`Client ${id} not found.`);
+    }
+    return client;
+  }
+
   async findAll(
     page = 1,
     limit = 20,
@@ -483,7 +518,7 @@ export class ClientService implements OnModuleInit {
     // Same ranges as create — an edit must not be able to write what create refuses.
     this.validateTunables(dto);
 
-    const client = await this.findOne(id);
+    const client = await this.loadForWrite(id);
 
     if (dto.name !== undefined) client.name = dto.name;
     if (dto.displayName !== undefined) client.displayName = dto.displayName;
@@ -550,11 +585,16 @@ export class ClientService implements OnModuleInit {
       console.error('Failed to publish client:updated event:', err);
     }
 
-    return saved;
+    /**
+     * Read the aggregate back for the response. The write above loaded only the client and its
+     * configuration, so `saved` carries no `contacts`, `contracts` or `billing`; returning it
+     * would quietly drop three collections from a response body callers already receive.
+     */
+    return this.findOne(saved.id);
   }
 
   async remove(id: string, userId: string): Promise<void> {
-    const client = await this.findOne(id);
+    const client = await this.loadForWrite(id);
     client.isActive = false;
     client.updatedBy = userId;
     await this.clientRepository.save(client);
@@ -649,7 +689,7 @@ export class ClientService implements OnModuleInit {
   // -----------------------------------------------------------------------
 
   async transitionLifecycle(id: string, newStatus: string, userId: string, reason?: string): Promise<ClientEntity> {
-    const client = await this.findOne(id);
+    const client = await this.loadForWrite(id);
     const currentStatus = client.lifecycleStatus;
     const allowed = VALID_LIFECYCLE_TRANSITIONS[currentStatus] || [];
 
@@ -695,7 +735,12 @@ export class ClientService implements OnModuleInit {
       console.error('Failed to publish client:status-changed event:', err);
     }
 
-    return saved;
+    /**
+     * Read the aggregate back for the response. The write above loaded only the client and its
+     * configuration, so `saved` carries no `contacts`, `contracts` or `billing`; returning it
+     * would quietly drop three collections from a response body callers already receive.
+     */
+    return this.findOne(saved.id);
   }
 
   /**

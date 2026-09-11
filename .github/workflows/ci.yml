@@ -197,4 +197,4 @@ jobs:
           DB_DATABASE: fapoms_ci
         run: |
           npm run migration:run
-          npx jest --ci -w 1 --testPathIgnorePatterns --testRegex '(assignment-postgres-concurrency|assignment-reassignment-lineage|billing-overview-region-scope|payout-destination-evidence|notification-tenant-isolation|assayer-postgres-concurrency)\.db\.spec\.ts$'
+          npx jest --ci -w 1 --testPathIgnorePatterns --testRegex '(assignment-postgres-concurrency|assignment-reassignment-lineage|billing-overview-region-scope|payout-destination-evidence|notification-tenant-isolation|assayer-postgres-concurrency|aggregate-write-orphans)\.db\.spec\.ts$'
