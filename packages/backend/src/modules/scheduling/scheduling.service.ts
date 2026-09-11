@@ -264,21 +264,28 @@ export class SchedulingService {
 
         if (assignment?.status !== AssignmentStatus.COMPLETED) {
           try {
-            await this.assignmentService.completeAssignment(
-              schedule.assignmentId,
-              userId,
-              'Completed via schedule dispatch',
-            );
+            /**
+             * No reason is supplied, deliberately.
+             *
+             * This used to pass `Completed via schedule dispatch`, which satisfied
+             * `completeAssignment`'s requirement that somebody account for an incomplete
+             * attendance record with a sentence no human wrote. A control a machine can
+             * discharge on your behalf is not a control. Dispatch now closes the visit only
+             * when the attendance record already stands on its own.
+             */
+            await this.assignmentService.completeAssignment(schedule.assignmentId, userId);
           } catch {
             /**
              * Refuse the whole transition rather than persist half of it. The message names the
              * missing step, because the usual cause is a visit marked complete before anyone
-             * arrived on site.
+             * arrived on site — or, now, before anyone recorded leaving it.
              */
             throw new BadRequestException(
               `This visit cannot be completed yet: the assignment is still ${assignment?.status ?? 'unavailable'}. ` +
-                'The assayer needs to check in on site first — completing the schedule on its own would leave the ' +
-                'audit unbilled and unable to reach validation.',
+                'The assayer needs a check-in and a check-out on site first — time on site is the attendance ' +
+                'evidence, and completing the schedule on its own would leave the audit unbilled and unable to ' +
+                'reach validation. If the visit really happened and a stamp is missing, close it from the ' +
+                'assignment itself, where somebody states why.',
             );
           }
         }

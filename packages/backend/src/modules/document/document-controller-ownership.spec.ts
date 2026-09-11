@@ -197,12 +197,20 @@ describe('DocumentController — download-token region scope, and upload multer 
     it('allows the owning assayer to complete their own assignment (books money)', async () => {
       assignmentRepo.findOne.mockResolvedValue({ ...victimAssignment, assayerId: 'assayer-ME' });
       await ctrl.completeUpload('sess-1', { type: 'AUDITED_RETURN_PDF', assignmentId: VICTIM_ASN } as any, req([{ name: SystemRole.ASSAYER }], 'assayer-ME'));
-      expect(assignmentService.completeAssignment).toHaveBeenCalledWith(VICTIM_ASN, 'assayer-ME', expect.stringContaining('Audited return'));
+      // Called with NO reason, deliberately. `completeAssignment` asks for a stated reason when
+      // the attendance record is incomplete; this path used to supply "Audited return PDF
+      // uploaded (<file>)", discharging that requirement with a sentence no human wrote. An
+      // upload now closes the job only when the attendance record already stands on its own.
+      expect(assignmentService.completeAssignment).toHaveBeenCalledWith(VICTIM_ASN, 'assayer-ME');
     });
 
     it('allows staff to complete on an assayer\'s behalf (back-office scan-by-email workflow)', async () => {
       await ctrl.completeUpload('sess-1', { type: 'AUDITED_RETURN_PDF', assignmentId: VICTIM_ASN } as any, req([{ name: SystemRole.OPERATIONS }], 'staff-1'));
-      expect(assignmentService.completeAssignment).toHaveBeenCalledWith(VICTIM_ASN, 'staff-1', expect.any(String));
+      // Called with NO reason, deliberately. `completeAssignment` asks for a stated reason when
+      // the attendance record is incomplete; this path used to supply "Audited return PDF
+      // uploaded (<file>)", discharging that requirement with a sentence no human wrote. An
+      // upload now closes the job only when the attendance record already stands on its own.
+      expect(assignmentService.completeAssignment).toHaveBeenCalledWith(VICTIM_ASN, 'staff-1');
     });
   });
 

@@ -490,9 +490,12 @@ export class DocumentController {
       );
     }
 
-    await this.completeAssignmentForReturn(doc, body.assignmentId, targetId, req?.user, fileName);
+    const completion = await this.completeAssignmentForReturn(doc, body.assignmentId, targetId, req?.user, fileName);
 
-    return { success: true, data: doc, documentUrl: `/documents/${doc.id}/download` };
+    // The upload succeeded either way; `assignmentCompletion` says whether the job actually
+    // closed. An assayer who uploaded a return and saw only "success" had every reason to
+    // believe it had.
+    return { success: true, assignmentCompletion: completion, data: doc, documentUrl: `/documents/${doc.id}/download` };
   }
 
   /**
@@ -588,9 +591,12 @@ export class DocumentController {
       console.error(`Audited return ${doc.id} could not be marked received:`, err?.message);
     }
 
-    await this.completeAssignmentForReturn(doc, assignmentId, targetId, req.user, file.originalname);
+    const completion = await this.completeAssignmentForReturn(doc, assignmentId, targetId, req.user, file.originalname);
 
-    return { success: true, data: doc };
+    // The upload succeeded either way; `assignmentCompletion` says whether the job actually
+    // closed. An assayer who uploaded a return and saw only "success" had every reason to
+    // believe it had.
+    return { success: true, assignmentCompletion: completion, data: doc };
   }
 
   /**
@@ -768,6 +774,7 @@ export class DocumentController {
     // can retry completion without re-uploading any chunks.
     await this.chunkedUploadService.discard(uploadId);
 
+    let completion: { completed: boolean; blockedReason?: string } | undefined;
     if (type === DocumentType.AUDITED_RETURN_PDF) {
       // Reassigned rather than discarded — the third occurrence of the same gap fixed on
       // `mobileUpload`/`mobileUploadBinary` above: the response was reporting the pre-receive
@@ -777,10 +784,13 @@ export class DocumentController {
       } catch (err: any) {
         console.error(`Chunked audited return ${doc.id} could not be marked received:`, err?.message);
       }
-      await this.completeAssignmentForReturn(doc, body?.assignmentId, session.assessmentId, req.user, session.fileName);
+      completion = await this.completeAssignmentForReturn(doc, body?.assignmentId, session.assessmentId, req.user, session.fileName);
     }
 
-    return { success: true, data: doc };
+    // The upload succeeded either way; `assignmentCompletion` says whether the job actually
+    // closed. An assayer who uploaded a return and saw only "success" had every reason to
+    // believe it had.
+    return { success: true, assignmentCompletion: completion, data: doc };
   }
 
   /**
@@ -800,7 +810,7 @@ export class DocumentController {
     fallbackTargetId: string | undefined,
     user: any,
     fileName: string,
-  ): Promise<void> {
+  ): Promise<{ completed: boolean; blockedReason?: string }> {
     const userId: string = user?.id || 'SYSTEM';
     let targetAsn = null;
     if (assignmentId) {
@@ -841,18 +851,35 @@ export class DocumentController {
 
     if (targetAsn && targetAsn.status !== AssignmentStatus.COMPLETED) {
       try {
-        await this.assignmentService.completeAssignment(
-          targetAsn.id,
-          userId,
-          `Audited return PDF uploaded (${fileName})`,
-        );
+        /**
+         * No reason is supplied here, deliberately.
+         *
+         * `completeAssignment` asks for a stated reason when the attendance record is incomplete —
+         * no arrival, or an arrival with no departure — because for a bank collateral audit time on
+         * site is the evidence. This call used to pass `Audited return PDF uploaded (<file>)`, which
+         * satisfied that requirement with a sentence no human wrote and nobody could be asked about.
+         * A control a machine can discharge on your behalf is not a control.
+         *
+         * So an upload closes the job only when the attendance record already stands on its own.
+         * Otherwise the refusal is reported to the caller below, and somebody accounts for the gap
+         * through the completion route, where the reason is theirs.
+         */
+        await this.assignmentService.completeAssignment(targetAsn.id, userId);
+        return { completed: true };
       } catch (err: any) {
-        console.error(
-          `Failed to complete assignment ${targetAsn.id} after audited-return upload:`,
-          err?.message,
+        /**
+         * The upload itself succeeded and the document is stored, so this does not throw. But it no
+         * longer disappears into a server log either: the caller reports that the job is still open
+         * and why, because an assayer who uploaded their return and saw "success" had every reason
+         * to believe the job was closed when it was not.
+         */
+        this.logger.warn(
+          `Assignment ${targetAsn.id} stayed open after its audited return landed: ${err?.message}`,
         );
+        return { completed: false, blockedReason: err?.message ?? 'The assignment could not be closed.' };
       }
     }
+    return { completed: targetAsn?.status === AssignmentStatus.COMPLETED };
   }
 
   @Post('validate-customer-excel')
