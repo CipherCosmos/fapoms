@@ -8,6 +8,12 @@ import {
 import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 
 @Entity('assayers')
+/**
+ * The roster's page order. Declared here as well as in migration 1798100000000, because a
+ * `synchronize: true` environment rewrites the schema from these classes and silently drops any
+ * index it cannot see — which would restore a full scan per page without changing a line of SQL.
+ */
+@Index('idx_assayers_recent_page', ['createdAt', 'id'], { where: '"is_active" = true' })
 @Index(['assayerCode'])
 @Index(['employeeId'])
 @Index(['status'])

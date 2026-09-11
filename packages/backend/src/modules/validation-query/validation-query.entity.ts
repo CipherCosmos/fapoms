@@ -4,6 +4,8 @@ import { ValidationCaseEntity } from '../../modules/validation/validation-case.e
 import { ValidationQueryStatus } from '@fapoms/shared';
 
 @Entity('validation_queries')
+/** The validation queue leads on the SLA clock — see migration 1798100000000. */
+@Index('idx_validation_queries_sla_page', ['slaDueDate', 'createdAt', 'id'], { where: '"is_active" = true' })
 @Index(['validationCaseId'])
 @Index(['assayerId'])
 @Index(['status'])

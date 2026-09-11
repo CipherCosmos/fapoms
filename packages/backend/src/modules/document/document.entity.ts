@@ -5,6 +5,8 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { DocumentStatus, DocumentType, DispatchMethod } from '@fapoms/shared';
 
 @Entity('documents')
+/** The document list's page order — see migration 1798100000000 and the note on AssayerEntity. */
+@Index('idx_documents_recent_page', ['createdAt', 'id'], { where: '"is_active" = true' })
 @Index(['projectBranchId'])
 @Index(['assessmentId'])
 @Index(['status'])
