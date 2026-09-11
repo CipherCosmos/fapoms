@@ -171,6 +171,81 @@ be dropped from the integrity check that calls it evidence.
 - **Evidence**: MOBILE · API · DB
 - **Dependent workflows**: travel-claim verification, attendance evidence, audit defensibility
 
+#### Owner's ruling, and what was built — `80a533e1`
+
+**Ruled: departure IS required attendance evidence for a bank collateral audit.** Completion now
+asks for the check-out and, failing that, for a stated reason — the same bargain the check-in rule
+already strikes — recorded in `completed_without_check_out_reason` and written into the completion's
+own audit row alongside the arrival, the departure and the minutes on site.
+
+**Completion does not stamp `checked_out_at`.** That column means "the assayer left the branch at
+this moment", and filling it from a completion would write a departure nobody observed into the
+field a travel claim and an audit defence are later read out of. A manufactured observation is worse
+than a missing one: the gap is visible, the fiction is not. The refusal exists so that nothing has
+to be invented, and a spec asserts `checkedOutAt` is still null after an explained completion.
+
+The web app now shows arrival, departure and time on site, and says in words when the departure is
+missing and what reason was given — `checkedOutAt` previously appeared nowhere in the frontend.
+
+A stated reason does **not** discharge the integrity finding. The new rule
+`COMPLETED_ASSIGNMENT_WITHOUT_CHECK_OUT` (P1) reports a completed audit with an arrival and no
+departure whether or not somebody explained it; the reason rides in `details` so the report
+distinguishes explained from unexplained without hiding either.
+
+Live, three evidence levels per case, 21/21 (`scratchpad/attend-probe.mjs`):
+
+| case | API | DB | AUDIT |
+|---|---|---|---|
+| complete WITH a check-out | 201 | `COMPLETED`, departure untouched | `minutesOnSite: 135` |
+| no check-out, no reason | 400, names the missing departure | status and `entity_version` unmoved | no `ASSIGNMENT_COMPLETED` row |
+| no check-out, with a reason | 201 | reason persisted, `checked_out_at` still null | reason + "never checked out", `minutesOnSite: null` |
+| no check-**in** (unchanged) | 400 "books the payout…" | unmoved | — |
+| reopen → re-complete | 201 | both reason columns cleared, asks again | `minutesOnSite: 90` on the clean close |
+| integrity scan | `scannedRules: 10`, `failedRules: 0` | scanner set == DB set | — |
+
+Mutation-tested twice, restored byte-identical (sha256 checked) both times. The second mutation is
+the one that matters: **`AND false` on the new rule's WHERE clause left all fifteen
+`operational-integrity.service.spec.ts` tests green**, because that spec mocks `dataSource.query`
+and never executes a rule's SQL. That is the scanner's documented failure mode reproduced on
+demand. Closed with `attendance-integrity.db.spec.ts`, which runs the scanner against real Postgres
+and asserts set equality with the table; it goes red on the same mutation, and is registered in the
+CI db-spec regex.
+
+**Recommended historical repair policy — recommended, not executed.**
+
+The 15 rows have no recoverable departure time. Nothing in the product, the audit trail or the
+location trail records when those assayers left; the trail holds a `CHECK_OUT` ping only where a
+check-out actually happened, which for these rows it did not.
+
+1. **Do not backfill `checked_out_at`.** Any value would be invented. Deriving one from the
+   completion timestamp, the next day's first ping or an average visit length produces a number
+   indistinguishable, on screen and in an export, from a geofenced observation — and these rows are
+   precisely the ones a dispute would reach for. The column stays null.
+2. **Do not backfill `completed_without_check_out_reason` either.** A reason is a statement by a
+   named person at a moment. A bulk `UPDATE … SET reason = 'predates the requirement'` would read
+   as fifteen people having explained themselves. The web app says it plainly instead: *"This audit
+   was completed before a departure was required, so no reason was recorded."*
+3. **Leave them reported.** They are P1 findings on every scan, by design. The count is the measure
+   of the gap; suppressing it by date or by an `is_legacy` flag would remove the only number that
+   shows the gap closing.
+4. **Watch the count, and expect it to stop growing rather than to fall.** New completions cannot
+   join the set unexplained. The right check at go-live is that no row *created after* `80a533e1`
+   appears in the rule unexplained:
+   `SELECT count(*) FROM assignments WHERE status='COMPLETED' AND checked_in_at IS NOT NULL AND checked_out_at IS NULL AND is_active AND completed_without_check_out_reason IS NULL AND created_at > '<deploy timestamp>'` — expected 0.
+5. **If a client challenges one of the 15**, answer from the arrival, the geofence distance and the
+   audited return, and say the departure was not recorded. That is defensible. A fabricated
+   timestamp discovered in cross-examination is not.
+
+- **Census after the change** (this rig): 15 historical, unexplained; 1 closed with a stated reason
+  by the probe; total completed 37, with a departure 3.
+- **Still open at the seam** (see the lane report): two callers satisfy the requirement with a
+  machine-written string rather than a person's answer — `document.controller.ts:846`
+  (`Audited return PDF uploaded (<file>)`, and it swallows the refusal into a `console.error`) and
+  `scheduling.service.ts:270` (`Completed via schedule dispatch`, which does rethrow). Both predate
+  this change and affect the check-**in** rule identically. Named, not fixed: they are outside this
+  lane and need the mobile lane's departure prompt to land with them. The integrity rule is the
+  backstop — a boilerplate reason still leaves the row reported.
+
 ### C-19 · LOW · mobile · OPEN
 Three smaller ones from the same run. Profile → Connection reports the server as offline but is
 read-only, so a signed-in assayer must sign out to repoint a moved backend. Google Password Manager
