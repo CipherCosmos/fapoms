@@ -85,7 +85,9 @@ export class AuditLogController {
   async getUnifiedTrail(
     @Query('entityId') entityId: string,
     @Query('entityType') entityType?: string,
-    @Query('limit') limit = 200,
+    // Was `Math.min(Number(limit) || 200, 500)` inline below — the hand-rolled clamp that
+    // ParseLimitPipe was factored out of, per its own docblock. Same numbers, one owner.
+    @Query('limit', new ParseLimitPipe({ default: 200, max: 500 })) limit?: number,
   ) {
     if (!entityId) {
       throw new BadRequestException('entityId is required.');
@@ -93,7 +95,7 @@ export class AuditLogController {
     const { entries, countsBySource } = await this.unifiedAuditService.getTrail(
       entityId,
       entityType,
-      Math.min(Number(limit) || 200, 500),
+      limit,
     );
     return { success: true, data: entries, meta: { total: entries.length, countsBySource } };
   }

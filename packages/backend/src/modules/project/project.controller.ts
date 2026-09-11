@@ -45,6 +45,7 @@ import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, Priority, ProjectStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /**
  * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
@@ -176,17 +177,21 @@ export class ProjectController {
   @ApiOperation({ summary: 'Get paginated list of projects' })
   async findAll(
     @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    // `projectQueryService.findAll`'s `take: limit` had no ceiling, and the controller echoed
+    // the requested number straight back in meta. ParseLimitPipe keeps the existing default 50.
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit?: number,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const result = await this.projectService.findAll(page ? Number(page) : 1, limit ? Number(limit) : 50, scope);
+    // `limit` has already been through ParseLimitPipe, so it is a positive integer inside the
+    // ceiling. Re-deriving it here is what let meta report a number the query never used.
+    const result = await this.projectService.findAll(page ? Number(page) : 1, limit, scope);
     return {
       success: true,
       data: result.projects,
       meta: {
         pagination: {
           page: page ? Number(page) : 1,
-          limit: limit ? Number(limit) : 50,
+          limit,
           total: result.total,
         },
       },

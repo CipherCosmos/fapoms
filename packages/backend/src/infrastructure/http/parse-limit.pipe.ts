@@ -31,8 +31,10 @@ export class ParseLimitPipe implements PipeTransform<unknown, number> {
   }
 
   transform(value: unknown, _metadata: ArgumentMetadata): number {
-    // A repeated query key (`?limit=1&limit=2`) arrives as an array; there is no single answer
-    // to "how many", so it is treated the same as garbage and falls back to the default.
+    // A repeated query key (`?limit=1&limit=2`) arrives as an array. The FIRST value is used —
+    // the same one qs hands Express — and then floored and clamped like any other input, so the
+    // result is bounded whichever value won. (This comment used to say the array fell back to
+    // the default, which is not what the line below does and not what the spec asserts.)
     const raw = Array.isArray(value) ? value[0] : value;
     const parsed = typeof raw === 'string' || typeof raw === 'number' ? Number(raw) : NaN;
 

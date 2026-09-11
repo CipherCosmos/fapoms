@@ -7,6 +7,7 @@ import { PushNotificationService } from './push-notification.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, AnyAuthenticated } from '../auth/guards';
 import { DevicePlatform } from './device-token.entity';
 import { rolesOf } from '../assayer/assayer-visibility';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 
 /**
@@ -82,7 +83,10 @@ export class NotificationController {
     @Req() req: any,
     @Query('category') category?: NotificationCategory,
     @Query('unreadOnly', new DefaultValuePipe(false), ParseBoolPipe) unreadOnly?: boolean,
-    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit?: number,
+    // `ParseIntPipe` refused non-numeric input but had no ceiling and no floor: the service's
+    // `Math.min(opts.limit ?? 25, 100)` let `?limit=-5` through as -5 and `.take(-5)` 500'd,
+    // while `meta` echoed the caller's number back whatever it was.
+    @Query('limit', new ParseLimitPipe({ default: 25, max: 100 })) limit?: number,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset?: number,
   ) {
     const page = await this.notificationService.findByUser(

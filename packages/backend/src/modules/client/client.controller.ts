@@ -26,6 +26,7 @@ import { QualificationScoreService } from '../assayer/qualification-score.servic
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { IsHttpUrl, IsIndianMobile } from '../../infrastructure/http/format-validators';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /**
  * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
@@ -336,7 +337,10 @@ export class ClientController {
   // already found and fixed the same way across several other list endpoints.
   async findAll(
     @Query('page', new ParsePagePipe()) page: number,
-    @Query('limit') limit = 20,
+    // `limit` reached `clientService.findAll`'s `.take(limit)` with no ceiling at all:
+    // `?limit=5000000` was accepted and echoed back in meta, and `?limit=-5` reached Postgres
+    // as a negative and 500'd. ParseLimitPipe keeps the existing default of 20.
+    @Query('limit', new ParseLimitPipe({ default: 20, max: 200 })) limit: number,
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('clientType') clientType?: string,

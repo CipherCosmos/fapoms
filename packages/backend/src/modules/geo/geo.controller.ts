@@ -17,6 +17,7 @@ import { SystemRole } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { GeoPrecisionService, GeoTarget } from './geo-precision.service';
 import { TileProxyService, parseTileCoords, InvalidTileError } from './tile-proxy.service';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /** Geo reference data is effectively static (seeded once), so a long TTL is safe. */
 const GEO_CACHE_TTL_SECONDS = 3600;
@@ -240,8 +241,13 @@ export class GeoController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:view:organization', 'assayer:view:organization')
   @ApiOperation({ summary: 'Records still on a district/state centroid — the manual-pin worklist' })
-  async impreciseRecords(@Param('target') target: string, @Query('limit') limit = 100) {
-    return { success: true, data: await this.geoPrecision.imprecise(assertTarget(target), Number(limit) || 100) };
+  // `imprecise()` does `take: limit * 4` with no ceiling, so `?limit=5000000` asks the database
+  // for twenty million rows. The pipe keeps the existing default of 100.
+  async impreciseRecords(
+    @Param('target') target: string,
+    @Query('limit', new ParseLimitPipe({ default: 100, max: 500 })) limit: number,
+  ) {
+    return { success: true, data: await this.geoPrecision.imprecise(assertTarget(target), limit) };
   }
 
   @Post('precision/:target/backfill')

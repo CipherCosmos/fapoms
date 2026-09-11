@@ -9,6 +9,7 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions }
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 class CreateOrganizationRequestDto implements CreateOrganizationDto {
   @IsString() @IsNotEmpty()
@@ -81,7 +82,12 @@ export class OrganizationController {
   // `?page=-1` and `?page=abc` each produced a negative or NaN `skip`, which Postgres/TypeORM
   // reject before the query runs — an unhandled 500 for a request that should just serve page one.
   // Same gap already found and fixed the same way across several other list endpoints.
-  async findAll(@Query('page', new ParsePagePipe()) page: number, @Query('limit') limit = 50) {
+  // `take: limit` in the service had no ceiling: `?limit=5000000` was accepted and echoed back,
+  // and `?limit=-5` 500'd on a negative skip. ParseLimitPipe keeps the existing default of 50.
+  async findAll(
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit: number,
+  ) {
     const { organizations, total } = await this.organizationService.findAll(page, limit);
     return {
       success: true,

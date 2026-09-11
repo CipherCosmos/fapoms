@@ -54,7 +54,10 @@ describe('ParseLimitPipe', () => {
     expect(run('9999', { default: 20, max: 200 })).toBe(200);
   });
 
-  it('treats a repeated query key (array value) as garbage and falls back to default', () => {
+  // The name used to say "treats a repeated query key as garbage and falls back to default",
+  // which the first of its own two assertions disproves. It takes the first value and treats
+  // THAT like any other input.
+  it('resolves a repeated query key (array value) to its first value, then clamps that', () => {
     expect(run(['10', '20'])).toBe(10);
     expect(run(['abc', '20'])).toBe(50);
   });

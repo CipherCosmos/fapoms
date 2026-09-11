@@ -9,6 +9,7 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { ScheduleEntity } from './schedule.entity';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /**
  * What a CLIENT_USER — a bank employee outside FAPOMS — may see of a schedule.
@@ -137,7 +138,9 @@ export class SchedulingController {
   @ApiOperation({ summary: 'List all active schedules' })
   async findAll(
     @Query('page', new ParsePagePipe()) page: number,
-    @Query('limit') limit = 50,
+    // `take: limit` in the service had no ceiling; `?limit=5000000` was accepted and echoed
+    // back, `?limit=-5` 500'd. ParseLimitPipe keeps the existing default of 50.
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit: number,
     @Query('status') status?: ScheduleStatus,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
@@ -146,7 +149,7 @@ export class SchedulingController {
   ) {
     const result = await this.schedulingService.findAll(
       Number(page),
-      Number(limit),
+      limit,   // already clamped by ParseLimitPipe
       status,
       dateFrom,
       dateTo,
@@ -159,7 +162,7 @@ export class SchedulingController {
       meta: {
         pagination: {
           page: Number(page),
-          limit: Number(limit),
+          limit,   // the applied limit, not the requested one
           total: result.total,
         },
       },

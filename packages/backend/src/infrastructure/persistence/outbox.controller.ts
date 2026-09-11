@@ -6,6 +6,7 @@ import { JwtAuthGuard, RolesGuard, Roles, RoleOnly } from '../../modules/auth/gu
 import { AuditService } from '../../core/audit/audit.service';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { OutboxDeadLetterService } from './outbox-dead-letter.service';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /**
  * The outbox, for the person who has to answer "did that event ever actually get delivered".
@@ -58,8 +59,11 @@ export class OutboxController {
   /** Everything the relay has given up on, newest failure first. */
   @Get('dead-letters')
   @ApiOperation({ summary: 'Domain events abandoned after exhausting their retries' })
-  async list(@Query('limit') limit: string | undefined, @Req() req: Request) {
-    const events = await this.deadLetters.list(limit ? Number(limit) : undefined);
+  // `Math.min(Math.max(limit, 1), 500)` in the service defends against a negative but not
+  // against NaN: `?limit=abc` arrived as NaN, survived both comparisons as NaN, and 500'd on
+  // `take: NaN`. The pipe turns anything that is not a positive integer into the default.
+  async list(@Query('limit', new ParseLimitPipe({ default: 100, max: 500 })) limit: number, @Req() req: Request) {
+    const events = await this.deadLetters.list(limit);
     await this.record(req, 'OUTBOX_DEAD_LETTERS_READ', NOT_A_RECORD_ENTITY_ID, 'SUCCESS',
       `Read the outbox dead-letter queue (${events.length} event(s)).`, { returned: events.length });
     return { success: true, data: { events, count: events.length } };

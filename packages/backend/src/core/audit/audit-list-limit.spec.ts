@@ -51,7 +51,7 @@ describe('audit-log list limit clamps', () => {
   });
 
   /**
-   * The three ceilings are one number on purpose. `/trail` reached 500 first, by hand, and three
+   * The four ceilings are one number on purpose. `/trail` reached 500 first, by hand, and the
    * sibling routes each picking their own would be the drift the shared constant exists to stop.
    */
   it('caps every audit_events route at the same 500 /trail already enforced', () => {
@@ -60,18 +60,43 @@ describe('audit-log list limit clamps', () => {
   });
 
   /**
-   * `/trail` keeps its inline `Math.min(Number(limit) || 200, 500)` rather than moving to the pipe
-   * — it is already bounded, and parse-limit.pipe.ts cites it by name as the hand-rolled original.
-   * This pins that it stays bounded by *something*: an unpiped parameter is fine here only for as
-   * long as the clamp inside the method body survives.
+   * `/trail` HAS now moved to the pipe, and this replaces the case that said it should not.
+   *
+   * The previous decision was recorded here as "it is already bounded", and that was only half
+   * true: `Math.min(Number(limit) || 200, 500)` bounds the value ABOVE and not BELOW.
+   * `?limit=-5` is truthy, survives `|| 200`, and `Math.min(-5, 500)` is -5 — which reaches four
+   * raw `LIMIT $n` interpolations in `UnifiedAuditService.getTrail`, where Postgres refuses it
+   * ("LIMIT must not be negative") and each of the four is `.catch(() => [])`.
+   *
+   * Measured on the running rig against a record carrying 240 audit rows:
+   *
+   *     ?limit=<none>     200, 200 entries
+   *     ?limit=20         200,  20 entries
+   *     ?limit=-5         200,   0 entries     ← the whole trail, silently empty
+   *     ?limit=5000000    200, 363 entries
+   *
+   * So the endpoint whose entire purpose is answering "what happened to this" reported that
+   * nothing had, with a 200, for a record with 240 events behind it. That is the same defect
+   * class the UI-truth sweep spent a day on — a refusal drawn as a confident answer — and it is
+   * exactly what the pipe's floor removes.
    */
-  it('leaves /trail on its own inline clamp, which must still bound the value', async () => {
-    expect(pipesFor('getUnifiedTrail', 'limit')).toHaveLength(0);
+  it('puts /trail on the shared pipe too, because its inline clamp had no floor', () => {
+    expect(clamp('getUnifiedTrail', '500000')).toBe(500);
+    expect(clamp('getUnifiedTrail', undefined)).toBe(200);
+    expect(clamp('getUnifiedTrail', '250')).toBe(250);
+    // The four cases the inline clamp let through as a negative or a NaN.
+    expect(clamp('getUnifiedTrail', '-5')).toBe(200);
+    expect(clamp('getUnifiedTrail', '-1')).toBe(200);
+    expect(clamp('getUnifiedTrail', '0')).toBe(200);
+    expect(clamp('getUnifiedTrail', 'abc')).toBe(200);
+  });
 
+  it('hands the handler the clamped number, so the service never sees the raw ask', async () => {
     const unifiedAuditService = { getTrail: jest.fn().mockResolvedValue({ entries: [], countsBySource: {} }) };
     const controller = new AuditLogController({} as any, unifiedAuditService as any, {} as any);
 
-    await controller.getUnifiedTrail('entity-1', 'USER', 500000);
+    // 500 is what the pipe hands the method for `?limit=500000`; the method never sees 500000.
+    await controller.getUnifiedTrail('entity-1', 'USER', 500);
 
     expect(unifiedAuditService.getTrail).toHaveBeenCalledWith('entity-1', 'USER', 500);
   });

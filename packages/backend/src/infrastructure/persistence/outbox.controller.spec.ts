@@ -101,7 +101,8 @@ describe('OutboxController', () => {
     });
 
     it('records who read the queue, and how much of it they saw', async () => {
-      const res: any = await controller.list('25', req);
+      // 25 is what ParseLimitPipe hands the method; the handler never sees the raw query value.
+      const res: any = await controller.list(25, req);
       expect(deadLetters.list).toHaveBeenCalledWith(25);
       expect(res.data.count).toBe(1);
       expect(audit.recordEventSafe).toHaveBeenCalledWith(
@@ -116,9 +117,24 @@ describe('OutboxController', () => {
       );
     });
 
-    it('passes no limit through when the caller gave none, rather than NaN', async () => {
-      await controller.list(undefined, req);
-      expect(deadLetters.list).toHaveBeenCalledWith(undefined);
+    /**
+     * This used to assert the handler passed `undefined` through rather than NaN, because the
+     * handler did its own `limit ? Number(limit) : undefined` and `?limit=abc` became NaN, which
+     * survived the service's `Math.min(Math.max(limit, 1), 500)` as NaN and 500'd on `take: NaN`.
+     * ParseLimitPipe now owns that, so the assertion moves to where the guard actually is: the
+     * pipe bound to the route. A pipe that is dropped from the binding leaves parse-limit.pipe.
+     * spec.ts passing and this route unguarded again, which is exactly what this catches.
+     */
+    it('turns a missing or non-numeric limit into the route default before the handler runs', () => {
+      const args = Reflect.getMetadata(ROUTE_ARGS_METADATA, OutboxController, 'list') ?? {};
+      const entry = Object.values(args).find((a: any) => a?.data === 'limit') as any;
+      const pipes = entry?.pipes ?? [];
+      expect(pipes).toHaveLength(1);
+      const clamp = (raw: unknown) => pipes[0].transform(raw, { type: 'query', data: 'limit' });
+      expect(clamp(undefined)).toBe(100);
+      expect(clamp('abc')).toBe(100);
+      expect(clamp('-5')).toBe(100);
+      expect(clamp('5000000')).toBe(500);
     });
 
     it('records reading one event, which is the read that returns the payload', async () => {

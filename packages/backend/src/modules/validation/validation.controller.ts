@@ -9,6 +9,7 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString, IsArray } from 'class-validator';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 class CreateValidationCaseRequestDto implements CreateValidationCaseDto {
   @IsUUID()
@@ -110,7 +111,10 @@ export class ValidationController {
   async findAll(
     @Req() req: any,
     @Query('page') page = 1,
-    @Query('limit') limit = 50,
+    // The service clamps the QUERY at 200, but the controller echoed the caller's own number
+    // back as `meta.pagination.limit` — so `?limit=5000000` returned 60 rows while claiming a
+    // limit of five million. The pipe makes the number reported the number applied.
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit: number,
     @GlobalScopeFilter() scope?: GlobalScope,
     @Query('projectBranchId') projectBranchId?: string,
     @Query('status') status?: ValidationStatus,
@@ -123,7 +127,7 @@ export class ValidationController {
     const resolvedReviewer = reviewerId === 'me' ? req.user.id : reviewerId;
     const resolvedWorkedBy = workedBy === 'me' ? req.user.id : workedBy;
     const { validationCases, total } = await this.validationService.findAll(
-      Number(page), Number(limit), projectBranchId, status, resolvedReviewer, search, resolvedWorkedBy, scope,
+      Number(page), limit, projectBranchId, status, resolvedReviewer, search, resolvedWorkedBy, scope,
     );
     return {
       success: true,
@@ -131,7 +135,7 @@ export class ValidationController {
       meta: {
         pagination: {
           page: Number(page),
-          limit: Number(limit),
+          limit,   // the applied limit, not the requested one
           total,
         },
       },
@@ -159,7 +163,9 @@ export class ValidationController {
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: 'Recent desk activity: assignments, hand-backs, decisions — who did what' })
-  async activity(@Query('limit') limit?: number) {
+  // Clamped at 100 in the service already; the pipe moves the guard to the boundary so the
+  // handler cannot be called with a number the service would have to defend against.
+  async activity(@Query('limit', new ParseLimitPipe({ default: 20, max: 100 })) limit: number) {
     return { success: true, data: await this.validationService.activity(limit) };
   }
 

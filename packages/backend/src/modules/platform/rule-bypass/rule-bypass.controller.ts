@@ -4,6 +4,7 @@ import { IsArray, IsString, IsNumber, IsOptional, IsNotEmpty } from 'class-valid
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly, AllowPermissionFallback } from '../../auth/guards';
 import { SystemRole, BypassableRule, BYPASSABLE_RULES, DEFAULT_BYPASS_HOURS } from '@fapoms/shared';
 import { RuleBypassService } from './rule-bypass.service';
+import { ParseLimitPipe } from '../../../infrastructure/http/parse-limit.pipe';
 
 export class EnableBypassDto {
   @IsArray()
@@ -109,7 +110,9 @@ export class RuleBypassController {
   @AllowPermissionFallback()
   @RequirePermissions('configuration:view:platform')
   @ApiOperation({ summary: 'Past bypass windows, newest first' })
-  async history(@Query('limit') limit = 50) {
-    return { success: true, data: await this.ruleBypass.history(Number(limit) || 50) };
+  // `Math.min(limit, 200)` in the service has no floor, so `?limit=-5` reached `take: -5` and
+  // 500'd. The pipe rejects that before the handler runs; the default of 50 is unchanged.
+  async history(@Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit: number) {
+    return { success: true, data: await this.ruleBypass.history(limit) };
   }
 }
