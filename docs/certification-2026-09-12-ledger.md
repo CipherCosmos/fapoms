@@ -78,6 +78,168 @@ activated. It is visible in the response's `via`, and it appears in **no finding
 - **Evidence**: SOURCE
 - **Dependent workflows**: assignment eligibility, deployment readiness, audit truth
 
+### C-17 · HIGH · mobile · **FIXED** `4da826a8`
+**Changing a password stranded the assayer on a dead session.** The change returns 201 and revokes
+every token the session holds — the access token then answers `401 "User not found or inactive"`
+and the refresh token `401 "Invalid or expired refresh token"`, with no replacement pair issued.
+The app read the 201 as success and carried on, rendering as signed in while every request 401'd.
+
+The screen this happened on is the forced-rotation gate, whose entire job is to stop an assayer
+being stranded. It handed them **"Nothing scheduled" with their real job invisible**, and only a
+force-quit cleared it.
+
+The same run exposed the general case: an HR password reset revokes the session too, so the 401
+arrives **before** the server can answer `403 PASSWORD_CHANGE_REQUIRED`. The gate that
+`password-rotation-gate.spec.ts` covers therefore can never fire in practice.
+
+Now silently re-authenticates with the new password, or signs out cleanly. Session-expiry is raised
+only on a rejected credential, so a 5xx or a missing signal no longer destroys a good session.
+Ten new specs; the identical sequence re-run on the device afterwards produced no 401 at all.
+
+### C-18 · HIGH · product decision needed · OPEN — **do not guess this one**
+**Nothing records when an assayer left the site, and the natural path guarantees it never will.**
+
+Uploading the audited return takes `CHECKED_IN → COMPLETED` directly and never stamps
+`checked_out_at`. On the mobile screen, "Scan audited return" is the **primary** button and
+"Check out" is secondary, so the ordinary way to finish a job is the way that loses the record.
+
+Census of this database, verified independently:
+
+| | |
+|---|---|
+| assignments COMPLETED | 32 |
+| with an arrival recorded | 17 |
+| with a departure recorded | **1** — the one the mobile lane performed deliberately |
+| completed, arrived, never departed | 15 |
+
+`checked_out_at` is written in exactly one place, the check-out route, and `completeAudit` never
+touches it. The state machine permits `CHECKED_IN → COMPLETED`, and `completeAudit` demands a
+stated reason only when there was no check-**in**. So the repository's position is that departure is
+optional — while `operational-integrity.service.ts:135` calls check-in and check-out
+"attendance evidence", and the **web app never displays check-out at all**.
+
+**This is not a bug to fix on my own judgement.** The repository does not establish whether a
+departure record is required, and inventing the rule would either block a legitimate workflow or
+manufacture evidence. The owner needs to answer one question: for a bank collateral audit, is visit
+duration attendance evidence that must exist? If yes, completion should require a check-out or stamp
+one, the web app should show it, and the 15 existing rows are a known gap. If no, the field should
+be dropped from the integrity check that calls it evidence.
+
+- **Evidence**: MOBILE · API · DB
+- **Dependent workflows**: travel-claim verification, attendance evidence, audit defensibility
+
+### C-19 · LOW · mobile · OPEN
+Three smaller ones from the same run. Profile → Connection reports the server as offline but is
+read-only, so a signed-in assayer must sign out to repoint a moved backend. Google Password Manager
+captures the **backend URL** as the saved username, because the server-address field does not
+disable autofill. And an Accept made while offline is silently dropped — check-in and check-out are
+durably queued, accept is not.
+
+### C-13 · HIGH · UI truth · **FIXED** `9b804157`, `99c76d19`, `e3063f62`, `4f3a0fe8`, `529ec193`, `6fdafec7`
+**47 screens drew a refusal as a confident answer.** The sweep is done, money first, then people,
+then work, then the desk, then outward. Representative of what was being said:
+
+- the workforce roster announced "Workforce roster is empty" over 1,155 people
+- the payouts tab said "No payouts yet. They appear here the moment an assignment completes."
+- a person's audit trail said "Nothing recorded for this person yet"
+- the user directory said "No users yet" beside an Add User button
+- the assayer record's dossier load had a `catch` whose entire body was the comment
+  `/* not entitled to dossier */`, and then showed nothing
+
+Gate after: frontend **93 suites / 1183 tests**, tsc clean. Seven new spec files. Every behavioural
+test asserts **both** halves — the refusal appears *and* the screen's own empty sentence is gone —
+and every screen also keeps a "genuine empty state still works" case, so the fix cannot degrade into
+blanket suppression.
+
+The guard over all 46 screens was mutation-tested twice, restored byte-identical both times. The
+second mutation is the one that matters: the code was removed from a screen while leaving the
+comments that mention `loadFailed` intact, so a naive text scan would have passed. The
+comment-stripped scan went red.
+
+### C-14 · MEDIUM · test validity · OPEN — class worth sweeping
+**A test and the bug it was supposed to catch agreed with each other.**
+`AssignmentTable` branched on `error.statusCode === 403`. `api.request` throws an `AppError`, whose
+field is `status`. The forbidden branch could never fire, so every refusal on a region-scoped queue
+read as an outage with a Retry that could only ever fail again.
+
+It survived because **the existing test constructed its error object by hand, with the same
+invented shape**. Both sides agreed on a field the product does not produce. The call site now
+builds its error through `fromResponse`, the real factory.
+
+- **Evidence**: SOURCE, fixed in `6fdafec7`
+- **Class to sweep**: every test that hand-builds an error, a response, or a DTO instead of running
+  it through the real constructor. Those tests can only confirm their author's belief.
+
+### C-15 · MEDIUM · UI truth · **FIXED** `98e87606`
+**Whether a failure was worth retrying depended on whether the server sent prose.**
+`fromResponse` seeded the category from the status, then consulted the status table — where 429,
+502, 503 and 504 are retryable — only when nothing else had produced a sentence. A readable server
+message filled that first, so the lookup was skipped and the seeded `system-failure` survived.
+
+Measured: a 502, 503 and 504 each reported **not** retryable with a message and **retryable**
+without one. The status now decides the category and the message only decides the wording; a domain
+code still wins both. A 500 stays deliberately non-retryable, pinned so the fix cannot widen.
+
+- **Evidence**: verified by spec, red before and green after
+
+### C-16 · LOW · UI truth · **FIXED** `6fdafec7`
+**A failed check reported itself as a passed check.** `AssayerDetailModal` printed a green ticked
+"No open flags on this record." whenever the snapshot request failed — while the panel beside it,
+fed by the *same* request, honestly said it could not load. Of everything in this sweep, a green
+tick over an unanswered question is the one most likely to be acted on.
+
+### C-12 · HIGH · concurrency · OPEN
+**Two desks recording different empanelment decisions at the same time: both are told it saved,
+and one is silently discarded.**
+
+Three concurrent `PUT /assayers/:id/empanelment/:clientId` with three different standings all
+answered **200**. The row holds one of them. The other two decisions were acknowledged to their
+authors and lost, with nothing anywhere recording that a decision was overwritten.
+
+Reproduced twice: once by `messy-reality.mjs` (B7-CONC-ii), then independently, from a clean
+`ACTIVE` standing, restored afterwards.
+
+```
+standing before     : ACTIVE
+PUT RECOMMENDED       -> 200
+PUT NOT_RECOMMENDED   -> 200
+PUT DOCUMENTS_PENDING -> 200
+standing after      : NOT_RECOMMENDED
+```
+
+**Why this matters more than a normal lost update.** Empanelment standing is what gates assignment
+eligibility. A desk recording `REJECTED` or `NOT_RECOMMENDED` for a client can have that refusal
+silently replaced by a concurrent `RECOMMENDED`, and the person becomes deployable to a client who
+declined them. The desk that refused them has a 200 and no reason to look again.
+
+The route is a free-form upsert with no state machine behind it and no `expectedVersion`, while
+assignments already refuse a stale write with a 409 either direction. So the product has the
+mechanism and does not apply it here.
+
+- **Evidence**: API · DB, reproduced independently
+- **Dependent workflows**: assignment eligibility, planning recommendations, deployment readiness
+- **Class to sweep**: every mutation that accepts no version. Which writes can silently lose a
+  concurrent decision, and which return a conflict?
+
+#### The class, swept
+
+Only **assignment** and **assayer** carry `expectedVersion` and refuse a stale write. Every other
+mutable entity accepts last-write-wins with no conflict signal. Two were tested live on
+decision-bearing data and both lose writes silently:
+
+| what | concurrent result |
+|---|---|
+| empanelment standing — gates who may be deployed | 3 × 200, two decisions discarded |
+| client GST rate — prices every audit for that client | 3 × 200, two decisions discarded |
+
+The second one is the more instructive. `client_billing` **has a `version` column and bumps it on
+every write** — it went 1 → 4 across the three concurrent calls — so the mechanism is present and
+simply never consulted. The rows carry the evidence of the collision and nothing reads it.
+
+Untested but structurally identical, in rough order of what a lost decision costs: client
+configuration (rate card, service radius), document verification verdicts, branch and project
+edits, holiday and zone definitions, role permission matrices.
+
 ### C-08 · HIGH · deployment · OPEN — owner action
 **The homeserver is not running the code anyone has been certifying.** It is serving a build from
 **2026-09-09**, roughly 94 commits behind `HEAD` and 10 behind `origin/main`. It has not pulled the
