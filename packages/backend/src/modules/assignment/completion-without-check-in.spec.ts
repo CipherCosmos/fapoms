@@ -23,13 +23,28 @@ describe('completing an assignment', () => {
     id: 'asn-1',
     status: AssignmentStatus.ACCEPTED,
     checkedInAt: null,
+    checkedOutAt: null,
     completedWithoutCheckInReason: null,
+    completedWithoutCheckOutReason: null,
     ...over,
   } as AssignmentEntity);
 
-  describe('when the assayer checked in', () => {
+  describe('when the assayer checked in AND checked out', () => {
+    /**
+     * Arrival alone is no longer the whole of attendance.
+     *
+     * Time on site is the span between the two stamps, and for a bank collateral audit that span
+     * IS the evidence. These cases used to pass a check-in alone, because completion never asked
+     * about departure — which is how this database ended up with 32 completed audits, 17
+     * arrivals and one departure. A full attendance record still needs no explanation; that is
+     * what these now assert.
+     */
     const attended = () =>
-      assignment({ status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date('2026-08-20T09:00:00Z') });
+      assignment({
+        status: AssignmentStatus.CHECKED_IN,
+        checkedInAt: new Date('2026-08-20T09:00:00Z'),
+        checkedOutAt: new Date('2026-08-20T13:30:00Z'),
+      });
 
     it('completes without anyone having to explain themselves', () => {
       const a = attended();
@@ -41,16 +56,56 @@ describe('completing an assignment', () => {
 
     it('records no reason, because there is nothing to account for', () => {
       const a = attended();
-      // Even when one is offered — the field means "closed without evidence", and this was not.
+      // Even when one is offered — the fields mean "closed without evidence", and this was not.
       AssignmentStateMachine.completeAudit(a, 'user-1', 'not needed');
 
       expect(a.completedWithoutCheckInReason).toBeNull();
+      expect(a.completedWithoutCheckOutReason).toBeNull();
     });
 
     it('completes from IN_PROGRESS too', () => {
-      const a = assignment({ status: AssignmentStatus.IN_PROGRESS, checkedInAt: new Date() });
+      const a = assignment({
+        status: AssignmentStatus.IN_PROGRESS,
+        checkedInAt: new Date('2026-08-20T09:00:00Z'),
+        checkedOutAt: new Date('2026-08-20T13:30:00Z'),
+      });
       AssignmentStateMachine.completeAudit(a, 'user-1');
       expect(a.status).toBe(AssignmentStatus.COMPLETED);
+    });
+  });
+
+  describe('when the assayer arrived but no departure was ever recorded', () => {
+    /**
+     * The half that was silently allowed. Uploading the audited return takes
+     * CHECKED_IN -> COMPLETED directly, and on the phone that upload is the primary button — so
+     * the ordinary way to finish a job was the way that lost the departure record.
+     */
+    const arrivedOnly = () =>
+      assignment({ status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date('2026-08-20T09:00:00Z') });
+
+    it('refuses to close the job with no departure and no explanation', () => {
+      const a = arrivedOnly();
+      expect(() => AssignmentStateMachine.completeAudit(a, 'user-1')).toThrow();
+      expect(a.status).toBe(AssignmentStatus.CHECKED_IN);
+    });
+
+    it('closes it when somebody accounts for the missing departure, and keeps what they said', () => {
+      const a = arrivedOnly();
+      AssignmentStateMachine.completeAudit(a, 'user-1', 'Assayer left site before the app would sync.');
+
+      expect(a.status).toBe(AssignmentStatus.COMPLETED);
+      expect(a.completedWithoutCheckOutReason).toBe('Assayer left site before the app would sync.');
+    });
+
+    /**
+     * The point of the whole change: a departure nobody observed must not appear in the column
+     * that a travel claim and an audit defence are later read out of.
+     */
+    it('does not invent a departure time to fill the gap', () => {
+      const a = arrivedOnly();
+      AssignmentStateMachine.completeAudit(a, 'user-1', 'Assayer left site before the app would sync.');
+
+      expect(a.checkedOutAt).toBeNull();
     });
   });
 

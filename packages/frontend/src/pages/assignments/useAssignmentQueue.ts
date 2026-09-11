@@ -36,6 +36,30 @@ export const COMPLETE_CONFIRM = {
   reversible: false,
 } as const;
 
+/**
+ * The departure half, and the case that fires most: `checked_out_at` is written only by the
+ * field app's check-out, while completing the job is a separate action that never touched it —
+ * so a job finished the ordinary way left an arrival with no departure and no time on site.
+ *
+ * It asks for the check-out first, because the check-out is the real evidence and the assayer
+ * may still be able to give it. The reason is the fallback, not the offer.
+ */
+export const COMPLETE_WITHOUT_CHECK_OUT_CONFIRM = {
+  title: 'Complete without a check-out?',
+  message:
+    'This assayer checked in but never checked out, so there is no record of when they left and '
+    + 'no time on site to show the client or a bank. If they are still able to check out from the '
+    + 'field app, ask them to do that first — completing it now records the gap against your name '
+    + 'with the reason below.',
+  confirmLabel: 'Complete and record the reason',
+  reversible: false,
+  tone: 'danger' as const,
+  reasonPrompt: {
+    label: 'Why is this being closed without a check-out?',
+    placeholder: 'e.g. Assayer left the branch at ~4pm; phone battery died before checking out',
+  },
+} as const;
+
 export const COMPLETE_WITHOUT_CHECK_IN_CONFIRM = {
   title: 'Complete without a check-in?',
   message:
@@ -351,21 +375,37 @@ export function useAssignmentQueue() {
     }
   };
 
-  const askToComplete = async (attended: boolean): Promise<{ reason?: string } | null> => {
-    if (attended) return (await confirm(COMPLETE_CONFIRM)) ? {} : null;
-    const { confirmed, reason } = await confirmWithReason(COMPLETE_WITHOUT_CHECK_IN_CONFIRM);
-    return confirmed ? { reason } : null;
+  /**
+   * Three answers, not two. The server refuses a completion that has no arrival AND refuses one
+   * that has an arrival but no departure, each with a stated reason as the way through — so a
+   * dialog that only asked about the arrival would send the second case into a 400 the operator
+   * could do nothing about from the dialog they were standing in.
+   */
+  const askToComplete = async (
+    attended: boolean,
+    departed = true,
+  ): Promise<{ reason?: string } | null> => {
+    if (!attended) {
+      const { confirmed, reason } = await confirmWithReason(COMPLETE_WITHOUT_CHECK_IN_CONFIRM);
+      return confirmed ? { reason } : null;
+    }
+    if (!departed) {
+      const { confirmed, reason } = await confirmWithReason(COMPLETE_WITHOUT_CHECK_OUT_CONFIRM);
+      return confirmed ? { reason } : null;
+    }
+    return (await confirm(COMPLETE_CONFIRM)) ? {} : null;
   };
 
   const quickAction = async (
     asnId: string,
     targetStatus: 'ACCEPTED' | 'COMPLETED',
-    attended = true
+    attended = true,
+    departed = true
   ) => {
     if (quickBusyId) return;
     let reason: string | undefined;
     if (targetStatus === 'COMPLETED') {
-      const answer = await askToComplete(attended);
+      const answer = await askToComplete(attended, departed);
       if (!answer) return;
       reason = answer.reason;
     }

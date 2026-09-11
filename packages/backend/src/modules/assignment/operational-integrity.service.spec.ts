@@ -41,8 +41,8 @@ describe('OperationalIntegrityService.scan', () => {
   let query: jest.Mock;
 
   /**
-   * Routes each of the nine statements by a fragment unique to it, so a test can answer one rule
-   * and leave the other eight empty. Keyed on the distinguishing clause rather than on call order:
+   * Routes each of the ten statements by a fragment unique to it, so a test can answer one rule
+   * and leave the other nine empty. Keyed on the distinguishing clause rather than on call order:
    * order is an implementation detail, and a test that depends on it breaks when a rule is added.
    */
   const RULE_MATCH: Array<[string, string]> = [
@@ -50,6 +50,7 @@ describe('OperationalIntegrityService.scan', () => {
     ['branchSlot', 'GROUP BY project_branch_id'],
     ['cancelledWithAttendance', "status = 'CANCELLED'"],
     ['completedWithoutAttendance', 'checked_in_at IS NULL'],
+    ['completedWithoutCheckOut', 'completed_without_check_out_reason'],
     ['ineligibleAssayer', 'INNER JOIN assayers'],
     ['invalidLifecycle', 'incompatible' /* never matches; see resolve below */],
     ['invalidEmploymentDates', 'exit_date < joining_date'],
@@ -85,16 +86,16 @@ describe('OperationalIntegrityService.scan', () => {
   });
 
   describe('a clean database', () => {
-    it('reports nine rules scanned, no violations, and an empty summary', async () => {
+    it('reports ten rules scanned, no violations, and an empty summary', async () => {
       serve({});
 
       const report = await service.scan();
 
-      expect(report.scannedRules).toBe(9);
+      expect(report.scannedRules).toBe(10);
       expect(report.totalViolations).toBe(0);
       expect(report.violations).toEqual([]);
       expect(report.summary).toEqual({});
-      // The half of "all clear" that used to be missing. Nine rules asked, nine rules answered —
+      // The half of "all clear" that used to be missing. Ten rules asked, ten rules answered —
       // without this, `totalViolations: 0` is only ever a claim about the queries that ran.
       expect(report.failedRules).toEqual([]);
       expect(Date.parse(report.timestamp)).not.toBeNaN();
@@ -105,7 +106,7 @@ describe('OperationalIntegrityService.scan', () => {
 
       await service.scan();
 
-      expect(query).toHaveBeenCalledTimes(9);
+      expect(query).toHaveBeenCalledTimes(10);
       // "Read-only" is in the method's own description and is the reason an AUDITOR may call it.
       // A scanner that repaired what it found would be a scanner nobody could safely run twice.
       const statements = query.mock.calls.map(([sql]) => String(sql).toUpperCase());
@@ -291,7 +292,7 @@ describe('OperationalIntegrityService.scan', () => {
 
   describe('a rule whose query fails', () => {
     /**
-     * A rule that cannot run is still contained to itself: the other eight are evaluated and
+     * A rule that cannot run is still contained to itself: the other nine are evaluated and
      * returned, which is why the first test asserts the survivors. That containment was always the
      * right call. What was wrong was that it was the ONLY thing that happened — `.catch(() => [])`
      * turned a broken statement into an empty result set, so `scannedRules: 9` reported rules
@@ -299,11 +300,11 @@ describe('OperationalIntegrityService.scan', () => {
      *
      * Now the failure is named. `failedRules` carries the rule id and the database error, and a rule
      * that failed is not counted in `scannedRules` — which is a tally of rules that answered, so
-     * `scannedRules + failedRules.length` comes to nine either way and an operator can tell a clean
+     * `scannedRules + failedRules.length` comes to ten either way and an operator can tell a clean
      * database from a scanner that has stopped looking. These tests pin that, because the field is
      * only worth having if it cannot be dropped silently.
      */
-    it('still returns the other eight rules’ findings', async () => {
+    it('still returns the other nine rules’ findings', async () => {
       serve({
         ineligibleAssayer: new Error('column "assayer_status" does not exist'),
         invalidEmploymentDates: [
@@ -314,7 +315,7 @@ describe('OperationalIntegrityService.scan', () => {
       const report = await service.scan();
 
       expect(report.violations.map((v) => v.rule)).toEqual(['INVALID_EMPLOYMENT_DATES']);
-      // Both halves of the contract in one place: the eight that ran are reported, and the one that
+      // Both halves of the contract in one place: the nine that ran are reported, and the one that
       // did not is reported as well, rather than being indistinguishable from a rule that passed.
       expect(report.failedRules.map((f) => f.rule)).toEqual(['ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER']);
     });
@@ -324,8 +325,8 @@ describe('OperationalIntegrityService.scan', () => {
 
       const report = await service.scan();
 
-      // Eight, not nine. The number is the honest one: this scan looked at eight of the invariants.
-      expect(report.scannedRules).toBe(8);
+      // Nine, not ten. The number is the honest one: this scan looked at nine of the invariants.
+      expect(report.scannedRules).toBe(9);
       expect(report.failedRules).toEqual([
         {
           rule: 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER',
@@ -349,7 +350,7 @@ describe('OperationalIntegrityService.scan', () => {
 
       expect(report.scannedRules).toBe(0);
       expect(report.totalViolations).toBe(0);
-      expect(report.failedRules).toHaveLength(9);
+      expect(report.failedRules).toHaveLength(10);
       expect(report.failedRules.every((f) => f.error === 'connection terminated')).toBe(true);
       // Every rule accounted for by its own id — a call site tagged with the wrong or a duplicated
       // name would leave one of these unnamed, and that rule could then fail without ever being
@@ -359,6 +360,7 @@ describe('OperationalIntegrityService.scan', () => {
         'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER',
         'CANCELLED_ASSIGNMENT_WITH_ATTENDANCE',
         'COMPLETED_ASSIGNMENT_WITHOUT_ATTENDANCE',
+        'COMPLETED_ASSIGNMENT_WITHOUT_CHECK_OUT',
         'INVALID_EMPLOYMENT_DATES',
         'INVALID_LIFECYCLE_COMBINATION',
         'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY',

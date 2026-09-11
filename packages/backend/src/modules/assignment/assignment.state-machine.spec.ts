@@ -223,10 +223,32 @@ describe('the edges the service used to write by hand', () => {
       expect(explained.completedWithoutCheckInReason).toMatch(/Phone died on site/);
     });
 
-    it('needs no reason when the assayer actually checked in', () => {
-      const attended: any = { id: 'asg-2', status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date() };
+    it('needs no reason when the attendance record is complete', () => {
+      const attended: any = {
+        id: 'asg-2', status: AssignmentStatus.CHECKED_IN,
+        checkedInAt: new Date('2026-08-20T09:00:00Z'), checkedOutAt: new Date('2026-08-20T13:30:00Z'),
+      };
       AssignmentStateMachine.completeAudit(attended, 'user-1');
       expect(attended.status).toBe(AssignmentStatus.COMPLETED);
+    });
+
+    /**
+     * Arrival on its own is half a record. Time on site is the span between the two stamps, and
+     * that span is the attendance evidence a bank collateral audit is defended with — so an
+     * arrival with no departure now has to be accounted for, exactly as no arrival at all does.
+     */
+    it('needs a reason when the assayer arrived and no departure was ever recorded', () => {
+      const arrivedOnly: any = {
+        id: 'asg-3', status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date('2026-08-20T09:00:00Z'),
+      };
+      expect(() => AssignmentStateMachine.completeAudit(arrivedOnly, 'user-1')).toThrow();
+      expect(arrivedOnly.status).toBe(AssignmentStatus.CHECKED_IN);
+
+      AssignmentStateMachine.completeAudit(arrivedOnly, 'user-1', 'Left site before the app would sync.');
+      expect(arrivedOnly.status).toBe(AssignmentStatus.COMPLETED);
+      expect(arrivedOnly.completedWithoutCheckOutReason).toMatch(/Left site before/);
+      // And the gap stays a gap — no departure time is invented to close it.
+      expect(arrivedOnly.checkedOutAt ?? null).toBeNull();
     });
   });
 });

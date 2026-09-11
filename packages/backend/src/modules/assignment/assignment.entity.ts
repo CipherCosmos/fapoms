@@ -258,6 +258,29 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'completed_without_check_in_reason', type: 'text', nullable: true })
   completedWithoutCheckInReason: string | null;
 
+  /**
+   * Why this job was closed with an arrival on record but no departure.
+   *
+   * The departure half of the same evidence, and it went missing far more often than the
+   * arrival did: `checked_out_at` is written in exactly one place, the check-out route, while
+   * `CHECKED_IN → COMPLETED` is a legal edge that uploading the audited return takes directly.
+   * So the ordinary way to finish a job was the way that lost the record, and a census of this
+   * database found 15 completed audits with an arrival and no departure against one departure
+   * in total.
+   *
+   * Time on site is attendance evidence for a bank collateral audit, so completion now asks for
+   * the departure and, failing that, for a reason. Set only when there IS a check-in and no
+   * check-out — a job with no arrival at all is already explained by
+   * `completedWithoutCheckInReason`, and saying the same thing twice in two columns would make
+   * neither of them mean anything precise.
+   *
+   * A value here does not make the gap go away: `OperationalIntegrityService` reports a
+   * completed assignment with an arrival and no departure whether or not a reason was stated.
+   * The reason records who said what, it does not discharge the finding.
+   */
+  @Column({ name: 'completed_without_check_out_reason', type: 'text', nullable: true })
+  completedWithoutCheckOutReason: string | null;
+
   @ManyToOne(() => ProjectBranchEntity, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'project_branch_id' })
   projectBranch: ProjectBranchEntity | null;

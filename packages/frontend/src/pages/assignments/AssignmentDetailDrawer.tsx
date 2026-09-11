@@ -23,6 +23,7 @@ import { loadFailed } from '../../queryClient';
 import { assignmentFee } from '../../utils/money';
 import { AssignmentMoneyCard } from '../billing/AssignmentMoneyCard';
 import { computeAssignmentAttention } from './useAssignmentQueue';
+import { readAttendance, formatAttendanceMoment } from './attendance';
 import type { Assignment, TimelineEvent } from './types';
 
 interface AssignmentDetailDrawerProps {
@@ -33,7 +34,7 @@ interface AssignmentDetailDrawerProps {
   onClearActionError: () => void;
   onTransition: (targetStatus: string, reason?: string) => Promise<void>;
   onEscalate: (reason?: string) => Promise<void>;
-  askToComplete: (attended: boolean) => Promise<{ reason?: string } | null>;
+  askToComplete: (attended: boolean, departed?: boolean) => Promise<{ reason?: string } | null>;
   planningLinkFor: (asn: Assignment) => string;
   confirm: (opts: any) => Promise<boolean>;
   confirmWithReason: (opts: any) => Promise<{ confirmed: boolean; reason?: string }>;
@@ -149,6 +150,9 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       </div>
     );
   }
+
+  // Arrival, departure and the span between them, read once for the whole panel.
+  const attendance = readAttendance(assignment);
 
   const canAcceptOffer = assignment.status === 'PENDING';
   const canComplete = ['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(assignment.status);
@@ -307,7 +311,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
               {canComplete && (
                 <button
                   onClick={async () => {
-                    const answer = await askToComplete(!!assignment.checkedInAt);
+                    const answer = await askToComplete(!!assignment.checkedInAt, !!assignment.checkedOutAt);
                     if (answer) {
                       await onTransition('COMPLETED', answer.reason);
                     }
@@ -442,28 +446,94 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
             <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>{assignment.scheduledDate ? new Date(assignment.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unscheduled'}</p>
           </div>
         </div>
-        {/* GPS Check-in evidence */}
-        {assignment.checkedInAt && (
+        {/*
+          Attendance on site: the arrival, the departure, and the span between them.
+
+          Only the arrival used to be here, and `checkedOutAt` appeared nowhere in the frontend at
+          all — so a visit that ended properly and a visit that simply stopped being recorded drew
+          the same panel. Time on site is what a client dispute, a travel claim and a bank's audit
+          file are read out of, so a missing departure is stated in words here rather than being
+          left as an absence the reader has to notice.
+        */}
+        {attendance.arrival && (
           <div style={{ background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-active-bg)', gridColumn: 'span 2' }}>
-            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Checked in on site</span>
+            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Attendance on site</span>
             <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
-              {new Date(assignment.checkedInAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+              Checked in {formatAttendanceMoment(attendance.arrival)}
               {assignment.checkInDistanceMeters != null && (
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · Checked in {assignment.checkInDistanceMeters < 1000 ? `${assignment.checkInDistanceMeters} m` : `${(assignment.checkInDistanceMeters / 1000).toFixed(1)} km`} from the branch</span>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · {assignment.checkInDistanceMeters < 1000 ? `${assignment.checkInDistanceMeters} m` : `${(assignment.checkInDistanceMeters / 1000).toFixed(1)} km`} from the branch</span>
               )}
               {assignment.checkInAccuracyMeters != null && (
                 <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — phone accuracy ±{assignment.checkInAccuracyMeters} m</span>
               )}
             </p>
-            {assignment.checkInLatitude != null && assignment.checkInLongitude != null && (
-              <a
-                href={`https://www.google.com/maps?q=${assignment.checkInLatitude},${assignment.checkInLongitude}`}
-                target="_blank" rel="noreferrer"
-                style={{ fontSize: '10.5px', color: 'var(--accent)', textDecoration: 'none' }}
-              >
-                View location on map ↗
-              </a>
+            {attendance.departure ? (
+              <>
+                <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
+                  Checked out {formatAttendanceMoment(attendance.departure)}
+                  {assignment.checkOutDistanceMeters != null && (
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · {assignment.checkOutDistanceMeters < 1000 ? `${assignment.checkOutDistanceMeters} m` : `${(assignment.checkOutDistanceMeters / 1000).toFixed(1)} km`} from the branch</span>
+                  )}
+                  {assignment.checkOutAccuracyMeters != null && (
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — phone accuracy ±{assignment.checkOutAccuracyMeters} m</span>
+                  )}
+                </p>
+                <p style={{ fontSize: '12px', fontWeight: 800, margin: '3px 0 1px', color: 'var(--success)' }}>
+                  {attendance.durationLabel} on site
+                </p>
+              </>
+            ) : (
+              <div style={{ marginTop: '4px', padding: '6px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', border: '1px solid var(--warning)' }}>
+                <p style={{ fontSize: '11.5px', fontWeight: 700, margin: 0, color: 'var(--warning)' }}>
+                  No check-out recorded — time on site unknown
+                </p>
+                <p style={{ fontSize: '10.5px', margin: '2px 0 0', color: 'var(--text-secondary)' }}>
+                  {attendance.gapReason
+                    ? `Closed without a departure. Reason given: “${attendance.gapReason}”`
+                    : assignment.status === 'COMPLETED'
+                      ? 'This audit was completed before a departure was required, so no reason was recorded.'
+                      : 'The assayer has not checked out of this branch yet.'}
+                </p>
+              </div>
             )}
+            <div style={{ display: 'flex', gap: '10px', marginTop: '3px' }}>
+              {assignment.checkInLatitude != null && assignment.checkInLongitude != null && (
+                <a
+                  href={`https://www.google.com/maps?q=${assignment.checkInLatitude},${assignment.checkInLongitude}`}
+                  target="_blank" rel="noreferrer"
+                  style={{ fontSize: '10.5px', color: 'var(--accent)', textDecoration: 'none' }}
+                >
+                  Arrival on map ↗
+                </a>
+              )}
+              {assignment.checkOutLatitude != null && assignment.checkOutLongitude != null && (
+                <a
+                  href={`https://www.google.com/maps?q=${assignment.checkOutLatitude},${assignment.checkOutLongitude}`}
+                  target="_blank" rel="noreferrer"
+                  style={{ fontSize: '10.5px', color: 'var(--accent)', textDecoration: 'none' }}
+                >
+                  Departure on map ↗
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+        {/*
+          No arrival at all. Previously drew nothing whatever, so the panel for a job closed on
+          somebody's word was indistinguishable from one nobody had looked at — and the reason the
+          desk was made to state at completion was stored and then never shown to anyone.
+        */}
+        {!attendance.arrival && assignment.status === 'COMPLETED' && (
+          <div style={{ background: 'var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--warning)', gridColumn: 'span 2' }}>
+            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Attendance on site</span>
+            <p style={{ fontSize: '11.5px', fontWeight: 700, margin: '1px 0', color: 'var(--warning)' }}>
+              No check-in recorded — this audit was closed without attendance evidence
+            </p>
+            <p style={{ fontSize: '10.5px', margin: '2px 0 0', color: 'var(--text-secondary)' }}>
+              {attendance.gapReason
+                ? `Reason given: “${attendance.gapReason}”`
+                : 'No reason was recorded against this completion.'}
+            </p>
           </div>
         )}
         <div style={{ background: 'var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-pending-bg)', display: 'flex', alignItems: 'center', gap: '6px' }}>

@@ -834,6 +834,13 @@ export class AssignmentService {
       assignment.checkOutAccuracyMeters = null;
       assignment.checkOutDistanceMeters = null;
       assignment.checkedOutAt = null;
+      // And the two explanations for attendance the PREVIOUS completion lacked. They were being
+      // left behind while the evidence they explain was cleared, so a reused record carried a
+      // stated reason about somebody else's missing check-in or check-out into a visit that has
+      // not happened yet — and if this assayer does check in and out, the record would show a
+      // full attendance trail with an excuse attached to it.
+      assignment.completedWithoutCheckInReason = null;
+      assignment.completedWithoutCheckOutReason = null;
       assignment.negotiationCount = 0;
       // The previous assayer's countered travel must die with their offer: assignmentMoney
       // prefers counterTravelFee over the frozen quote, so a stale one re-carves the NEW
@@ -1620,6 +1627,44 @@ export class AssignmentService {
           );
         }
 
+        /**
+         * The attendance the completion was booked on, written into the completion's own audit
+         * row rather than left to be reconstructed from two nullable columns later.
+         *
+         * A completion books the assayer's payable and the client's billing line, and the
+         * question asked of it afterwards — by a travel claim, a client dispute, or a bank
+         * reading the audit file — is "who was on site, and for how long". That was answerable
+         * only by reading the assignment row as it stands today, which a later reopen, reuse or
+         * reassignment clears. The audit row is append-only, so recording it here is the only
+         * copy that survives the assignment being reused.
+         *
+         * `minutesOnSite` is null, never zero, when either end of the window is missing: a zero
+         * would read as a visit that took no time, which is a different and false claim.
+         */
+        const completionAttendance = targetStatus === AssignmentStatus.COMPLETED
+          ? (() => {
+              const arrival = savedAssign.checkedInAt ? new Date(savedAssign.checkedInAt) : null;
+              const departure = savedAssign.checkedOutAt ? new Date(savedAssign.checkedOutAt) : null;
+              return {
+                checkedInAt: arrival ? arrival.toISOString() : null,
+                checkedOutAt: departure ? departure.toISOString() : null,
+                minutesOnSite: arrival && departure
+                  ? Math.max(0, Math.round((departure.getTime() - arrival.getTime()) / 60000))
+                  : null,
+                completedWithoutCheckInReason: savedAssign.completedWithoutCheckInReason ?? null,
+                completedWithoutCheckOutReason: savedAssign.completedWithoutCheckOutReason ?? null,
+              };
+            })()
+          : null;
+
+        const attendanceNote = completionAttendance
+          ? completionAttendance.checkedInAt == null
+            ? ' No check-in on record; closed with a stated reason.'
+            : completionAttendance.checkedOutAt == null
+              ? ' Arrived on site but never checked out; closed with a stated reason, so there is no time on site for this visit.'
+              : ` On site for ${completionAttendance.minutesOnSite} minute(s).`
+          : '';
+
         await this.auditService.recordEventSafe({
           category: EventCategory.WORKFLOW,
           eventType: `ASSIGNMENT_${targetStatus}`,
@@ -1628,10 +1673,11 @@ export class AssignmentService {
           previousState: prevStatus,
           newState: targetStatus,
           userId,
-          remarks: reason ?? `Transitioned assignment to ${targetStatus}`,
+          remarks: (reason ?? `Transitioned assignment to ${targetStatus}`) + attendanceNote,
           metadata: {
             clientRequestId: options?.clientRequestId,
             entityVersion: savedAssign.entityVersion,
+            ...(completionAttendance ? { attendance: completionAttendance } : {}),
           },
         }, { manager });
 
@@ -2424,6 +2470,12 @@ export class AssignmentService {
       assignment.checkOutAccuracyMeters = null;
       assignment.checkOutDistanceMeters = null;
       assignment.checkedOutAt = null;
+      // Same reason as the reuse path in `createAssignment`: the reasons explain attendance the
+      // OUTGOING assayer did not record, and the attendance columns beside them are being
+      // cleared. Carrying them to the incoming assayer attaches somebody else's excuse to a
+      // visit that has not happened.
+      assignment.completedWithoutCheckInReason = null;
+      assignment.completedWithoutCheckOutReason = null;
       assignment.negotiationCount = 0;
       assignment.counterTravelFee = null;
       assignment.entityVersion = lockedVersion + 1;

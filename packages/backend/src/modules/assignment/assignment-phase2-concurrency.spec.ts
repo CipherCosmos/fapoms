@@ -1304,11 +1304,13 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
   });
 
   describe('Operational Integrity Reconciliation Scanner', () => {
-    it('scans all 9 operational rules and reports summary without mutating database records', async () => {
+    it('scans all 10 operational rules and reports summary without mutating database records', async () => {
       const report = await operationalIntegrityService.scan();
 
       expect(report).toBeDefined();
-      expect(report.scannedRules).toBe(9);
+      // Ten since the departure rule landed: a COMPLETED audit with an arrival and no check-out is
+      // now an integrity finding, because time on site is the attendance evidence.
+      expect(report.scannedRules).toBe(10);
       expect(report.timestamp).toBeDefined();
       expect(report.totalViolations).toBeGreaterThanOrEqual(0);
       expect(report.summary).toBeDefined();

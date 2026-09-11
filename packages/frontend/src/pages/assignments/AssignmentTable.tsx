@@ -16,6 +16,7 @@ import {
   computeAssignmentAttention,
   PAGE_SIZE,
 } from './useAssignmentQueue';
+import { readAttendance, attendanceSummary } from './attendance';
 import type { Assignment } from './types';
 
 export interface AssignmentTableProps {
@@ -33,7 +34,7 @@ export interface AssignmentTableProps {
   dateSort: 'asc' | 'desc';
   setDateSort: (setter: (current: 'asc' | 'desc') => 'asc' | 'desc') => void;
   quickBusyId: string | null;
-  onQuickAction: (asnId: string, targetStatus: 'ACCEPTED' | 'COMPLETED', attended?: boolean) => void;
+  onQuickAction: (asnId: string, targetStatus: 'ACCEPTED' | 'COMPLETED', attended?: boolean, departed?: boolean) => void;
   isAttentionView: boolean;
   openIssueAssignmentIds: Set<string>;
   todayStr: string;
@@ -265,14 +266,38 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                     ) : (
                       asn.assayer?.displayName || '—'
                     )}
-                    {asn.checkedInAt && (
-                      <span
-                        title={`Checked in ${new Date(asn.checkedInAt).toLocaleString('en-IN')}`}
-                        style={{ marginLeft: '5px', color: 'var(--success)', fontWeight: 700 }}
-                      >
-                        📍
-                      </span>
-                    )}
+                    {/*
+                      The marker used to say only that somebody arrived, which made a visit with
+                      no departure look identical to a completed one on the queue. It now carries
+                      both ends and the time on site, and turns amber when the departure is
+                      missing — the state that is a finding, not a detail.
+                    */}
+                    {asn.checkedInAt && (() => {
+                      const read = readAttendance(asn);
+                      const missingDeparture = read.gap === 'NO_DEPARTURE';
+                      return (
+                        <span
+                          title={attendanceSummary(read)}
+                          style={{
+                            marginLeft: '5px',
+                            color: missingDeparture ? 'var(--warning)' : 'var(--success)',
+                            fontWeight: 700,
+                          }}
+                        >
+                          📍
+                          {read.durationLabel && (
+                            <span style={{ marginLeft: '3px', fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              {read.durationLabel}
+                            </span>
+                          )}
+                          {missingDeparture && (
+                            <span style={{ marginLeft: '3px', fontSize: '10px', fontWeight: 700 }}>
+                              no check-out
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td
                     style={{
@@ -372,7 +397,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                         )}
                         {canComplete && (
                           <button
-                            onClick={() => onQuickAction(asn.id, 'COMPLETED', !!asn.checkedInAt)}
+                            onClick={() => onQuickAction(asn.id, 'COMPLETED', !!asn.checkedInAt, !!asn.checkedOutAt)}
                             disabled={rowBusy}
                             className="btn btn-primary"
                             style={{ padding: '3px 9px', minHeight: '32px', fontSize: '11px' }}

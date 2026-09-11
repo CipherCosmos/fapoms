@@ -675,6 +675,9 @@ const mockNotificationService = {
   describe('completeAssignment — completion date is IST calendar day, not UTC-shifted', () => {
     const checkedIn = () => ({
       id: 'asn-1', status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date('2026-08-20T09:00:00Z'),
+      // A complete attendance record, so these cases stay about the completion DATE rather than
+      // tripping the departure rule — that rule has its own tests.
+      checkedOutAt: new Date('2026-08-20T13:30:00Z'),
       completionDate: null, assayerId: 'assayer-1',
     });
 

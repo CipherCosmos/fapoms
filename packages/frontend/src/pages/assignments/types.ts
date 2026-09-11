@@ -18,6 +18,17 @@ export interface Assignment {
   checkInLongitude?: number | null;
   checkInAccuracyMeters?: number | null;
   checkInDistanceMeters?: number | null;
+  // The departure half. The API has returned these all along; the web app referenced none of
+  // them, so a visit that never ended looked exactly like one that did.
+  checkedOutAt?: string | null;
+  checkOutLatitude?: number | null;
+  checkOutLongitude?: number | null;
+  checkOutAccuracyMeters?: number | null;
+  checkOutDistanceMeters?: number | null;
+  /** Stated when a job was closed with no arrival at all. */
+  completedWithoutCheckInReason?: string | null;
+  /** Stated when a job was closed with an arrival and no departure. */
+  completedWithoutCheckOutReason?: string | null;
   project: { name: string };
   assayer: { displayName: string };
   projectBranch: { status?: string; branch: { name: string; state: string } };

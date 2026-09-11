@@ -243,11 +243,17 @@ describe('Assignments Workspace: Domain & Attention Logic', () => {
       expect(screen.queryByRole('button', { name: /More/i })).toBeNull();
     });
 
-    it('executes regular completion with simple confirmation when check-in is present', async () => {
+    /**
+     * "Regular" now means the attendance record is COMPLETE — arrival and departure. Time on site
+     * is the span between them, and that span is the evidence a bank collateral audit is defended
+     * with, so an arrival on its own is half a record and no longer waves the job through.
+     */
+    it('executes regular completion with simple confirmation when attendance is complete', async () => {
       const attendedAsn: Assignment = {
         ...baseAssignment,
         status: 'IN_PROGRESS',
         checkedInAt: '2026-09-08T09:00:00.000Z',
+        checkedOutAt: '2026-09-08T13:30:00.000Z',
       };
       const onTransition = jest.fn().mockResolvedValue(undefined);
       const askToComplete = jest.fn().mockResolvedValue({});
@@ -272,8 +278,52 @@ describe('Assignments Workspace: Domain & Attention Logic', () => {
       fireEvent.click(completeBtn);
 
       await waitFor(() => {
-        expect(askToComplete).toHaveBeenCalledWith(true);
+        expect(askToComplete).toHaveBeenCalledWith(true, true);
         expect(onTransition).toHaveBeenCalledWith('COMPLETED', undefined);
+      });
+    });
+
+    /**
+     * The case the change exists for, and the one nothing covered.
+     *
+     * Uploading the audited return takes CHECKED_IN -> COMPLETED directly, and on the phone that
+     * upload is the primary button — so the ordinary way to finish a job was the way that lost the
+     * departure. This database ended with 32 completed audits, 17 arrivals and one departure.
+     */
+    it('asks for a reason when the assayer arrived and no departure was recorded', async () => {
+      const arrivedOnly: Assignment = {
+        ...baseAssignment,
+        status: 'IN_PROGRESS',
+        checkedInAt: '2026-09-08T09:00:00.000Z',
+        checkedOutAt: null,
+      };
+      const onTransition = jest.fn().mockResolvedValue(undefined);
+      const askToComplete = jest
+        .fn()
+        .mockResolvedValue({ reason: 'Assayer left site before the app would sync.' });
+
+      renderWithProviders(
+        <AssignmentDetailDrawer
+          assignment={arrivedOnly}
+          canActOnAssignments={true}
+          actionBusy={false}
+          actionError={null}
+          onClearActionError={jest.fn()}
+          onTransition={onTransition}
+          onEscalate={jest.fn()}
+          askToComplete={askToComplete}
+          planningLinkFor={() => '/planning'}
+          confirm={jest.fn()}
+          confirmWithReason={jest.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Mark Audit Complete/i }));
+
+      await waitFor(() => {
+        // Arrived, did not depart — the drawer must say so, not report attendance as complete.
+        expect(askToComplete).toHaveBeenCalledWith(true, false);
+        expect(onTransition).toHaveBeenCalled();
       });
     });
 
@@ -308,7 +358,7 @@ describe('Assignments Workspace: Domain & Attention Logic', () => {
       fireEvent.click(completeBtn);
 
       await waitFor(() => {
-        expect(askToComplete).toHaveBeenCalledWith(false);
+        expect(askToComplete).toHaveBeenCalledWith(false, false);
         expect(onTransition).toHaveBeenCalledWith(
           'COMPLETED',
           'Vault attendance confirmed via branch manager phone'
@@ -345,7 +395,7 @@ describe('Assignments Workspace: Domain & Attention Logic', () => {
       fireEvent.click(completeBtn);
 
       await waitFor(() => {
-        expect(askToComplete).toHaveBeenCalledWith(false);
+        expect(askToComplete).toHaveBeenCalledWith(false, false);
         expect(onTransition).not.toHaveBeenCalled();
       });
     });

@@ -155,6 +155,49 @@ export class OperationalIntegrityService {
       });
     }
 
+    /**
+     * 4b. Completed assignment that arrived on site and never left it.
+     *
+     * The converse of rule 3, and the reason it had to exist: rule 3 has called check-in and
+     * check-out "attendance evidence" since it was written, while nothing ever required the
+     * departure and the web app never showed it. `checked_out_at` is written in exactly one
+     * place — the check-out route — and `CHECKED_IN → COMPLETED` is a legal edge that uploading
+     * the audited return takes directly, so the ordinary way to finish a job was the way that
+     * lost the record. It is visible in the data: 15 completed audits with an arrival and no
+     * departure, against one departure in the whole table.
+     *
+     * Time on site is the span between the two timestamps, and for a bank collateral audit that
+     * span is the evidence. Half a span is not a shorter visit, it is no visit at all.
+     *
+     * A stated reason does NOT discharge this. `completed_without_check_out_reason` records who
+     * said what about the gap; the gap is still a gap, and an auditor asking "which visits have
+     * no measurable time on site" must get all of them back, explained or not. The reason rides
+     * along in `details` so the answer distinguishes the two without hiding either.
+     */
+    const completedWithoutCheckOut = await run('COMPLETED_ASSIGNMENT_WITHOUT_CHECK_OUT', `
+      SELECT id, assignment_number, status, completion_date, checked_in_at, checked_out_at,
+             completed_without_check_out_reason
+      FROM assignments
+      WHERE status = 'COMPLETED'
+        AND checked_in_at IS NOT NULL
+        AND checked_out_at IS NULL
+        AND is_active = true
+    `);
+
+    for (const row of completedWithoutCheckOut) {
+      const explained = (row.completed_without_check_out_reason ?? '').trim();
+      violations.push({
+        rule: 'COMPLETED_ASSIGNMENT_WITHOUT_CHECK_OUT',
+        severity: 'P1',
+        entityId: row.id,
+        details: row,
+        description:
+          `Assignment ${row.assignment_number} is COMPLETED with a check-in (${row.checked_in_at}) `
+          + 'and no check-out, so there is no time on site on record for the visit. '
+          + (explained ? `Stated reason: ${explained}` : 'No reason was stated — it predates the requirement.'),
+      });
+    }
+
     // 5. Assignment linked to ineligible assayer
     const ineligibleAssayers = await run('ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER', `
       SELECT a.id, a.assignment_number, a.status as assignment_status,

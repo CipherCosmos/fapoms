@@ -147,6 +147,7 @@ export class AssignmentStateMachine {
     AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.COMPLETED);
 
     const attended = !!assignment.checkedInAt;
+    const departed = !!assignment.checkedOutAt;
     const stated = (reason ?? '').trim();
     if (!attended && !stated) {
       throw new BadRequestException(
@@ -154,7 +155,37 @@ export class AssignmentStateMachine {
         + 'line on your word alone. Say why it is being closed without one.',
       );
     }
+    /**
+     * The departure half of the same rule.
+     *
+     * Time on site is the span between the check-in and the check-out, and for a bank collateral
+     * audit that span IS the attendance evidence — `operational-integrity.service.ts` has called
+     * both timestamps "attendance evidence" since it was written. But `checked_out_at` is set in
+     * exactly one place, the check-out route, and `CHECKED_IN → COMPLETED` is a legal edge that
+     * uploading the audited return takes directly. So the ordinary way to finish a job silently
+     * ended the visit with no record of when the assayer left, and the census bore that out:
+     * 15 completed audits with an arrival and no departure, against one departure in the table.
+     *
+     * The fix is deliberately NOT to stamp `checkedOutAt` here. That column means "the assayer
+     * left the branch at this moment"; filling it at completion would write a departure nobody
+     * observed into the field a travel claim and an audit defence are later read out of. A
+     * manufactured observation is worse than a missing one, because the gap is visible and the
+     * fiction is not. So completion asks for the departure, and failing that asks why there
+     * isn't one — the same bargain the check-in rule above already strikes.
+     *
+     * Only when there IS an arrival: with no check-in at all the branch above has already taken
+     * a reason for the whole absent visit, and writing it into both columns would leave neither
+     * meaning anything precise.
+     */
+    if (attended && !departed && !stated) {
+      throw new BadRequestException(
+        'Nobody checked out of this branch, so there is no record of when the assayer left and '
+        + 'no time on site to show a client. Check out from the field app if the visit is still '
+        + 'open, or say why this one is being closed without a departure.',
+      );
+    }
     if (!attended) assignment.completedWithoutCheckInReason = stated;
+    else if (!departed) assignment.completedWithoutCheckOutReason = stated;
 
     const prev = assignment.status;
     assignment.status = AssignmentStatus.COMPLETED;
@@ -182,6 +213,11 @@ export class AssignmentStateMachine {
     assignment.status = AssignmentStatus.ACCEPTED;
     assignment.completionDate = null;
     assignment.completedWithoutCheckInReason = null;
+    // Both explanations belong to the completion being undone. Left behind, the next completion
+    // of this assignment would carry the previous one's excuse for a gap that may no longer
+    // exist — and if the assayer does check out this time, the record would say a departure was
+    // both present and explained away.
+    assignment.completedWithoutCheckOutReason = null;
     assignment.remarks = stated;
     return { previousState: prev, newState: assignment.status, userId };
   }
