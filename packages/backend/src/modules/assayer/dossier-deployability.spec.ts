@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import {
   AssayerLifecycleStatus, EmpanelmentStatus, OnboardingDocument, DocumentVerification,
   AssayerUnavailableReason, PLACEHOLDER_PIN_METRES,
@@ -130,6 +130,8 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: onboarding },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
+        // `setEmpanelment` locks its row before reading it; nothing here reaches that path.
+        { provide: getDataSourceToken(), useValue: {} },
         { provide: PlatformSettingsService, useValue: { get: jest.fn(async () => identityGateMode) } },
       ],
     }).compile();

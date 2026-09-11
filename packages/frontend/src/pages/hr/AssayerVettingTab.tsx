@@ -699,9 +699,17 @@ export const AssayerVettingTab: React.FC<{
     }
     setBusy(true);
     try {
+      // `expectedVersion` is the revision this screen loaded. The server refuses a change to an
+      // existing standing that arrives without it, and refuses one whose version has moved on —
+      // two desks deciding at once used to both be told they had saved. See
+      // `empanelment-version.ts`. Absent only for a first standing, which overwrites nothing.
       await api.request(`/assayers/${assayerId}/empanelment/${draft.clientId}`, {
         method: 'PUT',
-        body: JSON.stringify({ status: draft.status, statusReason: draft.statusReason || undefined }),
+        body: JSON.stringify({
+          status: draft.status,
+          statusReason: draft.statusReason || undefined,
+          expectedVersion: existing?.version,
+        }),
       });
       toast({
         type: 'success',

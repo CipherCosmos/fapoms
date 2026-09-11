@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { DocumentVerification, EmpanelmentStatus, BackgroundCheckVerdict } from '@fapoms/shared';
 import { RosterRecordsService } from './roster-records.service';
 import { AssayerEntity } from './assayer.entity';
@@ -22,11 +22,21 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
   let checks: any;
   let onboarding: any;
   let assayers: any;
+  /**
+   * What the `SELECT … FOR UPDATE` in `setEmpanelment` finds. The standing is read under a row
+   * lock now rather than through the repository, so this — not `empanelments.findOne` — is where
+   * a test says what is already on file. Empty means no standing yet.
+   */
+  let lockRows: any[];
   const audit = { recordEvent: jest.fn(), recordEventSafe: jest.fn().mockResolvedValue(undefined) };
 
   beforeEach(async () => {
+    lockRows = [];
     empanelments = {
       findOne: jest.fn(),
+      findOneOrFail: jest.fn(async () => ({
+        id: 'emp-1', clientId: 'c-1', assayerId: 'a-1', version: 2, ...(empanelments.save.mock.calls.at(-1)?.[0] ?? {}),
+      })),
       create: jest.fn((v: any) => ({ ...v })),
       save: jest.fn((v: any) => Promise.resolve({ id: 'emp-1', ...v })),
     };
@@ -51,6 +61,17 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: checks },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: onboarding },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: {} },
+        {
+          // `setEmpanelment` locks the standing before it reads it, which needs a transaction.
+          // The double runs the callback inline and serves the lock from `lockRows`.
+          provide: getDataSourceToken(),
+          useValue: {
+            transaction: (fn: any) => fn({
+              query: jest.fn(async () => lockRows),
+              getRepository: () => empanelments,
+            }),
+          },
+        },
         { provide: AuditService, useValue: audit },
       ],
     }).compile();
@@ -59,8 +80,10 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
   });
 
   it('records EMPANELMENT_SET with the previous and new standing', async () => {
-    empanelments.findOne.mockResolvedValue({ id: 'emp-1', status: EmpanelmentStatus.INACTIVE, clientId: 'c-1' });
-    await service.setEmpanelment('a-1', 'c-1', { status: EmpanelmentStatus.ACTIVE }, 'user-1');
+    lockRows = [{ id: 'emp-1', version: 1, status: EmpanelmentStatus.INACTIVE, is_active: true }];
+    await service.setEmpanelment(
+      'a-1', 'c-1', { status: EmpanelmentStatus.ACTIVE, expectedVersion: 1 }, 'user-1',
+    );
 
     expect(audit.recordEventSafe).toHaveBeenCalledTimes(1);
     const dto = audit.recordEventSafe.mock.calls[0][0];

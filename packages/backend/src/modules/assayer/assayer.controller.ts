@@ -769,6 +769,19 @@ export class SetEmpanelmentDto {
 
   @IsOptional() @IsString() @MaxLength(2000)
   remarks?: string;
+
+  /**
+   * The version of the standing this decision was taken against.
+   *
+   * Required when the pair already has a row, refused as a 400 when it is absent, and optional
+   * only for the first standing — there is no earlier decision to be stale about. Three
+   * concurrent calls carrying three different standings used to answer 200, 200, 200 while the
+   * row kept one; this is the column that was always there, finally consulted. Same wire shape as
+   * `assignment.service.ts` and the client billing profile, so a client handles one kind of
+   * staleness. See `empanelment-version.ts`.
+   */
+  @IsOptional() @IsInt()
+  expectedVersion?: number;
 }
 
 export class UpdateLiveLocationDto {

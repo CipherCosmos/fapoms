@@ -45,10 +45,11 @@
  * 2. EICAR PROVES THE APP, NOT CLAMAV. `FileScanService.scanBuffer` catches the EICAR signature in
  *    process, BEFORE it looks at `CLAMAV_HOST`, deliberately so the wiring can be tested without a
  *    scanner. So an EICAR upload that is rejected tells you the guard fired and tells you NOTHING
- *    about whether ClamAV is reachable. The check that discriminates is a CLEAN file: with
- *    `FILE_SCAN_REQUIRED=true` and no reachable scanner the service throws 503; a 2xx means bytes
- *    really were streamed to clamd. 3.10 therefore runs the clean control and reads the EICAR
- *    result only alongside it.
+ *    about whether ClamAV is reachable. The check that discriminates is a CLEAN control file: with
+ *    `FILE_SCAN_REQUIRED=true` and no reachable scanner the service throws 503; a 2xx then means
+ *    bytes really were streamed to clamd. 3.10 runs BOTH and reads them together — and refuses to
+ *    read an accepted clean control as proof unless the path is known to fail CLOSED, because with
+ *    `FILE_SCAN_REQUIRED` unset a deployment with no scanner answers 2xx there as well.
  *
  * SAFETY
  *
@@ -82,6 +83,10 @@
  *   AC_DB=1 + DB_HOST/DB_PORT/…      3.4 and 3.12 — only ever point this at a database you are
  *                                    allowed to read; it is never required.
  *   AC_EXPECT_COMMIT=<sha>           3.15 compares against this instead of the local HEAD.
+ *   AC_FILE_SCAN_REQUIRED=1          3.10 — assert FILE_SCAN_REQUIRED=true after reading it on the
+ *                                    box. Without it, and without 3.1 proving NODE_ENV=production,
+ *                                    an accepted clean control cannot distinguish a working scanner
+ *                                    from a path that is failing open, and 3.10 says UNKNOWN.
  *
  * Exit code is 0 when nothing FAILED. UNKNOWN does not fail the run — an unrunnable check is a
  * reporting outcome, not a defect — but the summary states how many there were, because a
@@ -467,16 +472,38 @@ async function check39(storageDriverIsS3) {
 // ── 3.10 Malware scanning ──────────────────────────────────────────────────────────────────────
 
 /**
- * See trap 2. The clean control is the check; EICAR on its own cannot distinguish a working
- * ClamAV from no ClamAV at all.
+ * TWO FILES, READ TOGETHER. Neither one alone certifies anything.
+ *
+ * See trap 2. `FileScanService.scanBuffer` catches EICAR in-process, before it ever looks at
+ * `CLAMAV_HOST`, so a rejected EICAR upload proves the in-process guard fired and proves NOTHING
+ * about whether clamd is reachable. Checklist item 3.10 as originally written asked for EICAR and
+ * nothing else, which would return a PASS on a deployment with no scanner at all.
+ *
+ *   EICAR         must be REJECTED (400 UPLOAD_REJECTED). Proves the upload path is guarded.
+ *   clean control must be ACCEPTED. This is the discriminating one — but only under a condition.
+ *
+ * THE CONDITION, which this check will not paper over. The clean control discriminates because
+ * `scanBuffer` throws 503 when it has no reachable scanner AND `FILE_SCAN_REQUIRED=true`. With
+ * `FILE_SCAN_REQUIRED` unset the same service logs a warning and returns `{clean: true}` — so a
+ * deployment with NO scanner also answers 2xx, and reading that 2xx as "the bytes reached clamd"
+ * is the same false pass in a new place. So:
+ *
+ *   clean -> 503        ClamAV is NOT reachable.                          CONCLUSIVE (a FAIL)
+ *   clean -> 2xx, and FILE_SCAN_REQUIRED=true is established              CONCLUSIVE (a PASS)
+ *   clean -> 2xx, and it is NOT established                               INCONCLUSIVE (UNKNOWN)
+ *
+ * `FILE_SCAN_REQUIRED=true` is established either by 3.1 proving NODE_ENV=production — main.ts
+ * refuses to boot without it there — or by the operator asserting it with `AC_FILE_SCAN_REQUIRED=1`
+ * after reading the environment on the box. A guess is not one of the options.
  */
-async function check310(admin) {
+async function check310(admin, prodInferred) {
+  const TITLE = 'Malware scanning (clean control + EICAR)';
   if (!admin?.token) {
-    return record('3.10', 'Malware scanning (EICAR)', STATUS.UNKNOWN, 'UNKNOWN',
+    return record('3.10', TITLE, STATUS.UNKNOWN, 'UNKNOWN',
       `every upload route requires a JWT — ${admin?.error ?? 'no credential supplied'}. FILE_SCAN_REQUIRED=true is separately INFERRED from the production boot assertion.`);
   }
   if (!ALLOW_EICAR) {
-    return record('3.10', 'Malware scanning (EICAR)', STATUS.UNKNOWN, 'UNKNOWN',
+    return record('3.10', TITLE, STATUS.UNKNOWN, 'UNKNOWN',
       'not run: this is the one deliberate write and it is opt-in. Re-run with AC_EICAR=1 to perform it.');
   }
 
@@ -492,22 +519,38 @@ async function check310(admin) {
   const infected = await post('eicar.pdf', 'application/pdf', EICAR);
 
   const rejected = infected.status === 400 && String(infected.body?.code ?? '') === 'UPLOAD_REJECTED';
-  const scannerReachable = clean.status < 400;
+  const cleanAccepted = clean.status < 400;
   const scannerMissing = clean.status === 503;
 
+  const requiredAsserted = env.AC_FILE_SCAN_REQUIRED === '1';
+  const failClosed = Boolean(prodInferred) || requiredAsserted;
+  const failClosedWhy = prodInferred
+    ? 'FILE_SCAN_REQUIRED=true is INFERRED from 3.1: NODE_ENV=production is proven and main.ts refuses to boot without it'
+    : requiredAsserted
+      ? 'FILE_SCAN_REQUIRED=true was asserted by the operator (AC_FILE_SCAN_REQUIRED=1)'
+      : 'FILE_SCAN_REQUIRED could not be established — 3.1 did not prove NODE_ENV=production and no operator assertion was given';
+
   const observed = [
-    `EICAR upload   -> ${infected.status} ${infected.body?.code ?? ''} ${String(infected.body?.message ?? '').slice(0, 120)}`,
     `clean control  -> ${clean.status} ${String(clean.body?.message ?? '').slice(0, 120)}`,
+    `EICAR upload   -> ${infected.status} ${infected.body?.code ?? ''} ${String(infected.body?.message ?? '').slice(0, 120)}`,
+    '',
     rejected
-      ? 'the EICAR upload was REJECTED. Note this alone proves only the in-process guard fired:'
-        + '\nFileScanService catches EICAR before it ever looks at CLAMAV_HOST.'
-      : 'the EICAR upload was NOT rejected.',
+      ? 'EICAR was REJECTED. On its own that proves only the in-process guard fired: FileScanService'
+        + '\ncatches the signature before it ever looks at CLAMAV_HOST. It is half the evidence.'
+      : 'EICAR was NOT rejected — the upload path is not guarded at all.',
+    failClosedWhy,
     scannerMissing
-      ? 'the clean control returned 503, which is what FILE_SCAN_REQUIRED=true does when NO scanner'
-        + '\nis reachable. So ClamAV is NOT reachable on this deployment.'
-      : scannerReachable
-        ? 'the clean control was accepted, so bytes really were streamed to clamd: ClamAV IS reachable.'
-        : `the clean control returned ${clean.status}, which settles neither way.`,
+      ? 'The clean control returned 503, which is what a fail-closed upload path does when it has no'
+        + '\nreachable scanner. ClamAV is NOT reachable on this deployment.'
+      : cleanAccepted
+        ? failClosed
+          ? 'The clean control was ACCEPTED on a fail-closed path, so the bytes really were streamed to'
+            + '\nclamd and came back clean. ClamAV IS reachable. Together with the EICAR rejection this is'
+            + '\nconclusive: a scanner exists AND the upload path refuses what it finds.'
+          : 'The clean control was ACCEPTED — but on a path that may be failing OPEN. With'
+            + '\nFILE_SCAN_REQUIRED unset, a deployment with no scanner at all answers 2xx here too and'
+            + '\nonly logs a warning. This settles nothing about whether clamd is reachable.'
+        : `The clean control returned ${clean.status}, which settles neither way.`,
     rejected
       ? 'Nothing was stored: the scan runs in FileScanInterceptor BEFORE the handler, so the rejected'
         + '\nupload never reached saveFile() or documentService.create() — there is no object and no row'
@@ -515,15 +558,18 @@ async function check310(admin) {
       : '',
   ].filter(Boolean).join('\n');
 
-  if (rejected && scannerReachable) {
-    return record('3.10', 'Malware scanning (EICAR)', STATUS.PASS, 'DEPLOYMENT-VERIFIED', observed);
+  if (!rejected) {
+    return record('3.10', TITLE, STATUS.FAIL, 'DEPLOYMENT-VERIFIED', observed,
+      'product defect — an EICAR upload was accepted, so the upload path is not scanned at all');
   }
-  if (rejected && scannerMissing) {
-    return record('3.10', 'Malware scanning (EICAR)', STATUS.FAIL, 'DEPLOYMENT-VERIFIED', observed,
+  if (scannerMissing) {
+    return record('3.10', TITLE, STATUS.FAIL, 'DEPLOYMENT-VERIFIED', observed,
       'environment defect — CLAMAV_HOST is unset or the sidecar is down; every real upload 503s while only EICAR is caught');
   }
-  record('3.10', 'Malware scanning (EICAR)', rejected ? STATUS.UNKNOWN : STATUS.FAIL, 'DEPLOYMENT-VERIFIED', observed,
-    rejected ? null : 'product defect — an EICAR upload was accepted');
+  if (cleanAccepted && failClosed) {
+    return record('3.10', TITLE, STATUS.PASS, 'DEPLOYMENT-VERIFIED', observed);
+  }
+  record('3.10', TITLE, STATUS.UNKNOWN, cleanAccepted ? 'INFERRED (partial)' : 'UNKNOWN', observed);
 }
 
 // ── 3.11 Backups ───────────────────────────────────────────────────────────────────────────────
@@ -836,7 +882,7 @@ async function main() {
   await check37();
   await check38();
   await check39(Boolean(prodInferred));
-  await check310(admin);
+  await check310(admin, prodInferred);
   check311();
   await check312(db);
   await check313();

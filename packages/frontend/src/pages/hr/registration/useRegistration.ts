@@ -386,6 +386,13 @@ export interface DossierEmpanelment {
   status: string;
   statusReason: string | null;
   client: { id: string; name: string; clientCode?: string | null } | null;
+  /**
+   * The revision this standing was read at, sent straight back as `expectedVersion` when it is
+   * changed. The server refuses a change to an existing standing that does not carry it, because
+   * a writer that cannot say what it read cannot be told its decision was overwritten — which is
+   * exactly what used to happen, with a 200 on the way out. See `empanelment-version.ts`.
+   */
+  version?: number;
 }
 
 export interface Dossier {

@@ -203,9 +203,16 @@ export const ClientsStep: React.FC<{
     onBusy(true);
     setError(null);
     try {
+      // `expectedVersion` is the revision this screen is looking at. Absent only when there is no
+      // standing yet, which is the one case with no earlier decision to overwrite; present, the
+      // server refuses the write if somebody else has decided since — see `empanelment-version.ts`.
       await api.request(`/assayers/${assayerId}/empanelment/${clientId}`, {
         method: 'PUT',
-        body: JSON.stringify({ status, statusReason: reason.trim() || undefined }),
+        body: JSON.stringify({
+          status,
+          statusReason: reason.trim() || undefined,
+          expectedVersion: standings.get(clientId)?.version,
+        }),
       });
       const name = clients?.find((c) => c.id === clientId)?.name ?? 'this client';
       const choice = STANDING_CHOICES.find((c) => c.value === status);

@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { RosterRecordsService } from './roster-records.service';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -60,6 +60,8 @@ describe('RosterRecordsService.listIssues', () => {
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: issues },
+        // `setEmpanelment` locks its row before reading it; nothing here reaches that path.
+        { provide: getDataSourceToken(), useValue: {} },
       ],
     }).compile();
     service = mod.get(RosterRecordsService);

@@ -15,25 +15,46 @@ import { RosterRecordsService } from './roster-records.service';
  * require prose is a worse outcome than the thing it was added for.
  */
 describe('reversing a client rejection', () => {
-  /** The service with only the collaborators this path touches. */
+  /**
+   * The service with only the collaborators this path touches.
+   *
+   * The standing is read under a `SELECT … FOR UPDATE` now, so the double serves the existing row
+   * from the lock query rather than from `findOne` — the guard is answered against the committed
+   * status, which is the point of taking the lock first. See `empanelment-version.ts`.
+   */
   const build = (existingStatus: EmpanelmentStatus | null) => {
     const saved: any[] = [];
     const audits: any[] = [];
+    const locked = existingStatus === null
+      ? []
+      : [{ id: 'emp-1', version: 1, status: existingStatus, is_active: true }];
+    const repo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      findOneOrFail: jest.fn(async () => ({
+        id: 'emp-1', assayerId: 'a1', clientId: 'c1', version: 1, status: existingStatus,
+        ...(saved.at(-1) ?? {}),
+      })),
+      create: jest.fn((v: any) => ({ ...v })),
+      save: jest.fn(async (row: any) => { saved.push(row); return { id: 'emp-1', ...row }; }),
+    };
     const svc: any = Object.create(RosterRecordsService.prototype);
     svc.assertOwnedAssayer = jest.fn().mockResolvedValue(undefined);
-    svc.empanelments = {
-      findOne: jest.fn().mockResolvedValue(
-        existingStatus === null ? null : { assayerId: 'a1', clientId: 'c1', status: existingStatus },
-      ),
-      create: jest.fn((v: any) => ({ ...v })),
-      save: jest.fn(async (row: any) => { saved.push(row); return row; }),
+    svc.empanelments = repo;
+    svc.dataSource = {
+      transaction: (fn: any) => fn({ query: jest.fn(async () => locked), getRepository: () => repo }),
     };
     svc.auditService = { recordEventSafe: jest.fn(async (e: any) => { audits.push(e); }) };
     return { svc, saved, audits };
   };
 
+  /**
+   * `expectedVersion` is supplied for every existing standing because the server now refuses an
+   * edit that arrives without one. That refusal has its own cases in
+   * `empanelment-concurrency.spec.ts`; these are about the reversal rule, and a missing version
+   * would refuse them before the rule was ever reached.
+   */
   const set = (svc: any, status: EmpanelmentStatus, statusReason?: string) =>
-    svc.setEmpanelment('a1', 'c1', { status, statusReason }, 'actor-1');
+    svc.setEmpanelment('a1', 'c1', { status, statusReason, expectedVersion: 1 }, 'actor-1');
 
   it('refuses to lift a rejection with no reason, and writes nothing', async () => {
     const { svc, saved, audits } = build(EmpanelmentStatus.REJECTED);

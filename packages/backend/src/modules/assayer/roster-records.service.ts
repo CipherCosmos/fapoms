@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull, SelectQueryBuilder } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, In, IsNull, SelectQueryBuilder, DataSource } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { assertTenantOwns, tenantFilterId, tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
 import {
@@ -30,6 +30,9 @@ import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AuditService } from '../../core/audit/audit.service';
+import {
+  assertEmpanelmentVersion, lockEmpanelmentRow, translateConcurrentEmpanelmentCreate,
+} from './empanelment-version';
 
 /**
  * The workforce records the roster spreadsheet was holding sideways.
@@ -111,6 +114,12 @@ export class RosterRecordsService {
     @InjectRepository(AssayerBackgroundCheckEntity) private readonly checks: Repository<AssayerBackgroundCheckEntity>,
     @InjectRepository(AssayerDocumentEntity) private readonly onboarding: Repository<AssayerDocumentEntity>,
     @InjectRepository(AssayerImportIssueEntity) private readonly issues: Repository<AssayerImportIssueEntity>,
+    /**
+     * Needed for exactly one thing: `setEmpanelment` takes a row lock, and a `FOR UPDATE` outside
+     * a transaction is released immediately and guards nothing. Every other write in this service
+     * is a single statement whose own row lock is enough.
+     */
+    @InjectDataSource() private readonly dataSource: DataSource,
     @Optional() @InjectRepository(AssayerDocumentVersionEntity) private readonly docVersions?: Repository<AssayerDocumentVersionEntity>,
     // Optional so existing specs that build this service through Nest's DI without an audit
     // collaborator still resolve; DI always supplies the real one. The `?` alone only helps
@@ -619,56 +628,121 @@ export class RosterRecordsService {
 
   // ── Client standing ───────────────────────────────────────────────────
 
+  /**
+   * Record where one assayer stands with one client.
+   *
+   * ## Why this is a locked transaction rather than a read and a save
+   *
+   * Three concurrent calls carrying three different standings all answered **200** and the row
+   * kept one of them. The version went 1 → 4 across those three calls, so the collision was
+   * recorded in the row and nobody looked; the two desks whose decision was discarded were told
+   * it had saved. This standing gates assignment eligibility, so the discarded decision can be a
+   * REJECTED overwritten by a concurrent RECOMMENDED — and the person becomes deployable to a
+   * client who declined them, with an `EMPANELMENT_SET` audit row presenting it as deliberate.
+   *
+   * The lock is taken BEFORE anything is read, and every decision below — the version check, the
+   * reversal guard, the previous status that reaches the audit row — is answered from what came
+   * back under it. See `empanelment-version.ts`, and `client/pricing-version.ts` for the same
+   * mechanism on the client billing row, which is where this one is taken from.
+   *
+   * The response is re-read from the database on the transaction's own connection, because the
+   * invariant is that **the HTTP result corresponds to the persisted value**. An in-memory entity
+   * handed back from `save` is the caller's own hope, not the row.
+   */
   async setEmpanelment(
     assayerId: string,
     clientId: string,
     dto: { status: EmpanelmentStatus; statusReason?: string; documentsOutstanding?: string;
-           clientReferenceCode?: string; decidedAt?: string; remarks?: string },
+           clientReferenceCode?: string; decidedAt?: string; remarks?: string;
+           expectedVersion?: number },
     actorId: string,
   ) {
     // Before the upsert, not after: this writes whether a bank will send someone work, and an
     // unscoped `assayerId` here empanels or blacklists another organisation's assayer against a
     // client — with an `EMPANELMENT_SET` audit row recording it as a legitimate decision.
     await this.assertOwnedAssayer(assayerId);
-    // Upsert: the unique constraint permits exactly one standing per pair, and this is the
-    // decision about it rather than another opinion alongside it.
-    const existing = await this.empanelments.findOne({ where: { assayerId, clientId } });
-    const previousStatus = existing?.status ?? null;
 
-    /**
-     * Undoing a client's rejection has to be said out loud.
-     *
-     * `EmpanelmentStatus` has no state machine and deliberately keeps none: the business decided
-     * (2026-09-10) that a rejection stays reversible, because a client changing its mind is an
-     * ordinary thing and making it terminal would push the correction into a database edit where
-     * nobody would see it at all. What it must not be is silent. Every other standing change is a
-     * routine update and stays one; moving *away* from REJECTED is the one transition that
-     * overturns somebody else's decision, so it carries a reason into the `EMPANELMENT_SET` audit
-     * row beside the actor and the previous value.
-     *
-     * The assignment layer is unaffected either way — `REJECTED` is a strictly non-overridable
-     * standing there, so no work can reach the field through this route regardless.
-     */
-    if (previousStatus === EmpanelmentStatus.REJECTED && dto.status !== EmpanelmentStatus.REJECTED) {
-      if (!dto.statusReason?.trim()) {
-        throw new BadRequestException(
-          `Say why this client's rejection is being reversed. Moving from REJECTED to ${dto.status} `
-          + 'overturns a decision the client made, and the reason is recorded against whoever made it.',
-        );
+    const { saved, previousStatus } = await this.dataSource.transaction(async (m) => {
+      const repo = m.getRepository(AssayerClientEmpanelmentEntity);
+      // Lock FIRST, read after. Anything else leaves a window in which the row below is already
+      // stale and `save` writes straight over the winner — see `empanelment-version.ts`.
+      const locked = await lockEmpanelmentRow(m, assayerId, clientId);
+
+      /**
+       * Undoing a client's rejection has to be said out loud.
+       *
+       * `EmpanelmentStatus` has no state machine and deliberately keeps none: the business decided
+       * (2026-09-10) that a rejection stays reversible, because a client changing its mind is an
+       * ordinary thing and making it terminal would push the correction into a database edit where
+       * nobody would see it at all. What it must not be is silent. Every other standing change is a
+       * routine update and stays one; moving *away* from REJECTED is the one transition that
+       * overturns somebody else's decision, so it carries a reason into the `EMPANELMENT_SET` audit
+       * row beside the actor and the previous value.
+       *
+       * Answered from `locked.status` — the committed value — rather than from an unlocked read.
+       * A guard decided against a copy taken before a concurrent REJECTED committed would let the
+       * reason-less reversal through over the top of it, which is the defect in miniature.
+       *
+       * The assignment layer is unaffected either way — `REJECTED` is a strictly non-overridable
+       * standing there, so no work can reach the field through this route regardless.
+       */
+      const guardReversal = (from: EmpanelmentStatus) => {
+        if (from === EmpanelmentStatus.REJECTED && dto.status !== EmpanelmentStatus.REJECTED
+            && !dto.statusReason?.trim()) {
+          throw new BadRequestException(
+            `Say why this client's rejection is being reversed. Moving from REJECTED to ${dto.status} `
+            + 'overturns a decision the client made, and the reason is recorded against whoever made it.',
+          );
+        }
+      };
+
+      if (!locked) {
+        // The create half. There is no earlier decision to be stale about, so no version is
+        // demanded — but two callers can still arrive here at once, and the unique constraint
+        // lets one of them through. The loser used to get a 500.
+        const fresh = repo.create({
+          assayerId,
+          clientId,
+          status: dto.status,
+          statusReason: dto.statusReason ?? null,
+          documentsOutstanding: dto.documentsOutstanding ?? null,
+          clientReferenceCode: dto.clientReferenceCode ?? null,
+          decidedAt: dto.decidedAt ? new Date(dto.decidedAt) : new Date(),
+          remarks: dto.remarks ?? null,
+          isActive: true,
+          createdBy: actorId,
+          updatedBy: actorId,
+        });
+        const inserted = await repo.save(fresh).catch(translateConcurrentEmpanelmentCreate);
+        return {
+          saved: await repo.findOneOrFail({ where: { id: inserted.id } }),
+          previousStatus: null as EmpanelmentStatus | null,
+        };
       }
-    }
 
-    const row = existing ?? this.empanelments.create({ assayerId, clientId, createdBy: actorId });
+      // Version before reversal: a writer who did not see the current standing is stale first and
+      // foremost, and telling it to justify a reversal it never knew about would be the wrong
+      // sentence. It reloads, sees REJECTED, and is then asked for the reason.
+      assertEmpanelmentVersion(locked, dto.expectedVersion);
+      guardReversal(locked.status);
 
-    row.status = dto.status;
-    row.statusReason = dto.statusReason ?? null;
-    row.documentsOutstanding = dto.documentsOutstanding ?? null;
-    row.clientReferenceCode = dto.clientReferenceCode ?? row.clientReferenceCode ?? null;
-    row.decidedAt = dto.decidedAt ? new Date(dto.decidedAt) : new Date();
-    row.remarks = dto.remarks ?? null;
-    row.isActive = true;
-    row.updatedBy = actorId;
-    const saved = await this.empanelments.save(row);
+      const row = await repo.findOneOrFail({ where: { id: locked.id } });
+      row.status = dto.status;
+      row.statusReason = dto.statusReason ?? null;
+      row.documentsOutstanding = dto.documentsOutstanding ?? null;
+      row.clientReferenceCode = dto.clientReferenceCode ?? row.clientReferenceCode ?? null;
+      row.decidedAt = dto.decidedAt ? new Date(dto.decidedAt) : new Date();
+      row.remarks = dto.remarks ?? null;
+      row.isActive = true;
+      row.updatedBy = actorId;
+      await repo.save(row);
+      // The committed row, not the in-memory copy: the response has to be the persisted value.
+      return {
+        saved: await repo.findOneOrFail({ where: { id: locked.id } }),
+        previousStatus: locked.status as EmpanelmentStatus | null,
+      };
+    });
+
     // Whether this bank will send someone work is a decision, and "who set this and when" has
     // to be answerable the same way a lifecycle move is — there was previously no trail at all.
     await this.auditService?.recordEventSafe({
@@ -680,7 +754,14 @@ export class RosterRecordsService {
       newState: saved.status,
       userId: actorId,
       remarks: `Client empanelment set to ${saved.status}${dto.statusReason ? `: ${dto.statusReason}` : ''}`,
-      metadata: { clientId, previousValue: { status: previousStatus }, newValue: { status: saved.status, statusReason: saved.statusReason } },
+      // `version` rides along so the trail says which committed revision this decision became.
+      // A run of EMPANELMENT_SET rows with no version cannot be told apart from a lost update
+      // after the fact, which is how this went unnoticed for as long as it did.
+      metadata: {
+        clientId,
+        previousValue: { status: previousStatus },
+        newValue: { status: saved.status, statusReason: saved.statusReason, version: saved.version },
+      },
     });
     return saved;
   }
