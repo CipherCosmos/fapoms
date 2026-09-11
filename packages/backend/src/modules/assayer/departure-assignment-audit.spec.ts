@@ -43,8 +43,17 @@ import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 describe('assignments cancelled by a departure', () => {
   let service: AssayerService;
 
-  /** The rows the cascade's `UPDATE … RETURNING` hands back — what it actually changed. */
+  /**
+   * The rows the cascade's `UPDATE … RETURNING` hands back — what it actually changed.
+   *
+   * Served to the service in TypeORM's real shape for a writing statement, `[rows, affected]`,
+   * NOT as a bare row list. That distinction is not cosmetic: a fixture that handed the rows over
+   * directly passed every case here while production wrote every audit row with an undefined
+   * entityId — the count on the employment record right, the assignments still bare, and a 200 on
+   * the way out. The live run found it; this shape is what stops it coming back.
+   */
   let cancelledRows: any[];
+  const returning = () => [cancelledRows, cancelledRows.length];
   /** Every `recordEvent` call, in order, with the manager it was given. */
   let events: Array<{ dto: any; scope: any }>;
   /** What the transition's `SELECT … FOR UPDATE` finds — the state it is moving away from. */
@@ -88,7 +97,7 @@ describe('assignments cancelled by a departure', () => {
     if (/FROM assayers\b/i.test(sql) && /FOR UPDATE/i.test(sql)) {
       return [{ lifecycle_status: lockedState, version: 1 }];
     }
-    if (/UPDATE\s+assignments\b/i.test(sql)) return cancelledRows;
+    if (/UPDATE\s+assignments\b/i.test(sql)) return returning();
     if (/UPDATE\s+assayer_client_empanelments\b/i.test(sql)) return [[], 0];
     return [];
   };

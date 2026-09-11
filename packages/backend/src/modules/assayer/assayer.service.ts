@@ -637,6 +637,23 @@ export interface BulkLifecycleResult {
   failed: { id: string; reason: string }[];
 }
 
+/**
+ * One assignment the departure cascade cancelled, as its `UPDATE … RETURNING` reports it.
+ *
+ * `previous_status` is the value the same statement overwrote — read from the locked row inside
+ * the UPDATE rather than by a separate SELECT, so a concurrent accept cannot make the audit row
+ * describe a state the assignment was no longer in.
+ */
+interface CancelledAssignmentRow {
+  id: string;
+  assignment_number: string | null;
+  previous_status: string;
+  previous_version: number | null;
+  new_version: number | null;
+  scheduled_date: string | null;
+  project_branch_id: string | null;
+}
+
 @Injectable()
 export class AssayerService implements OnModuleInit {
   private readonly logger = new Logger(AssayerService.name);
@@ -3441,11 +3458,7 @@ export class AssayerService implements OnModuleInit {
      * CANCELLED and REJECTED work is neither mutated nor audited. Nothing about a delivered or
      * already-closed assignment changes because somebody left.
      */
-    const cancelled: Array<{
-      id: string; assignment_number: string | null; previous_status: string;
-      previous_version: number | null; new_version: number | null;
-      scheduled_date: string | null; project_branch_id: string | null;
-    }> = await runner.query(
+    const raw = await runner.query(
       `UPDATE assignments a
           SET status = $1, cancel_reason = $2, updated_by = $3,
               entity_version = COALESCE(a.entity_version, 1) + 1, updated_at = NOW()
@@ -3464,7 +3477,24 @@ export class AssayerService implements OnModuleInit {
               a.scheduled_date,
               a.project_branch_id`,
       [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssayerService.OPEN_ASSIGNMENT_STATUSES],
-    ) ?? [];
+    );
+
+    /**
+     * `[rows, affectedCount]`, not `rows` — and getting this wrong is silent.
+     *
+     * TypeORM hands a writing statement back as a two-element tuple, which is why the previous
+     * version of this method read the count as `const [, affected] = …`. Treating that tuple as
+     * the row list iterates over `[rows]` and a number, so every audit row is written with an
+     * undefined `entityId`: the count on the employment record is right, the assignments still
+     * have nothing against them, and every HTTP response is a 200. The unit fixture that served
+     * rows directly was the shape that hid it; the live run is what found it.
+     *
+     * Both shapes are accepted rather than depending on a driver version — an array of arrays is
+     * the tuple, an array of rows is the rows.
+     */
+    const cancelled: CancelledAssignmentRow[] = Array.isArray(raw) && Array.isArray(raw[0])
+      ? raw[0]
+      : (Array.isArray(raw) ? raw : []);
 
     await this.auditCancelledOnDeparture(cancelled, assayerId, target, userId, reason, manager, departureEventId);
 
@@ -3507,11 +3537,7 @@ export class AssayerService implements OnModuleInit {
    * a second apart.
    */
   private async auditCancelledOnDeparture(
-    cancelled: Array<{
-      id: string; assignment_number: string | null; previous_status: string;
-      previous_version: number | null; new_version: number | null;
-      scheduled_date: string | null; project_branch_id: string | null;
-    }>,
+    cancelled: CancelledAssignmentRow[],
     assayerId: string,
     target: AssayerLifecycleStatus,
     userId: string,
