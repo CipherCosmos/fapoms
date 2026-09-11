@@ -3,6 +3,19 @@
 #
 # Mutations are applied to SOURCE and exercised through jest. The running containers serve
 # compiled `dist`, so nothing here changes the behaviour of the live acceptance rig.
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# SAFETY CLASSIFICATION: MUTATES SOURCE FILES
+# ────────────────────────────────────────────────────────────────────────────────────────────
+#
+# source      : EDITS FILES IN THE WORKING TREE to remove a control, runs jest to prove the test
+#               goes red, then restores the file and verifies the checksum matches byte for byte.
+#               It SKIPS any file that already has uncommitted changes, so it will not mutate
+#               another session's edit — but it is still writing to your checkout.
+# deployment  : none. The containers serve compiled dist; nothing here reaches the running rig.
+# gate        : the uncommitted-changes check, and nothing else. Do not run it mid-edit.
+#
+# The full table for every script here is in scripts/acceptance/README.md.
+
 set -u
 REPO=/Users/deepstacker/WorkSpace/dupcq/gssAutomation
 cd "$REPO" || exit 2

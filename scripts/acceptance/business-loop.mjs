@@ -7,6 +7,20 @@
  *
  * Everything it creates is prefixed ACC- so it can be told apart from seeded data.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : signs each persona in and rotates the seeded password to AC_PASSWORD.
+ * api writes  : creates and completes an assignment, which BOOKS REAL MONEY (a payable and a
+ *               client line), then approves and pays it.
+ * consumes    : one project-branch per run, permanently — a completed audit closes its branch.
+ * deletion    : none. Earlier runs are closed through the product, never deleted.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { createRequire } from 'node:module';
 // `pg` lives in the workspace, not beside this script.
 const require = createRequire(

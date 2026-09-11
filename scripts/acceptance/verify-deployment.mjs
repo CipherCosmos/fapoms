@@ -92,6 +92,20 @@
  * reporting outcome, not a defect — but the summary states how many there were, because a
  * certification with nine UNKNOWNs is not a certification and should not read like one.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: READ-ONLY by default
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : NEVER rotates. signIn() reports mustChangePassword as a finding and stops —
+ *               this is the script the other probes were measured against.
+ * api writes  : none unless opted in. AC_EICAR=1 uploads the EICAR string and a clean control
+ *               (3.10); AC_ALLOW_WRITES=1 lets 3.13 create business records.
+ * db          : read-only, and only when AC_DB=1 is given a database it may read.
+ * gate        : both opt-ins are off by default and each says what it will do.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { execFileSync } from 'node:child_process';
 import tls from 'node:tls';
 import { URL } from 'node:url';

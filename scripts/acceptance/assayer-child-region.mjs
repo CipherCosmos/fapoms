@@ -30,6 +30,23 @@
  *
  * Usage:  AC_ENV_FILE=… node scripts/acceptance/assayer-child-region.mjs
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : rotates an assayer app login it minted itself (gated, announced).
+ * db writes   : SQL UPDATE on users.regions / is_active / must_change_password for the probe
+ *               account; clones rows into assayers and every child table.
+ * role changes: DELETEs and re-INSERTs that account's user_roles to make it a region-scoped ADMIN.
+ * deletion    : DELETEs assayer child rows through the API (attributes, overrides, references,
+ *               empanelments, document files) as part of the measurement.
+ * teardown    : none — fixture rows are left behind under the run tag.
+ * gate        : declareMutating + AC_ALLOW_WRITES; rotation needs AC_ALLOW_PASSWORD_ROTATION.
+ * NOTE        : the writes that SUCCEED are the finding. On a deployment they are real.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { API, req, login, sql, one, tally, env, declareMutating, canRotatePassword } from './_lib.mjs';
 
 const TAG = `AC${Date.now()}`;

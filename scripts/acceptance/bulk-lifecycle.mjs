@@ -32,6 +32,21 @@
  * (`BulkTransitionLifecycleDto` validates `@IsUUID('4')`, and an md5-derived id fails that), and
  * removed children-first at both ends of the run. Shared fixtures are never mutated.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : none.
+ * db writes   : INSERTs throwaway assayers under the ACBL- prefix.
+ * api writes  : walks their lifecycle_status through POST /assayers/bulk/lifecycle — real
+ *               transitions, real audit rows. That walk is the subject of the test.
+ * deletion    : DELETEs its own ACBL- rows and their children at both ends of the run.
+ *               audit_events is deliberately never touched.
+ * gate        : declareMutating + AC_ALLOW_WRITES.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { env, req, sql, one, login, tally, pool, declareMutating } from './_lib.mjs';
 
 const PREFIX = 'ACBL-';

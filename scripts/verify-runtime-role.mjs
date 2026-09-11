@@ -23,6 +23,21 @@
  * Exit code 0 means: migrations run under a non-superuser role, the runtime identity is
  * least-privileged, every listed attack is refused, and normal operations still work.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE — CREATES AND DROPS A DATABASE
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * databases   : CREATE DATABASE, applies the role split, then DROP DATABASE ... WITH (FORCE).
+ * destructive : deliberately ATTEMPTS TRUNCATE / DROP TRIGGER / DROP TABLE / DROP FUNCTION on
+ *               audit_events and audit_chain as fapoms_runtime, to prove each is refused — and
+ *               GRANTs itself TRUNCATE/UPDATE/DELETE to prove the grant changes nothing. All of
+ *               it inside the throwaway database, never the real one.
+ * credential  : needs an admin credential that may CREATE and DROP databases.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';

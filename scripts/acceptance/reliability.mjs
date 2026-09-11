@@ -22,6 +22,25 @@
  * that could remove data runs inside a transaction that is always rolled back. See
  * docs/incident-2026-09-09-audit-truncate.md for why that rule exists.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE — STOPS CONTAINERS
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * THE MOST DANGEROUS SCRIPT HERE. It does not only write; it takes the deployment apart.
+ * containers  : `docker stop` and `docker start` on the WORKER container (AC_WORKER, default
+ *               deploy-backend-worker-1) to prove an api-only deployment drains no outbox. While
+ *               it is stopped NOTHING is processed: no payables, no audit sealing, no retention.
+ *               It also runs redis-cli inside the Redis container to read Bull's repeat keys.
+ * api writes  : creates assignments tagged ACC-REL and completes them, which books real money.
+ * destructive : SQL probes that could remove data run inside a transaction that is ALWAYS rolled
+ *               back, and audit_events is never TRUNCATEd or DELETEd from. That rule is the
+ *               lesson of docs/incident-2026-09-09-audit-truncate.md.
+ * gate        : none of its own — it does not use _lib.mjs. DO NOT run it against a deployment
+ *               anybody is using.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 

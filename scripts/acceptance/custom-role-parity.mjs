@@ -26,6 +26,21 @@
  * at 20/min/IP independently of THROTTLE_LIMIT and this host is shared, so sign-ins are paced and
  * every token is minted once and reused.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : none beyond sign-in.
+ * role changes: REWRITES the permission set of a custom role through PUT /users/roles/:id/
+ *               permissions, and restores the original set at the end. An aborted run leaves the
+ *               role holding the probe's permissions.
+ * api writes  : attempts privileged writes as that role to prove refusal; where the fallback is
+ *               wider than expected those attempts SUCCEED, and that is the finding.
+ * gate        : declareMutating + AC_ALLOW_WRITES.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { login, req, sql, one, pool, tally, env, CERT_PASSWORD, declareMutating } from './_lib.mjs';
 
 const ADMIN_USER = env.AC_USERNAME ?? 'admin';

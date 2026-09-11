@@ -11,6 +11,22 @@
  * Every refusal is checked against the database as well as the status code: a 403 that still
  * mutated is worse than a 200.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : signs each persona in and rotates the seeded password to AC_PASSWORD.
+ * db writes   : none through SQL except the destructive audit probes below.
+ * destructive : ATTEMPTS TRUNCATE/DELETE/UPDATE/DROP on audit_events and audit_chain as the
+ *               runtime role, to prove they are refused. Each runs inside a transaction that is
+ *               ALWAYS rolled back — docs/incident-2026-09-09-audit-truncate.md is why.
+ * deletion    : attempts DELETE /assayers/:id expecting 403; asserts nothing moved.
+ * teardown    : none needed.
+ * gate        : none of its own — it does not use _lib.mjs. Read the rotation note above.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { createRequire } from 'node:module';
 const require = createRequire(
   process.env.AC_REPO ? `${process.env.AC_REPO}/package.json`

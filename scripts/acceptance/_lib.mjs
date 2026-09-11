@@ -202,27 +202,52 @@ export const one = async (q, p) => (await sql(q, p))[0] ?? null;
  * certification runs sat for 313s and 371s with nothing on screen and one had to be killed, which
  * is indistinguishable from a broken product. On reaching the budget this returns the 429 as
  * itself, so a caller can report "throttled, UNKNOWN" rather than mistake it for a denial.
+ *
+ * ── THE MEASURER'S OWN SLEEP IS NOT LATENCY ───────────────────────────────────────────────────
+ *
+ * Because the wait happens inside this function, a caller timing `await req(...)` with a clock on
+ * the outside measures **wait + request** and reports it as one number. That is how a certification
+ * run came to report a "60.4 second login" against a 2.4 s threshold. Twelve controlled logins
+ * against the same rig measured 0.199 – 0.323 s; the 60.4 s was twenty-odd seconds of honouring
+ * `Retry-After`, twice, with a fast 200 on the end. A performance number that includes the
+ * measurer's own sleep is worse than no number, because somebody acts on it.
+ *
+ * So every result now carries the split, and callers are expected to use it:
+ *
+ *   requestMs  time on the wire for the attempt that ANSWERED. This is the latency.
+ *   waitedMs   time this helper spent deliberately asleep honouring Retry-After. Not latency.
+ *   attempts   how many times the request was made. > 1 means the sample was taken under
+ *              contention, which is worth knowing even though requestMs is clean.
  */
 export async function req(path, { method = 'GET', token, body, budgetMs = 90_000 } = {}) {
   const deadline = Date.now() + budgetMs;
+  let waitedMs = 0;
+  let attempts = 0;
   for (;;) {
+    attempts++;
+    const sent = Date.now();
     const r = await fetch(API + path, {
       method,
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
+    const requestMs = Date.now() - sent;
     if (r.status === 429 && Date.now() < deadline) {
       const after = Number(r.headers.get('retry-after'));
       const waitMs = Number.isFinite(after) && after > 0 ? Math.min(after * 1000 + 500, 30_000) : 2_500;
       if (Date.now() + waitMs >= deadline) {
         let j = null; try { j = await r.json(); } catch {}
-        return { status: 429, body: j, msg: `throttled for the whole ${budgetMs}ms budget — treat as UNKNOWN, not a denial` };
+        return {
+          status: 429, body: j, requestMs, waitedMs, attempts,
+          msg: `throttled for the whole ${budgetMs}ms budget — treat as UNKNOWN, not a denial`,
+        };
       }
       await new Promise((s) => setTimeout(s, waitMs));
+      waitedMs += waitMs;
       continue;
     }
     let j = null; try { j = await r.json(); } catch {}
-    return { status: r.status, body: j, msg: j?.message ?? j?.error ?? null };
+    return { status: r.status, body: j, msg: j?.message ?? j?.error ?? null, requestMs, waitedMs, attempts };
   }
 }
 
@@ -274,6 +299,24 @@ export async function login(username, password = CERT_PASSWORD) {
   }
   if (!tok) throw new Error(`login ${username} produced no usable token`);
   return { token: tok, user: r.body?.data?.user ?? null };
+}
+
+/**
+ * The current version of a client standing, or null when there is no row yet.
+ *
+ * `PUT /assayers/:id/empanelment/:clientId` stopped being a free-form upsert on 2026-09-11: an
+ * UPDATE now requires `expectedVersion`, so that two desks recording different standings at the
+ * same time cannot both be told theirs saved while one is silently discarded. A CREATE still needs
+ * no version — there is no earlier decision to be stale about.
+ *
+ * Probes that set up a panel standing as a FIXTURE therefore have to read the version first. This
+ * is that read, in one place, because three scripts were about to grow their own copy of it.
+ */
+export async function empanelmentVersion(assayerId, clientId) {
+  const row = await one(
+    `SELECT version FROM assayer_client_empanelments WHERE assayer_id = $1 AND client_id = $2`,
+    [assayerId, clientId]);
+  return row ? Number(row.version) : null;
 }
 
 export function tally() {

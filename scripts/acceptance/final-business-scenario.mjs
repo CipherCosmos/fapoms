@@ -11,6 +11,19 @@
  * trail and the financial state are compared against each other. This is the scenario the
  * acceptance report's verdict rests on.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : rotates each persona, and an assayer app login, to AC_PASSWORD.
+ * api writes  : the full commercial loop — assignments, completion, payables, invoices.
+ *               BOOKS REAL MONEY.
+ * consumes    : project-branches, permanently.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { createRequire } from 'node:module';
 const require = createRequire(
   (process.env.AC_REPO || '/Users/deepstacker/WorkSpace/dupcq/gssAutomation') + '/package.json');

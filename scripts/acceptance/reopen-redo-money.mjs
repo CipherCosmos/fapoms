@@ -18,6 +18,20 @@
  * Env:    reads scratchpad acc.env (AC_API, AC_PASSWORD, DB_*) via pa/lib.mjs when present,
  *         otherwise AC_API / AC_PASSWORD / DB_* from the environment.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : none beyond sign-in.
+ * api writes  : creates a fixture branch and an assignment, then completes / reopens /
+ *               re-completes it. BOOKS AND VOIDS REAL MONEY each time round.
+ * deletion    : DELETEs its own fixture at the end — payments, payables, billing entries, the
+ *               assignment, the project_branch and the branch.
+ * gate        : declareMutating + AC_ALLOW_WRITES.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { env, req, sql, one, login, tally, freshBranch, pool, declareMutating } from './_lib.mjs';
 
 const { check, done } = tally();

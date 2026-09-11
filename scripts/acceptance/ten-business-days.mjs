@@ -40,10 +40,34 @@
  *
  *   node scripts/acceptance/ten-business-days.mjs
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : mints assayer app logins and rotates their forced password (gated, announced).
+ * api writes  : ten business days of real work — assayers, branches, assignments, documents,
+ *               panel standings. BOOKS, APPROVES AND PAYS REAL MONEY, and mints a client invoice.
+ * deletion    : DELETEs everything it made, by run tag, at both ends of the run.
+ * gate        : declareMutating + AC_ALLOW_WRITES; rotation needs AC_ALLOW_PASSWORD_ROTATION.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 
-const LIB = process.env.PA_LIB
-  || '/private/tmp/claude-501/-Users-deepstacker-WorkSpace-dupcq-gssAutomation/18ced63c-3709-4b5e-a708-90162fd58be8/scratchpad/pa/lib.mjs';
-const { env, req, sql, one, login, tally, pool, freshBranch } = await import(LIB);
+/**
+ * The helpers come from THIS DIRECTORY, not from a scratchpad.
+ *
+ * This used to default to an absolute path into a campaign scratchpad — a forked, older copy of
+ * `_lib.mjs` that is not in the repository. Two consequences, both bad: on any other machine the
+ * probe aborted on the first line, and on this one it silently ran DIFFERENT code from the file
+ * anybody reads when they want to know what it does. The two copies had already drifted; the
+ * scratchpad one carries neither the read-only write gate nor the request/wait split, so a fix
+ * made to `_lib.mjs` appeared to have no effect here at all.
+ *
+ * `PA_LIB` still overrides, for anyone who genuinely wants a different helper set.
+ */
+const LIB = process.env.PA_LIB || new URL('./_lib.mjs', import.meta.url).href;
+const { env, req, sql, one, login, tally, pool, freshBranch, empanelmentVersion, declareMutating, canRotatePassword } = await import(LIB);
 
 // ── house-keeping ──────────────────────────────────────────────────────────────────────────────
 
@@ -107,16 +131,25 @@ const CAST_DEF = {
 };
 const cast = {};       // token holders, by role name
 
-const traffic = { calls: 0, ms: 0, slow: [], relogins: [] };
-const SLOW_MS = 2400;   // the library's 429 back-off, and a generous ceiling for any call here
+const traffic = { calls: 0, ms: 0, waitedMs: 0, throttled: 0, slow: [], relogins: [] };
+const SLOW_MS = 2400;   // a generous ceiling for any REQUEST here, waiting excluded
 
 /**
- * The transport, with two pieces of honesty built in.
+ * The transport, with three pieces of honesty built in.
  *
  * The library's `req` absorbs a 429 by sleeping and retrying, so a throttle never reaches an
  * assertion as a status code — but it also disappears from the record, and a run that spent four
  * minutes being rate-limited should say so. Calls taking longer than the retry interval are
  * counted, and reported at the end.
+ *
+ * The third is the one this run got wrong before. Because that sleep happens INSIDE `req`, a clock
+ * on the outside measures wait + request and calls the total "latency" — which is how this script
+ * reported a 60.4 second login against a 2.4 s threshold. Twelve controlled logins measured
+ * 0.199 - 0.323 s; the rest was the measurer's own deliberate backoff. `req` now returns
+ * `requestMs` and `waitedMs` separately, and NOTHING here reports the two added together: the slow
+ * list is built from request time alone, the throttle wait is tallied on its own line, and a call
+ * that had to be retried is counted so a clean number taken under contention is still visible as
+ * one.
  *
  * The second is a single re-authentication on a 401. This stack is shared: sessions belonging to
  * other work invalidate caches and flip account state underneath a long run, and a token that
@@ -136,18 +169,31 @@ function bounded(promise, label) {
 
 async function api(path, opts = {}) {
   const started = Date.now();
+  let waited = 0;
+  let attempts = 0;
   let r = await bounded(req(path, opts), path);
+  waited += r.waitedMs ?? 0; attempts += r.attempts ?? 1;
   if (r.status === 401 && opts.token) {
     const who = Object.keys(cast).find((k) => cast[k]?.token === opts.token);
     if (who) {
       traffic.relogins.push(`${who} during ${SID}: ${r.status} ${short(msg(r), 70)}`);
       cast[who] = await signIn(...CAST_DEF[who]);
       r = await bounded(req(path, { ...opts, token: cast[who].token }), path);
+      waited += r.waitedMs ?? 0; attempts += r.attempts ?? 1;
     }
   }
   const took = Date.now() - started;
-  traffic.calls++; traffic.ms += took;
-  if (took > SLOW_MS) traffic.slow.push(`${SID}  ${(opts.method ?? 'GET').padEnd(5)} ${path.split('?')[0]}  ${(took / 1000).toFixed(1)}s -> ${r.status}`);
+  // Subtracting `waited` from elapsed, rather than using `r.requestMs`, so the bounded-timeout
+  // path and the re-auth leg are covered too. Never `took` on its own — that is the number that
+  // read as a 60-second login.
+  const requestMs = Math.max(0, took - waited);
+  traffic.calls++; traffic.ms += requestMs; traffic.waitedMs += waited;
+  if (attempts > 1) traffic.throttled++;
+  if (requestMs > SLOW_MS) {
+    traffic.slow.push(`${SID}  ${(opts.method ?? 'GET').padEnd(5)} ${path.split('?')[0]}  `
+      + `${(requestMs / 1000).toFixed(1)}s on the wire -> ${r.status}`
+      + (waited ? `   (+${(waited / 1000).toFixed(1)}s throttle wait, excluded)` : ''));
+  }
   return r;
 }
 
@@ -162,8 +208,9 @@ async function upload(path, token, blob, filename) {
     status = res.status;
   } catch (e) { status = -1; }
   const took = Date.now() - started;
+  // No retry and no backoff on this path, so elapsed IS request time.
   traffic.calls++; traffic.ms += took;
-  if (took > SLOW_MS) traffic.slow.push(`${SID}  POST  ${path}  ${(took / 1000).toFixed(1)}s -> ${status}`);
+  if (took > SLOW_MS) traffic.slow.push(`${SID}  POST  ${path}  ${(took / 1000).toFixed(1)}s on the wire -> ${status}`);
   return { status };
 }
 
@@ -351,15 +398,35 @@ async function issueAppAccess(assayer) {
   let l = await POST('/auth/login', null, { username: assayer.assayer_code, password: temp });
   const tok = l.body?.data?.accessToken;
   if (!tok) return null;
+  // A credential write, even on a handset login this run minted seconds ago. Announced and gated
+  // like every other one — see the READ-ONLY BY DEFAULT note in _lib.mjs.
+  if (!canRotatePassword(assayer.assayer_code, 'the probe minted this assayer app login and must clear its forced rotation')) return null;
   await POST('/assayers/me/change-password', tok, { currentPassword: temp, newPassword: env.CERT_PASSWORD });
   l = await POST('/auth/login', null, { username: assayer.assayer_code, password: env.CERT_PASSWORD });
   return l.body?.data?.accessToken ? { token: l.body.data.accessToken } : null;
 }
 
-/** Put this person on the client's panel. */
+/**
+ * Put this person on the client's panel.
+ *
+ * An UPDATE to a client standing now requires `expectedVersion` (2026-09-11: two desks recording
+ * different standings at once were both told theirs saved while one was discarded). A CREATE does
+ * not — there is no earlier decision to be stale about. So the version is read first and sent only
+ * when a row already exists.
+ *
+ * This matters beyond "the call works". S5 asserts that a REJECTED -> ACTIVE reversal with no
+ * written reason is refused 400 BECAUSE no reason was given. Omitting `expectedVersion` produces a
+ * 400 as well, from a different rule entirely — the check would go green while measuring nothing.
+ * Sending the right version is what keeps that assertion about the thing it names.
+ */
 async function empanel(assayerId, clientId, status = 'ACTIVE', statusReason) {
-  return PUT_(`/assayers/${assayerId}/empanelment/${clientId}`, cast.admin.token,
-    statusReason === undefined ? { status } : { status, statusReason });
+  const version = await empanelmentVersion(assayerId, clientId);
+  const body = {
+    status,
+    ...(statusReason === undefined ? {} : { statusReason }),
+    ...(version === null ? {} : { expectedVersion: version }),
+  };
+  return PUT_(`/assayers/${assayerId}/empanelment/${clientId}`, cast.admin.token, body);
 }
 
 /** A branch nobody has consumed, with the project and client that go with it. */
@@ -544,6 +611,15 @@ async function main() {
   console.log(`\n╔═ FAPOMS — ten business days ═══════════════════════════════════════════════`);
   console.log(`║  API ${env.AC_API}`);
   console.log(`║  run tag ${TAG} ${STAMP}\n`);
+  declareMutating('ten-business-days', [
+    'drives ten business days of real work: creates assayers, branches, project branches,',
+    '  assignments, documents, payouts and an invoice, through the product',
+    'BOOKS AND PAYS REAL MONEY: payouts are approved and released, and a client invoice is minted',
+    'writes client panel standings, including a REJECTED one and its reversal',
+    'mints assayer app logins and rotates their forced password — needs',
+    '  AC_ALLOW_PASSWORD_ROTATION=1 as well',
+    'deletes everything it made, at both ends of the run, by run tag',
+  ]);
 
   console.log('Teardown (before) — leftovers from any earlier run');
   await purge('before');
@@ -1320,8 +1396,9 @@ for (const s of scenarios) {
   for (const b of bad) console.log(`║          └─ ${b.name}\n║             ${String(b.detail ?? '').split('\n').join('\n║             ')}`);
 }
 console.log(`║`);
-console.log(`║  ${Math.round((Date.now() - started) / 1000)}s wall, ${traffic.calls} API calls, ${Math.round(traffic.ms / 1000)}s of it inside the API`);
-console.log(`║  calls slower than ${SLOW_MS / 1000}s: ${traffic.slow.length}`);
+console.log(`║  ${Math.round((Date.now() - started) / 1000)}s wall, ${traffic.calls} API calls, ${Math.round(traffic.ms / 1000)}s of it ON THE WIRE`);
+console.log(`║  throttle wait, counted separately and in NO latency figure above: ${(traffic.waitedMs / 1000).toFixed(1)}s across ${traffic.throttled} retried call(s)`);
+console.log(`║  REQUESTS slower than ${SLOW_MS / 1000}s (throttle waiting excluded): ${traffic.slow.length}`);
 for (const s of traffic.slow) console.log(`║      ${s}`);
 console.log(`║  sessions renewed mid-run: ${traffic.relogins.length}${traffic.relogins.length ? ` — ${traffic.relogins.join('; ')}` : ''}`);
 console.log(`║  assayers ${created.assayers.length}, branches ${created.branches.length}, assignments ${created.assignments.length}, invoices ${created.invoices.length}`);

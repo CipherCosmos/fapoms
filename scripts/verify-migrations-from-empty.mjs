@@ -23,6 +23,20 @@
  *   node scripts/verify-migrations-from-empty.mjs
  *   DB_PORT=55432 node scripts/verify-migrations-from-empty.mjs
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE — CREATES AND DROPS A DATABASE
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * databases   : CREATE DATABASE <scratch> TEMPLATE template0, runs every migration into it, then
+ *               DROP DATABASE ... WITH (FORCE). It never touches the database it connects to, and
+ *               the scratch name is generated per run.
+ * credential  : needs a DB_ADMIN_URL that may CREATE DATABASE — on a hardened cluster that is
+ *               NOT the application's credential. Point it only at a cluster you may do this on.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';

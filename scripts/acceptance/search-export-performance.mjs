@@ -16,7 +16,10 @@
  *   - It never writes. Every probe is a GET, a login, or a queued-report POST that produces a
  *     workbook and nothing else. The one exception is the queued-report POST, which enqueues.
  *   - It never treats a 429 as an answer. The throttler is a brake; a 429 is retried once and
- *     then recorded as UNKNOWN rather than as a denial or as a slow response.
+ *     then recorded as UNKNOWN rather than as a denial or as a slow response. Nor does it ever
+ *     report its own waiting as latency: `hit()` times each ATTEMPT on its own clock, so the
+ *     pacing sleep and the retry backoff are outside every number in the timing table, and the
+ *     tally prints how many seconds were spent asleep so the table can be read in context.
  *
  * ## The comparison method
  *
@@ -36,13 +39,33 @@
  * Configuration comes from the shared acceptance helpers (`PA_LIB`, see below), which read
  * `acc.env`. `PA_LIB` points at the campaign's `lib.mjs`; override it if the helpers move.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES (nearly read-only)
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : none beyond sign-in; caches tokens beside AC_ENV_FILE, never in the repo.
+ * api writes  : enqueues report jobs (a queued job and a workbook, no business rows). Every
+ *               measured surface is a GET.
+ * db writes   : installs pg_stat_statements IF ABSENT and removes it again only if it installed
+ *               it; calls pg_stat_statements_reset(), which DISCARDS every query statistic the
+ *               server had accumulated. On a monitored deployment that is somebody else's data.
+ * gate        : declareMutating + AC_ALLOW_WRITES.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 
 import XLSX from 'xlsx';
 
-const PA_LIB = process.env.PA_LIB
-  ?? '/private/tmp/claude-501/-Users-deepstacker-WorkSpace-dupcq-gssAutomation/18ced63c-3709-4b5e-a708-90162fd58be8/scratchpad/pa/lib.mjs';
+/**
+ * The helpers come from THIS DIRECTORY, not from a scratchpad. See the same note in
+ * `ten-business-days.mjs`: the old default was an absolute path to a forked copy of `_lib.mjs`
+ * that is not in the repository, so this script ran code nobody could read and aborted outright
+ * on any other machine. `PA_LIB` still overrides.
+ */
+const PA_LIB = process.env.PA_LIB ?? new URL('./_lib.mjs', import.meta.url).href;
 const lib = await import(PA_LIB);
-const { env, API, login, sql, one, pool, CERT_PASSWORD } = lib;
+const { env, API, login, sql, one, pool, CERT_PASSWORD, declareMutating } = lib;
 
 const PHASES = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 const want = (p) => PHASES.length === 0 || PHASES.includes(p);
@@ -54,6 +77,17 @@ let fail = 0;
 let unknown = 0;
 const findings = [];
 const timings = [];
+/**
+ * Time this script spent DELIBERATELY ASLEEP, kept out of every latency number it prints.
+ *
+ * `hit()` times each attempt on its own clock, so the pacing sleep and the 429 retry sleep were
+ * already outside the measurement. What was missing is the other half: the reader could not see
+ * that a run had been contended at all. A p50 of 40 ms taken while the script was also spending
+ * two minutes queueing behind somebody else's traffic is a true number in a misleading context,
+ * and the sibling probe's "60.4 second login" came from exactly this family of mistake — reporting
+ * the measurer's own sleep as if it were the server's.
+ */
+const waiting = { pacingMs: 0, retryMs: 0, retried: 0 };
 
 const check = (name, ok, detail) => {
   if (ok === null) { unknown++; console.log(`UNKN  ${name}${detail ? `\n        ${detail}` : ''}`); return; }
@@ -98,6 +132,7 @@ async function paceReports(path) {
     const waitMs = REPORT_WINDOW_MS - (now - seen[0]) + 250;
     console.log(`     (pacing ${key}: ${Math.ceil(waitMs / 1000)}s to stay under its 10/min budget)`);
     await new Promise((s) => setTimeout(s, waitMs));
+    waiting.pacingMs += waitMs;
     reportCalls.set(key, (reportCalls.get(key) ?? []).filter((t) => Date.now() - t < REPORT_WINDOW_MS));
   }
   reportCalls.set(key, [...(reportCalls.get(key) ?? []).filter((t) => Date.now() - t < REPORT_WINDOW_MS), Date.now()]);
@@ -133,9 +168,12 @@ async function hit(path, { method = 'GET', token, body, accept } = {}) {
   let r = await send();
   if (r.status === 429) {
     await new Promise((s) => setTimeout(s, 3000));
+    waiting.retryMs += 3000; waiting.retried++;
     r = await send();
     if (r.status === 429) r.throttled = true;
   }
+  // `r.ms` is the attempt that ANSWERED, timed on its own clock — the sleep above is never in it.
+  r.retriedAfterThrottle = waiting.retried > 0 && r.status !== 429 && waiting.retryMs > 0;
   /**
    * A 401 that says the account is inactive is not this endpoint's answer.
    *
@@ -270,8 +308,20 @@ const P = {};
  * anything. A cached token is used only after `GET /users/me` proves it still works, so a stale
  * or revoked one costs one request and falls through to a real login.
  */
-const TOKEN_CACHE = new URL('../sxp-tokens.json', new URL(PA_LIB, 'file:///'));
+/**
+ * Beside the credentials file, or in the OS temp directory — never in the repository.
+ *
+ * This used to be derived from `PA_LIB`, which pointed into a scratchpad; now that the helpers
+ * live in the checkout, the same expression would have written a file of live bearer tokens into
+ * `scripts/`. Tokens are not source.
+ */
+const TOKEN_CACHE = (() => {
+  const dir = env.AC_ENV_FILE ? path.dirname(env.AC_ENV_FILE) : os.tmpdir();
+  return path.join(dir, 'sxp-tokens.json');
+})();
 const fs = await import('node:fs');
+const path = (await import('node:path')).default;
+const os = (await import('node:os')).default;
 const readCache = () => { try { return JSON.parse(fs.readFileSync(TOKEN_CACHE, 'utf8')); } catch { return {}; } };
 const writeCache = (c) => { try { fs.writeFileSync(TOKEN_CACHE, JSON.stringify(c, null, 2)); } catch { /* best effort */ } };
 
@@ -1899,8 +1949,24 @@ async function phasePerf() {
   // ---- 3.3 What the database actually did --------------------------------
   console.log('\n=== 3.3 The queries behind the slowest surfaces ===\n');
   let statsAvailable = false;
+  /**
+   * Only drop what this run installed.
+   *
+   * This used to `CREATE EXTENSION IF NOT EXISTS` and then, unconditionally, `DROP EXTENSION IF
+   * EXISTS` — so on any deployment where pg_stat_statements was already installed, a read-only
+   * performance probe silently UNINSTALLED the thing the operators monitor with. And
+   * `pg_stat_statements_reset()` discards every statistic accumulated since the server started,
+   * which is somebody else's data whether or not the extension survives.
+   */
+  let installedByThisRun = false;
   try {
-    await sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements');
+    const already = await one(`SELECT 1 AS x FROM pg_extension WHERE extname = 'pg_stat_statements'`);
+    if (!already) {
+      await sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements');
+      installedByThisRun = true;
+    } else {
+      console.log('  pg_stat_statements was ALREADY installed — using it, and leaving it installed.');
+    }
     await sql('SELECT pg_stat_statements_reset()');
     statsAvailable = true;
   } catch (e) {
@@ -2048,9 +2114,11 @@ async function phasePerf() {
     );
   }
 
-  if (statsAvailable) {
-    // Leave the server as it was found.
-    try { await sql('DROP EXTENSION IF EXISTS pg_stat_statements'); console.log('\n  pg_stat_statements dropped again (the server is as it was found).'); } catch { /* best effort */ }
+  if (statsAvailable && installedByThisRun) {
+    // Leave the server as it was found — which means dropping it ONLY if this run installed it.
+    try { await sql('DROP EXTENSION IF EXISTS pg_stat_statements'); console.log('\n  pg_stat_statements dropped again (this run installed it; the server is as it was found).'); } catch { /* best effort */ }
+  } else if (statsAvailable) {
+    console.log('\n  pg_stat_statements left installed — it was there before this run and is not ours to remove.');
   }
 }
 
@@ -2058,6 +2126,21 @@ async function phasePerf() {
 
 const main = async () => {
   console.log(`FAPOMS acceptance — search / export / performance\nAPI ${API}\nphases: ${PHASES.length ? PHASES.join(', ') : 'all'}\n`);
+  /**
+   * Very nearly read-only, and the exceptions are named rather than glossed.
+   *
+   * Everything measured here is a GET. What is NOT a GET is the queued-report POST (it enqueues a
+   * job and builds a workbook) and, in the perf phase, a database-level extension and a statistics
+   * reset. Those are why this declares at all — a script that says "it never writes" and then
+   * resets somebody's query statistics has told a comfortable half-truth.
+   */
+  declareMutating('search-export-performance', [
+    'enqueues report jobs through POST /reports/jobs — a queued job and a workbook, no business rows',
+    'in the perf phase: installs pg_stat_statements IF ABSENT (and then removes it again), and',
+    '  calls pg_stat_statements_reset(), which DISCARDS every query statistic the server had',
+    '  accumulated. On a monitored deployment that is somebody else\'s data',
+    'nothing else: every measured surface is a GET',
+  ]);
   await establishPrincipals();
   await census();
   if (want('search')) await phaseSearch();
@@ -2069,6 +2152,16 @@ const main = async () => {
     console.log('| surface | rows | p50 ms | worst ms | cold ms (discarded) | bytes |');
     console.log('|---|---|---|---|---|---|');
     for (const t of timings) console.log(`| ${t.label} | ${t.rows ?? '-'} | ${t.p50} | ${t.worst} | ${t.cold} | ${t.bytes} |`);
+    const waitS = ((waiting.pacingMs + waiting.retryMs) / 1000).toFixed(1);
+    console.log(`\nEvery number above is time ON THE WIRE for the attempt that answered. This run also`);
+    console.log(`spent ${waitS}s deliberately asleep — ${(waiting.pacingMs / 1000).toFixed(1)}s pacing the export brake`
+      + ` and ${(waiting.retryMs / 1000).toFixed(1)}s backing off ${waiting.retried} throttled call(s) —`);
+    console.log('and NONE of it is in the table. A latency figure that includes the measurer\'s own sleep');
+    console.log('is worse than no figure, because somebody acts on it.');
+    if (waiting.retried) {
+      console.log(`Note the ${waiting.retried} retried call(s): those samples are clean, but they were taken while`);
+      console.log('the rig was contended, so read the worst column with that in mind.');
+    }
   }
   if (findings.length) {
     console.log('\n════ FINDINGS ════');

@@ -47,6 +47,22 @@
  * `--cleanup` removes the custom-role fixture (role + user) this script provisions. Without it the
  * fixture is left in place and reused, which is what makes a second run a no-op rather than churn.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : ROTATES SEVERAL ACCOUNTS, each between AC_PASSWORD, CERT_PASSWORD and a
+ *               bootstrap value, to get a usable session per role. Read that again before
+ *               pointing this at a deployment.
+ * role changes: CREATES a custom role, GRANTS it permissions, ASSIGNS it to a real user, then
+ *               unassigns and DELETEs it. An aborted run leaves the user holding it.
+ * deletion    : probes DELETE on platform settings, the notification catalog and rule-bypass
+ *               with an __acceptance_probe__ id; ownerSafe:false entries can reach real state.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { createRequire } from 'node:module';
 import { writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';

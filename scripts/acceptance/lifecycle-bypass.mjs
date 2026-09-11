@@ -27,6 +27,20 @@
  * md5 digest's version nibble is whatever the digest happened to produce. BLK-03 proves that.
  * Cleanup removes exactly the `ACLB-` prefix and its dependants, and never touches `audit_events`.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : rotates each persona to AC_PASSWORD.
+ * deletion    : CALLS DELETE /assayers/:id — which ARCHIVES A PERSON from any state and
+ *               raw-cancels their in-flight assignments. That is the bypass under test.
+ * api writes  : drives lifecycle_status through all four writers that reach it outside the map,
+ *               including the recovery reset-onboarding-stage and the empanelment upsert.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { createRequire } from 'node:module';
 const require = createRequire(
   process.env.AC_REPO ? `${process.env.AC_REPO}/package.json`

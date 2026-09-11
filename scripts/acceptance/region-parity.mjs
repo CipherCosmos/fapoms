@@ -20,6 +20,22 @@
  *
  * Usage:  AC_ENV_FILE=… node scripts/acceptance/region-parity.mjs
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : none beyond sign-in.
+ * db writes   : SQL UPDATE on users.regions / is_active / must_change_password for the probe
+ *               account; MOVES A BRANCH between regions and states to build the fixture.
+ * role changes: DELETEs and re-INSERTs that account's user_roles to make it a region-scoped ADMIN.
+ * deletion    : creates and DELETEs branches, contacts, documents and remarks through the API.
+ * gate        : declareMutating + AC_ALLOW_WRITES.
+ * NOTE        : the writes that SUCCEED are the finding. On a deployment they are real rows on
+ *               real records, in a region the account is refused sight of.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { API, req, login, sql, one, tally, env, declareMutating } from './_lib.mjs';
 
 const TAG = `RP${Date.now()}`;

@@ -25,6 +25,19 @@
  * `executive` (OPERATIONS), `validator` (DESK_OPERATOR). `manager` is given and then returned
  * from a single region as part of the run.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: WRITES
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : none beyond sign-in.
+ * role changes: PUT /users/:id/roles on a REAL USER to prove a privilege check, and puts the
+ *               original roles back. An aborted run leaves that user on the probe's roles.
+ * db writes   : none.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { randomUUID } from 'node:crypto';
 
 const API = process.env.API || 'http://127.0.0.1:4099/api/v1';

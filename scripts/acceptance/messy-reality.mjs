@@ -33,6 +33,22 @@
  *
  * `MESSY_KEEP=1` skips the teardown when you want to go and look at what it left behind.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ * SAFETY CLASSIFICATION: DESTRUCTIVE
+ * ────────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * password    : rotates personas and an assayer app login to AC_PASSWORD.
+ * api writes  : creates clients, projects, branches, assayers and assignments; drives concurrent
+ *               empanelment and pricing writes deliberately.
+ * teardown    : DISCOVERS every table carrying assignment_id / assayer_id / branch_id /
+ *               project_id / client_id and DELETEs matching rows, three passes deep. It is
+ *               scoped to ids this run created and skips a FORBIDDEN set — but it is a
+ *               schema-walking delete loop, and that is what it is.
+ * gate        : none of its own — it does not use _lib.mjs.
+ *
+ * The full table for every script here is in scripts/acceptance/README.md.
+ */
 import { createRequire } from 'node:module';
 // `pg` lives in the workspace, not beside this script.
 const require = createRequire(
