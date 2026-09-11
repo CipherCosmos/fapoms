@@ -221,9 +221,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     MobileApiService.onRegistrationInProgress = () => {
       setUser((prev) => (prev ? { ...prev, registrationInProgress: true } : prev));
     };
+    /**
+     * And the case where there is no session left to gate.
+     *
+     * The service destroys the tokens when the server rejects the refresh token, but that was a
+     * silent local event: this provider kept `isAuthenticated` true, so App.tsx went on rendering
+     * the tabs while every request 401'd into the stale-schedule banner. An assayer whose session
+     * had been revoked — an HR password reset does exactly that — was left reading yesterday's
+     * jobs with no prompt to sign in again and no route out but force-quitting the app.
+     *
+     * The local teardown `logout()` performs is deliberately repeated here rather than reused:
+     * this path must not call `revokeServerSession()`, which would POST a token the server has
+     * already refused.
+     */
+    MobileApiService.onSessionExpired = () => {
+      disconnectMobileSocket();
+      void clearCache();
+      void clearQueue();
+      void clearOutbox();
+      setIsAuthenticated(false);
+      setUser(null);
+      setLocked(false);
+    };
     return () => {
       MobileApiService.onPasswordChangeRequired = null;
       MobileApiService.onRegistrationInProgress = null;
+      MobileApiService.onSessionExpired = null;
     };
   }, []);
 

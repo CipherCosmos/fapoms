@@ -20,7 +20,16 @@ export type TokenKey =
   | 'fapoms_assayer_token'
   | 'fapoms_assayer_refresh_token'
   | 'fapoms_assayer_userId'
-  | 'fapoms_assayer_userName';
+  | 'fapoms_assayer_userName'
+  /**
+   * The identifier typed at sign-in (assayer code or phone) — NOT the display name.
+   *
+   * Held because changing a password revokes every token this session has, and the only way to
+   * mint new ones without sending the assayer back to the login screen is to sign in again. It
+   * is a username, not a secret, but it lives here so it is cleared with the session on a shared
+   * handset rather than outliving it in plain preferences.
+   */
+  | 'fapoms_assayer_loginId';
 
 const isWeb = Platform.OS === 'web';
 
@@ -75,6 +84,7 @@ export const ALL_TOKEN_KEYS: TokenKey[] = [
   'fapoms_assayer_refresh_token',
   'fapoms_assayer_userId',
   'fapoms_assayer_userName',
+  'fapoms_assayer_loginId',
 ];
 
 /**

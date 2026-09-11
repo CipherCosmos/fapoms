@@ -156,6 +156,14 @@ export class MobileApiService {
   private static refreshInFlight: Promise<boolean> | null = null;
   static currentUserId: string | null = null;
   static currentUserName: string | null = null;
+  /**
+   * What was typed into "Assayer code or phone" at sign-in.
+   *
+   * Distinct from `currentUserName`, which holds the DISPLAY name ("Nilesh Rahane") and is no use
+   * for signing in again. Kept because a password change revokes this session server-side, and
+   * re-authenticating is the only way to carry the assayer on without bouncing them to login.
+   */
+  static currentLoginId: string | null = null;
   /** Set from the profile read during `validateSession`, so a restored session knows it too. */
   static mustChangePassword = false;
 
@@ -174,6 +182,24 @@ export class MobileApiService {
   static registrationInProgress = false;
 
   static onRegistrationInProgress: (() => void) | null = null;
+
+  /**
+   * Raised when the server has definitively rejected this session's refresh token.
+   *
+   * `doRefresh` already destroys the tokens in that case — but destroying them told nobody, so
+   * `AuthContext` kept `isAuthenticated` true and the app went on rendering Home over a session
+   * that no longer existed. Every read 401'd into the "showing your last synced schedule" banner,
+   * and the assayer sat looking at yesterday's work with no sign-in prompt and no way back short
+   * of force-quitting, since the cold-start `validateSession` is the only other thing that
+   * notices. Seen for real: an HR password reset revokes the running session, so the 401 arrives
+   * BEFORE the server ever gets to answer 403 PASSWORD_CHANGE_REQUIRED — the forced-rotation gate
+   * that exists for exactly this moment can never fire, because the token is dead first.
+   *
+   * Deliberately fired only from the rejected-credential branch, never from `clearSession()` at
+   * large: an ordinary sign-out already navigates, and a 5xx or a lost connection must NOT end a
+   * session — see the note in `doRefresh`. Being unable to ask is not an answer.
+   */
+  static onSessionExpired: (() => void) | null = null;
 
   /** Returns the API origin URL (e.g., http://localhost:3000) for resolving relative attachment URLs */
   static getApiOrigin(): string {
@@ -205,17 +231,25 @@ export class MobileApiService {
     if (userName) void writeToken('fapoms_assayer_userName', userName);
   }
 
+  /** Persist the sign-in identifier alongside the session. See `currentLoginId`. */
+  static setLoginId(loginId?: string | null) {
+    if (!loginId) return;
+    this.currentLoginId = loginId;
+    void writeToken('fapoms_assayer_loginId', loginId);
+  }
+
   /**
    * Async because the OS keystore is async. The caller must await it before deciding whether
    * to show the login screen — the previous sync version could only ever read `localStorage`,
    * so on device it always returned null and the app always showed login.
    */
   static async restoreSession(): Promise<{ token: string; userId?: string; userName?: string } | null> {
-    const [token, refreshToken, userId, userName] = await Promise.all([
+    const [token, refreshToken, userId, userName, loginId] = await Promise.all([
       readToken('fapoms_assayer_token'),
       readToken('fapoms_assayer_refresh_token'),
       readToken('fapoms_assayer_userId'),
       readToken('fapoms_assayer_userName'),
+      readToken('fapoms_assayer_loginId'),
     ]);
     if (!token) return null;
 
@@ -223,6 +257,9 @@ export class MobileApiService {
     if (refreshToken) this.refreshToken = refreshToken;
     this.currentUserId = userId || null;
     this.currentUserName = userName || null;
+    // Restored too, so a voluntary password change days after the last sign-in can still
+    // re-authenticate instead of dropping the assayer at the login screen.
+    this.currentLoginId = loginId || null;
     return { token, userId: userId || undefined, userName: userName || undefined };
   }
 
@@ -263,6 +300,7 @@ export class MobileApiService {
     this.refreshToken = null;
     this.currentUserId = null;
     this.currentUserName = null;
+    this.currentLoginId = null;
     this.mustChangePassword = false;
     // Cleared with the session, not left standing: a shared handset is normal here, and the next
     // person to sign in must not inherit a gate raised for somebody else.
@@ -410,6 +448,9 @@ export class MobileApiService {
        */
       if (response.status === 401 || response.status === 403) {
         this.clearSession();
+        // Tell the app, not just the keystore. Without this the tokens vanished silently and
+        // every screen kept drawing as though signed in. See `onSessionExpired`.
+        this.onSessionExpired?.();
       }
       return false;
     } catch {
@@ -695,6 +736,10 @@ export class MobileApiService {
         const token = data.data.accessToken;
         const name = userPayload.name || userPayload.displayName || userPayload.username || username;
         this.setAuthToken(token, userPayload.id, name);
+        // Remember HOW they signed in, not just who they are — see `currentLoginId`. The server's
+        // own spelling wins over what was typed, so "9876543210" is stored as the assayer code it
+        // resolved to and a later re-authentication uses the canonical identifier.
+        this.setLoginId(userPayload.username || username);
         if (data.data.refreshToken) {
           this.storeRefreshToken(data.data.refreshToken);
         }
@@ -811,10 +856,33 @@ export class MobileApiService {
     }
   }
 
+  /**
+   * Change the signed-in assayer's own password — and survive doing so.
+   *
+   * A successful change revokes every token this session holds. Verified against the running
+   * backend: immediately after `POST /assayers/me/change-password` returns 201, the SAME access
+   * token answers `401 "User not found or inactive"` and the refresh token answers `401 "Invalid
+   * or expired refresh token"`. The route returns no replacement pair.
+   *
+   * This used to return `{ success: true }` and let the app carry on, which left it holding two
+   * dead tokens while still rendering as signed in. `fetchWithAuthOnce` would 401, `tryRefresh()`
+   * would fail against the revoked refresh token, and the failure surfaced to whichever screen
+   * asked — so the forced-rotation gate handed the assayer a home screen reading "Nothing
+   * scheduled" over a stack of 401s, with their actual job invisible. Only a force-quit cleared
+   * it, because the cold-start `validateSession` is the one path that notices. That is precisely
+   * the trap this gate exists to prevent, one step further along.
+   *
+   * So the session is rebuilt here. The new password is in hand, and `currentLoginId` holds the
+   * identifier it belongs to, so signing in again is immediate and invisible. If that identifier
+   * is missing (a session restored from a build that never stored one) or the re-authentication
+   * fails, the session is destroyed rather than left half-dead: `reauthRequired` tells the caller
+   * to send the assayer back to the login screen, which is a worse experience and an honest one.
+   * The password change itself has already succeeded either way, and `success` keeps saying so.
+   */
   static async changeOwnPassword(
     currentPassword: string,
     newPassword: string,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; reauthRequired?: boolean }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/me/change-password`, {
         method: 'POST',
@@ -827,7 +895,18 @@ export class MobileApiService {
           error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Could not change your password.'),
         };
       }
-      return { success: true };
+
+      // The change stuck; the tokens that made it did not survive it.
+      const loginId = this.currentLoginId;
+      if (loginId) {
+        const again = await this.login(loginId, newPassword);
+        // `login` installs the fresh access and refresh tokens on success, so there is nothing
+        // further to do — the gate clears and the app keeps its place.
+        if (again.success) return { success: true };
+      }
+
+      this.clearSession();
+      return { success: true, reauthRequired: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error changing password' };
     }

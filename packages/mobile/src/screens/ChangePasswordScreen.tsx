@@ -124,6 +124,18 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
         return;
       }
       haptics.success();
+      /**
+       * The change always revokes this session server-side; `changeOwnPassword` normally signs
+       * back in behind the scenes so nothing is felt here. When it could not — no stored sign-in
+       * identifier, or the re-authentication itself failed — the tokens are already gone, and
+       * carrying on would put the app back in the state this flow exists to escape: signed in to
+       * look at, dead to the server. Sign out instead, so the assayer is asked for the password
+       * they just chose rather than shown an empty schedule.
+       */
+      if (res.reauthRequired) {
+        onLogout();
+        return;
+      }
       onChanged();
     } finally {
       setBusy(false);
