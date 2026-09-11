@@ -7,6 +7,7 @@ import { useConfirm, useToast, AlertBanner, SkeletonList } from '../../component
 import { label, Empty, Notice, Lede, LinkButton, Field, fieldInput, Editor } from './hr-ui';
 import { fmtDate } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { counted } from '../../utils/plural';
 
 /**
@@ -66,11 +67,23 @@ export const AssayerSkillsPanel: React.FC<{
 
   const who = assayerName ?? 'this assayer';
 
-  const load = useCallback(() => api.request<Attribute[]>(`/assayers/${assayerId}/workforce-attribute`)
-    .then((d) => setRows(Array.isArray(d) ? d : []))
-    .catch((e) => { setRows([]); setErr(userMessage(e)); }), [assayerId]);
+  /**
+   * The load's own failure, kept apart from `err`.
+   *
+   * `err` is the panel's write channel — it holds "could not save that certificate" and is
+   * dismissible, correctly, because the clerk has read it and will try again. A failed READ is a
+   * different thing: it left `rows` at `[]`, which renders "No skills, languages or certificates
+   * recorded — planning cannot match this person on competency." That sentence is acted on. It
+   * decides whether somebody is offered a branch that requires a certificate, and it must not be
+   * printed about a request that was refused or never answered.
+   */
+  const [loadErr, setLoadErr] = useState<unknown>(null);
 
-  useEffect(() => { setRows(null); setErr(null); void load(); }, [load]);
+  const load = useCallback(() => api.request<Attribute[]>(`/assayers/${assayerId}/workforce-attribute`)
+    .then((d) => { setRows(Array.isArray(d) ? d : []); setLoadErr(null); })
+    .catch((e) => { setRows([]); setLoadErr(e); }), [assayerId]);
+
+  useEffect(() => { setRows(null); setErr(null); setLoadErr(null); void load(); }, [load]);
 
   // The shared list of names, so two people do not end up with "Hindi" and "hindi".
   useEffect(() => {
@@ -175,8 +188,16 @@ export const AssayerSkillsPanel: React.FC<{
     <div style={{ opacity: busy ? 0.6 : 1, transition: 'opacity .15s' }}>
       {confirmDialog}
 
-      {/* The section's one failure channel, not a hand-rolled red line of its own. */}
+      {/* The section's one failure channel for WRITES, not a hand-rolled red line of its own. */}
       <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '10px' }} />
+
+      {/* And the read's, which is not dismissible while the list below is still empty because of it. */}
+      {loadErr != null && (
+        <LoadFailure
+          style={{ marginBottom: '10px' }}
+          loads={[{ label: `what ${who} is qualified on`, query: caughtLoad(loadErr, () => { setRows(null); void load(); }) }]}
+        />
+      )}
 
       <Lede>
         What {who} can be matched on when work is planned. A branch that requires a certificate is
@@ -254,7 +275,7 @@ export const AssayerSkillsPanel: React.FC<{
         </Editor>
       )}
 
-      {sorted!.length === 0 ? (
+      {loadErr != null ? null : sorted!.length === 0 ? (
         <Empty>
           No skills, languages or certificates recorded — planning cannot match this person on
           competency.

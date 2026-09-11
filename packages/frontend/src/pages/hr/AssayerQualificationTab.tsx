@@ -2,6 +2,7 @@ import React from 'react';
 import { Printer, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { useConfirm, StatusBadge, AlertBanner, SkeletonList } from '../../components/ui';
 import { card, label, Bar, Empty, Section, Lede, LinkButton } from './hr-ui';
 import { STANDING_LABELS, standingStance, STANDING_STANCE_TONE } from './AssayerVettingTab';
@@ -50,6 +51,8 @@ export const AssayerQualificationTab: React.FC<{
   const [data, setData] = React.useState<QualificationPayload | null>(null);
   const [partners, setPartners] = React.useState<PartnerQualificationView[] | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
+  /** The read's failure, kept as the error itself so the banner can classify it (refusal vs outage). */
+  const [loadErr, setLoadErr] = React.useState<unknown>(null);
   const [busy, setBusy] = React.useState(false);
   const [openPartner, setOpenPartner] = React.useState<string | null>(null);
   const { confirmWithReason, confirm, confirmDialog } = useConfirm();
@@ -57,12 +60,13 @@ export const AssayerQualificationTab: React.FC<{
   const load = React.useCallback(async () => {
     try {
       setErr(null);
+      setLoadErr(null);
       const [q, p] = await Promise.all([
         api.request<QualificationPayload>(`/assayers/${assayerId}/qualification`),
         api.request<PartnerQualificationView[]>(`/assayers/${assayerId}/qualification/partners`),
       ]);
       setData(q); setPartners(p);
-    } catch (e) { setErr(userMessage(e)); }
+    } catch (e) { setLoadErr(e); }
   }, [assayerId]);
 
   React.useEffect(() => { void load(); }, [load]);
@@ -140,7 +144,15 @@ export const AssayerQualificationTab: React.FC<{
     } catch (e) { setErr(userMessage(e)); }
   };
 
-  if (err && !data) return <AlertBanner type="error" message={err} />;
+  /**
+   * A bare red line with the raw sentence in it said "something went wrong" and no more. The
+   * scores on this tab gate who gets offered work, so the difference between "your role is not
+   * shown these" and "the scoring service is down" is the difference between raising a ticket and
+   * waiting five minutes. Checked before the skeleton, which otherwise spins on a refusal forever.
+   */
+  if (loadErr != null) {
+    return <LoadFailure loads={[{ label: "this assayer's qualification scores", query: caughtLoad(loadErr, () => { void load(); }) }]} />;
+  }
   // The scores are computed on read, so this wait is real; hold the shape rather than
   // replacing the tab with one line of prose.
   if (!data || !partners) return <SkeletonList rows={4} height={58} />;

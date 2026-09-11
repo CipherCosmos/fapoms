@@ -14,6 +14,7 @@ import {
 import { looksLikeMask } from './assayer-shared';
 import { fmtDate } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { counted } from '../../utils/plural';
 import { relationshipOptions } from './reference-vocabulary';
 import { EMPANELMENT_STATUS_REASONS, OTHER_STATUS_REASON } from './empanelment-reason-vocabulary';
@@ -603,15 +604,21 @@ export const AssayerVettingTab: React.FC<{
   const { toast } = useToast();
   /** The document a "Send it back" click is choosing a reason for — the dialog is open exactly when this is set. */
   const [rejectTarget, setRejectTarget] = useState<any | null>(null);
+  /** Why the dossier itself is not here — kept apart from `err`, which every write reports to. */
+  const [dossierErr, setDossierErr] = useState<unknown>(null);
   /** The document whose card details are being read off — the dialog is open exactly when this is set. */
   const [printedTarget, setPrintedTarget] = useState<any | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setErr(null);
+    setDossierErr(null);
     api.request<Dossier>(`/assayers/${assayerId}/dossier`)
-      .then((d) => { if (!cancelled) setData(d); })
-      .catch((e) => { if (!cancelled) setErr(userMessage(e)); });
+      .then((d) => { if (!cancelled) { setData(d); setDossierErr(null); } })
+      // Read failures go to their own channel, not to `err`. `err` is the write channel and is
+      // dismissible by design; dismissing it when the dossier never arrived left this tab as an
+      // empty div with no explanation and no way back to one.
+      .catch((e) => { if (!cancelled) setDossierErr(e); });
     return () => { cancelled = true; };
   }, [assayerId, reloadKey]);
 
@@ -1029,8 +1036,13 @@ export const AssayerVettingTab: React.FC<{
     return (
       <div>
         {errorBanner}
-        {/* Was the word "Loading…" in the middle of an empty card. */}
-        {!err && <SkeletonList rows={3} height={92} />}
+        {/* The read's own failure: permanent while it stands, and it says whether this was a
+            refusal (this tab carries background checks and identity documents, which not every
+            HR role may open) or an outage that Retry could clear. */}
+        {dossierErr != null
+          ? <LoadFailure loads={[{ label: "this assayer's vetting file", query: caughtLoad(dossierErr, reload) }]} />
+          /* Was the word "Loading…" in the middle of an empty card. */
+          : !err && <SkeletonList rows={3} height={92} />}
       </div>
     );
   }

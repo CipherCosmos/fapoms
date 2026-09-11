@@ -4,6 +4,8 @@ import { assayerLifecycleLabel } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { useConfirm, AlertBanner, Modal } from '../../components/ui';
 import { UploadExcelControls } from '../../components/ui';
 import { ImportIssuesPanel } from './ImportIssuesPanel';
@@ -69,10 +71,10 @@ export const AssayerRoster: React.FC<{
     totalCount,
     truncated,
     loading,
-    isError,
-    error,
+    query: rosterLoad,
     refresh,
   } = useRosterQuery();
+  const rosterFailed = loadFailed(rosterLoad);
 
   const [notice, setNotice] = useState<{
     tone: 'ok' | 'err';
@@ -135,12 +137,6 @@ export const AssayerRoster: React.FC<{
     refreshedForImport.current = key;
     refresh();
   }, [rosterImport.state, refresh]);
-
-  useEffect(() => {
-    if (isError) {
-      setNotice({ tone: 'err', text: `Could not load the roster. ${userMessage(error)}` });
-    }
-  }, [isError, error]);
 
   useEffect(() => {
     setVisibleCount(200);
@@ -513,6 +509,18 @@ export const AssayerRoster: React.FC<{
       )}
 
       {/* Core Roster Table */}
+      {/*
+        A roster that could not be read is not a roster with nobody in it.
+
+        This used to push a DISMISSIBLE notice ("Could not load the roster. …") and then render
+        the table anyway, which drew `EmptyState title="Workforce roster is empty"` over 1,155
+        people — and once the notice was closed, or once the query failed and PAUSED (which
+        `isError` never reported at all), the screen said only that. The banner is now permanent
+        for as long as the load is failing, and the table is not drawn beside it to contradict it.
+      */}
+      {rosterFailed ? (
+        <LoadFailure loads={[{ label: 'the workforce roster', query: rosterLoad }]} />
+      ) : (
       <RosterTable
         rows={sortedRows}
         totalLoaded={allAssayers.length}
@@ -537,6 +545,7 @@ export const AssayerRoster: React.FC<{
         activeCriteria={activeCriteria}
         onClearFilters={clearFilters}
       />
+      )}
 
       {/* Single Person Lifecycle Modal */}
       {transitionTarget && (

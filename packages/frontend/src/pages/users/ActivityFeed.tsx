@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, User as UserIcon, LogIn, KeyRound, ShieldAlert, FileText } from 'lucide-react';
 import { api } from '../../services/api';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { activityEventLabel, anyStatusLabel } from '@fapoms/shared';
 
 /**
@@ -55,12 +57,23 @@ const label: React.CSSProperties = {
 
 /** A single user's activity — mounted inside the edit panel on the Directory tab. */
 export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
-  const { data, isLoading } = useQuery({
+  const activity = useQuery({
     queryKey: ['audit-log', 'user', userId],
     queryFn: () => api.request<AuditEvent[]>(`/audit-log/user?userId=${userId}&limit=15`),
   });
+  const { data, isLoading } = activity;
   const events = (Array.isArray(data) ? data : (data as any)?.data) || [];
 
+  /**
+   * Of every screen in this app, an audit trail is the one that must never invent a clean sheet.
+   *
+   * `?? []` plus no error check meant a refusal ended at "Nothing recorded for this person yet."
+   * — which, read by an administrator checking whether someone signed in, or by an auditor
+   * checking whether a reset happened, is evidence of absence produced by a request that was
+   * never answered. `AUDIT_LOG:VIEW:PLATFORM` is held by three roles, so being refused this is
+   * ordinary, not exceptional. Checked first, before both the loading and the empty branches.
+   */
+  if (loadFailed(activity)) return <LoadFailure loads={[{ label: "this person's activity", query: activity }]} />;
   if (isLoading) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading…</div>;
   if (events.length === 0) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Nothing recorded for this person yet. Their sign-ins and the changes they make will be listed here.</div>;
 
@@ -84,10 +97,11 @@ export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
 /** The full-page global feed — the Activity tab. */
 export const ActivityFeed: React.FC = () => {
   const [category, setCategory] = useState<string>('ALL');
-  const { data, isLoading } = useQuery({
+  const feed = useQuery({
     queryKey: ['audit-log', 'recent', category],
     queryFn: () => api.request<AuditEvent[]>(`/audit-log/recent?limit=100${category !== 'ALL' ? `&category=${category}` : ''}`),
   });
+  const { data, isLoading } = feed;
   const events = (Array.isArray(data) ? data : (data as any)?.data) || [];
 
   return (
@@ -110,7 +124,12 @@ export const ActivityFeed: React.FC = () => {
       </div>
 
       <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden' }}>
-        {isLoading ? (
+        {/* "Nothing has been recorded in this category yet" is a finding about the system's own
+            history. Drawn over a refused or failed read it is a false one, and the category
+            buttons beside it invite the reader to confirm it four more times. */}
+        {loadFailed(feed) ? (
+          <LoadFailure style={{ margin: 12 }} loads={[{ label: 'the activity log', query: feed }]} />
+        ) : isLoading ? (
           <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
         ) : events.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>

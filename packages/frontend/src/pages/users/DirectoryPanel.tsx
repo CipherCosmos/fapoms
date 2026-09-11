@@ -3,6 +3,7 @@ import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserChec
 import { REGION_ORDER, REGION_LABELS, Region, roleLabel, userStatusLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { useClientOptions } from '../../hooks/useClients';
@@ -73,6 +74,16 @@ export const DirectoryPanel: React.FC = () => {
   const [roles, setRoles] = useState<UserRole[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Why the directory is empty, when it is empty because it could not be read.
+   *
+   * `error` is shared with every write on this panel (unlock, suspend, role change) and is meant
+   * to be read and forgotten. A failed READ is not like that: it left `users` at `[]`, and the
+   * table underneath then rendered "No users yet" beside an "Add User" button, over four KPI
+   * tiles all reading 0 — an administrator being told this deployment has no accounts in it.
+   * Kept as the error object, not a string, so the banner can tell a refusal from an outage.
+   */
+  const [usersLoadError, setUsersLoadError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const [searchText, setSearchText] = useState('');
@@ -175,10 +186,11 @@ export const DirectoryPanel: React.FC = () => {
       const list = Array.isArray(response?.data) ? response.data : [];
       setUsers(list);
       setUsersTotal(response?.meta?.pagination?.total ?? list.length);
+      setUsersLoadError(null);
       // Keep the open edit panel in sync after an action (e.g. unlock) refetches.
       setEditingUser((prev) => (prev ? list.find((u: UserProfile) => u.id === prev.id) ?? null : prev));
     } catch (err: any) {
-      setError(`Failed to retrieve users. ${userMessage(err)}`);
+      setUsersLoadError(err);
     } finally {
       setIsLoading(false);
     }
@@ -409,6 +421,9 @@ export const DirectoryPanel: React.FC = () => {
       </div>
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
+      {usersLoadError != null && (
+        <LoadFailure loads={[{ label: 'the user directory', query: caughtLoad(usersLoadError, () => void loadUsers()) }]} />
+      )}
       {notice && <AlertBanner type="success">{notice}</AlertBanner>}
       {/* The table below, and the KPIs beside it apart from "Total Users" itself, are drawn from
           this one loaded page — say so the moment it is not everyone. */}
@@ -524,8 +539,15 @@ export const DirectoryPanel: React.FC = () => {
                   <tr><td colSpan={6} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                       <UsersIcon size={30} style={{ opacity: 0.4 }} />
-                      <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{searchText || filterStatus !== 'ALL' ? 'No users match your filters' : 'No users yet'}</span>
-                      {!(searchText || filterStatus !== 'ALL') && (
+                      {/* The banner above carries the reason; this only has to stop contradicting
+                          it. Offering "Add User" here would invite an administrator to create an
+                          account because the directory looked empty, when it was merely unread. */}
+                      <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                        {usersLoadError != null
+                          ? 'The directory could not be loaded — see above.'
+                          : searchText || filterStatus !== 'ALL' ? 'No users match your filters' : 'No users yet'}
+                      </span>
+                      {usersLoadError == null && !(searchText || filterStatus !== 'ALL') && (
                         <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ marginTop: 6, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                           <UserPlus size={13} /> Add User
                         </button>

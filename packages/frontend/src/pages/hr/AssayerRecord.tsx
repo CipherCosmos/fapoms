@@ -30,6 +30,7 @@ import {
 } from './AssayerForms';
 import { fmtDate, fmtWhen } from '../../utils/dates';
 import { isAbsentById, userMessage } from '../../services/errors';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
 import {
@@ -176,6 +177,26 @@ export const AssayerRecord: React.FC<{
   const [activeAssignments, setActiveAssignments] = useState<ActiveAssignment[]>([]);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
 
+  /**
+   * Which of the record's four SIDE loads could not be read, and why.
+   *
+   * The main profile request has said "failed" or "no such person" for a while. The four beside
+   * it — the dossier, the frozen payables, the active assignments and the timeline — each caught
+   * their own error, threw it away, and left their state at `[]` or `null`. The panels below
+   * then drew, in the operator's own words:
+   *
+   *   - no empanelments and no background check, on a person who may hold both;
+   *   - "No money has been booked against this person yet";
+   *   - an empty Current work list, which is what somebody reads before they terminate a
+   *     contractor or hand their branches to somebody else;
+   *   - an empty history, which is what somebody reads before they conclude nothing happened.
+   *
+   * The dossier's `catch` even carried the comment "not entitled to dossier" — the refusal was
+   * known at the point it was discarded, and still nothing on screen said so. Recorded here, keyed
+   * by what the reader would call it, and cleared per load so a recovered fetch stops warning.
+   */
+  const [sideLoadErrors, setSideLoadErrors] = useState<Record<string, unknown>>({});
+
   const [dossierGlance, setDossierGlance] = useState<{
     empanelments: Array<{ id: string; status: string; statusReason?: string | null; client?: { id: string; name: string } | null }>;
     currentCheck: { cibilScore?: number | null; cibilBand?: string | null; checkedOn?: string | null; verdict?: string | null; findings?: string | null } | null;
@@ -231,6 +252,11 @@ export const AssayerRecord: React.FC<{
      */
     setA((prev) => (prev && prev.id !== assayerId ? null : prev));
     setProfileLoad('loading');
+    setSideLoadErrors({});
+    /** Remember a side load's failure under the name the panel it feeds goes by on screen. */
+    const sideFailed = (what: string) => (e: unknown) => {
+      if (!cancelled) setSideLoadErrors((prev) => ({ ...prev, [what]: e }));
+    };
     // 1. Assayer Profile — the one request that decides whether this screen has a subject at all.
     api.request<Assayer>(`/assayers/${assayerId}`)
       .then((fresh) => { if (!cancelled) { setA(fresh); setProfileLoad('ready'); } })
@@ -269,17 +295,20 @@ export const AssayerRecord: React.FC<{
             .map((r) => r.label ?? humanizeEnum(String(r.requirement))),
         });
       })
-      .catch(() => { /* not entitled to dossier */ });
+      // Most often a refusal — the dossier is empanelment, background checks and documents, which
+      // not every HR role may see. Named rather than swallowed: the glance panels below cannot
+      // tell "no empanelments" from "not shown to you" on their own.
+      .catch(sideFailed('their empanelment and background file'));
 
     // 3. Frozen Payables (snapshot)
     api.request<any[]>(`/assayers/${assayerId}/payables`)
       .then((p) => { if (!cancelled && Array.isArray(p)) setFrozenPayables(p); })
-      .catch(() => { if (!cancelled) setFrozenPayables([]); });
+      .catch((e) => { if (!cancelled) setFrozenPayables([]); sideFailed('what they have been paid')(e); });
 
     // 4. Active Assignments
     api.request<{ items: ActiveAssignment[] }>(`/assignments/assayer/${assayerId}?scope=active`)
       .then((res) => { if (!cancelled && Array.isArray(res?.items)) setActiveAssignments(res.items); })
-      .catch(() => { if (!cancelled) setActiveAssignments([]); });
+      .catch((e) => { if (!cancelled) setActiveAssignments([]); sideFailed('their current work')(e); });
 
     // 5. Activity Timeline
     api.request<any>(`/assayers/${assayerId}/activity`)
@@ -288,7 +317,7 @@ export const AssayerRecord: React.FC<{
         const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
         setTimelineEvents(list);
       })
-      .catch(() => { if (!cancelled) setTimelineEvents([]); });
+      .catch((e) => { if (!cancelled) setTimelineEvents([]); sideFailed('their history')(e); });
 
     return () => { cancelled = true; };
     // `onMissing` is the parent's callback and is deliberately not a dependency: it is an
@@ -308,7 +337,14 @@ export const AssayerRecord: React.FC<{
     if (!tabUrl) return;
     api.request<any[]>(tabUrl)
       .then((d) => setLoaded((p) => ({ ...p, [tab]: Array.isArray(d) ? d : [] })))
-      .catch(() => setLoaded((p) => ({ ...p, [tab]: [] })));
+      // The Pay and History tabs each render "nothing here yet" off an empty array, so a refused
+      // tab fetch read as a person with no commercial terms and no recorded history. Same
+      // treatment as the four side loads above: the tab still renders, and the banner says why
+      // it is bare.
+      .catch((e) => {
+        setLoaded((p) => ({ ...p, [tab]: [] }));
+        setSideLoadErrors((prev) => ({ ...prev, [tab === 'commercial' ? 'their pay and terms' : 'their history']: e }));
+      });
   }, [tab, assayerId, loaded]);
 
   // Manager display resolution
@@ -760,6 +796,23 @@ export const AssayerRecord: React.FC<{
         {/* Tab Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
           <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '14px' }} />
+
+          {/*
+            One line per part of the record that is missing because it could not be read, rather
+            than because there is nothing there. Not dismissible: the panels underneath go on
+            showing their empty states for as long as the load is failing, so the sentence that
+            corrects them has to stay up as long as they do. `attempt` is the same counter the
+            main profile's "Try again" uses, so Retry re-runs every one of these together.
+          */}
+          {Object.keys(sideLoadErrors).length > 0 && (
+            <LoadFailure
+              style={{ marginBottom: '14px' }}
+              loads={Object.entries(sideLoadErrors).map(([label, error]) => ({
+                label,
+                query: caughtLoad(error, () => setAttempt((n) => n + 1)),
+              }))}
+            />
+          )}
 
           {tab === 'summary' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

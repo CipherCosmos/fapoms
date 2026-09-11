@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { fetchWholeAssayerRoster } from '../../../services/assayer-roster';
 import { queryKeys } from '../../../hooks/queryKeys';
+import type { MonitoredLoad } from '../../../components/LoadFailure';
 import {
   ROSTER_FILTERS,
   EMPTY_FILTERS,
@@ -50,6 +51,15 @@ export interface UseRosterQueryResult {
   loading: boolean;
   isError: boolean;
   error: unknown;
+  /**
+   * The raw query, so the page can hand it to `LoadFailure` whole.
+   *
+   * `isError`/`error` alone are not enough to tell a failed roster from an empty one: a query
+   * that fails and PAUSES reports neither, and the page then drew "Workforce roster is empty"
+   * over a refusal. `loadFailed` reads `fetchStatus` and `data`, which only the query itself
+   * carries — a destructured `allAssayers = []` has already hidden the `undefined` it looks at.
+   */
+  query: MonitoredLoad['query'];
   refresh: () => void;
 }
 
@@ -173,6 +183,7 @@ export function useRosterQuery(): UseRosterQueryResult {
     loading,
     isError: rosterQuery.isError,
     error: rosterQuery.error,
+    query: rosterQuery,
     refresh,
   };
 }
