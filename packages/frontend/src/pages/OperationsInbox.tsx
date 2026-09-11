@@ -7,7 +7,7 @@ import {
   CalendarClock, UserX, Inbox as InboxIcon, X, MapPin,
 } from 'lucide-react';
 import { api } from '../services/api';
-import { queryClient } from '../queryClient';
+import { queryClient, loadFailed } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { getRecommendations, suggestAuditDate, describeSuggestedDate } from '../services/planning';
@@ -15,6 +15,7 @@ import { userMessage } from '../services/errors';
 import { todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { formatRouteDistance, type RouteSource, callOutcomeLabel } from '@fapoms/shared';
 import { AlertBanner, useConfirm, PageHeader } from '../components/ui';
+import { LoadFailure } from '../components/LoadFailure';
 
 /**
  * The Operations Inbox — every assignment waiting on a DESK decision, one queue, actions inline.
@@ -159,7 +160,7 @@ export const OperationsInbox: React.FC = () => {
   // assignment event, so the poll is only a fallback for when the realtime channel is down.
   const live = useSocketConnection();
 
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+  const inboxQuery = useQuery({
     // From the registry, so `useSocketInvalidation` refreshes this queue on every assignment
     // event. As a bare literal it matched nothing in the socket map, and an assignment event
     // took up to the 60-second poll below to reach the desk.
@@ -173,6 +174,14 @@ export const OperationsInbox: React.FC = () => {
     staleTime: 20_000,
     refetchInterval: live ? false : 60_000,
   });
+  const { data, isLoading, refetch, isFetching } = inboxQuery;
+  /**
+   * `isError` alone said nothing about a query that failed and PAUSED — no error, no data, not
+   * loading — which reached `totalActionable === 0` and printed "Inbox zero — the operation is
+   * healthy." That is the single most dangerous sentence on this screen: it is the reason
+   * somebody stops looking. `loadFailed` is the predicate that sees the paused case.
+   */
+  const inboxFailed = loadFailed(inboxQuery);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -460,16 +469,12 @@ export const OperationsInbox: React.FC = () => {
       />
 
       {message && <AlertBanner type={message.type} message={message.text} onClose={() => setMessage(null)} />}
-      {isError && (
-        <AlertBanner type="error">
-          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            Could not load the inbox.
-            <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '11px' }}>Retry</button>
-          </span>
-        </AlertBanner>
-      )}
+      {/* The banner used to say only "Could not load the inbox." and offer a Retry that a refused
+          role could press forever. It also sat ABOVE the "Inbox zero" panel rather than instead of
+          it, so the screen said both things at once. */}
+      {inboxFailed && <LoadFailure loads={[{ label: 'the operations inbox', query: inboxQuery }]} />}
 
-      {isLoading ? (
+      {inboxFailed ? null : isLoading ? (
         <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-muted)' }}>
           <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} /> Loading the queue…
         </div>
@@ -690,7 +695,7 @@ const ReassignDrawer: React.FC<{
     return () => document.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const { data, isLoading } = useQuery({
+  const recommendations = useQuery({
     queryKey: ['inbox-recommendations', item.branchId, item.scheduledDate],
     // A replacement steps into the ORIGINAL audit date, so candidates are ranked for that
     // day — availability and fees for "today" would answer the wrong question.
@@ -698,6 +703,7 @@ const ReassignDrawer: React.FC<{
     enabled: !!item.branchId,
     staleTime: 30_000,
   });
+  const { data, isLoading } = recommendations;
   const candidates = (data?.data ?? []).filter((c) => c.id !== item.assayerId).slice(0, 6);
 
   const offer = async (c: Candidate) => {
@@ -745,6 +751,10 @@ const ReassignDrawer: React.FC<{
 
         {!item.branchId ? (
           <div style={{ color: 'var(--text-muted)', fontSize: '12.5px' }}>This item carries no branch reference — open planning instead.</div>
+        ) : loadFailed(recommendations) ? (
+          /* "No eligible candidates — open planning to widen the filters" sends an operator who
+             is replacing a declined audit to go and loosen filters that were never consulted. */
+          <LoadFailure loads={[{ label: 'the ranked replacements', query: recommendations }]} />
         ) : isLoading ? (
           <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
             <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} /> Ranking candidates…

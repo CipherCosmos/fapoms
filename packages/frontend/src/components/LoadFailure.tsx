@@ -1,7 +1,7 @@
 import React from 'react';
 import { AlertBanner } from './ui';
 import { loadFailed } from '../queryClient';
-import { classifyError, userMessage } from '../services/errors';
+import { classifyError, translateError, userMessage } from '../services/errors';
 
 /**
  * The banner a screen shows instead of drawing a refused fetch as an empty list.
@@ -84,9 +84,20 @@ export const LoadFailure: React.FC<{
    * the least useful true sentence available — the problem is known and is the network.
    */
   const untried = reasons.every((r) => r === null);
-  // Retry is offered only where it could change the answer. `classifyError` reports a 403 or a 404
-  // as non-retryable; a dropped connection, a timeout and a 5xx as retryable.
-  const canRetry = !refused && !untried && reasons.some((r) => classifyError(r).isRetryable);
+  /**
+   * Retry is offered only where it could change the answer: a dropped connection, a timeout, a
+   * 5xx. Never a 403 or a 404.
+   *
+   * Asked of `translateError().retryable`, NOT `classifyError().isRetryable`. The two disagree,
+   * and the second one is wrong for the case this component exists to cover. `classifyError`
+   * answers `category === 'retryable'` for an AppError, and `fromResponse` never assigns that
+   * category — a 500 comes back as `'system-failure'`, a dropped connection as whatever
+   * `fromNetwork` chose — so every server outage was silently classed as not worth retrying and
+   * this banner offered no button at all on the one failure a button actually helps with.
+   * `translateError` reads the status band (`server_failure`, `network_failure`, `rate_limit`),
+   * which is the question being asked here.
+   */
+  const canRetry = !refused && !untried && reasons.some((r) => translateError(r).retryable);
 
   const what = failed.map((l) => l.label).join(' or ');
   // One sentence for the cause, taken from the first failure rather than invented here. Where two

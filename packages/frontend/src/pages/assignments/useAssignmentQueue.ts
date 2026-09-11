@@ -9,6 +9,7 @@ import { useConfirm } from '../../components/ui';
 import { api } from '../../services/api';
 import { queryClient } from '../../queryClient';
 import { queryKeys } from '../../hooks/queryKeys';
+import { loadFailed } from '../../queryClient';
 import { userMessage } from '../../services/errors';
 import { branchStatusLabel } from '../../utils/statusLabels';
 import type { OperationalAttentionState } from '../../config/status-registry';
@@ -211,13 +212,7 @@ export function useAssignmentQueue() {
   const scopeQuery = withScope(scopeParams);
 
   // Main assignments list query
-  const {
-    data: mainData,
-    isLoading,
-    isError,
-    error,
-    refetch: refetchList,
-  } = useQuery({
+  const listQuery = useQuery({
     queryKey: [...queryKeys.assignments.list(page, statusFilter), scopeKey],
     queryFn: () =>
       api.request<{ data: Assignment[]; meta: { pagination: { total: number } } }>(
@@ -226,6 +221,16 @@ export function useAssignmentQueue() {
       ),
     staleTime: 15_000,
   });
+  const { data: mainData, isLoading, error, refetch: refetchList } = listQuery;
+  /**
+   * Reported as failed using `loadFailed`, not `isError`.
+   *
+   * `isError` is false for a query that failed and then PAUSED — no error, no data, not loading —
+   * which is exactly the state that put "Nobody has been given a branch to audit yet" on screen
+   * over a queue that had been refused. The table's own failure branch reads this prop, so it is
+   * the predicate that decides whether the queue gets to claim anything at all.
+   */
+  const isError = loadFailed(listQuery);
 
   // Memoised so the `?? []` fallback keeps a stable identity between renders (see RuleBypassPanel).
   const assignments = useMemo(() => mainData?.data ?? [], [mainData?.data]);

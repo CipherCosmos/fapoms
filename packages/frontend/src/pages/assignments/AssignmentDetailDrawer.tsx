@@ -18,6 +18,8 @@ import { anyStatusLabel } from '../../utils/statusLabels';
 import { api } from '../../services/api';
 import { queryClient } from '../../queryClient';
 import { queryKeys } from '../../hooks/queryKeys';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { assignmentFee } from '../../utils/money';
 import { AssignmentMoneyCard } from '../billing/AssignmentMoneyCard';
 import { computeAssignmentAttention } from './useAssignmentQueue';
@@ -66,12 +68,13 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
   };
 
   // Timeline query
-  const { data: timeline = [], isLoading: isLoadingTimeline } = useQuery({
+  const timelineQuery = useQuery({
     queryKey: queryKeys.assignments.timeline(assignment?.id || ''),
     queryFn: () => api.request<TimelineEvent[]>(`/assignments/${assignment?.id}/timeline`),
     enabled: !!assignment?.id,
     staleTime: 15_000,
   });
+  const { data: timeline = [], isLoading: isLoadingTimeline } = timelineQuery;
 
   // Expenses query
   const { data: expenses = [], refetch: refetchExpenses } = useQuery({
@@ -526,7 +529,13 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
             </span>
           )}
         </div>
-        {isLoadingTimeline ? (
+        {/* A refused or failed timeline used to be indistinguishable from an untouched
+            assignment: "No timeline events yet — Events will appear here as the assignment
+            progresses." That is what somebody reads before concluding nobody has done anything,
+            on the record of what was actually done and when. */}
+        {loadFailed(timelineQuery) ? (
+          <LoadFailure loads={[{ label: "this assignment's timeline", query: timelineQuery }]} />
+        ) : isLoadingTimeline ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '32px', color: 'var(--text-muted)', fontSize: '13px' }}>
             <div style={{ width: '14px', height: '14px', border: '2px solid var(--border-color)', borderTop: '2px solid var(--accent-primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
             Loading timeline...

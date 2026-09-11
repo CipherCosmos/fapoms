@@ -11,6 +11,7 @@ import { StatusBadge, EmptyState } from '../../components/ui';
 import { useCurrentRoles, useCurrentPermissions } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 import { assignmentFee } from '../../utils/money';
+import { classifyError, translateError, userMessage } from '../../services/errors';
 import {
   computeAssignmentAttention,
   PAGE_SIZE,
@@ -100,18 +101,41 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
           Loading assignments queue...
         </div>
       ) : isError ? (
-        (error as any)?.statusCode === 403 ? (
+        /*
+         * `(error as any)?.statusCode === 403` never matched anything.
+         *
+         * `api.request` throws an `AppError`, and an AppError's field is `status` — `statusCode`
+         * exists only on the `ErrorTranslation` object `translateError` builds, which is not what
+         * lands here. So the FORBIDDEN branch below was unreachable, and every refusal fell
+         * through to "An error occurred while fetching assignments from the server. Please
+         * retry." with a Retry button whose only possible outcome was the same 403 again. The
+         * queue is region-scoped, so that is not a rare path.
+         *
+         * Asked of `classifyError` now, which is the one place that decides what a status means
+         * and whether retrying it can change the answer — the same function LoadFailure consults,
+         * so a refusal reads the same here as it does everywhere else in the app.
+         */
+        classifyError(error).category === 'permission-required' ? (
           <EmptyState
             meaning="FORBIDDEN"
             title="Assignment queue access restricted"
-            message="You do not have the required operational permissions to view this assignment queue or scope."
+            message={userMessage(error)}
           />
         ) : (
           <EmptyState
             meaning="UNAVAILABLE"
             title="Could not load assignments queue"
-            message="An error occurred while fetching assignments from the server. Please retry."
-            onRetry={onRetry}
+            message={userMessage(error)}
+            /*
+             * Only where pressing it could produce a different answer: a dropped connection, a
+             * timeout, a 5xx. Never on a record that does not exist.
+             *
+             * `translateError().retryable`, not `classifyError().isRetryable` — see the note in
+             * components/LoadFailure.tsx. The latter answers `category === 'retryable'`, a
+             * category `fromResponse` never assigns, so it calls every server outage
+             * non-retryable and would have removed the button from the one case it helps with.
+             */
+            onRetry={translateError(error).retryable ? onRetry : undefined}
           />
         )
       ) : filteredAssignments.length === 0 ? (

@@ -5,6 +5,8 @@ import { ProjectBranchStatus, roleLabel, formatDateOnly, formatRouteDistance, fo
 import { branchStatusLabel, isBranchCovered, coverageFromStatuses, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
+import { LoadFailure } from '../components/LoadFailure';
+import { loadFailed } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope, scopeConflict } from '../context/ScopeContext';
 import { useUrlSelection } from '../hooks/useUrlSelection';
@@ -749,6 +751,19 @@ export const PlanningWorkspace: React.FC = () => {
    * scope change, which is a different query) shows the loading state.
    */
   const isLoadingQueue = branchesQuery.isLoading;
+  /**
+   * The coverage queue had NO failure path at all: `branchesQuery.data ?? NO_BRANCHES` and
+   * nothing else, so a refused or failed queue arrived at the panel as an empty list and the
+   * panel said "No branches in this project yet. Add branches to the project before visits can
+   * be planned for them." That is an instruction to import a branch file, given to a planner
+   * whose project already has its branches and whose request was refused. Planning is
+   * region-scoped, so a 403 here is an everyday answer for a desk outside the region.
+   *
+   * Built once and passed to all four layouts' panels, so they cannot disagree about it.
+   */
+  const queueFailure = loadFailed(branchesQuery)
+    ? <LoadFailure style={{ margin: 8 }} loads={[{ label: 'the coverage queue', query: branchesQuery }]} />
+    : null;
 
   /**
    * Keep whatever branch is already selected if the refresh still contains it.
@@ -829,9 +844,13 @@ export const PlanningWorkspace: React.FC = () => {
    *
    * This was a bare `catch { console.error(...) }`, so a 500 from the engine and a genuinely
    * empty candidate list rendered identically — an empty panel, with no indication that anything
-   * had broken. `userMessage` gives the same plain-language sentence the rest of the app uses.
+   * had broken. That was fixed with a `userMessage(candidatesQuery.error)` line; `loadFailed`
+   * finishes the job, because `isError` is false for a query that failed and PAUSED, which put
+   * the panel straight back on the "nobody is eligible for this date" branch with no error to
+   * show. It also stops offering Retry on a 403 or a 404 — the branch-id mix-up this panel is
+   * known for 404s every time, and a Retry button on it only teaches the operator to press it.
    */
-  const candidatesError = candidatesQuery.isError ? userMessage(candidatesQuery.error) : null;
+  const candidatesFailed = loadFailed(candidatesQuery);
 
   /** "Have we already tried this person?" — the question ops otherwise answers by redialling. */
   const lastContactQuery = useQuery({
@@ -1864,17 +1883,8 @@ export const PlanningWorkspace: React.FC = () => {
     }
     // A failed request previously rendered as "no candidates", which is indistinguishable from
     // a genuine empty result — the operator would go looking for assayers that were never queried.
-    if (candidatesError) {
-      return (
-        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontSize: '12.5px', textAlign: 'center' }}>
-          <AlertTriangle size={18} />
-          <div>{candidatesError}</div>
-          <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 10px' }}
-            onClick={() => { void candidatesQuery.refetch(); }}>
-            Retry
-          </button>
-        </div>
-      );
+    if (candidatesFailed) {
+      return <LoadFailure style={{ margin: 12 }} loads={[{ label: 'the recommended assayers', query: candidatesQuery }]} />;
     }
     if (displayCandidates.length === 0) {
       // Say what actually emptied the list. Blaming the min-radius filter when the ENGINE
@@ -2733,6 +2743,7 @@ export const PlanningWorkspace: React.FC = () => {
           <BranchListPanel
             branches={filteredBranches}
             loading={isLoadingQueue}
+            failure={queueFailure}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
@@ -2782,6 +2793,7 @@ export const PlanningWorkspace: React.FC = () => {
           <BranchListPanel
             branches={filteredBranches}
             loading={isLoadingQueue}
+            failure={queueFailure}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
@@ -2818,6 +2830,7 @@ export const PlanningWorkspace: React.FC = () => {
           <BranchListPanel
             branches={filteredBranches}
             loading={isLoadingQueue}
+            failure={queueFailure}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}
@@ -2895,6 +2908,7 @@ export const PlanningWorkspace: React.FC = () => {
           <BranchListPanel
             branches={filteredBranches}
             loading={isLoadingQueue}
+            failure={queueFailure}
             selectedBranchId={selectedBranchId}
             onSelectBranch={setSelectedBranchId}
             searchTerm={searchTerm}

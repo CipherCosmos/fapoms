@@ -18,6 +18,7 @@ import { useScope, withScope } from '../context/ScopeContext';
 import { connectSocket } from '../services/socket';
 import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/useCurrentRoles';
 import { userMessage } from '../services/errors';
+import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { getZones } from '../services/planning';
 
 interface ClientOption {
@@ -291,6 +292,18 @@ export const Branches: React.FC = () => {
    */
   const [isLoading, setIsLoading] = useState(true);
   /**
+   * Why the table is empty, when it is empty because the request failed.
+   *
+   * `catch { console.error('Failed to load branches'); }` put the reason in a developer console
+   * nobody has open and left `branches` at `[]`. The table then said "No branches to show.
+   * Branches come from a client's branch list — clear your search and filters if you expected to
+   * see some", to a person whose search and filters were fine and whose client has 1,155
+   * branches; and the four tiles above it read 0 / 0 / 0 / 0, which is a statement about an
+   * estate's risk profile. Scope on this page is regional, so a 403 here is an ordinary answer
+   * for a desk outside the region, not an exceptional one.
+   */
+  const [branchesError, setBranchesError] = useState<unknown>(null);
+  /**
    * The import's whole lifetime, not a boolean.
    *
    * `isUploading` could only describe a request that returns, so this page awaited an import that
@@ -381,7 +394,13 @@ export const Branches: React.FC = () => {
       const response = await api.request<ClientOption[]>('/clients');
       setClients(response);
       if (response.length > 0 && !selectedClientId) setSelectedClientId(response[0].id);
-    } catch { console.error('Failed to load clients'); }
+    } catch (e) {
+      // The client picker decides which estate the table below describes, so an empty picker is
+      // not a cosmetic loss: it silently narrows the page to whatever `selectedClientId` already
+      // was, or to nothing. Surfaced in the page's own message channel rather than a console
+      // line — the branch banner covers the rows, this covers the control that chooses them.
+      setMessage({ type: 'error', text: `The client list could not be loaded, so the picker above may be empty or out of date. ${userMessage(e)}` });
+    }
   };
 
   /** One screenful. The server caps anything larger at 200, so this is the real ceiling too. */
@@ -415,7 +434,15 @@ export const Branches: React.FC = () => {
       setBranches(rows);
       setBranchesTotal(response?.meta?.pagination?.total ?? rows.length);
       setSummary(summary);
-    } catch { console.error('Failed to load branches'); }
+      setBranchesError(null);
+    } catch (e) {
+      // The rows and the summary are fetched together, so a failure of either leaves the tiles
+      // and the table describing different things. Both are cleared and the reason stated once.
+      setBranches([]);
+      setBranchesTotal(0);
+      setSummary(null);
+      setBranchesError(e);
+    }
     finally { setIsLoading(false); }
   };
 
@@ -424,7 +451,12 @@ export const Branches: React.FC = () => {
     try {
       const detail = await api.request<BranchDetail>(`/branches/${branch.id}`);
       setBranchDetail(detail);
-    } catch { console.error('Failed to load branch details'); }
+    } catch (e) {
+      // The detail panel keeps the row's own summary when the full record will not load, so the
+      // operator is not left staring at a blank aside wondering whether they mis-clicked.
+      setBranchDetail(null);
+      setMessage({ type: 'error', text: `The full record for ${branch.name} could not be loaded, so the panel is showing only what the table already knew. ${userMessage(e)}` });
+    }
   };
 
   const handleDelete = async (branch: Branch) => {
@@ -529,6 +561,9 @@ export const Branches: React.FC = () => {
       </div>
 
       {message && <AlertBanner type={message.type} message={message.text} />}
+      {branchesError != null && (
+        <LoadFailure loads={[{ label: 'the branch list', query: caughtLoad(branchesError, () => void loadBranches(selectedClientId)) }]} />
+      )}
       <ImportProgressPanel state={branchImport.state} onDismiss={branchImport.reset} />
 
 
@@ -604,7 +639,13 @@ export const Branches: React.FC = () => {
                   {phase === 'skeleton' ? (
                     <SkeletonRows rows={8} columns={8} />
                   ) : phase === 'empty' ? (
-                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
+                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
+                      {/* The banner above holds the reason; this must not tell the reader to go
+                          and adjust filters that were never the problem. */}
+                      {branchesError != null
+                        ? 'The branch list could not be loaded — see above.'
+                        : 'No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.'}
+                    </td></tr>
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.solId || ''}
                       onClick={() => { void loadBranchDetail(b); selectBranch(b.id); }}

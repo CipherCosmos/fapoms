@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Clock, ClipboardList, FileText, ShieldCheck, GitBranch } from 'lucide-react';
 import { DetailDrawer } from '../../components/ui';
 import { api } from '../../services/api';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { branchStatusLabel, anyStatusLabel, activityEventLabel } from '@fapoms/shared';
 
 /**
@@ -53,12 +55,14 @@ const label: React.CSSProperties = {
 export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: () => void }> = ({
   projectBranchId, onClose,
 }) => {
-  const { data, isLoading, error } = useQuery({
+  const history = useQuery({
     queryKey: ['branch-history', projectBranchId],
     queryFn: () => api.request<BranchHistory>(`/projects/branches/${projectBranchId}/history`),
   });
+  const { data, isLoading } = history;
 
   const h = data as BranchHistory | undefined;
+  const failed = loadFailed(history);
 
   return (
     <DetailDrawer
@@ -74,8 +78,15 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
         </>
       }
     >
-      {isLoading && <Muted>Loading history…</Muted>}
-      {error && <div style={{ color: 'var(--danger)', fontSize: '13px' }}>{(error as Error).message}</div>}
+      {/*
+        This printed `(error as Error).message` — whatever text the throw happened to carry, in
+        red, with no way to tell a permission from an outage and no Retry. `LoadFailure` says it in
+        the words the rest of the app uses, and it also catches the paused-with-no-data state
+        `error` alone misses, where the drawer previously showed neither history, nor a loading
+        line, nor a reason: an empty panel under a title reading "Branch history".
+      */}
+      {failed && <LoadFailure loads={[{ label: "this branch's history", query: history }]} />}
+      {isLoading && !failed && <Muted>Loading history…</Muted>}
       {h && (
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', paddingBottom: 4 }}>
           <Fact label="Current status" value={branchStatusLabel(h.currentStatus)} />

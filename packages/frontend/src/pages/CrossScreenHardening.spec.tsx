@@ -22,6 +22,7 @@ import {
   getStatusDescriptor,
 } from '../config/status-registry';
 import { EmptyState } from '../components/ui/EmptyState';
+import { fromResponse } from '../services/errors';
 import { AssignmentTable } from './assignments/AssignmentTable';
 import { CurrentAssignmentsCard } from './hr/record/CurrentAssignmentsCard';
 import {
@@ -252,14 +253,27 @@ describe('Phase 4: Cross-Screen Product Hardening Specification', () => {
       expect(retrySpy).toHaveBeenCalledTimes(1);
     });
 
-    it('AssignmentTable renders FORBIDDEN on 403 error', () => {
+    /**
+     * The error here is the one `api.request` actually throws.
+     *
+     * This test used to pass `{ statusCode: 403, message: 'Forbidden' }`, a shape nothing in the
+     * app produces — and the component matched it with `(error as any)?.statusCode === 403`, so
+     * the test and the bug agreed with each other. An `AppError` carries `status`, not
+     * `statusCode`, which meant that in the running application every refusal fell through to
+     * "Could not load assignments queue … Please retry" with a Retry button whose only possible
+     * outcome was the same 403. The queue is region-scoped, so that is an everyday path.
+     *
+     * Constructed through `fromResponse`, the same function the API client calls, so this test
+     * cannot drift from the real shape again.
+     */
+    it('AssignmentTable renders FORBIDDEN for the 403 the API client actually throws', () => {
       render(
         <MemoryRouter>
           <AssignmentTable
             assignments={[]}
             isLoading={false}
             isError={true}
-            error={{ statusCode: 403, message: 'Forbidden' }}
+            error={fromResponse(403, { message: 'Forbidden' })}
             statusFilter="ALL"
             searchTerm=""
             onResetFilters={() => {}}
@@ -269,7 +283,28 @@ describe('Phase 4: Cross-Screen Product Hardening Specification', () => {
       );
 
       expect(screen.getByText('Assignment queue access restricted')).toBeInTheDocument();
-      expect(screen.getByText(/You do not have the required operational permissions/i)).toBeInTheDocument();
+      expect(screen.getByText(/do not have permission/i)).toBeInTheDocument();
+    });
+
+    it('AssignmentTable offers no Retry on a 403 — pressing it could only fail identically', () => {
+      const retryMock = jest.fn();
+      render(
+        <MemoryRouter>
+          <AssignmentTable
+            assignments={[]}
+            isLoading={false}
+            isError={true}
+            error={fromResponse(403, { message: 'Forbidden' })}
+            onRetry={retryMock}
+            statusFilter="ALL"
+            searchTerm=""
+            onResetFilters={() => {}}
+            onSelectAssignment={() => {}}
+          />
+        </MemoryRouter>,
+      );
+
+      expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
     });
 
     it('AssignmentTable renders UNAVAILABLE on general error with retry button', () => {

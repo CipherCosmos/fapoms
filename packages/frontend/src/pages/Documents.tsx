@@ -11,6 +11,7 @@ import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
 import { userMessage, AppError } from '../services/errors';
+import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { uploadSizeProblem, SystemRole } from '@fapoms/shared';
 import { useCurrentRoles, useCurrentPermissions, canReadCustomerMaster, hasAnyRole } from '../hooks/useCurrentRoles';
 
@@ -158,6 +159,17 @@ export const Documents: React.FC = () => {
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
 
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The overview's own failure, kept apart from `error`.
+   *
+   * `error` is the write channel — every send, receive and upload reports to it and it is
+   * dismissible, correctly. Sharing it with the READ meant two things went wrong: a failed write
+   * that happened before the first overview landed put the page into the "couldn't load the
+   * workspace" branch, and dismissing the banner left the failure branch with no reason beside
+   * it. Held as the error object rather than a string so the banner can tell a refusal (this
+   * workspace is gated on customer-master and document permissions) from an outage.
+   */
+  const [overviewError, setOverviewError] = useState<unknown>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
@@ -194,8 +206,9 @@ export const Documents: React.FC = () => {
       );
       setOverview(res.data);
       setBranchTotal(res.meta?.pagination?.total ?? res.data?.branches?.length ?? 0);
+      setOverviewError(null);
     } catch (err) {
-      setError(userMessage(err));
+      setOverviewError(err);
     } finally {
       setOverviewLoading(false);
     }
@@ -226,7 +239,10 @@ export const Documents: React.FC = () => {
         setProjects(list || []);
         if (list?.length) setProjectId((cur) => cur || list[0].id);
       })
-      .catch((e) => setError(userMessage(e)));
+      // The project picker chooses which day's run the Daily Run view describes. An empty picker
+      // is not cosmetic: the view underneath then has no project and shows nothing, which reads
+      // as a day with no scheduled paperwork.
+      .catch((e) => setError(`The project list could not be loaded, so the Daily Run picker may be empty. ${userMessage(e)}`));
   }, []);
 
   useEffect(() => {
@@ -425,7 +441,7 @@ export const Documents: React.FC = () => {
 
       {overviewLoading && !overview ? (
         <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading document control…</div>
-      ) : !overview && error ? (
+      ) : !overview && overviewError != null ? (
         /*
          * A failed first load used to fall through to the bare `: null` this ternary ended on —
          * the tab switcher and every view it gates disappeared with it, leaving only the page
@@ -439,12 +455,15 @@ export const Documents: React.FC = () => {
          * reusing it here is the same recovery path, just reachable from the empty state that
          * actually needs it.
          */
-        <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-          <span>Couldn&apos;t load the document workspace.</span>
-          <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <RefreshCw size={14} /> Retry
-          </button>
-        </div>
+        /* "Couldn't load the document workspace." named no reason and offered a Retry to
+           everybody, including a role this workspace is simply not open to, for whom the button
+           could only produce the same refusal. LoadFailure quotes the server and decides the
+           button; `loadOverview` is still the one recovery path, the same call the header's
+           Refresh makes. */
+        <LoadFailure
+          style={{ margin: '12px 0' }}
+          loads={[{ label: 'the document workspace', query: caughtLoad(overviewError, loadOverview) }]}
+        />
       ) : overview ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <DocumentModelLegend />

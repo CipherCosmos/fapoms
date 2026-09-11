@@ -20,6 +20,7 @@ import { ProjectStatus, Priority, projectStatusLabel, branchStatusLabel } from '
 import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
+import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { connectSocket } from '../services/socket';
 import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls, Select, useConfirm, PageHeader } from '../components/ui';
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
@@ -251,7 +252,13 @@ export const Projects: React.FC = () => {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [projectsError, setProjectsError] = useState<string | null>(null);
+  /**
+   * Held as the error object rather than a message string, so the banner can tell a refusal from
+   * an outage. `err?.message || 'Failed to load projects.'` threw that distinction away and then
+   * offered a Retry button to everyone, including a desk whose region scope excludes the project
+   * list entirely — for whom the only possible outcome of pressing it is the same refusal.
+   */
+  const [projectsError, setProjectsError] = useState<unknown>(null);
   const [totalProjects, setTotalProjects] = useState(0);
   const [loadedPage, setLoadedPage] = useState(1);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -260,6 +267,8 @@ export const Projects: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  /** Why the detail panel is blank, when it is blank for a reason other than nothing being picked. */
+  const [detailError, setDetailError] = useState<unknown>(null);
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -283,7 +292,13 @@ export const Projects: React.FC = () => {
    * Set only when some of this client's branches could not be loaded, which the search box below
    * has to admit to. Null for every client the loader got through in full, which is the normal case.
    */
-  const [branchShortfall, setBranchShortfall] = useState<{ shown: number; total: number } | null>(null);
+  /**
+   * `reason` is set only when the branch directory could not be READ at all, as opposed to being
+   * read short. The two need different sentences: "only 200 of 3,400 loaded" tells the operator
+   * to use the Excel upload, while "the list could not be loaded" tells them to say why to
+   * somebody, and neither should be printed in the other's words.
+   */
+  const [branchShortfall, setBranchShortfall] = useState<{ shown: number; total: number; reason?: string } | null>(null);
   const [branchSearch, setBranchSearch] = useState('');
 
   /**
@@ -382,7 +397,11 @@ export const Projects: React.FC = () => {
       setTotalProjects(response.meta?.pagination?.total ?? response.data.length);
       setLoadedPage(1);
     } catch (err: any) {
-      setProjectsError(err?.message || 'Failed to load projects.');
+      // The rows are dropped so the table cannot go on showing a previous scope's projects under
+      // a banner saying this one failed.
+      setProjects([]);
+      setTotalProjects(0);
+      setProjectsError(err);
     } finally {
       setIsLoading(false);
     }
@@ -424,8 +443,10 @@ export const Projects: React.FC = () => {
     try {
       const response = await api.request<ClientOption[]>('/clients?limit=200', { method: 'GET' });
       setClients(response);
-    } catch {
-      console.error('Failed to load clients options');
+    } catch (e) {
+      // The client dropdown gates project creation: with it empty, "New project" cannot be
+      // completed and nothing says why. Reported in the page's own message channel.
+      setMessage({ type: 'error', text: `The client list could not be loaded, so the client dropdown is empty and a project cannot be created until it loads. ${userMessage(e)}` });
     }
   };
 
@@ -453,12 +474,20 @@ export const Projects: React.FC = () => {
         setBranchShortfall({ shown: directory.branches.length, total: directory.total });
       }
     } catch (err) {
-      console.error('Failed to load client branches', err);
+      /*
+       * The branch picker searches only what this loaded. Empty, it answers "No matching
+       * unassociated branches found." to every search — the same words it uses for a branch that
+       * is genuinely already on the project — so a branch that exists and could be added simply
+       * appears not to. The shortfall notice this page already has is the right place to say so.
+       */
+      setAllClientBranches([]);
+      setBranchShortfall({ shown: 0, total: 0, reason: userMessage(err) });
     }
   };
 
   const loadDetail = async (id: string) => {
     setIsLoadingDetail(true);
+    setDetailError(null);
     try {
       const response = await api.request<ProjectDetail>(`/projects/${id}`, { method: 'GET' });
       setDetail(response);
@@ -467,10 +496,16 @@ export const Projects: React.FC = () => {
       if (response && response.clientId) {
         void loadClientBranches(response.clientId);
       }
-    } catch {
-      console.error('Failed to load project detail');
+    } catch (e) {
+      /*
+       * `console.error('Failed to load project detail')` put the reason somewhere nobody looks
+       * and left `detail` null, which is the same state as "nothing is selected" — so the panel
+       * fell through to "Select a project to view details." immediately after the operator had
+       * selected one. The click looked like it had simply not registered.
+       */
       setDetail(null);
       setProjectBranches([]);
+      setDetailError(e);
     } finally {
       setIsLoadingDetail(false);
     }
@@ -1015,14 +1050,9 @@ export const Projects: React.FC = () => {
               <tbody>
                 {isLoading ? (
                   <tr><td colSpan={7} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>Loading projects...</td></tr>
-                ) : projectsError ? (
-                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: '50px 20px', color: 'var(--text-muted)' }}>
-                    <AlertTriangle size={36} style={{ margin: '0 auto 10px', color: 'var(--danger)', opacity: 0.6 }} />
-                    <p style={{ fontSize: '14px', color: 'var(--danger)' }}>Couldn't load projects</p>
-                    <p style={{ fontSize: '12px' }}>{projectsError}</p>
-                    <button onClick={loadProjects} className="btn btn-secondary" style={{ marginTop: '12px', padding: '8px 16px', fontSize: '12px' }}>
-                      <RefreshCw size={14} /> Retry
-                    </button>
+                ) : projectsError != null ? (
+                  <tr><td colSpan={7} style={{ padding: '20px' }}>
+                    <LoadFailure loads={[{ label: 'the project list', query: caughtLoad(projectsError, loadProjects) }]} />
                   </td></tr>
                 ) : filteredProjects.length === 0 ? (
                   <tr><td colSpan={7} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
@@ -1319,11 +1349,22 @@ export const Projects: React.FC = () => {
                             <div style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', fontSize: '11.5px', lineHeight: 1.5, color: 'var(--text-secondary)', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '7px 9px' }}>
                               <AlertTriangle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
                               <span>
-                                Only {branchShortfall.shown.toLocaleString('en-IN')} of this client's{' '}
-                                {branchShortfall.total.toLocaleString('en-IN')} branches could be loaded, so the
-                                search below cannot find the other {(branchShortfall.total - branchShortfall.shown).toLocaleString('en-IN')}.
-                                Reload the page to try again. If the same message comes back, add the branches you
-                                need with the Excel upload above instead — that does not go through this list.
+                                {branchShortfall.reason ? (
+                                  <>
+                                    This client's branches could not be loaded, so the search below will find none
+                                    of them — that is not the same as this project already holding them all.{' '}
+                                    {branchShortfall.reason} Add the branches you need with the Excel upload above
+                                    instead; that does not go through this list.
+                                  </>
+                                ) : (
+                                  <>
+                                    Only {branchShortfall.shown.toLocaleString('en-IN')} of this client's{' '}
+                                    {branchShortfall.total.toLocaleString('en-IN')} branches could be loaded, so the
+                                    search below cannot find the other {(branchShortfall.total - branchShortfall.shown).toLocaleString('en-IN')}.
+                                    Reload the page to try again. If the same message comes back, add the branches you
+                                    need with the Excel upload above instead — that does not go through this list.
+                                  </>
+                                )}
                               </span>
                             </div>
                           )}
@@ -1467,6 +1508,10 @@ export const Projects: React.FC = () => {
                   <span>Updated: {new Date(detail.updatedAt).toLocaleDateString()}</span>
                 </div>
               </>
+            ) : detailError != null ? (
+              <div style={{ padding: '20px' }}>
+                <LoadFailure loads={[{ label: 'this project', query: caughtLoad(detailError, () => { if (selectedId) void loadDetail(selectedId); }) }]} />
+              </div>
             ) : (
               <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '60px 20px' }}>
                 <Building2 size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />

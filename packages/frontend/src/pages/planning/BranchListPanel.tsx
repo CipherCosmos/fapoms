@@ -59,6 +59,16 @@ export const BranchListPanel: React.FC<{
   searchTerm: string;
   onSearchTermChange: (value: string) => void;
   loading?: boolean;
+  /**
+   * Shown instead of the list when the queue could not be READ.
+   *
+   * Without it this panel had one way to be blank, and used it for both: "No branches in this
+   * project yet. Add branches to the project before visits can be planned for them." — an
+   * instruction to go and import a branch file, given to a planner whose project has 155
+   * branches and whose request was refused. Planning is region-scoped, so a desk outside the
+   * region gets a 403 here as an ordinary answer.
+   */
+  failure?: React.ReactNode;
   width?: number;
   /**
    * Multi-select for bulk assignment. Optional so the panel keeps working unchanged where
@@ -77,6 +87,7 @@ export const BranchListPanel: React.FC<{
   searchTerm,
   onSearchTermChange,
   loading = false,
+  failure = null,
   width = 320,
   bulkSelectedIds,
   onToggleBulkSelect,
@@ -123,7 +134,9 @@ export const BranchListPanel: React.FC<{
         </div>
       )}
       <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
-        {loading ? (
+        {/* Failure is decided before both loading and emptiness, because it is indistinguishable
+            from either once the rows have defaulted to `[]`. */}
+        {failure ? failure : loading ? (
           <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>
             <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
             <div>Loading branches…</div>
