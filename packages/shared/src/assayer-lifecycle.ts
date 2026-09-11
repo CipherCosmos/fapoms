@@ -211,32 +211,43 @@ export function canTransitionAssayerLifecycle(from: string, to: string): boolean
  * trainee's file really is TRAINING → INACTIVE → ARCHIVED, and nothing is skipped by taking it —
  * which is what the `leaving` relaxation below exists for.
  *
- * ## OPEN, and deliberately not decided here: ACTIVE is still a waypoint
+ *   ACTIVE — the unearned activation, closed 2026-09-11. Until then a bulk `INVITED → SUSPENDED`
+ *     routed INVITED → DOCUMENT_VERIFICATION → INACTIVE → ACTIVE → SUSPENDED and WROTE all four
+ *     hops:
  *
- * Measured against the running system on 2026-09-10. A bulk `INVITED → SUSPENDED` routes
- * INVITED → DOCUMENT_VERIFICATION → INACTIVE → ACTIVE → SUSPENDED and writes all four hops:
+ *         INVITED -> DOCUMENT_VERIFICATION
+ *         DOCUMENT_VERIFICATION -> INACTIVE
+ *         INACTIVE -> ACTIVE          ← background verification and training never happened
+ *         ACTIVE -> SUSPENDED
  *
- *     INVITED -> DOCUMENT_VERIFICATION
- *     DOCUMENT_VERIFICATION -> INACTIVE
- *     INACTIVE -> ACTIVE          ← background verification and training never happened
- *     ACTIVE -> SUSPENDED
+ *     The same shape reached ACTIVE on the way to SUSPENDED or RESIGNED from INVITED,
+ *     DOCUMENT_VERIFICATION, BACKGROUND_VERIFICATION and INACTIVE, and on the way from SUSPENDED
+ *     to ARCHIVED — where it also reinstated a suspension nobody had decided to lift.
  *
- * The same shape reaches ACTIVE on the way to SUSPENDED or RESIGNED from INVITED,
- * DOCUMENT_VERIFICATION, BACKGROUND_VERIFICATION and INACTIVE, and on the way from SUSPENDED to
- * ARCHIVED — where it also reinstates a suspension nobody decided to lift. Activation is not a
- * corridor by any reading of the paragraph above: it has its own precondition method
- * (`assertCanActivate`), its own identity gate, and its own `ASSAYER_ONBOARDED` notification,
- * which really is emitted for a person who is about to be suspended.
+ *     Activation is not a corridor by any reading of the paragraph above. It has its own
+ *     precondition method (`assertCanActivate`), its own identity gate, and its own
+ *     `ASSAYER_ONBOARDED` notification — which really was emitted, to a person about to be
+ *     suspended. It is the single state the whole lifecycle exists to gate: `operationalStatusFor`
+ *     makes ACTIVE the one value that projects to a deployable person, so an ACTIVE hop written
+ *     for somebody who passed neither background verification nor training is the exact claim
+ *     this module is built to prevent, left standing in an append-only audit trail.
  *
- * It is NOT added to the list here because that is a decision about the transition graph — it
- * would withdraw those targets from the roster's bulk toolbar, which offers whatever this
- * function can reach — and this file is not where that call should be made silently. What HAS
- * changed is that the walk is no longer invisible: `bulkTransitionLifecycle` reports the route it
- * took in `via`, so the response above says `["DOCUMENT_VERIFICATION","INACTIVE","ACTIVE",
- * "SUSPENDED"]` rather than just "INVITED → SUSPENDED, succeeded".
+ *     Reporting the route in `via` was not enough. A truthful account of a fabricated activation
+ *     is still a fabricated activation: the hop committed, the notification went out, and the
+ *     employment record says the person was field-ready. The response was never the problem.
+ *
+ *     What this costs, stated plainly because it is a real withdrawal: the destinations that were
+ *     only ever reachable THROUGH an activation stop being offered. `INVITED → SUSPENDED`,
+ *     `INVITED → RESIGNED`, `DOCUMENT_VERIFICATION → SUSPENDED`, `ON_LEAVE → SUSPENDED`,
+ *     `ON_LEAVE → RESIGNED` and `SUSPENDED → ARCHIVED` now have no path and are reported
+ *     `skipped`, with nothing written. Every one of them is a move the single-transition route
+ *     already refuses — `ASSAYER_LIFECYCLE_TRANSITIONS` has no such edge — so this is parity with
+ *     the one-record screen, not a new restriction. Somebody who never started work is closed by
+ *     ARCHIVED (the revocation edge), not by resigning from a job they never held.
  */
 const NEVER_A_WAYPOINT: AssayerLifecycleStatus[] = [
   AssayerLifecycleStatus.INVITED,
+  AssayerLifecycleStatus.ACTIVE,
   AssayerLifecycleStatus.SUSPENDED,
   AssayerLifecycleStatus.RESIGNED,
   AssayerLifecycleStatus.TERMINATED,
@@ -300,6 +311,59 @@ export function assayerLifecyclePath(from: string, to: string): AssayerLifecycle
       if (NEVER_A_WAYPOINT.includes(next)) continue;
       // An outcome may be passed through on the way out, never on the way back in.
       if (!leaving && NOT_A_WAYPOINT_INBOUND.includes(next)) continue;
+      seen.add(next);
+      queue.push({ state: next, path: nextPath });
+    }
+  }
+  return null;
+}
+
+/**
+ * WHY there is no path — the decision a walk would have had to make on the operator's behalf, or
+ * null when the two states are simply not connected at all.
+ *
+ * `assayerLifecyclePath` returning null is two different answers wearing one face. Sometimes the
+ * states are genuinely unreachable (nothing leaves ARCHIVED, in any direction). Sometimes every
+ * route between them runs through a state that is an outcome rather than a corridor — and then
+ * the honest refusal names it, because the operator's next move is to take that decision
+ * deliberately on the one record, which is a thing they can actually do.
+ *
+ * "Select twelve INVITED people → Suspended" is the case this exists for. `No valid path from
+ * INVITED to SUSPENDED` is true and tells a clerk nothing; "SUSPENDED is only reached from
+ * ACTIVE, and nobody is activated on the way past" tells them the suspension is not available
+ * because the activation has not happened, which is the actual state of the world.
+ *
+ * Re-runs the same search with the waypoint rules lifted, and reports the first barred state on
+ * the route it would then have taken. It is deliberately a SEPARATE pass rather than a flag on
+ * the search above: the path-finder answers "which edges connect these two", and a function that
+ * sometimes returns a route it considers illegal is exactly the kind of second meaning that gets
+ * one of its two answers used by mistake.
+ */
+export function assayerLifecycleBlockedBy(from: string, to: string): AssayerLifecycleStatus | null {
+  if (from === to) return null;
+  /**
+   * Nothing is blocked when the walk is allowed. Asked about a reachable pair, the unrestricted
+   * search below would answer with whatever stands on the SHORTER illegal route — `INVITED →
+   * ACTIVE` would report INACTIVE, naming a barrier that is not stopping anything, because the
+   * legal four-hop joining chain is right there. A function that is only correct when its caller
+   * already knows the answer is a trap, so it is asked here rather than written in the docblock.
+   */
+  if (assayerLifecyclePath(from, to) !== null) return null;
+  const leaving = OUTCOME_DESTINATIONS.includes(to as AssayerLifecycleStatus);
+  const barred = (s: AssayerLifecycleStatus) =>
+    NEVER_A_WAYPOINT.includes(s) || (!leaving && NOT_A_WAYPOINT_INBOUND.includes(s));
+
+  const queue: Array<{ state: string; path: AssayerLifecycleStatus[] }> = [{ state: from, path: [] }];
+  const seen = new Set<string>([from]);
+
+  while (queue.length > 0) {
+    const { state, path } = queue.shift()!;
+    for (const next of ASSAYER_LIFECYCLE_TRANSITIONS[state] ?? []) {
+      if (seen.has(next)) continue;
+      const nextPath = [...path, next];
+      // The destination itself is never the blocker — it is allowed to be a decision, because
+      // arriving there IS the decision the operator asked for.
+      if (next === to) return nextPath.slice(0, -1).find(barred) ?? null;
       seen.add(next);
       queue.push({ state: next, path: nextPath });
     }

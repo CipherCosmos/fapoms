@@ -319,6 +319,8 @@ describe('RosterRecordsService.resolveIssues', () => {
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: issues },
+        // `setEmpanelment` locks its row before reading it; nothing here reaches that path.
+        { provide: getDataSourceToken(), useValue: {} },
       ],
     }).compile();
     service = mod.get(RosterRecordsService);

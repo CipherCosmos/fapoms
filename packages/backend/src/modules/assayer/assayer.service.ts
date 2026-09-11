@@ -4,7 +4,7 @@ import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
-  normalisePhone, formatDateOnly, parseCalendarDate,
+  normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -2621,7 +2621,8 @@ export class AssayerService implements OnModuleInit {
           skipped.push({
             id,
             current: from,
-            reason: `No valid path from ${from} to ${targetStatus}`,
+            reason: `No valid path from ${from} to ${targetStatus}.`
+              + AssayerService.whyNoPath(from, targetStatus),
           });
           continue;
         }
@@ -2775,6 +2776,30 @@ export class AssayerService implements OnModuleInit {
     }
 
     return null;
+  }
+
+  /**
+   * The half-sentence that turns "no valid path" into something an operator can act on.
+   *
+   * Empty when the two states are genuinely unconnected — nothing leaves ARCHIVED, and inventing
+   * an explanation for that would be worse than the bare fact. Present when every route between
+   * them runs through a state that is a decision rather than a corridor, because then the next
+   * move is a real one: take that decision on the record, deliberately, and the batch becomes
+   * available.
+   *
+   * ACTIVE is the entry that made this worth writing. "Select twelve INVITED people → Suspended"
+   * used to walk them through an activation nobody had earned — four committed hops including an
+   * `ASSAYER_ONBOARDED` notification — and `No valid path from INVITED to SUSPENDED` on its own
+   * would leave a clerk believing the roster was broken rather than that the suspension is not
+   * available until somebody is actually working.
+   */
+  private static whyNoPath(from: string, targetStatus: string): string {
+    const blocker = assayerLifecycleBlockedBy(from, targetStatus);
+    if (!blocker) return '';
+    return ` Every route from ${from} to ${targetStatus} passes through ${blocker}, which is a`
+      + ' decision somebody has to make and answer for, not a corridor — a bulk action will not'
+      + ` take it on your behalf. Move them to ${blocker} as its own decision first. Nothing was`
+      + ' changed.';
   }
 
   /**

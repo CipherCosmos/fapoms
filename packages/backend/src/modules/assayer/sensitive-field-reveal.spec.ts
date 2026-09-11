@@ -333,6 +333,8 @@ describe('the dossier paperwork checklist', () => {
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: onboarding },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
+        // `setEmpanelment` locks its row before reading it; nothing here reaches that path.
+        { provide: getDataSourceToken(), useValue: {} },
       ],
     }).compile();
     service = mod.get(RosterRecordsService);

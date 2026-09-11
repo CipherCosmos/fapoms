@@ -243,6 +243,13 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   'modules/branch/branch.service.ts',
   'modules/zone/zone.service.ts',
   'modules/assayer/assayer.service.ts',
+  // One transaction, for one write: `setEmpanelment` takes `SELECT … FOR UPDATE` on the client
+  // standing before it reads it, and a `FOR UPDATE` outside a transaction is released at once and
+  // guards nothing. Three concurrent decisions used to answer 200, 200, 200 while the row kept
+  // one. The audit row is deliberately written AFTER the commit, through `recordEventSafe`, so
+  // the trail records what actually persisted rather than what a rolled-back attempt intended —
+  // which is the coupling this list exists to make somebody state out loud.
+  'modules/assayer/roster-records.service.ts',
 ];
 
 /**

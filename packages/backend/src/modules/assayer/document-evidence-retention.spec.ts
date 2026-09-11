@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { BadRequestException } from '@nestjs/common';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -97,6 +97,8 @@ describe('RosterRecordsService.detachFile — evidence under a verification', ()
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: onboarding },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: {} },
+        // `setEmpanelment` locks its row before reading it; nothing here reaches that path.
+        { provide: getDataSourceToken(), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentVersionEntity), useValue: docVersions },
         { provide: AuditService, useValue: audit },
       ],
@@ -272,6 +274,8 @@ describe('reaching the evidence that was kept', () => {
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: onboarding },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: {} },
+        // `setEmpanelment` locks its row before reading it; nothing here reaches that path.
+        { provide: getDataSourceToken(), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentVersionEntity), useValue: docVersions },
       ],
     }).compile();
@@ -330,6 +334,8 @@ describe('verifying a version whose scan has been deleted', () => {
         { provide: getRepositoryToken(AssayerBackgroundCheckEntity), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentEntity), useValue: onboarding },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: {} },
+        // `setEmpanelment` locks its row before reading it; nothing here reaches that path.
+        { provide: getDataSourceToken(), useValue: {} },
         { provide: getRepositoryToken(AssayerDocumentVersionEntity), useValue: docVersions },
       ],
     }).compile();
