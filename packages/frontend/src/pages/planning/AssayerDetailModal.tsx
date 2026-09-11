@@ -9,6 +9,7 @@ import { EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, formatRouteDistance
 import { Modal } from '../../components/ui';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
 import { api } from '../../services/api';
+import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { ScoreBreakdown } from './ScoreBreakdown';
 import type { AssayerDetail, Candidate } from '../PlanningWorkspace';
 
@@ -70,13 +71,20 @@ export const AssayerDetailModal: React.FC<{
   assayerId: string | null;
   profile: AssayerDetail | null;
   loadingProfile: boolean;
+  /**
+   * Why there is no profile, when there is no profile because the request failed. Told apart from
+   * `profile === null`, which this modal renders as "Assayer not found." — a claim about a person
+   * that must never be produced by a refusal or an outage.
+   */
+  profileError?: unknown;
+  onRetryProfile?: () => void;
   /** The card this modal was opened from — branch-specific match context. Null off a bare id. */
   candidate: Candidate | null;
   branchName?: string | null;
   clientId?: string | null;
   onCallAndAssign: (c: Candidate) => void;
   onSendToApp: (c: Candidate) => void;
-}> = ({ open, onClose, assayerId, profile, loadingProfile, candidate, branchName, clientId, onCallAndAssign, onSendToApp }) => {
+}> = ({ open, onClose, assayerId, profile, loadingProfile, profileError, onRetryProfile, candidate, branchName, clientId, onCallAndAssign, onSendToApp }) => {
   const [tab, setTab] = React.useState<TabKey>('overview');
   const [qualification, setQualification] = React.useState<(AssayerQualificationView & { printSummary?: unknown }) | null>(null);
   const [partners, setPartners] = React.useState<PartnerQualificationView[] | null>(null);
@@ -122,6 +130,10 @@ export const AssayerDetailModal: React.FC<{
     <Modal open onClose={onClose} title="Assayer Details" width="880px" maxHeight="90vh" bodyStyle={{ padding: '0 4px 0 0', gap: 0 }}>
       {loadingProfile ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading assayer details...</div>
+      ) : profileError != null ? (
+        <div style={{ padding: '20px' }}>
+          <LoadFailure loads={[{ label: "this assayer's profile", query: caughtLoad(profileError, () => onRetryProfile?.()) }]} />
+        </div>
       ) : !profile ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Assayer not found.</div>
       ) : (() => {
@@ -363,7 +375,13 @@ export const AssayerDetailModal: React.FC<{
                     <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><AlertTriangle size={13} /> Data-integrity flags</h4>
                     {loadingExtra ? (
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading…</div>
-                    ) : !snapshot || snapshot.riskFlags.length === 0 ? (
+                    ) : !snapshot ? (
+                      /* An all-clear is a finding. "No open flags on this record", in green, with
+                         a tick, was printed whenever the snapshot failed to load — the panel next
+                         to it already admitted "Could not load live workload" off the SAME request.
+                         A planner reads this before deciding somebody is safe to send. */
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Could not load the data-integrity flags, so this is not saying there are none.</div>
+                    ) : snapshot.riskFlags.length === 0 ? (
                       <div style={{ fontSize: '11px', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '5px' }}><CheckCircle2 size={12} /> No open flags on this record.</div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

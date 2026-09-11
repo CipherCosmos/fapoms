@@ -555,6 +555,15 @@ export const PlanningWorkspace: React.FC = () => {
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
   const [detailAssayer, setDetailAssayer] = useState<AssayerDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  /**
+   * Why the detail modal has no profile in it.
+   *
+   * The load was `catch { console.error('Failed to load assayer details'); }`, leaving
+   * `detailAssayer` null — and null is the modal's "Assayer not found." state. So a 403, a 500 or
+   * a dropped connection told a planner that the person whose card they had just clicked does not
+   * exist, on the screen where they decide whether to offer that person a day's work.
+   */
+  const [detailError, setDetailError] = useState<unknown>(null);
   /** The card the detail modal was opened from — its branch-specific match context. */
   const [detailCandidate, setDetailCandidate] = useState<Candidate | null>(null);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
@@ -1378,6 +1387,7 @@ export const PlanningWorkspace: React.FC = () => {
   const loadAssayerDetail = async (candidate: Candidate) => {
     setDetailCandidate(candidate);
     setLoadingDetail(true);
+    setDetailError(null);
     setShowAssayerDetailModal(true);
     try {
       // Remarks, qualification, eligibility and live workload are fetched inside the modal
@@ -1385,7 +1395,7 @@ export const PlanningWorkspace: React.FC = () => {
       // profile is loaded here.
       const profile = await api.request<AssayerDetail>(`/assayers/${candidate.id}/profile`, { method: 'GET' });
       setDetailAssayer(profile);
-    } catch { console.error('Failed to load assayer details'); }
+    } catch (e) { setDetailError(e); }
     finally { setLoadingDetail(false); }
   };
 
@@ -3180,6 +3190,8 @@ export const PlanningWorkspace: React.FC = () => {
         assayerId={detailCandidate?.id ?? detailAssayer?.id ?? null}
         profile={detailAssayer}
         loadingProfile={loadingDetail}
+        profileError={detailError}
+        onRetryProfile={() => { if (detailCandidate) void loadAssayerDetail(detailCandidate); }}
         candidate={detailCandidate}
         branchName={selectedPb?.branch?.name}
         clientId={selectedProjectClientId ?? undefined}

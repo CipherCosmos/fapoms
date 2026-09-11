@@ -78,6 +78,7 @@ const REPAIRED: Array<[path: string, whatItUsedToSay: string, ownMarker?: string
    */
   ['pages/planning/BranchListPanel.tsx', 'the same, with no way for the page to say otherwise', 'failure'],
   ['pages/planning/BranchHistoryDrawer.tsx', '(error as Error).message, raw'],
+  ['pages/planning/AssayerDetailModal.tsx', '"Assayer not found.", and a green "No open flags on this record."'],
   ['pages/assignments/AssignmentTable.tsx', 'a FORBIDDEN branch that could never fire (error.statusCode)'],
   ['pages/assignments/AssignmentDetailDrawer.tsx', '"No timeline events yet"'],
   ['pages/assignments/useAssignmentQueue.ts', 'isError, missing the paused case'],
