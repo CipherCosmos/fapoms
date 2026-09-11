@@ -366,6 +366,43 @@ describe('assignments cancelled by a departure', () => {
       expect(lifecycleEvent()!.dto.metadata?.departureEventId).toBeUndefined();
     });
 
+    /**
+     * THE OTHER DOOR, and the one finding DEL-07 literally names.
+     *
+     * `DELETE /assayers/:id` runs its own cascade — same raw UPDATE, same silence. Its audit row
+     * is `ASSAYER_DELETED` on the ASSAYER, naming neither the assignments nor how many. The
+     * assignment rows are written by the same helper, so the two doors leave the same trail, and
+     * only `cause` tells them apart.
+     */
+    it('audits the assignments a profile DELETION closes, not only a departure', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(person());
+      cancelledRows = [row({ previous_status: AssignmentStatus.PENDING })];
+
+      await service.remove('as-1', 'u-9', 'Duplicate record created in error.');
+
+      expect(assignmentEvents()).toHaveLength(1);
+      const { dto } = assignmentEvents()[0];
+      expect(dto.eventType).toBe('ASSIGNMENT_CANCELLED');
+      expect(dto.previousState).toBe(AssignmentStatus.PENDING);
+      expect(dto.newState).toBe(AssignmentStatus.CANCELLED);
+      // Named for what it was, not for a departure that did not happen.
+      expect(dto.metadata.cause).toBe('ASSAYER_DELETED');
+      expect(dto.metadata.previousAssayerId).toBe('as-1');
+      expect(dto.remarks).toMatch(/soft deleted/);
+    });
+
+    it('correlates a deletion\'s cancellations to the ASSAYER_DELETED row', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(person());
+      cancelledRows = [row()];
+
+      await service.remove('as-1', 'u-9', 'Duplicate record created in error.');
+
+      const onAssignment = assignmentEvents()[0].dto.metadata.departureEventId;
+      const deletion = events.find((e) => e.dto.eventType === 'ASSAYER_DELETED')!;
+      expect(typeof onAssignment).toBe('string');
+      expect(deletion.dto.metadata.deletionEventId).toBe(onAssignment);
+    });
+
     it('does the same for both kinds of departure', async () => {
       for (const [move, target] of [
         ['acceptResignation', AssayerLifecycleStatus.RESIGNED],

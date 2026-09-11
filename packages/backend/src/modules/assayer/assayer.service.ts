@@ -2258,6 +2258,13 @@ export class AssayerService implements OnModuleInit {
 
     const assayer = await this.findOne(id);
     const deletedFrom = assayer.lifecycleStatus;
+    /**
+     * One id for the whole deletion, written onto every assignment this cascade cancels and onto
+     * the `ASSAYER_DELETED` row below. Same join key the departure path mints, for the same
+     * reason: "show me everything that happened when this record was deleted" should be one
+     * query, not an inference from timestamps a second apart.
+     */
+    const deletionEventId = randomUUID();
     assayer.isActive = false;
     assayer.lifecycleStatus = AssayerLifecycleStatus.ARCHIVED;
     assayer.status = AssayerStatus.INACTIVE;
@@ -2355,13 +2362,47 @@ export class AssayerService implements OnModuleInit {
        * beside its definition above. The two paths cancel the same work for the same reason and
        * had no business disagreeing about which work that is.
        */
-      // 1. Genuinely open work is cancelled, and says why.
+      /**
+       * 1. Genuinely open work is cancelled, says why, and — since 2026-09-11 — leaves an audit
+       * row on each assignment it closes.
+       *
+       * This is the half of finding DEL-07 that sits on the delete path. The sibling
+       * `cancelOpenAssignmentsOnDeparture` had the same gap and closed it the same way: the only
+       * trail here was one `ASSAYER_DELETED` row on the ASSAYER, naming neither the assignments
+       * nor how many, so "why was my job cancelled?" was answerable only by already knowing to go
+       * and look at somebody's deletion. `entity_version` was bumped with nothing on the
+       * assignment to say what had changed.
+       *
+       * Deliberately NOT aliased. `soft-delete-cascade.spec.ts` reads this method as raw text and
+       * matches each child table against an un-aliased update that clears its active flag; giving
+       * this statement an alias would hide it from the guard that exists to notice a table
+       * dropping out of the cascade. (That guard scans comments as well as code, so this one is
+       * worded to describe the rule rather than quote it.)
+       */
       .then(() => manager.query(
         `UPDATE assignments SET is_active = false, status = $1,
             cancel_reason = 'Assayer profile soft deleted', updated_by = $2,
-            entity_version = COALESCE(entity_version, 1) + 1, updated_at = NOW()
-          WHERE assayer_id = $3 AND is_active = true AND status = ANY($4)`,
+            entity_version = COALESCE(assignments.entity_version, 1) + 1, updated_at = NOW()
+          FROM (
+            SELECT id, status, entity_version FROM assignments
+             WHERE assayer_id = $3 AND is_active = true AND status = ANY($4)
+               FOR UPDATE
+          ) AS before
+          WHERE assignments.id = before.id
+      RETURNING assignments.id,
+                assignments.assignment_number,
+                before.status         AS previous_status,
+                before.entity_version AS previous_version,
+                assignments.entity_version AS new_version,
+                assignments.scheduled_date,
+                assignments.project_branch_id`,
         [AssignmentStatus.CANCELLED, userId, id, AssayerService.OPEN_ASSIGNMENT_STATUSES],
+      ))
+      .then((raw) => this.auditCancelledOnDeparture(
+        AssayerService.returnedRows(raw), id, AssayerLifecycleStatus.ARCHIVED, userId,
+        'Assayer profile soft deleted; the work could not proceed as planned. Reassign it if it '
+        + 'still needs doing.',
+        manager, deletionEventId, 'ASSAYER_DELETED',
       ))
       /**
        * 2. Work that already ended — REJECTED or CANCELLED — is only deactivated, so the branch's
@@ -2403,7 +2444,9 @@ export class AssayerService implements OnModuleInit {
           newState: AssayerLifecycleStatus.ARCHIVED,
           remarks: `Administrative deletion of ${assayer.displayName} (was ${deletedFrom}): ${reason.trim()}`
             + ' — cascaded deactivation to commercial profiles, documents, and non-completed assignments.',
-          metadata: { reason: reason.trim(), deletedFrom },
+          // The other end of the join: this row says a deletion happened, the
+          // ASSIGNMENT_CANCELLED rows carrying the same id say which jobs it closed.
+          metadata: { reason: reason.trim(), deletedFrom, deletionEventId },
         },
         { manager },
       )));
@@ -3492,9 +3535,7 @@ export class AssayerService implements OnModuleInit {
      * Both shapes are accepted rather than depending on a driver version — an array of arrays is
      * the tuple, an array of rows is the rows.
      */
-    const cancelled: CancelledAssignmentRow[] = Array.isArray(raw) && Array.isArray(raw[0])
-      ? raw[0]
-      : (Array.isArray(raw) ? raw : []);
+    const cancelled = AssayerService.returnedRows(raw);
 
     await this.auditCancelledOnDeparture(cancelled, assayerId, target, userId, reason, manager, departureEventId);
 
@@ -3536,6 +3577,25 @@ export class AssayerService implements OnModuleInit {
    * everything that happened when she left" is one query rather than a guess based on timestamps
    * a second apart.
    */
+  /**
+   * The rows a writing statement's `RETURNING` actually produced.
+   *
+   * TypeORM hands a writing statement back as `[rows, affectedCount]`, which is why both cascades
+   * here used to read their count as `const [, affected] = …`. Treating that tuple as the row list
+   * iterates over `[rows]` and a number, and every audit row is then written with an undefined
+   * `entityId`: the count on the employment record right, the assignments still bare, and a 200 on
+   * the way out — the exact silence these audit rows exist to end, one layer further in. It was
+   * the live run that found it, because a unit fixture serving rows directly is a shape production
+   * never produces.
+   *
+   * Both shapes are accepted rather than depending on a driver version: an array whose first
+   * element is an array is the tuple, anything else is already the rows.
+   */
+  private static returnedRows(raw: unknown): CancelledAssignmentRow[] {
+    if (!Array.isArray(raw)) return [];
+    return (Array.isArray(raw[0]) ? raw[0] : raw) as CancelledAssignmentRow[];
+  }
+
   private async auditCancelledOnDeparture(
     cancelled: CancelledAssignmentRow[],
     assayerId: string,
@@ -3544,6 +3604,12 @@ export class AssayerService implements OnModuleInit {
     reason: string,
     manager?: EntityManager,
     departureEventId?: string,
+    /**
+     * What ended the work. A lifecycle departure and a profile deletion close the same
+     * assignments for different reasons, and a row that said "departure" for a deletion would be
+     * a small lie in the one place that has to be exact.
+     */
+    cause: 'ASSAYER_DEPARTURE' | 'ASSAYER_DELETED' = 'ASSAYER_DEPARTURE',
   ): Promise<void> {
     for (const row of cancelled) {
       await this.auditService.recordEvent(
@@ -3558,7 +3624,7 @@ export class AssayerService implements OnModuleInit {
           remarks: reason,
           metadata: {
             /** What ended the work, so the row explains itself without the assayer's trail. */
-            cause: 'ASSAYER_DEPARTURE',
+            cause,
             lifecycleTarget: target,
             /**
              * The assayer this work was taken from. `assayer_id` is deliberately NOT cleared by
@@ -3566,7 +3632,11 @@ export class AssayerService implements OnModuleInit {
              * a cancelled assignment months later should not have to infer the connection.
              */
             previousAssayerId: assayerId,
-            /** The join key back to the one ASSAYER_LIFECYCLE_TRANSITION row for this departure. */
+            /**
+             * The join key back to the ONE row on the assayer for this act — the
+             * `ASSAYER_LIFECYCLE_TRANSITION` for a departure, the `ASSAYER_DELETED` for a
+             * deletion. Both carry the same value.
+             */
             departureEventId: departureEventId ?? null,
             assignmentNumber: row.assignment_number,
             projectBranchId: row.project_branch_id,
