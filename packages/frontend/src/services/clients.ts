@@ -1,6 +1,7 @@
 import { api } from './api';
 import type {
   Client,
+  ClientConfiguration,
   ClientContact,
   ClientContract,
   ClientBilling,
@@ -32,10 +33,16 @@ export interface ClientListResult {
   meta: PaginatedMeta;
 }
 
-export interface ClientDetail extends Omit<Client, 'billing'> {
+export interface ClientDetail extends Omit<Client, 'billing' | 'configuration'> {
   contacts?: ClientContact[];
   contracts?: ClientContract[];
   billing?: ClientBilling | null;
+  /**
+   * The row's optimistic-concurrency version travels with it. `ClientConfiguration` in
+   * `@fapoms/shared` predates the column being read by anything, so it does not declare it —
+   * the API has always returned it, and the rate-card editors have to send it back.
+   */
+  configuration?: (ClientConfiguration & { version?: number }) | null;
 }
 
 export interface ClientConfigurationPayload {
@@ -51,6 +58,13 @@ export interface ClientConfigurationPayload {
   defaultBaseFee?: number;
   travelFeePerKm?: number;
   freeTravelAllowanceKm?: number;
+  /**
+   * The configuration version this edit was decided against. Required by `PUT /clients/:id`
+   * whenever `configuration` is present: without it the server cannot tell a fresh edit from one
+   * typed against numbers another operator has since replaced, and it refuses rather than
+   * accepting a rate card it would then discard.
+   */
+  expectedVersion?: number;
 }
 
 export interface CreateClientPayload {
@@ -110,6 +124,8 @@ export interface UpdateBillingPayload {
   notes?: string;
   gstRate?: number;
   tdsRate?: number;
+  /** The billing-profile version this edit was decided against. Required when a profile exists. */
+  expectedVersion?: number;
 }
 
 async function listClients(params: ClientListParams = {}): Promise<ClientListResult> {

@@ -14,10 +14,10 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
-  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, Max, IsUUID, MaxLength,
-  ValidateBy, ValidationOptions,
+  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsInt, IsEmail, IsBoolean, IsEnum, Min, Max, IsUUID, MaxLength,
+  ValidateBy, ValidationOptions, ValidateNested,
 } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -72,8 +72,16 @@ const IsGstinOrPanFormat = (options?: ValidationOptions): PropertyDecorator =>
 class CreateClientConfigDto {
   @IsOptional() @IsObject() importMapping?: Record<string, string>;
   @IsOptional() @IsArray() workingDays?: number[];
-  // Serviceability radius in km. Below 1 no branch is ever in range; the platform default is 50.
-  @IsOptional() @IsNumber() @Min(1) @Max(2000) defaultRadius?: number;
+  /**
+   * Serviceability radius in km. Below 1 no branch is ever in range; the platform default is 50.
+   *
+   * The ceiling is 999 because `client_configurations.default_radius` is `numeric(5,2)` — it
+   * cannot hold 1000. The decorator used to say 2000, so a value between 1000 and 2000 passed
+   * every check the API had and then overflowed in Postgres, which the error boundary correctly
+   * redacted into a bare **500 "Internal server error"**. Measured: `defaultRadius: 999999`
+   * answered 500, not 400. A bound that is wider than the column is not a bound.
+   */
+  @IsOptional() @IsNumber() @Min(1) @Max(999) defaultRadius?: number;
   @IsOptional() @IsObject() slaRules?: Record<string, any>;
   @IsOptional() @IsString() serviceLevel?: string;
   // Hours, so an upper bound of one year. Zero would mean "already breached on creation".
@@ -90,6 +98,18 @@ class CreateClientConfigDto {
   @IsOptional() @IsNumber() @Min(0) @Max(10_000_000) defaultBaseFee?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1000) travelFeePerKm?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(2000) freeTravelAllowanceKm?: number;
+}
+
+/**
+ * The same configuration, plus the version the operator was looking at when they decided.
+ *
+ * Separate from `CreateClientConfigDto` on purpose: creating a client has nothing to be stale
+ * about, and a field that is accepted-and-ignored on one route is how an API teaches callers to
+ * send something meaningless. Required on update — the service refuses without it; see
+ * `pricing-version.ts` for why an absent version is not the same as "no opinion".
+ */
+class UpdateClientConfigDto extends CreateClientConfigDto {
+  @IsOptional() @IsInt() @Min(1) expectedVersion?: number;
 }
 
 class CreateClientRequestDto implements CreateClientDto {
@@ -121,7 +141,7 @@ class CreateClientRequestDto implements CreateClientDto {
   @IsOptional() @IsArray() preferredAssayers?: string[];
   @IsOptional() @IsArray() restrictedAssayers?: string[];
   @IsOptional() @IsObject() planningPreferences?: Record<string, any>;
-  @IsOptional() @IsObject() configuration?: CreateClientConfigDto;
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => CreateClientConfigDto) configuration?: CreateClientConfigDto;
 }
 
 class UpdateClientRequestDto implements UpdateClientDto {
@@ -142,7 +162,17 @@ class UpdateClientRequestDto implements UpdateClientDto {
   @IsOptional() @IsArray() preferredAssayers?: string[];
   @IsOptional() @IsArray() restrictedAssayers?: string[];
   @IsOptional() @IsObject() planningPreferences?: Record<string, any>;
-  @IsOptional() @IsObject() configuration?: CreateClientConfigDto;
+  /**
+   * `@ValidateNested()` + `@Type()` are what make the bounds above real.
+   *
+   * This was `@IsOptional() @IsObject()` alone on both DTOs, and class-validator does not descend
+   * into a plain object — so every `@Min`/`@Max` in `CreateClientConfigDto` was decoration only,
+   * despite that class's own docblock saying "these decorators are what actually enforces them".
+   * Measured before the fix, against the live API: `configuration: { travelFeePerKm: -5 }`
+   * answered **200** and stored −5.00 — a travel allowance that pays the client per kilometre —
+   * and `configuration: { madeUpField: 1 }` answered 200 while `forbidNonWhitelisted` was on.
+   */
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => UpdateClientConfigDto) configuration?: UpdateClientConfigDto;
 }
 
 class CreateContactRequestDto implements CreateContactDto {
@@ -205,8 +235,18 @@ class UpdateBillingRequestDto implements UpdateBillingDto {
   @IsOptional() @IsString() bankName?: string;
   @IsOptional() @IsString() ifscCode?: string;
   @IsOptional() @IsString() notes?: string;
-  @IsOptional() @IsNumber() gstRate?: number;
-  @IsOptional() @IsNumber() tdsRate?: number;
+  /**
+   * Percentages, so 0–100 — the same "bounds, not just types" rule the configuration DTO above
+   * states. These were bare `@IsNumber()`, so a stray minus sign or a rate typed in basis points
+   * was accepted and then applied to every client line booked afterwards.
+   */
+  @IsOptional() @IsNumber() @Min(0) @Max(100) gstRate?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(100) tdsRate?: number;
+  /**
+   * The version of the profile this edit was decided against — required when a profile already
+   * exists, refused as stale when it is not the committed one. See `pricing-version.ts`.
+   */
+  @IsOptional() @IsInt() @Min(1) expectedVersion?: number;
 }
 
 class LifecycleTransitionDto {

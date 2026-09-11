@@ -7,7 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, Like, In, DataSource } from 'typeorm';
+import { Repository, Like, In, DataSource, EntityManager } from 'typeorm';
 import { ClientEntity } from './client.entity';
 import { ClientConfigurationEntity } from './client-configuration.entity';
 import { ClientContactEntity } from './client-contact.entity';
@@ -20,6 +20,7 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { assertPricingVersion, lockPricingRow, translateConcurrentCreate } from './pricing-version';
 import { EventCategory, ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 
 export interface CreateClientDto {
@@ -86,6 +87,12 @@ export interface UpdateClientDto {
     travelFeePerKm?: number;
     freeTravelAllowanceKm?: number;
     effectiveTo?: Date;
+    /**
+     * The version of the configuration row this edit was decided against. Required, because the
+     * rate card in here (`defaultBaseFee`, `travelFeePerKm`, `freeTravelAllowanceKm`) prices every
+     * booking and `defaultRadius` decides who is even eligible. See `pricing-version.ts`.
+     */
+    expectedVersion?: number;
   };
 }
 
@@ -147,6 +154,11 @@ export interface UpdateBillingDto {
   notes?: string;
   gstRate?: number;
   tdsRate?: number;
+  /**
+   * The version of the billing profile this edit was decided against. Required when a profile
+   * already exists; meaningless (and ignored) when one is being created. See `pricing-version.ts`.
+   */
+  expectedVersion?: number;
 }
 
 /**
@@ -404,12 +416,17 @@ export class ClientService implements OnModuleInit {
     return saved;
   }
 
-  async findOne(id: string): Promise<ClientEntity> {
+  /**
+   * `m` reads on a caller's open transaction instead of a pooled connection. `updateWithConfiguration`
+   * passes it so the response body is the state that transaction just wrote, rather than whatever a
+   * concurrent writer had committed by the time a second, independent read ran.
+   */
+  async findOne(id: string, m?: EntityManager): Promise<ClientEntity> {
     // Filters `is_active` on the client AND on every soft-deletable relation loaded below
     // (configuration, contacts, contracts, billing). A plain `relations` option would load
     // the whole set including soft-deleted rows, so they surface in the detail view even
     // though the dedicated findContacts/findContracts/findBilling methods hide them.
-    const client = await this.clientRepository
+    const client = await (m ? m.getRepository(ClientEntity) : this.clientRepository)
       .createQueryBuilder('client')
       .leftJoinAndSelect('client.configuration', 'configuration', 'configuration.isActive = true')
       .leftJoinAndSelect('client.contacts', 'contacts', 'contacts.isActive = true')
@@ -446,8 +463,8 @@ export class ClientService implements OnModuleInit {
    * `billing` is left unloaded: no write path reads it, and an unloaded relation is the one
    * state `save` is guaranteed not to touch.
    */
-  private async loadForWrite(id: string): Promise<ClientEntity> {
-    const client = await this.clientRepository
+  private async loadForWrite(id: string, m?: EntityManager): Promise<ClientEntity> {
+    const client = await (m ? m.getRepository(ClientEntity) : this.clientRepository)
       .createQueryBuilder('client')
       .leftJoinAndSelect('client.configuration', 'configuration', 'configuration.isActive = true')
       .where('client.id = :id', { id })
@@ -514,12 +531,46 @@ export class ClientService implements OnModuleInit {
     return { clients, total };
   }
 
+  /**
+   * Edit the client and, optionally, the configuration row that prices its work.
+   *
+   * When `dto.configuration` is present this runs inside a transaction that locks the
+   * configuration row FIRST and refuses a stale `expectedVersion` with a 409 — the rate card in
+   * there (`defaultBaseFee`, `travelFeePerKm`, `freeTravelAllowanceKm`) is what every booking is
+   * priced from and `defaultRadius` decides who is eligible at all, so two operators editing it
+   * at once must not both be told it saved. Three concurrent calls setting three different base
+   * fees used to answer 200, 200, 200 — and return each other's numbers, because the response was
+   * re-read after the write rather than being the write. The response body is now read inside the
+   * same transaction, so it is this call's own committed state or this call did not commit.
+   *
+   * A `PUT` that does not touch `configuration` (renaming a client, changing a contact) is left
+   * exactly as it was, deliberately: optimistic locking belongs where a lost update would change
+   * a business decision, not on every column in the product.
+   */
   async update(id: string, dto: UpdateClientDto, userId: string): Promise<ClientEntity> {
     // Same ranges as create — an edit must not be able to write what create refuses.
     this.validateTunables(dto);
 
-    const client = await this.loadForWrite(id);
+    if (dto.configuration) return this.updateWithConfiguration(id, dto, userId);
 
+    const client = await this.loadForWrite(id);
+    this.applyClientFields(client, dto);
+
+    client.updatedBy = userId;
+    const saved = await this.clientRepository.save(client);
+
+    await this.afterClientUpdate(saved, client.name, userId, false);
+
+    /**
+     * Read the aggregate back for the response. The write above loaded only the client and its
+     * configuration, so `saved` carries no `contacts`, `contracts` or `billing`; returning it
+     * would quietly drop three collections from a response body callers already receive.
+     */
+    return this.findOne(saved.id);
+  }
+
+  /** The client's own scalar columns. Shared by both `update` paths so they cannot drift. */
+  private applyClientFields(client: ClientEntity, dto: UpdateClientDto): void {
     if (dto.name !== undefined) client.name = dto.name;
     if (dto.displayName !== undefined) client.displayName = dto.displayName;
     if (dto.website !== undefined) client.website = dto.website;
@@ -536,40 +587,28 @@ export class ClientService implements OnModuleInit {
     if (dto.preferredAssayers !== undefined) client.preferredAssayers = dto.preferredAssayers;
     if (dto.restrictedAssayers !== undefined) client.restrictedAssayers = dto.restrictedAssayers;
     if (dto.planningPreferences !== undefined) client.planningPreferences = dto.planningPreferences;
+  }
 
-    if (dto.configuration && client.configuration) {
-      const conf = client.configuration;
-      if (dto.configuration.importMapping !== undefined) conf.importMapping = dto.configuration.importMapping;
-      if (dto.configuration.workingDays !== undefined) conf.workingDays = dto.configuration.workingDays;
-      if (dto.configuration.defaultRadius !== undefined) conf.defaultRadius = dto.configuration.defaultRadius;
-      if (dto.configuration.slaRules !== undefined) conf.slaRules = dto.configuration.slaRules;
-      if (dto.configuration.serviceLevel !== undefined) conf.serviceLevel = dto.configuration.serviceLevel;
-      if (dto.configuration.maxResponseTimeHours !== undefined) conf.maxResponseTimeHours = dto.configuration.maxResponseTimeHours;
-      if (dto.configuration.penaltyRate !== undefined) conf.penaltyRate = dto.configuration.penaltyRate;
-      if (dto.configuration.serviceHours !== undefined) conf.serviceHours = dto.configuration.serviceHours;
-      if (dto.configuration.defaultBaseFee !== undefined) conf.defaultBaseFee = dto.configuration.defaultBaseFee;
-      if (dto.configuration.travelFeePerKm !== undefined) conf.travelFeePerKm = dto.configuration.travelFeePerKm;
-      if (dto.configuration.freeTravelAllowanceKm !== undefined) conf.freeTravelAllowanceKm = dto.configuration.freeTravelAllowanceKm;
-      if (dto.configuration.effectiveTo !== undefined) conf.effectiveTo = dto.configuration.effectiveTo;
-      conf.updatedBy = userId;
-    }
-
-    client.updatedBy = userId;
-    const saved = await this.clientRepository.save(client);
-
+  /** Cache eviction, audit row and domain event. Shared by both `update` paths. */
+  private async afterClientUpdate(
+    saved: ClientEntity,
+    name: string,
+    userId: string,
+    rateCardChanged: boolean,
+  ): Promise<void> {
     // A changed rate card (defaultBaseFee / travelFeePerKm / freeTravelAllowanceKm) must not
     // be served stale by FeePolicyService.getRates, which caches under ref:rates:client:{id}.
-    if (dto.configuration) {
-      await this.cache.del(`ref:rates:client:${id}`);
+    if (rateCardChanged) {
+      await this.cache.del(`ref:rates:client:${saved.id}`);
     }
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'CLIENT_UPDATED',
       entityType: 'CLIENT',
-      entityId: id,
+      entityId: saved.id,
       userId,
-      remarks: `Updated client ${client.name}`,
+      remarks: `Updated client ${name}`,
     });
 
     try {
@@ -584,13 +623,66 @@ export class ClientService implements OnModuleInit {
     } catch (err) {
       console.error('Failed to publish client:updated event:', err);
     }
+  }
 
-    /**
-     * Read the aggregate back for the response. The write above loaded only the client and its
-     * configuration, so `saved` carries no `contacts`, `contracts` or `billing`; returning it
-     * would quietly drop three collections from a response body callers already receive.
-     */
-    return this.findOne(saved.id);
+  /**
+   * The configuration half of `update`, under the row lock that makes the version check mean
+   * something.
+   *
+   * Order matters and is the whole fix: `FOR UPDATE` runs before the entity is read, so the
+   * in-memory copy is the committed one and a concurrent writer is either still blocked or
+   * already counted. Reading first and locking second is the shape that looks right and silently
+   * clobbers — TypeORM would then write `stale + 1` over the winner's row.
+   *
+   * The aggregate for the response is read on the transaction's own connection, so the body is
+   * this call's committed state. Previously it was re-read afterwards, and three concurrent calls
+   * each got back a number one of the *other* two had sent.
+   */
+  private async updateWithConfiguration(id: string, dto: UpdateClientDto, userId: string): Promise<ClientEntity> {
+    const cfg = dto.configuration!;
+    const { saved, response, name } = await this.dataSource.transaction(async (m) => {
+      const locked = await lockPricingRow(m, 'client_configurations', id);
+      if (!locked) {
+        /**
+         * No live configuration row to edit. `create` gives every client one, so this is a client
+         * whose configuration was soft-deleted — and the old code's `dto.configuration &&
+         * client.configuration` guard answered **200** while writing none of it. A rate card that
+         * was accepted and discarded is exactly the failure this task exists to remove, so it is
+         * a refusal now, and one that says what to do about it.
+         */
+        throw new ConflictException(
+          `NO_CLIENT_CONFIGURATION: client ${id} has no active configuration row, so there is nothing ` +
+            `to apply this rate card to. Restore or recreate the client's configuration first — this ` +
+            `request was NOT saved.`,
+        );
+      }
+      assertPricingVersion('client_configurations', locked, cfg.expectedVersion);
+
+      const client = await this.loadForWrite(id, m);
+      this.applyClientFields(client, dto);
+
+      const conf = client.configuration;
+      if (cfg.importMapping !== undefined) conf.importMapping = cfg.importMapping;
+      if (cfg.workingDays !== undefined) conf.workingDays = cfg.workingDays;
+      if (cfg.defaultRadius !== undefined) conf.defaultRadius = cfg.defaultRadius;
+      if (cfg.slaRules !== undefined) conf.slaRules = cfg.slaRules;
+      if (cfg.serviceLevel !== undefined) conf.serviceLevel = cfg.serviceLevel;
+      if (cfg.maxResponseTimeHours !== undefined) conf.maxResponseTimeHours = cfg.maxResponseTimeHours;
+      if (cfg.penaltyRate !== undefined) conf.penaltyRate = cfg.penaltyRate;
+      if (cfg.serviceHours !== undefined) conf.serviceHours = cfg.serviceHours;
+      if (cfg.defaultBaseFee !== undefined) conf.defaultBaseFee = cfg.defaultBaseFee;
+      if (cfg.travelFeePerKm !== undefined) conf.travelFeePerKm = cfg.travelFeePerKm;
+      if (cfg.freeTravelAllowanceKm !== undefined) conf.freeTravelAllowanceKm = cfg.freeTravelAllowanceKm;
+      if (cfg.effectiveTo !== undefined) conf.effectiveTo = cfg.effectiveTo;
+      conf.updatedBy = userId;
+
+      client.updatedBy = userId;
+      const savedClient = await m.getRepository(ClientEntity).save(client);
+      return { saved: savedClient, response: await this.findOne(savedClient.id, m), name: client.name };
+    });
+
+    await this.afterClientUpdate(saved, name, userId, true);
+    return response;
   }
 
   async remove(id: string, userId: string): Promise<void> {
@@ -1026,45 +1118,73 @@ export class ClientService implements OnModuleInit {
    * GST/TDS rates every client line is priced at. There is no billing "status" and no separate
    * history — the profile is either there or not, and every edit is an audit event with the
    * fields that changed.
+   *
+   * **Editing an existing profile requires `expectedVersion`.** This row decides the GST and TDS
+   * applied to every client line booked from now on, and three concurrent calls setting three
+   * different GST rates used to answer 200, 200, 200 while the row kept one — the two operators
+   * whose rate was discarded were told it had saved. `client_billing.version` was already there
+   * and already incrementing (it went 1 → 4 across exactly those three calls); it was simply
+   * never read. It is read now, under the row lock, and a stale writer gets a 409 that says the
+   * change was not saved. See `pricing-version.ts`.
+   *
+   * Creating the first profile needs no version — there is no earlier decision to be stale about.
+   * Two callers creating it at once is the other half of the race: `client_id` is unique, so one
+   * INSERT commits and the other is translated from a raw 23505 into the same conflict.
+   *
+   * The row is re-read on the transaction's own connection for the response, so the body is what
+   * committed rather than the in-memory entity that was handed to `save`.
    */
   async upsertBilling(clientId: string, dto: UpdateBillingDto, userId: string): Promise<ClientBillingEntity> {
     await this.findOne(clientId);
 
-    let billing = await this.billingRepository.findOne({ where: { clientId } });
-    const changes: Array<{ field: string; label: string; fromValue: string | null; toValue: string | null }> = [];
+    const { saved, changes, created } = await this.dataSource.transaction(async (m) => {
+      const repo = m.getRepository(ClientBillingEntity);
+      // Lock FIRST, read after: see pricing-version.ts. Anything else leaves a window in which
+      // the entity below is already stale and `save` writes straight over the winner.
+      const locked = await lockPricingRow(m, 'client_billing', clientId);
+      const collected: Array<{ field: string; label: string; fromValue: string | null; toValue: string | null }> = [];
 
-    if (!billing) {
-      billing = this.billingRepository.create({
-        clientId,
-        paymentTerms: dto.paymentTerms ?? 'NET30',
-        currency: dto.currency ?? 'INR',
-        taxIdentifier: dto.taxIdentifier ?? null,
-        invoiceCycle: dto.invoiceCycle ?? 'MONTHLY',
-        billingAddress: dto.billingAddress ?? '',
-        bankAccount: dto.bankAccount ?? null,
-        bankName: dto.bankName ?? null,
-        ifscCode: dto.ifscCode ?? null,
-        notes: dto.notes ?? null,
-        gstRate: dto.gstRate ?? 18,
-        tdsRate: dto.tdsRate ?? 10,
-        createdBy: userId,
-        updatedBy: userId,
-      });
-    } else {
+      if (!locked) {
+        const fresh = repo.create({
+          clientId,
+          paymentTerms: dto.paymentTerms ?? 'NET30',
+          currency: dto.currency ?? 'INR',
+          taxIdentifier: dto.taxIdentifier ?? null,
+          invoiceCycle: dto.invoiceCycle ?? 'MONTHLY',
+          billingAddress: dto.billingAddress ?? '',
+          bankAccount: dto.bankAccount ?? null,
+          bankName: dto.bankName ?? null,
+          ifscCode: dto.ifscCode ?? null,
+          notes: dto.notes ?? null,
+          gstRate: dto.gstRate ?? 18,
+          tdsRate: dto.tdsRate ?? 10,
+          createdBy: userId,
+          updatedBy: userId,
+        });
+        const inserted = await repo
+          .save(fresh)
+          .catch((err) => translateConcurrentCreate(err, 'client_billing'));
+        return { saved: inserted, changes: collected, created: true };
+      }
+
+      assertPricingVersion('client_billing', locked, dto.expectedVersion);
+
+      const billing = await repo.findOneOrFail({ where: { id: locked.id } });
       for (const f of this.BILLING_FIELDS) {
         const incoming = (dto as any)[f.key];
         if (incoming === undefined) continue;
         const fromValue = this.stringify(billing[f.key]);
         const toValue = this.stringify(incoming);
         if (fromValue !== toValue) {
-          changes.push({ field: f.key, label: f.label, fromValue, toValue });
+          collected.push({ field: f.key, label: f.label, fromValue, toValue });
           (billing as any)[f.key] = incoming;
         }
       }
       billing.updatedBy = userId;
-    }
-
-    const saved = await this.billingRepository.save(billing);
+      await repo.save(billing);
+      // The committed row, not the in-memory copy: the response has to be the persisted value.
+      return { saved: await repo.findOneOrFail({ where: { id: locked.id } }), changes: collected, created: false };
+    });
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -1072,10 +1192,12 @@ export class ClientService implements OnModuleInit {
       entityType: 'CLIENT',
       entityId: clientId,
       userId,
-      remarks: changes.length
-        ? `Updated billing: ${changes.map((c) => c.label).join(', ')}`
-        : `Created billing profile for client ${clientId}`,
-      metadata: changes.length ? { changes } : undefined,
+      remarks: created
+        ? `Created billing profile for client ${clientId}`
+        : changes.length
+          ? `Updated billing: ${changes.map((c) => c.label).join(', ')}`
+          : `Billing profile confirmed unchanged for client ${clientId}`,
+      metadata: changes.length ? { changes, version: saved.version } : { version: saved.version },
     });
 
     return saved;
