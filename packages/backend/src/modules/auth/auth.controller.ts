@@ -15,7 +15,10 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { IsString, IsNotEmpty, IsIn } from 'class-validator';
+import { probeDatabase } from '../../health-probe';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard, PasswordChangeExempt, OnboardingAllowed } from './guards';
 import { Throttle } from '@nestjs/throttler';
@@ -71,7 +74,13 @@ class BiometricLoginDto {
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    // Only `GET /auth/status` uses this, and only to run `SELECT 1`. It is injected here rather
+    // than reached through AuthService because connectivity is not an auth concern: the probe
+    // must answer even when every authentication path is failing.
+    @InjectDataSource() private readonly dataSource: DataSource,
+  ) {}
 
   /**
    * Confirms an assayer identifier exists, before the password step.
@@ -114,15 +123,29 @@ export class AuthController {
     };
   }
 
+  /**
+   * Reports whether this process is up *and* whether its database answers.
+   *
+   * It used to report the second half as the string literal `'connected'`, with no reference to
+   * a `DataSource` anywhere in the method — so it said "connected" with the database on fire,
+   * and a monitor wired to it had a green light that could not go red. It is now the same probe
+   * `/health` and `/health/ready` run (`health-probe.ts`), not a second opinion about it, and
+   * `status` degrades alongside `database` so a monitor watching either field sees the outage.
+   *
+   * The vocabulary (`online` / `connected`) is kept because it is a deployment contract that
+   * predates this fix and may be wired into monitors that do not redeploy with the application;
+   * only the negative values are new, because until now there were none.
+   */
   @Get('status')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Check API and database connectivity status' })
-  status() {
+  async status() {
+    const database = await probeDatabase(this.dataSource);
     return {
       success: true,
       data: {
-        status: 'online',
-        database: 'connected',
+        status: database === 'up' ? 'online' : 'degraded',
+        database: database === 'up' ? 'connected' : 'disconnected',
         timestamp: new Date().toISOString(),
       },
     };

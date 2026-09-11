@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from './infrastructure/redis/redis-client.module';
 import { realtimeHealth } from './infrastructure/realtime/realtime-health';
+import { probeDatabase } from './health-probe';
 
 /**
  * Unauthenticated liveness/readiness checks.
@@ -40,12 +41,7 @@ export class HealthController {
   @Get()
   @ApiOperation({ summary: 'Liveness and database connectivity check' })
   async check() {
-    let database = 'up';
-    try {
-      await this.dataSource.query('SELECT 1');
-    } catch {
-      database = 'down';
-    }
+    const database = await probeDatabase(this.dataSource);
     return { status: database === 'up' ? 'ok' : 'degraded', database };
   }
 
@@ -59,10 +55,7 @@ export class HealthController {
   @ApiOperation({ summary: 'Readiness check across backing services (DB, Redis)' })
   async ready() {
     const [database, redis] = await Promise.all([
-      this.dataSource
-        .query('SELECT 1')
-        .then(() => 'up')
-        .catch(() => 'down'),
+      probeDatabase(this.dataSource),
       this.pingRedis(),
     ]);
 
