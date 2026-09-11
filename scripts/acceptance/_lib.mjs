@@ -8,6 +8,34 @@
  *
  * Configuration comes from the environment; `AC_ENV_FILE` may point at a file of `KEY=value`
  * lines (the acceptance rig writes one) and anything already in `process.env` wins over it.
+ *
+ * ── READ-ONLY BY DEFAULT ──────────────────────────────────────────────────────────────────────
+ *
+ * A certification tool is pointed at deployments somebody is deciding whether to TRUST. It must
+ * therefore be safe to point at one before you have read it, and that means writing nothing until
+ * told to. Until this file was changed it did the opposite: `login()` rotated an account's
+ * password away to a handover value and back whenever `mustChangePassword` was set, announcing
+ * nothing. On the rig that is convenient and re-runnable. On a real deployment it is an
+ * unannounced write to a live credential, and a failed rotate-back leg locks somebody out.
+ *
+ * It had already cost this campaign real time: a password reset made for the product owner was
+ * silently undone by the next probe run, twice, and nobody could see why (campaign defect T-03).
+ *
+ * So there are now two gates, deliberately separate, because "insert a fixture branch" and
+ * "change the password of a real account" are not the same risk and must not share a switch:
+ *
+ *   AC_ALLOW_WRITES=1              general mutation — fixture rows, business records, SQL writes.
+ *                                  (`AC_ALLOW_MUTATIONS=1` is accepted as a synonym.)
+ *   AC_ALLOW_PASSWORD_ROTATION=1   changing ANY account's password. Implied by nothing.
+ *
+ * Both are off unless set. Both announce themselves on stdout when they are used — the banner
+ * names the target and every category of write before the first one happens, so "I did not know
+ * it would do that" stops being available to anybody who ran it.
+ *
+ * `sql()` enforces the first gate itself: any statement whose verb writes is refused unless the
+ * gate is open, so a probe cannot mutate the database through this helper by accident. `login()`
+ * enforces the second: with rotation not permitted it reports `mustChangePassword` as a finding
+ * and hands back the session it did get, instead of quietly rewriting the credential.
  */
 import pg from 'pg';
 import fs from 'node:fs';
@@ -26,6 +54,100 @@ export const API = env.AC_API ?? 'http://127.0.0.1:8080/api/v1';
 export const CERT_PASSWORD = env.CERT_PASSWORD ?? 'Cert!Walk2026x19961';
 const HANDOVER = 'Handover!Temp2026x7';
 
+// ── the safety gates ───────────────────────────────────────────────────────────────────────────
+
+const truthy = (v) => v === '1' || v === 'true' || v === 'yes' || v === 'YES' || v === 'TRUE';
+
+/** General mutation: fixture rows, business records, SQL writes. */
+export const ALLOW_WRITES = truthy(env.AC_ALLOW_WRITES) || truthy(env.AC_ALLOW_MUTATIONS);
+/** Changing any account's password. Separate on purpose — nothing else implies it. */
+export const ALLOW_PASSWORD_ROTATION = truthy(env.AC_ALLOW_PASSWORD_ROTATION);
+
+/** A target that is not loopback is somebody's deployment until proven otherwise. */
+export const TARGET_IS_LOCAL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(API);
+
+let announcedMutating = false;
+
+/**
+ * Announce, once, that this run will write — and refuse to run if it was not authorised.
+ *
+ * `writes` is a list of the CATEGORIES of write this script performs, in plain words. It is not
+ * decoration: it is the only thing an operator reads before deciding to type the flag, so it has
+ * to be specific enough to act on ("creates fixture branches and walks lifecycle_status on a
+ * throwaway assayer"), never "modifies some data".
+ */
+export function declareMutating(script, writes) {
+  if (announcedMutating) return;
+  announcedMutating = true;
+  const bar = '─'.repeat(94);
+  if (!ALLOW_WRITES) {
+    console.error(`\n${bar}`);
+    console.error(`  REFUSED — "${script}" is a MUTATING probe and writes are not enabled.`);
+    console.error(`  target : ${API}${TARGET_IS_LOCAL ? '' : '   ← NOT loopback. This is somebody\'s deployment.'}`);
+    console.error('  it would:');
+    for (const w of writes) console.error(w.startsWith('  ') ? `       ${w.trim()}` : `     · ${w}`);
+    console.error('');
+    console.error('  Certification tooling is read-only by default so that it is safe to point at a');
+    console.error('  deployment before you have read it. Re-run with AC_ALLOW_WRITES=1 if every line');
+    console.error('  above is acceptable on THIS target.');
+    console.error(`${bar}\n`);
+    process.exit(2);
+  }
+  console.log(`\n${bar}`);
+  console.log(`  MUTATING RUN — "${script}" will write to the target. AC_ALLOW_WRITES=1 is set.`);
+  console.log(`  target : ${API}`);
+  if (!TARGET_IS_LOCAL) console.log('  WARNING: this target is NOT loopback. You are writing to a deployment.');
+  console.log('  writes :');
+  for (const w of writes) console.log(w.startsWith('  ') ? `       ${w.trim()}` : `     · ${w}`);
+  console.log(`  password rotation: ${ALLOW_PASSWORD_ROTATION ? 'ENABLED (AC_ALLOW_PASSWORD_ROTATION=1)' : 'disabled'}`);
+  console.log(`${bar}\n`);
+}
+
+/** Refuse a write the run was not authorised to make. Names what it was about to do. */
+export function assertWritesAllowed(what) {
+  if (ALLOW_WRITES) return;
+  throw new Error(
+    `REFUSED: this run is read-only and tried to ${what}.\n`
+    + `  target: ${API}\n`
+    + '  Certification tooling writes nothing unless told to. Set AC_ALLOW_WRITES=1 to permit it,\n'
+    + '  and only on a target where that write is acceptable.',
+  );
+}
+
+/**
+ * Refuse a password change the run was not authorised to make, and say whose it is when it is.
+ *
+ * The announcement is not optional and not conditional on success: whoever reads the log has to
+ * be able to see, afterwards, exactly which credential this tool touched.
+ */
+export function assertPasswordRotationAllowed(username, why) {
+  if (!ALLOW_PASSWORD_ROTATION) {
+    throw new Error(
+      `REFUSED: this run tried to change the password of "${username}" (${why}).\n`
+      + `  target: ${API}\n`
+      + '  A probe must never silently rotate a real credential — a failed rotate-back leg locks\n'
+      + '  somebody out, and a manual reset made by an administrator does not survive it.\n'
+      + '  Set AC_ALLOW_PASSWORD_ROTATION=1 to permit it, on a rig where that is acceptable.',
+    );
+  }
+  console.log(`  ROTATING PASSWORD of "${username}" — ${why} (AC_ALLOW_PASSWORD_ROTATION=1)`);
+}
+
+/**
+ * The non-throwing form, for a probe that can report the check as not-run instead of dying.
+ *
+ * Returns true only when rotation is permitted, and announces either way — a skipped credential
+ * write has to be as visible as a performed one, or a read-only run reads as a clean run.
+ */
+export function canRotatePassword(username, why) {
+  if (ALLOW_PASSWORD_ROTATION) {
+    console.log(`  ROTATING PASSWORD of "${username}" — ${why} (AC_ALLOW_PASSWORD_ROTATION=1)`);
+    return true;
+  }
+  console.log(`  NOT rotating the password of "${username}" (${why}) — AC_ALLOW_PASSWORD_ROTATION is unset.`);
+  return false;
+}
+
 export const pool = new pg.Pool({
   host: env.DB_HOST ?? '127.0.0.1',
   port: +(env.DB_PORT ?? 5432),
@@ -33,6 +155,42 @@ export const pool = new pg.Pool({
   password: env.DB_PASSWORD ?? 'fapoms_dev',
   database: env.DB_DATABASE ?? 'fapoms',
 });
+
+/**
+ * Does this statement write?
+ *
+ * Leading verb, plus two cases a leading-verb test alone would wave through: a data-modifying CTE
+ * (`WITH x AS (UPDATE …)`), and the handful of `SELECT fn()` calls whose whole purpose is a side
+ * effect — `pg_stat_statements_reset()` in particular, which silently discards whatever a real
+ * deployment's monitoring had accumulated.
+ */
+const WRITE_VERB = /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(insert|update|delete|truncate|drop|alter|create|grant|revoke|comment|reindex|vacuum|refresh|call|do|lock|copy|set\s+role|security\s+label)\b/i;
+const WRITE_CTE = /^\s*with\b[\s\S]*\b(?:insert\s+into|update\s+\S+\s+set|delete\s+from)\b/i;
+const SIDE_EFFECT_FN = /\b(pg_stat_statements_reset|pg_stat_reset\w*|pg_terminate_backend|pg_cancel_backend|pg_switch_wal|pg_create_\w*slot|pg_drop_replication_slot|setval|nextval)\s*\(/i;
+/** `EXPLAIN ANALYZE INSERT …` really runs the insert. `EXPLAIN` on its own does not. */
+const EXPLAIN_ANALYZE_WRITE = /^\s*explain\b[\s\S]*\banalyze\b[\s\S]*?\b(insert\s+into|update\s+\S+\s+set|delete\s+from|create|drop|alter)\b/i;
+
+export const statementWrites = (q) => {
+  const s = String(q);
+  return WRITE_VERB.test(s) || WRITE_CTE.test(s) || SIDE_EFFECT_FN.test(s) || EXPLAIN_ANALYZE_WRITE.test(s);
+};
+
+/**
+ * The gate goes on `pool.query`, not only on `sql()`.
+ *
+ * Several probes reach past the helper and call `pool.query(CLEANUP)` directly for multi-statement
+ * teardown. A gate that only wrapped `sql()` would wave those through, which is precisely the
+ * class of bypass this change exists to remove.
+ */
+const rawQuery = pool.query.bind(pool);
+pool.query = (q, ...rest) => {
+  const text = typeof q === 'string' ? q : q?.text ?? '';
+  if (statementWrites(text)) {
+    assertWritesAllowed(`run a writing SQL statement: ${String(text).replace(/\s+/g, ' ').trim().slice(0, 120)}`);
+  }
+  return rawQuery(q, ...rest);
+};
+
 export const sql = (q, p) => pool.query(q, p).then((r) => r.rows);
 export const one = async (q, p) => (await sql(q, p))[0] ?? null;
 
@@ -69,11 +227,16 @@ export async function req(path, { method = 'GET', token, body, budgetMs = 90_000
 }
 
 /**
- * Sign in, clearing a forced password change if one is pending.
+ * Sign in. Clearing a forced password change is OPT-IN and announced — see the header.
  *
  * The gate is enforced on EVERY request, not only at login: `/auth/login` answers 200 with
  * `mustChangePassword: true` and the next call 403s. A helper that only handles the login-time
  * refusal sails past this and then reads every later 403 as a permission failure.
+ *
+ * With `AC_ALLOW_PASSWORD_ROTATION=1` this clears the flag by rotating away to a handover value
+ * and back to `CERT_PASSWORD`, which is what makes a rig run re-runnable, and says so on stdout.
+ * Without it, the session is returned as-is carrying `mustChangePassword: true` so the caller can
+ * report the forced rotation as the finding it is — the credential is not touched.
  */
 export async function login(username, password = CERT_PASSWORD) {
   const attempt = (pw) => req('/auth/login', { method: 'POST', body: { username, password: pw } });
@@ -82,16 +245,30 @@ export async function login(username, password = CERT_PASSWORD) {
   if (!tok) throw new Error(`login ${username}: ${r.status} ${JSON.stringify(r.body).slice(0, 200)}`);
 
   if (r.body?.data?.user?.mustChangePassword) {
+    if (!ALLOW_PASSWORD_ROTATION) {
+      // Deliberately NOT rotating. Hand the caller the session and the fact.
+      console.log(`  NOTE: "${username}" has mustChangePassword set. Not rotating it — this run is`);
+      console.log('        read-only for credentials. Set AC_ALLOW_PASSWORD_ROTATION=1 to clear it.');
+      return { token: tok, user: r.body?.data?.user ?? null, mustChangePassword: true };
+    }
+    assertPasswordRotationAllowed(username, 'mustChangePassword is set and the probe needs a usable session');
     // Rotate away and back, so the account always ends on CERT_PASSWORD and this is re-runnable.
     const away = await req('/users/me/change-password', {
       method: 'POST', token: tok, body: { currentPassword: password, newPassword: HANDOVER },
     });
     if (away.status >= 400) throw new Error(`rotate ${username}: ${away.status}`);
     const r2 = await attempt(HANDOVER);
-    await req('/users/me/change-password', {
+    const back = await req('/users/me/change-password', {
       method: 'POST', token: r2.body?.data?.accessToken,
       body: { currentPassword: HANDOVER, newPassword: CERT_PASSWORD },
     });
+    if (back.status >= 400) {
+      // The leg that locks somebody out. Say it loudly and in terms of what to do about it.
+      throw new Error(
+        `ROTATE-BACK FAILED for "${username}": ${back.status}. The account is left on the handover\n`
+        + `  password "${HANDOVER}". Sign in with that and change it, or reset it through the product.`,
+      );
+    }
     r = await attempt(CERT_PASSWORD);
     tok = r.body?.data?.accessToken;
   }
@@ -124,6 +301,7 @@ export function tally() {
  * land on a version nibble outside 1-5, which `@IsUUID()` rejects outright.
  */
 export async function freshBranch(tag, sourceBranchName = 'Pune Main Branch') {
+  assertWritesAllowed('create a fixture branch and project_branch row');
   const name = `${tag} ${Date.now()}`;
   await sql(
     `INSERT INTO branches (id, version, sol_id, name, address, state, district, city, pincode, region,

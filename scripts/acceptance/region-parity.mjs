@@ -20,7 +20,7 @@
  *
  * Usage:  AC_ENV_FILE=… node scripts/acceptance/region-parity.mjs
  */
-import { API, req, login, sql, one, tally, env } from './_lib.mjs';
+import { API, req, login, sql, one, tally, env, declareMutating } from './_lib.mjs';
 
 const TAG = `RP${Date.now()}`;
 const ADMIN_PASSWORD = env.AC_PASSWORD;
@@ -276,6 +276,15 @@ export async function main() {
 
   // ── tokens, each proved alive before anything is concluded from a refusal ──
   if (!ADMIN_PASSWORD) throw new Error('AC_PASSWORD is required (admin builds the fixtures)');
+  declareMutating('region-parity', [
+    'SQL: sets users.regions, is_active and must_change_password on a probe account, and rewrites',
+    '  its user_roles rows (DELETE then INSERT) so it holds the admin role scoped to one region',
+    'SQL: moves a branch between regions/states to build the laundering fixture',
+    'creates branches, contacts, documents, remarks and other child rows through the API, and',
+    '  deletes them again to measure whether a region-scoped account may write outside its region',
+    'THIS IS THE POINT OF THE PROBE: writes that SUCCEED here are the finding. On a deployment',
+    '  those are real rows on real records',
+  ]);
   const admin = await login('admin', ADMIN_PASSWORD);
   const adminRow = await one(`SELECT id FROM users WHERE username = 'admin'`);
   const ops = await login('cert_ops_east');

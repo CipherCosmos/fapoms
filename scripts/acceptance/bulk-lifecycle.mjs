@@ -32,7 +32,7 @@
  * (`BulkTransitionLifecycleDto` validates `@IsUUID('4')`, and an md5-derived id fails that), and
  * removed children-first at both ends of the run. Shared fixtures are never mutated.
  */
-import { env, req, sql, one, login, tally, pool } from './_lib.mjs';
+import { env, req, sql, one, login, tally, pool, declareMutating } from './_lib.mjs';
 
 const PREFIX = 'ACBL-';
 const { check, done } = tally();
@@ -148,6 +148,12 @@ const bulk = async (token, people, targetStatus, reason) => {
 
 (async () => {
   console.log(`\n=== FAPOMS acceptance — the bulk lifecycle contract ===\nAPI ${env.AC_API}\n`);
+  declareMutating('bulk-lifecycle', [
+    `INSERTs throwaway assayers under the ${PREFIX} prefix, and DELETEs them and their child rows`,
+    '  at both ends of the run. Shared fixtures are never mutated; audit_events is never touched',
+    'walks those assayers through POST /assayers/bulk/lifecycle — the walk is the subject of the',
+    '  test, so lifecycle_status really changes and real audit rows are written',
+  ]);
 
   const admin = await login('admin', env.AC_PASSWORD);
   const east = await login('cert_ops_east').catch(() => null);

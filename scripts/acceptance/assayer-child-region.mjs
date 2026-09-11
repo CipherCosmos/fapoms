@@ -30,7 +30,7 @@
  *
  * Usage:  AC_ENV_FILE=… node scripts/acceptance/assayer-child-region.mjs
  */
-import { API, req, login, sql, one, tally, env } from './_lib.mjs';
+import { API, req, login, sql, one, tally, env, declareMutating, canRotatePassword } from './_lib.mjs';
 
 const TAG = `AC${Date.now()}`;
 const ADMIN_PASSWORD = env.AC_PASSWORD;
@@ -240,6 +240,15 @@ export async function main() {
   const results = [];
 
   if (!ADMIN_PASSWORD) throw new Error('AC_PASSWORD is required (admin builds the fixtures)');
+  declareMutating('assayer-child-region', [
+    'SQL: sets users.regions, is_active and must_change_password on a probe account, and rewrites',
+    '  its user_roles rows (DELETE then INSERT) so it holds the admin role scoped to one region',
+    'creates and deletes assayer child rows through the API — workforce attributes, qualification',
+    '  overrides, references, empanelments and document files — on real assayer records',
+    'rotates an assayer app credential through POST /assayers/me/change-password, which needs',
+    '  AC_ALLOW_PASSWORD_ROTATION=1 as well',
+    'THIS IS THE POINT OF THE PROBE: writes that SUCCEED here are the finding',
+  ]);
   const admin = await login('admin', ADMIN_PASSWORD);
   const adminRow = await one(`SELECT id FROM users WHERE username = 'admin'`);
   const ops = await login('cert_ops_east');
@@ -467,7 +476,11 @@ export async function main() {
        */
       const APP_PASSWORD = 'Field!App2026x8821';
       let tok = null;
-      const first = await req('/auth/login', { method: 'POST', body: { username: code, password: temp } });
+      const mayRotate = canRotatePassword(code,
+        'the probe minted this assayer app login itself and must clear its forced rotation');
+      const first = mayRotate
+        ? await req('/auth/login', { method: 'POST', body: { username: code, password: temp } })
+        : { status: 0, body: null, msg: 'not attempted — credential writes are off for this run' };
       const firstTok = first.body?.data?.accessToken;
       if (firstTok) {
         const rotate = await req('/assayers/me/change-password', {

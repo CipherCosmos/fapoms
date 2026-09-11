@@ -26,7 +26,7 @@
  * at 20/min/IP independently of THROTTLE_LIMIT and this host is shared, so sign-ins are paced and
  * every token is minted once and reused.
  */
-import { login, req, sql, one, pool, tally, env, CERT_PASSWORD } from './_lib.mjs';
+import { login, req, sql, one, pool, tally, env, CERT_PASSWORD, declareMutating } from './_lib.mjs';
 
 const ADMIN_USER = env.AC_USERNAME ?? 'admin';
 const ADMIN_PASSWORD = env.AC_PASSWORD;
@@ -130,6 +130,12 @@ async function setRoleGrants(adminToken, roleId, keys) {
 
 async function main() {
   if (!ADMIN_PASSWORD) throw new Error('AC_PASSWORD is not set — put it in AC_ENV_FILE');
+  declareMutating('custom-role-parity', [
+    `rewrites the permission set of the ${ROLE} role through PUT /users/roles/:id/permissions,`,
+    '  and puts the original set back at the end of the run',
+    'attempts privileged writes as that role to prove they are refused — on a deployment where',
+    '  the fallback is wider than expected, some of those attempts would SUCCEED',
+  ]);
 
   const { token: adminToken } = await login(ADMIN_USER, ADMIN_PASSWORD);
   await pace();

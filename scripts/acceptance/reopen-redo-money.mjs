@@ -18,7 +18,7 @@
  * Env:    reads scratchpad acc.env (AC_API, AC_PASSWORD, DB_*) via pa/lib.mjs when present,
  *         otherwise AC_API / AC_PASSWORD / DB_* from the environment.
  */
-import { env, req, sql, one, login, tally, freshBranch, pool } from './_lib.mjs';
+import { env, req, sql, one, login, tally, freshBranch, pool, declareMutating } from './_lib.mjs';
 
 const { check, done } = tally();
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,6 +50,14 @@ async function settle(id, predicate) {
 }
 
 const main = async () => {
+  declareMutating('reopen-redo-money', [
+    'creates a fixture branch and project_branch, then a real assignment on it, and drives that',
+    '  assignment through accept / check-in / complete / reopen / re-complete',
+    'BOOKS AND VOIDS REAL MONEY: assayer_payables and billing_entries rows are created by the',
+    '  worker as a consequence, and the reopen voids/cancels them',
+    'deletes its own fixture at the end — payments, payables, billing entries, the assignment,',
+    '  the project_branch and the branch',
+  ]);
   const admin = await login('admin', env.AC_PASSWORD);
   check('admin session alive', !!admin.token, 'token issued');
 
