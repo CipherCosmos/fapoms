@@ -12,6 +12,8 @@ import { useToast, Select, useConfirm, PageHeader } from '../../components/ui';
 import {
   SectionCard, SettingRow, Toggle, Pill, controlStyle,
 } from '../../components/ui/settings';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset, canManagePlanningRules, canReadTravelSettings } from '../../hooks/useCurrentRoles';
 import { DangerZoneSection } from './DangerZone/DangerZoneSection';
 import { RulesSection } from '../Rules';
@@ -192,10 +194,17 @@ export const PlatformSettings: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [runningDigest, setRunningDigest] = useState(false);
 
-  const { data: res, isLoading } = useQuery({
+  /**
+   * Held whole so the pane below can ask `loadFailed` rather than only `isLoading`. A refused or
+   * failed read left `payload` null and `settings` at `[]`, and the section then rendered its
+   * heading, its description and no rows at all — a configuration screen that reads as "nothing on
+   * this platform is configured", on the one screen where somebody then goes and sets it.
+   */
+  const settingsQuery = useQuery({
     queryKey: ['platform-settings'],
     queryFn: () => api.request<any>('/platform-settings'),
   });
+  const { data: res, isLoading } = settingsQuery;
   const payload = res ? (res as { groups: Group[]; settings: Setting[] }) : null;
   /**
    * The server's groups, with the two client-side sections placed where they belong.
@@ -239,11 +248,13 @@ export const PlatformSettings: React.FC = () => {
     ? requested
     : (groups[0]?.key ?? 'email');
 
-  const { data: emailStatusRes } = useQuery({
+  const emailStatusQuery = useQuery({
     queryKey: ['notification-admin', 'email-status'],
     queryFn: () => api.request<any>('/notification-admin/email/status'),
   });
-  const emailStatus = emailStatusRes ? (emailStatusRes as any) : null;
+  const emailStatus = emailStatusQuery.data ? (emailStatusQuery.data as any) : null;
+  /** Not "email is off" — "we did not get to ask". The card below told those apart as one. */
+  const emailStatusUnknown = loadFailed(emailStatusQuery);
 
   const inGroup = settings.filter((s) => s.group === activeGroup);
   const savedCount = (g: string) => settings.filter((s) => s.group === g && s.source === 'saved').length;
@@ -515,12 +526,18 @@ export const PlatformSettings: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
           {activeGroup === 'email' && (
             <SectionCard
-              icon={emailStatus?.enabled ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-              title={emailStatus?.enabled ? `Email is working — ${emailStatus.transport === 'GMAIL' ? 'Gmail' : 'SMTP'}` : 'Email is not configured'}
+              icon={emailStatusUnknown ? <AlertTriangle size={16} /> : emailStatus?.enabled ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+              title={
+                emailStatusUnknown
+                  ? 'Whether email is working could not be read'
+                  : emailStatus?.enabled ? `Email is working — ${emailStatus.transport === 'GMAIL' ? 'Gmail' : 'SMTP'}` : 'Email is not configured'
+              }
               description={
-                emailStatus?.enabled
-                  ? `Sending as ${emailStatus.from}. Links in emails point at ${emailStatus.appPublicUrl}.`
-                  : 'Notifications still reach the in-app bell, and each one records that its email was suppressed. Fill in the fields below to switch it on.'
+                emailStatusUnknown
+                  ? 'The delivery status did not load, so this section cannot say whether mail is leaving the building. The fields below are still the saved configuration.'
+                  : emailStatus?.enabled
+                    ? `Sending as ${emailStatus.from}. Links in emails point at ${emailStatus.appPublicUrl}.`
+                    : 'Notifications still reach the in-app bell, and each one records that its email was suppressed. Fill in the fields below to switch it on.'
               }
             >
               {canEdit && (
@@ -590,8 +607,14 @@ export const PlatformSettings: React.FC = () => {
             title={groups.find((g) => g.key === activeGroup)?.label ?? 'Settings'}
             description={groups.find((g) => g.key === activeGroup)?.description}
           >
-            {isLoading ? (
+            {loadFailed(settingsQuery) ? (
+              <LoadFailure style={{ margin: '14px' }} loads={[{ label: 'the platform settings', query: settingsQuery }]} />
+            ) : isLoading ? (
               <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
+            ) : inGroup.length === 0 ? (
+              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                Nothing is configurable in this section.
+              </div>
             ) : (
               settingRows(inGroup)
             )}

@@ -5,6 +5,8 @@ import { roleLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { Modal, AlertBanner, useConfirm } from '../../components/ui';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { useCurrentRoles, canManageRoles } from '../../hooks/useCurrentRoles';
 import {
   PERMISSION_AREAS, resourceLabel, actionLabel, scopeQualifier, areaForResource,
@@ -58,14 +60,25 @@ export const RolesPermissionsPanel: React.FC = () => {
   const canEdit = canManageRoles(roles_);
   const { confirm, confirmDialog } = useConfirm();
 
-  const { data: rolesRes, isLoading, refetch } = useQuery({
+  /**
+   * Both held whole, because the two states this panel was missing live on the query object.
+   *
+   * `isLoading` was the only thing consulted, and it is false for a query that failed and paused,
+   * so a refused `/users/roles` returned the finished screen with no role rows on it — a platform
+   * that appears to have no roles at all, next to a "New Role" button. The permission catalogue
+   * failed the same way one layer in: an empty `byArea` renders "Nothing matches “”", so the
+   * matrix looked like a search that found nothing rather than a catalogue that never arrived.
+   */
+  const rolesQuery = useQuery({
     queryKey: ['users', 'roles', 'full'],
     queryFn: () => api.request<RoleRow[]>('/users/roles'),
   });
-  const { data: permsRes } = useQuery({
+  const { data: rolesRes, isLoading, refetch } = rolesQuery;
+  const permsQuery = useQuery({
     queryKey: ['users', 'permissions', 'catalogue'],
     queryFn: () => api.request<Permission[]>('/users/permissions'),
   });
+  const { data: permsRes } = permsQuery;
   const { data: usersRes } = useQuery({
     queryKey: ['users', 'all', 'for-role-counts'],
     /**
@@ -241,6 +254,10 @@ export const RolesPermissionsPanel: React.FC = () => {
       return next;
     });
 
+  // Refused before loading: a role list that never arrived must not be drawn as no roles.
+  if (loadFailed(rolesQuery)) {
+    return <LoadFailure style={{ margin: '20px 0' }} loads={[{ label: 'the roles', query: rolesQuery }]} />;
+  }
   if (isLoading) return <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading roles…</div>;
 
   return (
@@ -401,7 +418,13 @@ export const RolesPermissionsPanel: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {byArea.length === 0 ? (
+              {/* The catalogue, not the search box, is what can be missing here. Left to the
+                  branch below, a refused `/users/permissions` opened this panel on “Nothing
+                  matches “””, blaming an empty filter for an empty list — and a role whose
+                  grants cannot be seen is a role somebody edits blind. */}
+              {loadFailed(permsQuery) ? (
+                <LoadFailure loads={[{ label: 'the permission catalogue', query: permsQuery }]} />
+              ) : byArea.length === 0 ? (
                 <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '16px 0', textAlign: 'center' }}>
                   Nothing matches “{filter}”.
                 </div>

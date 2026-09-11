@@ -7,6 +7,8 @@ import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
 import { StatusBadge, Modal, AlertBanner, Select, useConfirm, PageHeader } from '../components/ui';
 import type { ConfirmOptions } from '../components/ui';
+import { LoadFailure, caughtLoad } from '../components/LoadFailure';
+import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
 
 interface Holiday {
@@ -82,10 +84,18 @@ export const Holidays: React.FC = () => {
   const { data: clientsRes } = useClientOptions();
   const clients = clientsRes ?? [];
 
-  const { data: holidaysResponse, isLoading, refetch } = useQuery({
+  /**
+   * Kept whole rather than destructured down to `data`/`isLoading`, because the two states this
+   * screen was missing are only visible on the query object: `isError`, and the paused retry that
+   * `loadFailed` reads. Without them a refused or failed `/holidays` call drew an ordinary month
+   * with no holidays marked on any day, and a list that said "No holidays registered for 2026" —
+   * which is the answer a scheduler acts on when deciding an audit can go out on the 26th.
+   */
+  const holidaysQuery = useQuery({
     queryKey: ['holidays', yearFilter, clientFilter],
     queryFn: () => api.request<Holiday[]>(`/holidays?year=${yearFilter}${clientFilter !== 'ALL' ? `&clientId=${clientFilter}` : ''}&limit=200`),
   });
+  const { data: holidaysResponse, isLoading, refetch } = holidaysQuery;
   // Memoized so its identity is stable across renders — otherwise the `byDate` Map below rebuilt on
   // every render (form typing, etc.), not just when the data changed.
   const holidays = useMemo(
@@ -255,7 +265,11 @@ export const Holidays: React.FC = () => {
               className="btn btn-secondary" style={{ padding: '6px 10px' }}><ChevronRight size={14} /></button>
           </div>
 
-          {isLoading ? (
+          {/* Failure before loading, and before a blank month. An unmarked grid is not a neutral
+              thing to show here: every cell of it says "nothing is observed on this day". */}
+          {loadFailed(holidaysQuery) ? (
+            <LoadFailure loads={[{ label: 'the holiday calendar', query: holidaysQuery }]} />
+          ) : isLoading ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
           ) : (
             <>
@@ -310,7 +324,9 @@ export const Holidays: React.FC = () => {
         </div>
       ) : (
         <div className="glass-card" style={{ padding: '20px' }}>
-          {isLoading ? (
+          {loadFailed(holidaysQuery) ? (
+            <LoadFailure loads={[{ label: 'the holiday calendar', query: holidaysQuery }]} />
+          ) : isLoading ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading holiday records...</div>
           ) : holidays.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
@@ -502,7 +518,16 @@ const CopyLastYearModal: React.FC<{
 }> = ({ targetYear, clientFilter, existing, confirm, onClose, onDone }) => {
   const sourceYear = targetYear - 1;
   const [source, setSource] = useState<Holiday[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  /**
+   * The raw error, not a sentence. It used to be a string shown in a banner ABOVE a list that
+   * then said "Nothing registered for 2025 in this client scope, so there is nothing to bring
+   * forward" — both statements on screen at once, the second one false, and the second one is the
+   * one that reads like an answer. Held as the caught error so `caughtLoad` can decide whether a
+   * retry is even worth offering.
+   */
+  const [loadError, setLoadError] = useState<unknown>(null);
+  /** Bumped to ask again, so the banner's Retry can actually re-run the read. */
+  const [reload, setReload] = useState(0);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   /** `null` = not running. Otherwise the honest "n of total" the create loop has reached. */
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -511,11 +536,12 @@ const CopyLastYearModal: React.FC<{
   // one (or the reverse) would put holidays where nobody asked for them.
   useEffect(() => {
     let cancelled = false;
+    setSource(null);
     api.request<Holiday[]>(`/holidays?year=${sourceYear}${clientFilter !== 'ALL' ? `&clientId=${clientFilter}` : ''}&limit=200`)
-      .then((r) => { if (!cancelled) setSource(Array.isArray(r) ? r : []); })
-      .catch((e) => { if (!cancelled) { setSource([]); setLoadError(userMessage(e)); } });
+      .then((r) => { if (!cancelled) { setSource(Array.isArray(r) ? r : []); setLoadError(null); } })
+      .catch((e) => { if (!cancelled) { setSource([]); setLoadError(e); } });
     return () => { cancelled = true; };
-  }, [sourceYear, clientFilter]);
+  }, [sourceYear, clientFilter, reload]);
 
   /** Names already registered in the target year, compared case-insensitively and trimmed. */
   const alreadyThere = useMemo(
@@ -620,9 +646,16 @@ const CopyLastYearModal: React.FC<{
           calendar move from year to year and will need editing afterwards.
         </p>
 
-        {loadError && <AlertBanner type="error">{`Could not read ${sourceYear}'s holidays. ${loadError}`}</AlertBanner>}
-
-        {source === null ? (
+        {/* The read failed, so this dialog knows nothing about last year — say that instead of
+            "nothing to bring forward", which is a claim about last year's calendar. */}
+        {loadError != null ? (
+          <LoadFailure
+            loads={[{
+              label: `${sourceYear}'s holidays`,
+              query: caughtLoad(loadError, () => setReload((n) => n + 1)),
+            }]}
+          />
+        ) : source === null ? (
           <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Reading {sourceYear}…</div>
         ) : rows.length === 0 ? (
           <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>

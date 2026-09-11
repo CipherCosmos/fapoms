@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import {
   User, Lock, Palette, Check, Save, KeyRound, AlertCircle, CheckCircle2, MonitorSmartphone,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
+import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { changeOwnPasswordPath, isAssayerPrincipal } from '../config/self-service-endpoints';
 import { SessionsPanel } from './account/SessionsPanel';
 import { MfaPanel } from './account/MfaPanel';
@@ -53,8 +54,21 @@ export const Settings: React.FC = () => {
   // Appearance Theme
   const { theme, setTheme, custom, setCustom, customActive } = useTheme();
 
-  // Load User Profile on Mount
-  useEffect(() => {
+  /**
+   * Whether this screen actually knows who you are.
+   *
+   * Every field below is seeded from `/users/me`, and that call used to be caught, written to the
+   * console and dropped. So a refused or failed load drew a complete, ordinary-looking account
+   * page with an empty name, an empty email, an empty username and no role badges — a person's own
+   * record presented as though nothing were on it, with the browser console the only place that
+   * said otherwise. The form was live too: Save Profile would have PUT those blanks over their
+   * real name. Held in state so the screen says what happened and refuses to pretend.
+   */
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileLoadError, setProfileLoadError] = useState<unknown>(null);
+
+  const loadProfile = useCallback(() => {
+    setProfileLoading(true);
     api.request<UserProfileData>('/users/me')
       .then((data) => {
         setFirstName(data.firstName || '');
@@ -63,11 +77,20 @@ export const Settings: React.FC = () => {
         setEmail(data.email || '');
         setUsername(data.username || '');
         setUserRoles((data.roles || []).map((r) => r.name));
+        setProfileLoadError(null);
       })
       .catch((err) => {
-        console.error('Failed to load profile:', err);
+        setProfileLoadError(err);
+      })
+      .finally(() => {
+        setProfileLoading(false);
       });
   }, []);
+
+  // Load User Profile on Mount
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
 
   // Save Profile Handler
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -246,6 +269,15 @@ export const Settings: React.FC = () => {
             </div>
           )}
 
+          {/* Refused or failed first, then still-loading, then the form. The form is deliberately
+              not rendered over a failed load: blank required fields are indistinguishable from a
+              person with no name on file, and the Save button beneath them would write exactly
+              that back. */}
+          {profileLoadError != null ? (
+            <LoadFailure loads={[{ label: 'your profile', query: caughtLoad(profileLoadError, loadProfile) }]} />
+          ) : profileLoading ? (
+            <div style={{ padding: '24px 0', color: 'var(--text-muted)', fontSize: '13px' }}>Loading your profile…</div>
+          ) : (
           <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -369,6 +401,7 @@ export const Settings: React.FC = () => {
               </button>
             </div>
           </form>
+          )}
         </div>
       )}
 

@@ -8,7 +8,8 @@ import {
   ShieldAlert, RefreshCw, AlertTriangle, Users, Building2, Clock, IndianRupee, MapPin, FileSpreadsheet,
 } from 'lucide-react';
 import { api } from '../services/api';
-import { userMessage } from '../services/errors';
+import { LoadFailure } from '../components/LoadFailure';
+import { loadFailed } from '../queryClient';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { queryKeys } from '../hooks/queryKeys';
@@ -91,7 +92,7 @@ export const ExecutiveMap: React.FC = () => {
     void downloadExcel('/reports/command-center/jobs', { ...scopeParams, clientId: clientId || undefined });
   };
 
-  const { data, isPending, isFetching, error, refetch } = useQuery({
+  const commandCentre = useQuery({
     queryKey: [...queryKeys.commandCenter.all, scopeKey, clientId],
     // The page's own client picker still wins when set; everything else comes from the header's
     // global scope, so the map draws the same slice the rest of the app is showing. `signal`
@@ -103,6 +104,7 @@ export const ExecutiveMap: React.FC = () => {
     },
     staleTime: 30_000,
   });
+  const { data, isPending, isFetching, refetch } = commandCentre;
 
   useEffect(() => {
     api.request<any[]>('/clients?limit=100')
@@ -183,12 +185,20 @@ export const ExecutiveMap: React.FC = () => {
         </div>
       </div>
 
-      {error && (
-        <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 13 }}>
-          Failed to load command centre. {userMessage(error)}
-        </div>
-      )}
-      {isPending && <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading geographic intelligence…</div>}
+      {/*
+        Failure is decided before "still loading", and `loadFailed` is what decides it.
+        `isPending` is true for a query that failed and PAUSED as well as for one still in flight,
+        and this screen showed the two identically: a refused or failed `/planning/command-center`
+        left "Loading geographic intelligence…" on the page for as long as the operator cared to
+        stare at it, with `error` still null and nothing else on screen. The hand-written banner it
+        replaces only fired for a settled error, and it sent people to check their connection when
+        the answer was that their role does not reach this call.
+      */}
+      {loadFailed(commandCentre) ? (
+        <LoadFailure loads={[{ label: 'the command centre', query: commandCentre }]} />
+      ) : isPending ? (
+        <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading geographic intelligence…</div>
+      ) : null}
 
       {data && t && (
         <>

@@ -5,6 +5,8 @@ import { Bell, Mail, RotateCcw, Save, Eye, FileText, Info } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { Modal, AlertBanner, useToast, Select, useConfirm, PageHeader } from '../../components/ui';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { useCurrentRoles, canAdministerNotifications } from '../../hooks/useCurrentRoles';
 
 /**
@@ -90,16 +92,25 @@ export const NotificationAdmin: React.FC = () => {
 
   // Kept only to tell the reader whether email is actually reaching anyone; configuring it
   // lives in Platform Settings, which is where the link below goes.
-  const { data: statusRes } = useQuery({
+  const emailStatusQuery = useQuery({
     queryKey: ['notification-admin', 'email-status'],
     queryFn: () => api.request<any>('/notification-admin/email/status'),
   });
+  const statusRes = emailStatusQuery.data;
   const status: EmailStatus | null = statusRes ? (statusRes as EmailStatus) : null;
 
-  const { data: catalogRes, isLoading: loadingCatalog } = useQuery({
+  /**
+   * Held whole so the table below can ask `loadFailed` rather than only `isLoading`. A refused or
+   * failed catalog read left `catalog` null, and the screen drew the finished table — headings,
+   * channel columns and all — with no rows under them, above a line reading "0 emailing · 0
+   * customised · 0 off". An administrator reads that as a platform that raises no events and
+   * emails nobody, which is the opposite of what is happening.
+   */
+  const catalogQuery = useQuery({
     queryKey: ['notification-admin', 'catalog'],
     queryFn: () => api.request<any>('/notification-admin/catalog'),
   });
+  const { data: catalogRes, isLoading: loadingCatalog } = catalogQuery;
   const catalog: CatalogResponse | null = catalogRes ? (catalogRes as CatalogResponse) : null;
 
   const types = useMemo(() => {
@@ -205,9 +216,14 @@ export const NotificationAdmin: React.FC = () => {
           <div className="glass-card" style={{ padding: '11px 14px', display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' }}>
             <Mail size={14} style={{ color: status?.enabled ? 'var(--success, #34a853)' : 'var(--warning)', flexShrink: 0 }} />
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              {status?.enabled
-                ? <>Email is working — sending as <strong>{status.from}</strong>.</>
-                : <>Email is not configured, so nothing marked &ldquo;Email&rdquo; below is actually sent. Notifications still reach the bell.</>}
+              {/* "Email is not configured" is a fact about the deployment, and it was printed
+                  whenever this read came back empty — including when it never came back at all.
+                  A mail setup that is working perfectly was reported as broken. */}
+              {loadFailed(emailStatusQuery)
+                ? <>Whether email is working could not be read, so the &ldquo;Email&rdquo; column below may not describe what is actually sent.</>
+                : status?.enabled
+                  ? <>Email is working — sending as <strong>{status.from}</strong>.</>
+                  : <>Email is not configured, so nothing marked &ldquo;Email&rdquo; below is actually sent. Notifications still reach the bell.</>}
             </span>
             <Link to="/admin/settings" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginLeft: 'auto' }}>
               {status?.enabled ? 'Email settings →' : 'Set it up →'}
@@ -226,14 +242,23 @@ export const NotificationAdmin: React.FC = () => {
               onChange={setCategoryFilter}
               options={[{ value: 'ALL', label: 'All categories' }, ...(catalog?.categories ?? []).map((c) => ({ value: c, label: c }))]}
             />
-            <div style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)' }}>
-              {counts.emailing} emailing · {counts.customised} customised · {counts.disabled} off
-            </div>
+            {/* Three zeroes counted from a catalog that never arrived are three wrong numbers. */}
+            {!loadFailed(catalogQuery) && (
+              <div style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)' }}>
+                {counts.emailing} emailing · {counts.customised} customised · {counts.disabled} off
+              </div>
+            )}
           </div>
 
           <div className="glass-card" style={{ padding: '18px' }}>
-            {loadingCatalog ? (
+            {loadFailed(catalogQuery) ? (
+              <LoadFailure loads={[{ label: 'the event catalog', query: catalogQuery }]} />
+            ) : loadingCatalog ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
+            ) : types.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                No events match what you are filtering on.
+              </div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table className="table" style={{ width: '100%' }}>

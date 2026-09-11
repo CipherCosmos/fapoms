@@ -5,6 +5,7 @@ import { Inbox, Map as MapIcon, CalendarDays, ClipboardList } from 'lucide-react
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { loadFailed } from '../../queryClient';
 import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 import {
@@ -140,7 +141,19 @@ export const AuditWork: React.FC = () => {
 
   const activeTab: WorkTabPath = isWorkTabPath(location.pathname) ? location.pathname : '/inbox';
 
-  const { enabled: isLocating, data: resolvedTab, isLoading, error } = useResolvedWorkTab(activeTab, searchParams);
+  const locate = useResolvedWorkTab(activeTab, searchParams);
+  const { enabled: isLocating, data: resolvedTab, isLoading } = locate;
+  /**
+   * The lookup did not answer.
+   *
+   * `error` alone was the test, and it is false for a query that never got to try — the browser
+   * offline, so React Query paused it before the first attempt with `error: null` and `data:
+   * undefined`. In that state `isLoading` is false too, so the person following a link to a
+   * specific branch was silently dropped on today's actions with nothing said at all: the note
+   * below, which exists precisely to explain that, never rendered. `loadFailed` covers both.
+   */
+  const locateFailed = loadFailed(locate);
+  const locateReason = locate.error ?? locate.failureReason ?? null;
 
   /**
    * Is there a hand-over to make, and may this role actually be sent there?
@@ -293,11 +306,18 @@ export const AuditWork: React.FC = () => {
                 moved.
               </QuietNote>
             )}
-            {isLocating && error && (
+            {/*
+              A quiet note rather than the `LoadFailure` banner the list screens use, and that is a
+              judgement about this one load, not a second pattern: what failed is a redirect hint,
+              and the tab underneath is real, fully loaded work. The predicate is still the shared
+              `loadFailed`, so the state that used to render nothing at all now renders this.
+            */}
+            {isLocating && locateFailed && (
               <div>
                 <QuietNote tone="warning">
                   We could not check where that branch has got to, so you are on today's actions.
-                  Pick a tab above to carry on. ({userMessage(error)})
+                  Pick a tab above to carry on.
+                  {locateReason ? ` (${userMessage(locateReason)})` : ''}
                 </QuietNote>
               </div>
             )}

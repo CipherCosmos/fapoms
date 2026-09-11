@@ -8,6 +8,8 @@ import {
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useConfirm, PageHeader } from '../../components/ui';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 
@@ -93,18 +95,20 @@ export const RuleBypassPanel: React.FC = () => {
   const reasonRef = useRef<HTMLInputElement>(null);
   const ruleListRef = useRef<HTMLDivElement>(null);
 
-  const { data: state } = useQuery({
+  const stateQuery = useQuery({
     queryKey: ['rule-bypass', 'state'],
     queryFn: () => api.request<RuleBypassState>('/admin/rule-bypass'),
     refetchInterval: 30_000,
     enabled: mayUse,
   });
-  const { data: catalogue, isLoading: catalogueLoading, error: catalogueError } = useQuery({
+  const { data: state } = stateQuery;
+  const catalogueQuery = useQuery({
     queryKey: ['rule-bypass', 'catalogue'],
     queryFn: () => api.request<{ rules: BypassableRuleInfo[] }>('/admin/rule-bypass/catalogue'),
     staleTime: Infinity,
     enabled: mayUse,
   });
+  const { data: catalogue, isLoading: catalogueLoading } = catalogueQuery;
   /**
    * Real reasons people have actually typed before, as autocomplete suggestions alongside the
    * fixed categories above. `history()` already returns up to 200 past windows with their
@@ -121,6 +125,16 @@ export const RuleBypassPanel: React.FC = () => {
   });
 
   const current = state ?? INACTIVE_BYPASS;
+  /**
+   * We have never managed to read the window, so we do not know whether one is open.
+   *
+   * `INACTIVE_BYPASS` is a sensible default to render against, but it is not an answer, and the
+   * screen printed it as one: a failed or paused read produced the green "All rules are being
+   * enforced." — the exact sentence an administrator comes here to confirm before trusting the
+   * records being created right now. Scoped to `state === undefined` on purpose: once a real
+   * window has loaded, a failed 30-second refetch must not blank the card describing it.
+   */
+  const stateUnknown = state === undefined && loadFailed(stateQuery);
   // Memoised: `?? []` allocates a new array on every render where the query has not resolved,
   // which changed the identity of the dependency below and made its useMemo re-run every time.
   const rules = useMemo(() => catalogue?.rules ?? [], [catalogue?.rules]);
@@ -268,7 +282,9 @@ export const RuleBypassPanel: React.FC = () => {
         subtitle="Suspend named operational rules so a workflow can be tested end to end. Every suspension is recorded against the records it affects, announced while it is on, and expires on its own."
       />
 
-      {current.active ? (
+      {stateUnknown ? (
+        <LoadFailure loads={[{ label: 'whether any rules are suspended right now', query: stateQuery }]} />
+      ) : current.active ? (
         <div style={{ ...card, borderColor: 'var(--danger)', background: 'var(--status-cancelled-bg)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontWeight: 800, fontSize: '14px' }}>
             <AlertOctagon size={17} /> Rules are suspended right now
@@ -352,14 +368,16 @@ export const RuleBypassPanel: React.FC = () => {
           )}
         </div>
 
-        {catalogueLoading ? (
+        {/* The list of rules could not be read. Saying so beats an empty checklist, which reads as
+            "this platform has no rules to suspend" — the opposite of the truth. This was already
+            guarded, but on a bare `error`, which is false for a query that failed and PAUSED: that
+            state is not loading and not erroring either, so it fell straight through to the groups
+            below, every one of which renders nothing when it has no items. `loadFailed` is the
+            predicate that covers both, and `LoadFailure` drops the retry a 403 could never win. */}
+        {loadFailed(catalogueQuery) ? (
+          <LoadFailure loads={[{ label: 'the rule catalogue', query: catalogueQuery }]} />
+        ) : catalogueLoading ? (
           <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading the rule catalogue…</div>
-        ) : catalogueError ? (
-          /* The list of rules could not be read. Saying so beats an empty checklist, which
-             reads as "this platform has no rules to suspend" — the opposite of the truth. */
-          <div style={{ fontSize: '12.5px', color: 'var(--danger)', padding: '8px 0' }}>
-            The list of rules could not be loaded, so there is nothing to choose from. {userMessage(catalogueError)}
-          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             <RuleGroup

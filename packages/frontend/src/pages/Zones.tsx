@@ -6,6 +6,8 @@ import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
 import { Modal, AlertBanner, Select, ChipMultiSelect, useConfirm, PageHeader } from '../components/ui';
+import { LoadFailure } from '../components/LoadFailure';
+import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageZones, canDeleteZones } from '../hooks/useCurrentRoles';
 
 interface Zone {
@@ -97,10 +99,17 @@ export const Zones: React.FC = () => {
   const { data: clientsRes } = useClientOptions();
   const clients = clientsRes ?? [];
 
-  const { data: zonesRes, isLoading, refetch } = useQuery({
+  /**
+   * Held whole so the render below can ask `loadFailed` rather than only `isLoading`. A refused
+   * or failed `/zones` left `zones` at `[]`, and the page then said "No zones defined yet. Create
+   * one to group branches for coverage planning." — an invitation to rebuild a territory map that
+   * already exists, on a screen where a duplicate zone is a real consequence.
+   */
+  const zonesQuery = useQuery({
     queryKey: ['zones', 'all'],
     queryFn: () => api.request<Zone[]>('/zones?limit=200'),
   });
+  const { data: zonesRes, isLoading, refetch } = zonesQuery;
   const zones: Zone[] = (Array.isArray(zonesRes) ? zonesRes : (zonesRes as any)?.data) || [];
 
   const resetForm = () => {
@@ -244,7 +253,9 @@ export const Zones: React.FC = () => {
       {success && <AlertBanner type="success">{success}</AlertBanner>}
 
       <div className="glass-card" style={{ padding: '20px' }}>
-        {isLoading ? (
+        {loadFailed(zonesQuery) ? (
+          <LoadFailure loads={[{ label: 'the territorial zones', query: zonesQuery }]} />
+        ) : isLoading ? (
           <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading zones…</div>
         ) : zones.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>

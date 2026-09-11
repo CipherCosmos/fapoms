@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertOctagon, ArrowRight } from 'lucide-react';
 import { BYPASSABLE_RULE_INFO, BypassableRule, INACTIVE_BYPASS, RuleBypassState } from '@fapoms/shared';
 import { api } from '../services/api';
+import { LoadFailure } from './LoadFailure';
+import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageRuleBypass } from '../hooks/useCurrentRoles';
 
 /**
@@ -21,7 +23,7 @@ import { useCurrentRoles, canManageRuleBypass } from '../hooks/useCurrentRoles';
 export const RuleBypassBanner: React.FC = () => {
   const isAdmin = canManageRuleBypass(useCurrentRoles());
 
-  const { data, refetch } = useQuery({
+  const stateQuery = useQuery({
     queryKey: ['rule-bypass', 'state'],
     queryFn: () => api.request<RuleBypassState>('/admin/rule-bypass'),
     // Polled rather than fetched once: a window opened or revoked by another administrator has to
@@ -35,8 +37,23 @@ export const RuleBypassBanner: React.FC = () => {
     enabled: Boolean(localStorage.getItem('fapoms_token')),
     retry: false,
   });
+  const { data, refetch } = stateQuery;
 
   const state = data ?? INACTIVE_BYPASS;
+  /**
+   * We have never read the state, so we cannot say the controls are on.
+   *
+   * `GET /admin/rule-bypass` is `@AnyAuthenticated()` precisely so this strip works for everyone,
+   * which makes a failure here an outage rather than a permission boundary — and the failure mode
+   * was silence: `data` stayed undefined, `INACTIVE_BYPASS` stood in, `state.active` was false and
+   * the component returned null. Absence of the warning is how this strip says "you are creating
+   * real records", so a failed read told every user in the building exactly the wrong thing.
+   *
+   * Deliberately narrowed to `data === undefined`: once a state has loaded, a dropped poll must
+   * not replace a live TEST MODE warning (or a legitimately quiet page) with an error strip. The
+   * poll is still running and will correct itself.
+   */
+  const stateUnknown = data === undefined && loadFailed(stateQuery);
 
   // Drop the banner the instant the window lapses, instead of leaving a stale "controls are off"
   // warning up until the next poll. One timer to the exact expiry, re-armed if the window moves.
@@ -47,6 +64,15 @@ export const RuleBypassBanner: React.FC = () => {
     const timer = setTimeout(() => { void refetch(); }, ms + 500);
     return () => clearTimeout(timer);
   }, [state.active, state.expiresAt, refetch]);
+
+  if (stateUnknown) {
+    return (
+      <LoadFailure
+        style={{ margin: 0, borderRadius: 0 }}
+        loads={[{ label: 'whether the platform’s controls are currently suspended', query: stateQuery }]}
+      />
+    );
+  }
 
   if (!state.active) return null;
 

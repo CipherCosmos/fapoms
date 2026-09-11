@@ -7,6 +7,7 @@ import { fetchWholeBranchDirectory } from '../services/branch-directory';
 import { queryKeys } from '../hooks/queryKeys';
 import { useClientOptions } from '../hooks/useClients';
 import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton, Select, ChipMultiSelect, useConfirm } from '../components/ui';
+import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { useCurrentRoles, canManageRules, canDeleteRules } from '../hooks/useCurrentRoles';
 
@@ -109,7 +110,19 @@ export const RulesSection: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('ALL');
+  /** What a save or a delete said. Never a failed read — see `loadError`. */
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * Why the rule list is empty, when it is empty for a reason other than there being no rules.
+   *
+   * A failed read set `err` and left `rules` at `[]`, so the grid fell through to its empty state
+   * and said "No rules yet. Without any, every assayer is eligible for every job and ranking is
+   * decided by the recommendation score alone — which is a perfectly normal way to run." That is a
+   * description of a configuration nobody chose, printed under a red line about a failure, and it
+   * is the sentence an administrator acts on: they add back rules that already exist, or they stop
+   * wondering why a territory restriction is not biting.
+   */
+  const [loadError, setLoadError] = useState<unknown>(null);
 
   const [form, setForm] = useState(emptyForm);
   // The app's own dialog, not the browser's: `window.confirm` renders a grey box whose OK/Cancel
@@ -154,7 +167,12 @@ export const RulesSection: React.FC = () => {
     try {
       const data = await api.request<BusinessRule[]>('/planning/rules');
       setRules(Array.isArray(data) ? data : []);
-    } catch (e) { setErr(e instanceof Error ? e.message : 'Failed to load rules'); }
+      setLoadError(null);
+    } catch (e) {
+      // The rows go with it: what the grid shows must agree with what the banner says.
+      setRules([]);
+      setLoadError(e);
+    }
     finally { setLoading(false); }
   };
 
@@ -310,11 +328,17 @@ export const RulesSection: React.FC = () => {
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
         <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search rules..." style={{ maxWidth: '320px' }} />
         <FilterSelect value={typeFilter} onChange={setTypeFilter} options={[{ value: 'ALL', label: 'All types' }, ...RULE_TYPES.map((t) => ({ value: t.value, label: t.label }))]} />
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{filtered.length} rules</span>
+        {/* Not "0 rules" when the count is only the size of a list that never arrived. */}
+        {loadError == null && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{filtered.length} rules</span>}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(340px, 100%), 1fr))', gap: '16px' }}>
-        {loading ? (
+        {loadError != null ? (
+          <LoadFailure
+            style={{ gridColumn: '1 / -1' }}
+            loads={[{ label: 'the eligibility rules', query: caughtLoad(loadError, () => void fetchRules()) }]}
+          />
+        ) : loading ? (
           <div style={{ gridColumn: '1 / -1', padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ gridColumn: '1 / -1', padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-lg)', color: 'var(--text-muted)' }}>

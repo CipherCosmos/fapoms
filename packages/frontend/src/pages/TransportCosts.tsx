@@ -14,6 +14,8 @@ import {
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { Modal, AlertBanner, Select, useConfirm } from '../components/ui';
+import { LoadFailure } from '../components/LoadFailure';
+import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageTransportRates } from '../hooks/useCurrentRoles';
 
 /**
@@ -121,10 +123,17 @@ export const TransportCostsSection: React.FC = () => {
   const [estState, setEstState] = useState('');
   const [estRegion, setEstRegion] = useState('');
 
-  const { data: ratesRes, isLoading } = useQuery({
+  /**
+   * Held whole: a refused or failed read left `rates` at `[]`, and the card below then said "No
+   * active transport rates yet. Add one…". On a rate card that is not an absence, it is an
+   * instruction — someone re-enters rates that already exist, and the duplicate then competes with
+   * the real one for the most-specific scope an offer quotes from.
+   */
+  const ratesQuery = useQuery({
     queryKey: ['transport-rates'],
     queryFn: () => api.request<TransportRate[]>('/transport-rates'),
   });
+  const { data: ratesRes, isLoading } = ratesQuery;
   const rates: TransportRate[] = useMemo(
     () => ratesRes ?? [],
     [ratesRes],
@@ -132,7 +141,7 @@ export const TransportCostsSection: React.FC = () => {
 
   const estKmNumber = Number(estKm);
   const estimateEnabled = Number.isFinite(estKmNumber) && estKmNumber > 0;
-  const { data: estimateRes, isFetching: estimating } = useQuery({
+  const estimateQuery = useQuery({
     queryKey: ['transport-rates', 'estimate', estKm, estState, estRegion],
     queryFn: () =>
       api.request<Estimate>(
@@ -142,6 +151,7 @@ export const TransportCostsSection: React.FC = () => {
       ),
     enabled: estimateEnabled,
   });
+  const { data: estimateRes, isFetching: estimating } = estimateQuery;
   const estimate: Estimate | null = estimateRes ?? null;
 
   const visibleRates = useMemo(() => {
@@ -376,7 +386,13 @@ export const TransportCostsSection: React.FC = () => {
 
         {estimateEnabled && (
           <div style={{ marginTop: '14px' }}>
-            {estimating ? (
+            {/* A failed estimate is not a priced answer. Left to the branch below it read as "No
+                active transport rate covers this place" — a statement about the rate card, from a
+                call that never reached it, on the panel whose whole promise is that what you see
+                here is what the desk is quoted. */}
+            {loadFailed(estimateQuery) ? (
+              <LoadFailure loads={[{ label: 'the journey estimate', query: estimateQuery }]} />
+            ) : estimating ? (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Calculating…</div>
             ) : !estimate || estimate.options.length === 0 ? (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -439,7 +455,9 @@ export const TransportCostsSection: React.FC = () => {
 
       {/* ── The rate card itself ──────────────────────────────────────────── */}
       <div className="glass-card" style={{ padding: '18px' }}>
-        {isLoading ? (
+        {loadFailed(ratesQuery) ? (
+          <LoadFailure loads={[{ label: 'the transport rate card', query: ratesQuery }]} />
+        ) : isLoading ? (
           <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
         ) : visibleRates.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
