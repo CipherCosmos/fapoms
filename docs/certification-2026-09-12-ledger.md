@@ -29,6 +29,59 @@ Ten business days improved from 80/85 at the last campaign to 85/85, with no cha
 
 ## Findings
 
+### C-20 · HIGH · audit truth · **FIXED** `59b83607`
+**The endpoint whose whole purpose is "what happened to this" answered that nothing had.**
+`GET /audit-log/trail?limit=-5` returned **200 OK with 0 entries** on a record carrying 240 audit
+rows. The inline clamp was `Math.min(limit, 500)` — bounded above and not below — and `-5` reached
+four raw `LIMIT $n` interpolations, each wrapped in `.catch(() => [])`, so the failure surfaced as
+an empty trail rather than an error.
+
+A spec had recorded the decision to keep that inline clamp because the endpoint was "already
+bounded". It was bounded in one direction. Verified on the wire after the fix: `limit=-5` and
+`limit=abc` both return the default 200 entries, and the 5xx responses are gone.
+- **Evidence**: API · DB
+
+### C-21 · HIGH · test validity · **FIXED** `0dd3029c`
+**Two probes were not running the code anyone reads.** `ten-business-days.mjs` and
+`search-export-performance.mjs` defaulted their helper path to an absolute location inside a
+campaign scratchpad — a **forked, older copy of `_lib.mjs` that is not in the repository**.
+
+So no fix to the shared helper ever reached them, and on any machine but this one they aborted on
+their first line. The 85/85 result those runs reported was measured against a library nobody can
+read or review. The same expression would have written live bearer tokens into `scripts/`.
+- **Evidence**: SOURCE
+- **Class**: any default that points outside the repository. A test that resolves its subject from
+  a path the repository does not contain is not testing the repository.
+
+### C-22 · MEDIUM · destructive tooling · **FIXED** `0dd3029c`
+**A read-only performance probe uninstalled the operators' monitoring.**
+`search-export-performance.mjs` created `pg_stat_statements` with `IF NOT EXISTS` and then dropped
+it **unconditionally**. On any deployment where it was already installed — which is every
+deployment that monitors query performance — running the probe removed it. It now drops only what
+it installed.
+- **Evidence**: SOURCE
+
+### C-23 · MEDIUM · certification honesty · **FIXED** `8af201fd`
+**The first malware fix had a second false pass inside it.** Correcting the EICAR probe to use a
+clean control file was right, but a deployment with **no scanner at all** also accepts the control
+when `FILE_SCAN_REQUIRED` is unset. The probe now establishes that condition first and reports
+UNKNOWN when it cannot.
+
+Stated plainly by the lane that fixed it: on this rig, the old code said PASS on evidence the new
+code correctly calls UNKNOWN. Live: control `201`, EICAR `400`, and clamd answering `PONG` from
+inside the API container.
+- **Evidence**: API · DEPLOYMENT
+
+### C-24 · MEDIUM · test validity · **FIXED** `c5d81ae5`
+**A probe that measured nothing read as a probe that found a defect.** In
+`authorization-and-audit`, the sign-in helper could not tell a 429 from a bad credential, and one
+case picked its second assayer with an unordered `LIMIT 1` over a table other probes fill with
+password-less throwaways. That case failed, and the two horizontal-isolation cases after it never
+ran at all — so a run that established **nothing** about whether one assayer can read another's
+record presented as one that had found a problem with it.
+- **Evidence**: SOURCE · API
+
+
 ### C-03 · **CLOSED — not a product defect** (measurement artifact)
 **The 60-second login does not reproduce, and the mechanism is fully explained.**
 
@@ -443,4 +496,5 @@ defect is worse than silence.
 | T-02 | The runner set the path to the credentials file but never sourced it, so probes reading `AC_PASSWORD` directly aborted while probes reading the file passed. Six probes wrongly appeared to fail. | test defect |
 | T-03 | Resetting `admin` to a memorable password desynchronised it from the other fifteen accounts, which remain on the harness password. The probes rotate passwords themselves, so a manual change does not hold. **Open — needs a decision.** | environment defect |
 | T-04 | Three `lifecycle-bypass` checks failed (EMP-04, EMP-05, ELG-03) because the shared empanelment fixture was left at `REJECTED` by an earlier aborted run, where the checks expect `ACTIVE`. **Verified not a product defect**: setting an invented standing `BLACKLISTED` is refused `400` naming the seven legal values, and the row is unchanged. Recorded because calling this a product defect would have been the easy and wrong answer. | test defect |
+| T-06 | **The git index is shared across every lane in this checkout.** `git add <paths>` followed by `git commit` commits the WHOLE index, including whatever another lane staged in between. Two commits carry the wrong attribution because of it — eleven files of one lane's work rode into another lane's commit, and two files went the other way. Nothing was lost and the history is intact. **`git commit -- <paths>` is the only safe form here**, and it is now what every lane is told to use. | campaign defect |
 | T-05 | `business-loop` aborts with `409 Cannot assign` — every branch its assayer may work is already engaged, because a completed audit closes its branch to further assignments. That is a product **rule**, not a fault; the probe needs fresh branches per run. | test defect |
