@@ -207,19 +207,31 @@ export function canDeleteAssayers(roles: SystemRole[], permissions?: string[]): 
  * There is no dedicated `role:*` permission — UserController's own comment explains why: every
  * write here rides on `user:edit:organization`, the same grant `PUT /users/:id/roles` already
  * requires to change who holds which role, because granting one half without the other would
- * describe an access model nobody could actually administer. So a custom role built in
- * Admin -> Roles that holds `user:edit:organization` can administer roles too — the backend
- * genuinely allows it (`RolesGuard`'s fallback, same as everywhere else this hook mirrors it) —
- * and this screen must say so, rather than showing a permanent "requires an Administrator role"
- * notice to someone who could actually save a change.
+ * describe an access model nobody could actually administer.
  *
- * Named by name only (not `allowed()`, which would also admit any OTHER built-in role that
- * happens to hold this permission for an unrelated reason): today only ADMIN is granted
- * `USER:EDIT:PLATFORM`, so the two helpers agree, but a role editor is exactly the wrong screen
- * to have that stop being true silently.
+ * ## A NAME, deliberately, and not that permission
+ *
+ * This used to offer the editor to a custom role holding `user:edit:organization`, on the stated
+ * grounds that "the backend genuinely allows it". It does not, and it must not.
+ *
+ * It does not: `POST /users/roles`, `PUT /users/roles/:id`, `PUT /users/roles/:id/permissions`,
+ * `DELETE /users/roles/:id` and `PUT /users/:id/roles` are all `@Roles(ADMIN)` with no
+ * `@AllowPermissionFallback()`, so `RolesGuard` refuses every unrecognised role name before it
+ * reads a permission. The editor therefore appeared, fully enabled, and every Save answered 403.
+ *
+ * It must not: role administration is the one grant that can mint every other. `PUT
+ * /users/roles/:id/permissions` assigns any key in the catalogue, and `PUT /users/:id/roles`
+ * assigns any role — including ADMIN — to any account. Making it reachable through a permission
+ * would mean a single custom-role grant could promote its own holder to administrator, which is
+ * precisely the escalation the whole fallback design is careful to avoid everywhere else.
+ *
+ * So it stays a name (ADMIN, and DEVELOPER through implication), the backend agrees, and a custom
+ * role granted `user:view` still opens `/users` and reads the directory — see the
+ * `@AllowPermissionFallback()` on UserController's three GETs — it simply cannot rewrite the
+ * access model from inside it.
  */
-export function canManageRoles(roles: SystemRole[], permissions?: string[]): boolean {
-  return allowedByNameOrCustomPermission(roles, [SystemRole.ADMIN], 'USER:EDIT:ORGANIZATION', permissions);
+export function canManageRoles(roles: SystemRole[]): boolean {
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /**

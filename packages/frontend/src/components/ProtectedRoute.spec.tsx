@@ -37,9 +37,20 @@ const openAt = (from: string, roles: SystemRole[], permissions: string[]) =>
  * the dashboard, and the dashboard's own API refused them too.
  */
 describe('ProtectedRoute', () => {
-  const HR_ONLY = ['ASSAYER:VIEW:ORGANIZATION'];
   /**
-   * The workforce clerk's role is a row built in Admin → Roles, so its name is not a `SystemRole`.
+   * The clerk's single grant, and why it is a paperwork one rather than the workforce one this
+   * test was written with.
+   *
+   * `/hr` was the reachable page here, on the strength of `GET /hr/workforce` declaring
+   * `assayer:view:organization`. That route refuses a custom role — its `@Roles` list carries no
+   * permission fallback — so the entry stopped naming the permission, and sending a refusal to
+   * `/hr` would now be sending it to a page that opens and cannot load: the very failure this
+   * describe block exists to prevent. `/documents` is the same shape and is genuinely served:
+   * `GET /documents/operations/overview` declares `document:view:organization` and honours it.
+   */
+  const PAPERWORK_ONLY = ['DOCUMENT:VIEW:ORGANIZATION'];
+  /**
+   * The clerk's role is a row built in Admin → Roles, so its name is not a `SystemRole`.
    * At runtime `useCurrentRoles` returns that name in the roles array, and the permission fallback
    * runs only for a principal carrying such a name (it must not hand a built-in role a page it was
    * deliberately left off — see canAccessRoute). So the clerk is modelled by its actual role name,
@@ -48,18 +59,27 @@ describe('ProtectedRoute', () => {
   const HR_OPERATOR = ['HR_OPERATOR'] as unknown as SystemRole[];
 
   it('renders a page the person may open', () => {
-    openAt('/hr', HR_OPERATOR, HR_ONLY);
-    expect(screen.getByText('page @ /hr')).toBeInTheDocument();
+    openAt('/documents', HR_OPERATOR, PAPERWORK_ONLY);
+    expect(screen.getByText('page @ /documents')).toBeInTheDocument();
   });
 
   it('sends a refusal to a page they can use, not to the dashboard', () => {
-    openAt('/billing', HR_OPERATOR, HR_ONLY);
-    expect(screen.getByText('page @ /hr')).toBeInTheDocument();
+    openAt('/billing', HR_OPERATOR, PAPERWORK_ONLY);
+    expect(screen.getByText('page @ /documents')).toBeInTheDocument();
   });
 
   it('does the same for the dashboard itself, which this role cannot load either', () => {
-    openAt('/dashboard', HR_OPERATOR, HR_ONLY);
-    expect(screen.getByText('page @ /hr')).toBeInTheDocument();
+    openAt('/dashboard', HR_OPERATOR, PAPERWORK_ONLY);
+    expect(screen.getByText('page @ /documents')).toBeInTheDocument();
+  });
+
+  /**
+   * The page this role is no longer offered, asserted here as well as in route-permissions.spec:
+   * a refusal must never be redirected onto another refusal.
+   */
+  it('does not send a workforce-granted custom role to a workforce page its API refuses', () => {
+    openAt('/hr', HR_OPERATOR, ['ASSAYER:VIEW:ORGANIZATION']);
+    expect(screen.queryByText('page @ /hr')).not.toBeInTheDocument();
   });
 
   it('leaves a built-in role exactly where it was allowed to go', () => {

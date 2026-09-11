@@ -64,8 +64,11 @@ describe('canAccessRoute', () => {
     });
 
     it('carries the section permissions down to a sub-path as well as the roles', () => {
-      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'], '/hr/roster')).toBe(true);
-      expect(canAccessRoute(CUSTOM_ROLE, ['DOCUMENT:VIEW:ORGANIZATION'], '/hr/roster')).toBe(false);
+      // `/documents/*` and not `/hr/*`: `/hr` no longer names a permission, because
+      // `GET /hr/workforce` refuses every custom role (see that entry's own note), and a section
+      // that names none can never demonstrate a permission being inherited.
+      expect(canAccessRoute(CUSTOM_ROLE, ['DOCUMENT:VIEW:ORGANIZATION'], '/documents/dispatch')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'], '/documents/dispatch')).toBe(false);
     });
 
     it('lets a sub-path override its section when it declares its own roles', () => {
@@ -146,8 +149,37 @@ describe('canAccessRoute', () => {
       'OCR:CREATE:ORGANIZATION', 'OCR:EDIT:ORGANIZATION',
     ];
 
-    it('opens the workforce console it was granted', () => {
-      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr')).toBe(true);
+    /**
+     * The workforce console is CLOSED to it, and that is the honest answer rather than a
+     * regression.
+     *
+     * This asserted `true` on the strength of `GET /hr/workforce` declaring
+     * `assayer:view:organization`. Measured against a live custom role holding exactly that grant,
+     * the route answers 403: its `@Roles(ADMIN, OPERATIONS)` carries no permission fallback, so
+     * `RolesGuard` refuses an unrecognised role name before it reads a permission. Opening the page
+     * anyway produced "The workforce figures could not be loaded just now. An unknown problem
+     * occurred." — a page that opens and cannot fill itself.
+     *
+     * `modules/assayer/**` belongs to another workstream. One `@AllowPermissionFallback()` on
+     * `HrController.workforce` makes this `true` again, and the entry says so.
+     */
+    it('is NOT offered the workforce console, because its API refuses a custom role', () => {
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr/roster')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/assayers')).toBe(false);
+    });
+
+    /**
+     * The pages it IS offered, all of which were verified live to answer this role 200 after the
+     * backing routes were opted into the fallback.
+     */
+    it('opens every page whose API now honours the permission it was granted', () => {
+      expect(canAccessRoute(CUSTOM_ROLE, ['PROJECT:VIEW:ORGANIZATION'], '/dashboard')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['PLANNING:VIEW:ORGANIZATION'], '/executive-map')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['SCHEDULING:VIEW:ORGANIZATION'], '/scheduling')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['BILLING:VIEW:ORGANIZATION'], '/billing')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['USER:VIEW:ORGANIZATION'], '/users')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['CONFIGURATION:VIEW:PLATFORM'], '/admin/rule-bypass')).toBe(true);
     });
 
     it('opens its own account and its own notifications, as every signed-in user may', () => {
@@ -174,6 +206,20 @@ describe('canAccessRoute', () => {
     });
 
     /**
+     * The pages whose backing API declares a permission it will not honour from a custom role.
+     * Each of these named that permission until it was measured 403 live; the entries carry the
+     * one-line backend change that would restore them.
+     */
+    it('is not offered a page whose API declares a permission but refuses a custom role', () => {
+      // /planning is the subtle one: its own reads DO honour the fallback, but the project list
+      // the workspace is keyed on does not, so the page could open and never fill.
+      expect(canAccessRoute(CUSTOM_ROLE, ['PLANNING:VIEW:ORGANIZATION'], '/planning')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:CREATE:ORGANIZATION'], '/hr/register')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['VALIDATION:VIEW:ORGANIZATION'], '/data-entry')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['VALIDATION:VIEW:ORGANIZATION'], '/validation')).toBe(false);
+    });
+
+    /**
      * FAIL CLOSED, and the case worth keeping. These two genuinely name no permission because
      * the API behind each one names none either, so holding a plausible-looking permission still
      * does not open them. Reading "nothing listed" as "nothing required" is the same defect as an
@@ -189,13 +235,13 @@ describe('canAccessRoute', () => {
     it('needs the exact key a page lists, not a neighbour on the same resource', () => {
       // Every entry currently names one permission, so `every` and `some` cannot be told apart
       // from the outside yet; what this pins down is that the match is by whole key. Being
-      // granted create/edit/delete on assayers is not being granted the console that reads them.
-      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:CREATE:ORGANIZATION'], '/hr')).toBe(false);
-      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:SELF'], '/hr')).toBe(false);
+      // granted upload/generate on documents is not being granted the console that reads them.
+      expect(canAccessRoute(CUSTOM_ROLE, ['DOCUMENT:UPLOAD:ORGANIZATION'], '/documents')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['DOCUMENT:VIEW:SELF'], '/documents')).toBe(false);
     });
 
     it('is matched case-insensitively, since the backend declares these in lower case', () => {
-      expect(canAccessRoute(CUSTOM_ROLE, ['assayer:view:organization'], '/hr')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['document:view:organization'], '/documents')).toBe(true);
     });
   });
 
@@ -211,25 +257,31 @@ describe('canAccessRoute', () => {
    * the frontend catching up to `RolesGuard`, which already filters to unrecognised roles first.
    */
   describe('the permission fallback is offered to custom roles only', () => {
+    /**
+     * Demonstrated on `/scheduling` rather than the `/planning` of the story above, because
+     * `/planning` no longer names a permission at all (its project picker's API refuses custom
+     * roles, so the page is not offered — see that entry). `/scheduling` is the same shape and is
+     * live: CLIENT_USER holds SCHEDULING:VIEW:PLATFORM, which widens to the key this page names,
+     * and is deliberately absent from its `allowedRoles` — `users` has no client ceiling on this
+     * screen's own controls. The permission must not let it in.
+     */
     it('refuses a built-in role a page it holds the permission for but is not listed on', () => {
-      // AUDITOR holds PLANNING:VIEW:ORGANIZATION (widened from its /executive-map grant) but is
-      // deliberately absent from /planning's allowedRoles. The permission must not let it in.
-      expect(canAccessRoute([SystemRole.AUDITOR], ['PLANNING:VIEW:ORGANIZATION'], '/planning')).toBe(false);
+      expect(canAccessRoute([SystemRole.CLIENT_USER], ['SCHEDULING:VIEW:ORGANIZATION'], '/scheduling')).toBe(false);
     });
 
     it('still admits a built-in role that is named on the route, permission or not', () => {
-      // OPERATIONS is on /planning's list, so it never reaches the fallback — unaffected.
-      expect(canAccessRoute([SystemRole.OPERATIONS], [], '/planning')).toBe(true);
-      expect(canAccessRoute([SystemRole.ADMIN], [], '/planning')).toBe(true);
+      // OPERATIONS is on /scheduling's list, so it never reaches the fallback — unaffected.
+      expect(canAccessRoute([SystemRole.OPERATIONS], [], '/scheduling')).toBe(true);
+      expect(canAccessRoute([SystemRole.ADMIN], [], '/scheduling')).toBe(true);
     });
 
     it('still admits a custom role that genuinely holds the page permission', () => {
       // The fallback is for exactly this principal: a database role granted what the page asks for.
-      expect(canAccessRoute(CUSTOM_ROLE, ['PLANNING:VIEW:ORGANIZATION'], '/planning')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['SCHEDULING:VIEW:ORGANIZATION'], '/scheduling')).toBe(true);
     });
 
     it('refuses a custom role that does not hold the page permission', () => {
-      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'], '/planning')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'], '/scheduling')).toBe(false);
     });
 
     /**
@@ -238,8 +290,8 @@ describe('canAccessRoute', () => {
      * matching the runtime, where such a person's cache carries both roles' grants together.
      */
     it('offers the fallback to a principal who also holds a custom role', () => {
-      const roles = [SystemRole.AUDITOR, ...CUSTOM_ROLE] as unknown as SystemRole[];
-      expect(canAccessRoute(roles, ['PLANNING:VIEW:ORGANIZATION'], '/planning')).toBe(true);
+      const roles = [SystemRole.CLIENT_USER, ...CUSTOM_ROLE] as unknown as SystemRole[];
+      expect(canAccessRoute(roles, ['SCHEDULING:VIEW:ORGANIZATION'], '/scheduling')).toBe(true);
     });
   });
 
@@ -467,8 +519,25 @@ describe('defaultRouteFor', () => {
     expect(defaultRouteFor([SystemRole.PRODUCT_SUPPORT], [])).toBe('/feedback');
   });
 
-  it('lands a workforce role built in the admin screen on the workforce console', () => {
-    expect(defaultRouteFor(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'])).toBe('/hr');
+  /**
+   * A role built in Admin -> Roles lands on the first page it can ACTUALLY use.
+   *
+   * This asserted `/hr` for a workforce grant. It cannot any more and must not: `GET /hr/workforce`
+   * refuses a custom role, so sending one there recreated the original incident in miniature — a
+   * landing page that opens and then fails to load. A role granted only the workforce permissions
+   * now falls through to its own notification inbox, which is a poor home and an honest one; the
+   * moment `HrController` honours the fallback and `/hr` names the permission again, this returns
+   * to `/hr` on its own.
+   */
+  it('never lands a custom role on a page whose API would refuse it', () => {
+    expect(defaultRouteFor(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'])).not.toBe('/hr');
+  });
+
+  it('lands a custom role on the first page its grants really open', () => {
+    expect(defaultRouteFor(CUSTOM_ROLE, ['PROJECT:VIEW:ORGANIZATION'])).toBe('/dashboard');
+    expect(defaultRouteFor(CUSTOM_ROLE, ['SCHEDULING:VIEW:ORGANIZATION'])).toBe('/scheduling');
+    expect(defaultRouteFor(CUSTOM_ROLE, ['DOCUMENT:VIEW:ORGANIZATION'])).toBe('/documents');
+    expect(defaultRouteFor(CUSTOM_ROLE, ['BILLING:VIEW:ORGANIZATION'])).toBe('/billing');
   });
 
   it('lands a read-only auditor on the overview it can read', () => {

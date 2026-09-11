@@ -85,17 +85,23 @@ describe('the empty assignment queue', () => {
    * testing a role list.
    *
    * A role built in Admin → Roles matches no `allowedRoles` entry by definition, so for those the
-   * permission fallback decides. A hand-written `roles.includes(OPERATIONS)` here would deny the
-   * link to a custom planning role that genuinely holds the permission, and would keep denying it
-   * however many permissions an administrator granted.
+   * routing table's answer is the whole answer — and asking it, rather than hard-coding
+   * `roles.includes(OPERATIONS)`, is what makes this link track the page it points at.
+   *
+   * That answer is currently NO, and this test asserts the new one rather than the old. `/planning`
+   * stopped naming a permission: the workspace is keyed on a project list served by
+   * `GET /projects`, which refuses every custom role, so the page would open and never fill. A link
+   * offered here would be a link to that. When `ProjectController.findAll` honours the fallback and
+   * `/planning` names its permission again, this flips back on its own — which is the point of
+   * asking `canAccessRoute` instead of restating the rule here.
    */
-  it('follows the permission for a role that no allowedRoles entry can name', () => {
+  it('does not offer the planning link to a role the planning page is closed to', () => {
     asRoles.mockReturnValue(['Regional Planner']);
     asPerms.mockReturnValue(['PLANNING:VIEW:ORGANIZATION']);
 
     renderEmptyQueue();
 
-    expect(screen.getByRole('link', { name: 'Planning' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
   });
 
   it('withholds it from a custom role that lacks the permission', () => {

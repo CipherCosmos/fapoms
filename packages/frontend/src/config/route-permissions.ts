@@ -98,9 +98,25 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
+    /**
+     * The planning workspace. Permission OFF, and for a reason `/executive-map` above does not
+     * share even though the two name the same grant.
+     *
+     * `GET /planning/*` honours the fallback now, so the recommendations and day plans this page
+     * draws would be served. But the page is keyed on a PROJECT, and its project picker is fed by
+     * `GET /projects` — `@Roles(...STAFF_ROLES)` in `modules/project/**`, another workstream's, with
+     * no fallback. Measured live: the picker came up empty and the workspace announced "No branches
+     * in this project yet. Add branches to the project before visits can be planned for them." — a
+     * confident, specific, wrong statement, produced by a refusal.
+     *
+     * `/executive-map` stays open because its own content (`GET /planning/command-center`) fills
+     * completely; only a client filter is short. This page's content is the project.
+     *
+     * `@RolesFallbackPermissions('project:view:organization')` on `ProjectController.findAll`
+     * restores it; the permission belongs back here in the same change.
+     */
     path: '/planning',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
-    requiredPermissions: ['PLANNING:VIEW:ORGANIZATION'],
   },
   {
     // The Operations Inbox: every assignment awaiting a desk decision (call tasks for
@@ -158,12 +174,28 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
-    // The workforce console, and the entry this whole change exists for: GET /hr/workforce asks
-    // for assayer:view:organization and answers a custom role holding it, so the web app must
-    // too — otherwise the API serves a page the navigation refuses to open.
+    /**
+     * The workforce console. The permission is OFF, and that is a correction, not a retreat.
+     *
+     * The line that stood here said "GET /hr/workforce asks for assayer:view:organization and
+     * answers a custom role holding it, so the web app must too". Half of that was true. The route
+     * (`modules/assayer/hr.controller.ts`) does declare `assayer:view:organization` — but its
+     * `@Roles(ADMIN, OPERATIONS)` carries neither `@AllowPermissionFallback()` nor
+     * `@RolesFallbackPermissions(...)`, so `RolesGuard` hard-denies every unrecognised role before
+     * it ever looks at a permission. Measured against a custom role holding exactly
+     * ASSAYER:VIEW:ORGANIZATION: `GET /hr/workforce` → 403.
+     *
+     * So this table was opening a page whose data is refused — the one thing the type's own note
+     * says it must not do. What the operator got was worse than a closed door: "The workforce
+     * figures could not be loaded just now. An unknown problem occurred. Please try again." —
+     * honest that something failed, wrong about what, and an invitation to retry forever.
+     *
+     * ONE LINE fixes it properly, and it is not in this workstream's files: add
+     * `@AllowPermissionFallback()` beside the `@RequirePermissions('assayer:view:organization')` on
+     * `HrController.workforce`. Restore this key in the same change.
+     */
     path: '/hr',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
-    requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
   {
     /**
@@ -178,7 +210,10 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
      */
     path: '/hr/register',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
-    requiredPermissions: ['ASSAYER:CREATE:ORGANIZATION'],
+    // Permission off, for the same reason as `/hr` above and one of its own: `POST /assayers`
+    // lives in `modules/assayer/**` and offers no permission fallback either, so a custom role
+    // holding ASSAYER:CREATE would land on a registration wizard whose Save is refused — a worse
+    // outcome than not being offered the page, because it is discovered after the typing.
   },
   {
     /**
@@ -194,7 +229,7 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
      */
     path: '/hr/register/:assayerId',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
-    requiredPermissions: ['ASSAYER:CREATE:ORGANIZATION'],
+    // Permission off, mirroring `/hr/register` above — these two must always agree.
   },
   {
     // The comment this replaced ("no permission: gated by role name and declare none") was true
@@ -233,7 +268,11 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.DESK,
       SystemRole.DESK_OPERATOR,
     ],
-    requiredPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
+    // Permission off. All three of the fetches named above declare
+    // `validation:view:organization` and none of them offers a fallback, so a custom role holding
+    // that grant was admitted here and refused by every one of them. `modules/validation/**` is
+    // another workstream's; adding `@AllowPermissionFallback()` to `attention`, `workload` and
+    // `activity` and restoring this key is the whole fix.
   },
   {
     // Now a redirect into Platform Settings' travel section, which holds the rate card and the
@@ -359,12 +398,14 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.DESK,
       SystemRole.DESK_OPERATOR,
     ],
-    requiredPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
+    // Permission off, mirroring `/data-entry` — a redirect must never outlive its target's gate.
   },
   {
+    // A redirect into `/hr/roster`, so it carries what `/hr` carries — which since this change is
+    // roles only. `GET /assayers` declares `assayer:view:organization` and offers no fallback
+    // (`modules/assayer/**`), so admitting a custom role here sent it to a roster that answers 403.
     path: '/assayers',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
-    requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
 ];
 

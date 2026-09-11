@@ -123,49 +123,48 @@ describe('capability checks', () => {
   });
 
   /**
-   * RolesPermissionsPanel.tsx used to test `roles_.includes(SystemRole.ADMIN) ||
-   * roles_.includes(SystemRole.ADMIN)` — the same clause written twice, which read as "either of
-   * two roles" but was really one role checked redundantly. It happened to still be correct for
-   * ADMIN, which is why it shipped unnoticed, but it meant a custom role granted
-   * `user:edit:organization` — the exact permission the backend's own role-CRUD routes accept
-   * from a custom role, since there is no dedicated `role:*` permission (see UserController's own
-   * comment) — was shown "Viewing only... requires an Administrator role" for a save the API
-   * would actually have accepted. `canManageRoles` replaces it with the same
-   * name-or-custom-permission rule every other screen in this file already follows.
+   * The role editor is the one screen whose gate is a NAME on purpose.
+   *
+   * This helper briefly offered the editor to a custom role holding `user:edit:organization`, on
+   * the stated grounds that the backend's role-CRUD routes accept that permission from a custom
+   * role. They do not — `POST/PUT/DELETE /users/roles*` and `PUT /users/:id/roles` are
+   * `@Roles(ADMIN)` with no `@AllowPermissionFallback()`, so RolesGuard refuses an unrecognised
+   * role name outright — and the control was enabled over an API that answered 403 on every save.
+   *
+   * Aligning them the other way was the wrong repair, which is what these tests now hold. `PUT
+   * /users/roles/:id/permissions` grants any key in the catalogue and `PUT /users/:id/roles`
+   * assigns any role, ADMIN included: reachable through a permission, one custom-role grant would
+   * promote its own holder to administrator. Role administration is the grant that mints every
+   * other grant, so it is not itself grantable.
    */
   describe('canManageRoles', () => {
     it('opens for ADMIN by name, with no permission needed', () => {
-      expect(canManageRoles([SystemRole.ADMIN], [])).toBe(true);
+      expect(canManageRoles([SystemRole.ADMIN])).toBe(true);
     });
 
-    it('opens for a custom role that genuinely holds user:edit:organization', () => {
+    /**
+     * The escalation this refuses, stated as a test: a role built in Admin -> Roles cannot be
+     * granted the ability to edit Admin -> Roles.
+     */
+    it('stays shut for a custom role holding user:edit — the backend refuses it, and should', () => {
       const custom = ['QATRACK_L_CONFIG_EDITOR'] as unknown as SystemRole[];
-      expect(canManageRoles(custom, ['USER:EDIT:ORGANIZATION'])).toBe(true);
+      expect(canManageRoles(custom)).toBe(false);
     });
 
-    it('honours a PLATFORM grant for a custom role, matching the backend widening', () => {
-      // canManageRoles itself does no widening — that happens one layer up, in
-      // permissionKeysFrom, which is what useCurrentPermissions() actually returns from the
-      // cache. This exercises the real pipeline end to end rather than a bare ORGANIZATION
-      // string, which every other "honours PLATFORM" test in this file (misleadingly) does too.
+    it('is not opened by a PLATFORM-scoped USER:EDIT either', () => {
       const cached = { roles: [{ name: 'SOME_CUSTOM_ROLE', permissions: [{ resource: 'USER', action: 'EDIT', scope: 'PLATFORM' }] }] };
       const custom = ['SOME_CUSTOM_ROLE'] as unknown as SystemRole[];
-      expect(canManageRoles(custom, permissionKeysFrom(cached))).toBe(true);
+      // The widening pipeline works — this key IS produced — and it still buys nothing here.
+      expect(permissionKeysFrom(cached)).toContain('USER:EDIT:ORGANIZATION');
+      expect(canManageRoles(custom)).toBe(false);
     });
 
-    it('stays shut for a custom role without it', () => {
-      const custom = ['SOME_CUSTOM_ROLE'] as unknown as SystemRole[];
-      expect(canManageRoles(custom, ['USER:VIEW:ORGANIZATION'])).toBe(false);
+    it('stays shut for a built-in, non-ADMIN role', () => {
+      expect(canManageRoles([SystemRole.OPERATIONS])).toBe(false);
     });
 
-    it('stays shut for a built-in, non-ADMIN role even if it somehow held the permission', () => {
-      // Mirrors canReadCustomerMaster's DESK_OPERATOR case: a named built-in role must not slip
-      // in on a permission it happens to hold, only unrecognised (custom) roles get the fallback.
-      expect(canManageRoles([SystemRole.OPERATIONS], ['USER:EDIT:ORGANIZATION'])).toBe(false);
-    });
-
-    it('is false for nobody — no roles, no permissions', () => {
-      expect(canManageRoles(NO_ROLES, [])).toBe(false);
+    it('is false for nobody — no roles at all', () => {
+      expect(canManageRoles(NO_ROLES)).toBe(false);
     });
   });
 
@@ -183,7 +182,7 @@ describe('capability checks', () => {
       expect(canDeleteProjects([SystemRole.DEVELOPER], [])).toBe(true);
       expect(canAdministerNotifications([SystemRole.DEVELOPER])).toBe(true);
       expect(canManageCompliance([SystemRole.DEVELOPER])).toBe(true);
-      expect(canManageRoles([SystemRole.DEVELOPER], [])).toBe(true);
+      expect(canManageRoles([SystemRole.DEVELOPER])).toBe(true);
     });
 
     it('keeps the technical estate closed to a pure ADMIN — implication is one-way', () => {

@@ -5,7 +5,7 @@ import { roleLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { Modal, AlertBanner, useConfirm } from '../../components/ui';
-import { useCurrentRoles, useCurrentPermissions, canManageRoles } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, canManageRoles } from '../../hooks/useCurrentRoles';
 import {
   PERMISSION_AREAS, resourceLabel, actionLabel, scopeQualifier, areaForResource,
 } from '../../config/permission-labels';
@@ -45,18 +45,17 @@ const input: React.CSSProperties = {
 };
 
 export const RolesPermissionsPanel: React.FC = () => {
-  // Mirrors the API's gate on these routes (POST/PUT/DELETE /users/roles*, all gated on
-  // user:edit:organization — see canManageRoles), so nobody is shown a control that would 403,
-  // and nobody is told "requires an Administrator role" for a save the API would actually accept.
-  // Administrators are included by that same check: they hold the permission by name, and they
-  // could already grant themselves any role from the Directory tab, so locking this screen to
-  // some narrower group made it inert, not safer. This used to test
-  // `roles_.includes(SystemRole.ADMIN)` twice — the same clause repeated rather than the built-in
-  // OR custom-role check it was clearly meant to be — which happened to read correctly for ADMIN
-  // only because no custom role has ever been granted user:edit:organization yet.
+  // Mirrors the API's gate on these routes (POST/PUT/DELETE /users/roles*, `@Roles(ADMIN)` with no
+  // permission fallback), so nobody is shown a control that would 403. It briefly ran the
+  // built-in-OR-custom-permission rule the rest of the app uses, which enabled the whole editor for
+  // a custom role holding user:edit:organization over an API that refused every save — and the
+  // right repair was to close the control, not to open the API: see canManageRoles for why role
+  // administration is the one capability that must not itself be grantable.
+  //
+  // A custom role granted user:view still reaches this tab and reads the matrix; it just cannot
+  // write it.
   const roles_ = useCurrentRoles();
-  const permissions_ = useCurrentPermissions();
-  const canEdit = canManageRoles(roles_, permissions_);
+  const canEdit = canManageRoles(roles_);
   const { confirm, confirmDialog } = useConfirm();
 
   const { data: rolesRes, isLoading, refetch } = useQuery({
