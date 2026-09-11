@@ -229,6 +229,14 @@ const auditCount = async (entityId, eventType) => Number((await one(
    * `TRAINING → ARCHIVED` routes through INACTIVE. ARCHIVED and INACTIVE both need a reason, so
    * the walk must stop at the first hop. The version of this that tested only `targetStatus`
    * carried whatever it was given (or nothing) through every hop.
+   *
+   * UPDATED to the settled bulk contract (see `bulk-lifecycle.mjs`). This used to assert the row
+   * came back in `failed`. It now comes back in `skipped`: the walk is rehearsed against the
+   * whole path BEFORE the first hop, so a reason-gated hop three states away refuses the move
+   * without taking any of it. The substance of the check is unchanged and is what it always
+   * was — the per-hop gate holds, the record does not move, and no audit row is written. Only
+   * the bucket the refusal is reported in has changed, because "failed" now means something
+   * narrower: that nothing happened AND the attempt threw.
    */
   {
     const a = await seedAssayer('HOPGATE-NOREASON', 'TRAINING');
@@ -236,11 +244,12 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const r = await bulk([a.id], 'ARCHIVED');
     const after = await auditCount(a.id, 'ASSAYER_LIFECYCLE_TRANSITION');
     const st = await lifecycleOf(a.id);
-    const failed = r.body?.data?.failed?.[0];
+    const refused = r.body?.data?.skipped?.[0];
     record('BLK-04',
-      !!failed && st.lifecycle_status === 'TRAINING' && after === before,
-      `TRAINING → ARCHIVED (routes via INACTIVE) with NO reason: FAILED per-row `
-      + `("${(failed?.reason ?? '').slice(0, 90)}"), db still ${st.lifecycle_status}, `
+      !!refused && (r.body?.data?.failed?.length ?? 0) === 0
+        && st.lifecycle_status === 'TRAINING' && after === before,
+      `TRAINING → ARCHIVED (routes via INACTIVE) with NO reason: SKIPPED per-row `
+      + `("${(refused?.reason ?? '').slice(0, 90)}"), db still ${st.lifecycle_status}, `
       + `${after - before} audit rows`);
 
     const b = await seedAssayer('HOPGATE-REASON', 'TRAINING');
@@ -256,12 +265,19 @@ const auditCount = async (entityId, eventType) => Number((await one(
   }
 
   /**
-   * BLK-06 — what a half-walked route leaves behind.
+   * BLK-06 — what a half-walked route leaves behind. THE FINDING THIS PROBE RAISED, NOW CLOSED.
    *
    * `INVITED → INACTIVE` routes INVITED → DOCUMENT_VERIFICATION → INACTIVE. The first hop needs
-   * no reason and the second does, so a reasonless call commits hop one and is refused at hop two.
-   * The service's own comment calls the committed hop "the honest outcome"; this records what an
-   * operator is actually left holding.
+   * no reason and the second does, so a reasonless call USED TO commit hop one, be refused at hop
+   * two, and report the id as `failed` — leaving the record at DOCUMENT_VERIFICATION while the
+   * response told the operator nothing had happened. That contradiction was the LOW finding this
+   * check used to raise on every run.
+   *
+   * The walk is now rehearsed against the whole path first, so the missing reason is known before
+   * hop one and nothing commits. This check is INVERTED rather than relaxed: it used to record
+   * that the record had been part-moved, and now records that it has not been touched at all.
+   * The half-landed case that remains — a hop lost to a concurrent move — is reported as
+   * `partial` and is certified by `bulk-lifecycle.mjs` and the unit contract suite.
    */
   {
     const a = await seedAssayer('PARTIAL-WALK', 'INVITED');
@@ -269,17 +285,18 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const r = await bulk([a.id], 'INACTIVE');
     const after = await auditCount(a.id, 'ASSAYER_LIFECYCLE_TRANSITION');
     const st = await lifecycleOf(a.id);
-    const failed = r.body?.data?.failed?.[0];
+    const d = r.body?.data ?? {};
+    const refused = d.skipped?.[0];
     record('BLK-06',
-      !!failed && st.lifecycle_status !== 'INACTIVE',
-      `INVITED → INACTIVE, no reason: the reasonless first hop COMMITS and the walk stops — `
-      + `db ${st.lifecycle_status} (asked for INACTIVE), ${after - before} audit rows, `
-      + `reported as failed ("${(failed?.reason ?? '').slice(0, 70)}")`);
-    if (st.lifecycle_status === 'DOCUMENT_VERIFICATION') {
-      finding('BLK-06', 'LOW',
-        'a refused bulk move leaves the record part-moved (INVITED → DOCUMENT_VERIFICATION) and '
-        + 'reports only "failed" for that id — the response says nothing about the hop that landed, '
-        + 'so a roster batch can silently advance people the operator believes were refused');
+      !!refused && (d.failed?.length ?? 0) === 0 && (d.partial?.length ?? 0) === 0
+        && st.lifecycle_status === 'INVITED' && after === before,
+      `INVITED → INACTIVE, no reason: the reasonless first hop is NO LONGER committed — `
+      + `db ${st.lifecycle_status}, ${after - before} audit rows, reported as skipped `
+      + `("${(refused?.reason ?? '').slice(0, 70)}")`);
+    if (st.lifecycle_status !== 'INVITED') {
+      finding('BLK-06', 'HIGH',
+        `a refused bulk move left the record part-moved (INVITED → ${st.lifecycle_status}) — the `
+        + 'walk rehearsal that is supposed to refuse it before the first hop did not fire');
     }
   }
 

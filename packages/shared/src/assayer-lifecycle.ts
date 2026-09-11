@@ -210,6 +210,30 @@ export function canTransitionAssayerLifecycle(from: string, to: string): boolean
  * INACTIVE is deliberately NOT here. It has a genuine corridor use on the way out — closing a
  * trainee's file really is TRAINING → INACTIVE → ARCHIVED, and nothing is skipped by taking it —
  * which is what the `leaving` relaxation below exists for.
+ *
+ * ## OPEN, and deliberately not decided here: ACTIVE is still a waypoint
+ *
+ * Measured against the running system on 2026-09-10. A bulk `INVITED → SUSPENDED` routes
+ * INVITED → DOCUMENT_VERIFICATION → INACTIVE → ACTIVE → SUSPENDED and writes all four hops:
+ *
+ *     INVITED -> DOCUMENT_VERIFICATION
+ *     DOCUMENT_VERIFICATION -> INACTIVE
+ *     INACTIVE -> ACTIVE          ← background verification and training never happened
+ *     ACTIVE -> SUSPENDED
+ *
+ * The same shape reaches ACTIVE on the way to SUSPENDED or RESIGNED from INVITED,
+ * DOCUMENT_VERIFICATION, BACKGROUND_VERIFICATION and INACTIVE, and on the way from SUSPENDED to
+ * ARCHIVED — where it also reinstates a suspension nobody decided to lift. Activation is not a
+ * corridor by any reading of the paragraph above: it has its own precondition method
+ * (`assertCanActivate`), its own identity gate, and its own `ASSAYER_ONBOARDED` notification,
+ * which really is emitted for a person who is about to be suspended.
+ *
+ * It is NOT added to the list here because that is a decision about the transition graph — it
+ * would withdraw those targets from the roster's bulk toolbar, which offers whatever this
+ * function can reach — and this file is not where that call should be made silently. What HAS
+ * changed is that the walk is no longer invisible: `bulkTransitionLifecycle` reports the route it
+ * took in `via`, so the response above says `["DOCUMENT_VERIFICATION","INACTIVE","ACTIVE",
+ * "SUSPENDED"]` rather than just "INVITED → SUSPENDED, succeeded".
  */
 const NEVER_A_WAYPOINT: AssayerLifecycleStatus[] = [
   AssayerLifecycleStatus.INVITED,
@@ -250,6 +274,15 @@ const OUTCOME_DESTINATIONS: AssayerLifecycleStatus[] = [
  * On the way *out* they are still traversable, because there they are the designed route rather
  * than a shortcut: closing a trainee's file really does go TRAINING → INACTIVE → ARCHIVED, and
  * nothing is skipped by taking it.
+ *
+ * ## A path is a PLAN, not a promise
+ *
+ * This answers "which edges connect these two states", and nothing more. It does not know whether
+ * the caller holds the reason each hop demands, whether the identity gate will admit an
+ * activation, or whether somebody else is moving the same person right now. `bulkTransitionLifecycle`
+ * rehearses the whole plan against those rules before it takes the first hop, precisely because a
+ * route that is legal edge-by-edge can still be refused part way — and half a walk is not a state
+ * this domain can undo. See the contract docblock there.
  */
 export function assayerLifecyclePath(from: string, to: string): AssayerLifecycleStatus[] | null {
   if (from === to) return [];

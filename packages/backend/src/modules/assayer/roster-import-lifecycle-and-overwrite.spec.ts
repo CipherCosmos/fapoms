@@ -40,7 +40,7 @@ describe('roster import — lifecycle transitions go through the state machine',
    * legal-transition test below drives a real run and asserts on the call rather than on
    * `savedAssayers[0].lifecycleStatus`, which no longer reflects a queued move.
    */
-  const harness = (existing: Array<Record<string, any>> = [], bulkTransitionLifecycle = jest.fn().mockResolvedValue({ succeeded: [], skipped: [], failed: [] })) => {
+  const harness = (existing: Array<Record<string, any>> = [], bulkTransitionLifecycle = jest.fn().mockResolvedValue({ succeeded: [], partial: [], skipped: [], failed: [] })) => {
     const savedAssayers: any[] = [];
     const savedIssues: any[] = [];
     let n = 1;

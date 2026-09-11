@@ -665,11 +665,25 @@ export class RosterImportService {
         // Not added to `summary.updated`: every id here is an existing row already counted
         // there when its own save landed (line ~470) — this only reports transitions that
         // did not land as this run expected.
-        for (const { id, current, reason } of result.skipped) {
+        for (const { id, current, reason } of result.skipped ?? []) {
           this.logger.warn(`Roster import: queued transition of ${id} to ${to} was skipped after the row saved (${current}, ${reason}).`);
         }
-        for (const { id, reason } of result.failed) {
+        for (const { id, reason } of result.failed ?? []) {
           this.logger.warn(`Roster import: queued transition of ${id} to ${to} failed after the row saved: ${reason}`);
+        }
+        /**
+         * A part-done walk cannot arise from this caller's own queue — every id here was checked
+         * with `canTransitionAssayerLifecycle`, so its path is exactly one hop and a single hop is
+         * atomic. It is logged all the same, and louder than a skip, because the only way this
+         * line can ever print is that the walk was longer than this method believes it queued —
+         * which is a fact about the import worth finding out from a log rather than from the data.
+         * Defaulted because several specs still hand back the three-array shape this predates.
+         */
+        for (const { id, reached, reason } of result.partial ?? []) {
+          this.logger.error(
+            `Roster import: queued transition of ${id} to ${to} stopped part way — the record is `
+            + `now ${reached}, not ${to}: ${reason}`,
+          );
         }
       }
     }
