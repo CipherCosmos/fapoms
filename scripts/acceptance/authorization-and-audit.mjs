@@ -61,14 +61,36 @@ const call = async (token, method, path, body) => {
   return { status: res.status, body: await res.json().catch(() => null) };
 };
 
+/**
+ * Sign in, and never mistake a THROTTLE for a bad credential.
+ *
+ * `POST /auth/login` is capped at 20/min for the whole host and this rig is shared. This helper
+ * used to return null on any failure, so a saturated window produced "could not sign in the staff
+ * personas" and an aborted run — indistinguishable, on the page, from wrong passwords or a locked
+ * account. It cost this campaign an investigation once already. A 429 now says so, and is waited
+ * out once rather than reported as a denial.
+ */
 const signIn = async (username, seedPw, changePath) => {
-  let r = await call(null, 'POST', '/auth/login', { username, password: PW });
+  const attempt = async (password) => {
+    let r = await call(null, 'POST', '/auth/login', { username, password });
+    if (r.status === 429) {
+      const waitMs = 25_000;
+      console.log(`  (login throttled for "${username}" — POST /auth/login is 20/min for the whole `
+        + `host and this rig is shared. Waiting ${waitMs / 1000}s once; this is the brake, not a denial.)`);
+      await new Promise((s) => setTimeout(s, waitMs));
+      r = await call(null, 'POST', '/auth/login', { username, password });
+    }
+    return r;
+  };
+
+  let r = await attempt(PW);
   if (!r.body?.data?.accessToken) {
-    r = await call(null, 'POST', '/auth/login', { username, password: seedPw });
-    if (!r.body?.data?.accessToken) return null;
+    if (r.status === 429) return { throttled: true, username };
+    r = await attempt(seedPw);
+    if (!r.body?.data?.accessToken) return r.status === 429 ? { throttled: true, username } : null;
     const t = r.body.data.accessToken;
     await call(t, 'POST', changePath, { currentPassword: seedPw, newPassword: PW });
-    r = await call(null, 'POST', '/auth/login', { username, password: PW });
+    r = await attempt(PW);
   }
   return r.body?.data?.accessToken ? { token: r.body.data.accessToken, id: r.body.data.user.id, username } : null;
 };
@@ -80,7 +102,22 @@ const signIn = async (username, seedPw, changePath) => {
 
   const admin = await signIn('admin', 'admin123', '/users/me/change-password');
   const validator = await signIn('validator', 'admin123', '/users/me/change-password');
-  if (!admin || !validator) throw new Error('could not sign in the staff personas');
+  const throttled = [admin, validator].filter((x) => x?.throttled).map((x) => x.username);
+  if (throttled.length) {
+    throw new Error(
+      `THROTTLED, not refused: ${throttled.join(' and ')} could not sign in because POST /auth/login `
+      + 'answered 429 for the whole attempt. That is the rate limiter working — 20/min for the whole '
+      + 'host, on a rig shared with other sessions — and says nothing about credentials or '
+      + 'authorization. Re-run when the window is quiet.',
+    );
+  }
+  if (!admin || !validator) {
+    throw new Error(
+      'could not sign in the staff personas — the credentials were REFUSED, not throttled. Check '
+      + 'AC_PASSWORD is SOURCED into the environment (not merely pointed at), and that nothing has '
+      + 'rotated these accounts since.',
+    );
+  }
 
   // ── 1. every token must be alive, or a sweep of 403s proves nothing ─────────────────────────
   const aliveV = await call(validator.token, 'GET', '/assignments?limit=1');
@@ -135,11 +172,56 @@ const signIn = async (username, seedPw, changePath) => {
     `SELECT DISTINCT a.assayer_id, asr.assayer_code FROM assignments a
        JOIN assayers asr ON asr.id=a.assayer_id WHERE a.is_active LIMIT 2`);
   const owner = pair[0];
-  const [others] = await q(
-    `SELECT id, assayer_code FROM assayers WHERE id <> $1 AND lifecycle_status='ACTIVE' AND is_active LIMIT 1`,
+  /**
+   * The intruder has to be somebody who can actually SIGN IN, and finding them cannot be luck.
+   *
+   * This used to be `... AND lifecycle_status='ACTIVE' AND is_active LIMIT 1` with no ORDER BY, on
+   * a table the other probes fill with throwaway people. An unordered LIMIT 1 returns whichever
+   * row the planner feels like — often an `ACBL-`/`TenDay-`/`AC-` fixture with no `password_hash`
+   * at all. AZ-10 then reported FAIL and AZ-11/AZ-12 never ran, so a run that measured NOTHING
+   * about horizontal isolation read as a run that had found a defect in it.
+   *
+   * Two things are needed and neither is optional. Only people who HAVE app access are candidates.
+   * And more than one is tried, with more than one password, because this rig is shared and the
+   * seeded assayers have been rotated to different values by different probes — AS-01 answers 401
+   * to all of the campaign's passwords while AS-02 answers 200 to AC_PASSWORD.
+   *
+   * Bounded on purpose: at most three people and two passwords each. `POST /auth/login` is capped
+   * at 20/min for the whole host, and a probe that walks the roster hunting for a credential is
+   * the thing that closes the window for everybody else.
+   */
+  const candidates = await q(
+    `SELECT id, assayer_code FROM assayers
+      WHERE id <> $1 AND lifecycle_status = 'ACTIVE' AND is_active
+        AND password_hash IS NOT NULL
+      ORDER BY created_at ASC, id ASC
+      LIMIT 3`,
     [owner?.assayer_id ?? '00000000-0000-0000-0000-000000000000']);
-  const intruder = others ? await signIn(others.assayer_code, 'assayer123', '/assayers/me/change-password') : null;
-  if (intruder && owner) {
+
+  const PASSWORDS = [PW, process.env.CERT_PASSWORD].filter(Boolean);
+  let intruder = null;
+  let others = null;
+  let throttledOut = false;
+  const tried = [];
+  outer: for (const c of candidates) {
+    for (const pw of PASSWORDS) {
+      const r = await call(null, 'POST', '/auth/login', { username: c.assayer_code, password: pw });
+      if (r.status === 429) { throttledOut = true; break outer; }
+      if (r.body?.data?.accessToken) {
+        intruder = { token: r.body.data.accessToken, id: r.body.data.user?.id, username: c.assayer_code };
+        others = c;
+        break outer;
+      }
+    }
+    tried.push(c.assayer_code);
+  }
+
+  if (throttledOut) {
+    record('AZ-10', false,
+      'THROTTLED, not refused: the 20/min login cap closed before a second assayer could sign in. '
+      + 'Horizontal isolation was NOT measured this run — re-run when the window is quiet.');
+  }
+  if (intruder?.token && owner) {
     const [job] = await q(
       `SELECT id FROM assignments WHERE assayer_id=$1 AND is_active ORDER BY created_at DESC LIMIT 1`,
       [owner.assayer_id]);
@@ -154,7 +236,15 @@ const signIn = async (username, seedPw, changePath) => {
     record('AZ-12', bank.status === 403 || bank.status === 404,
       `${others.assayer_code} cannot read ${owner.assayer_code}'s bank details (-> ${bank.status})`);
   } else {
-    record('AZ-10', false, 'could not sign in a second assayer to probe horizontal isolation');
+    if (!throttledOut) {
+      record('AZ-10', false,
+        candidates.length
+          ? `none of ${tried.join(', ')} accepted the campaign's passwords — horizontal isolation NOT `
+            + 'measured. This is a fixture problem, not an authorization finding: those accounts have '
+            + 'app access but have been rotated to a value this probe does not hold.'
+          : 'no second ACTIVE assayer WITH app access exists in this database — horizontal isolation '
+            + 'NOT measured. Seed one, or run POST /assayers/:id/app-access against an existing person.');
+    }
   }
 
   // ── 4. the audit trail against the application's own credential ────────────────────────────
