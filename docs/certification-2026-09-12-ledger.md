@@ -29,6 +29,71 @@ Ten business days improved from 80/85 at the last campaign to 85/85, with no cha
 
 ## Findings
 
+### C-12 · HIGH · concurrency · **FIXED** (empanelment) — verified independently
+The reproduction `200, 200, 200` is now **`200, 409, 409`**: one decision commits, the others are
+refused deterministically, and the persisted standing equals the body the 200 returned. One version
+bump, one `EMPANELMENT_SET` row whose `new_state` matches the row. The create race is `409, 409, 200`
+with no 5xx, closing the 500 that the first attempt at this lane had found.
+
+The table already carried a `version` column, incrementing since the schema was written and read by
+nobody — the same shape as `client_billing`. The `client/pricing-version.ts` mechanism was applied
+rather than a second one invented, with the lock taken **before** the read.
+
+**A second defect surfaced while fixing the first.** The REJECTED-reversal guard — the rule that
+reversing a rejection requires a written reason — was decided from an **unlocked** read. Under
+concurrency a rejection could therefore be reversed with no reason at all. It is now answered from
+the locked status.
+
+Mutation-tested by moving the read back in front of the lock: the case named for it went red, file
+restored byte-identical.
+
+**Contract change callers must know**: editing an existing standing without `expectedVersion` is now
+`400 MISSING_EXPECTED_VERSION`. Creating a first standing is unchanged.
+
+### C-05 · MEDIUM · correctness · **FIXED** `403e6a08`
+`ACTIVE` now sits in `NEVER_A_WAYPOINT`. Fixed at the transition graph rather than in the response,
+because a truthful account of a fabricated activation is still a fabricated activation.
+
+**It withdrew moves, and that is the deliberate half.** `INVITED → SUSPENDED`, `INVITED → RESIGNED`,
+`DOCUMENT_VERIFICATION → SUSPENDED`, `ON_LEAVE → SUSPENDED`, `ON_LEAVE → RESIGNED` and
+`SUSPENDED → ARCHIVED` now have no bulk path and report `skipped` with nothing written. Each is a
+move the single-record route already refuses, so this is parity with the one-person screen, not a
+new restriction. Verified: `INVITED → SUSPENDED` writes **zero** audit and activity rows and no
+`ACTIVE` anywhere, while `INVITED → ACTIVE` still walks all four stages and leaves its earned rows.
+
+### C-07 · MEDIUM · audit truth · **FIXED** `74a82b4a`, `4d31563d`
+Each assignment cancelled by a departure now carries its own `ASSIGNMENT_CANCELLED` row in the same
+transaction: previous and new status, reason, actor, branch, scheduled date, both entity versions,
+the previous assayer, and a `departureEventId` linking it to the lifecycle row. Recorded with
+`recordEvent`, not the forgiving variant — a cancellation that cannot be recorded does not commit.
+The `DELETE /assayers/:id` door is closed too, which is what the probe's DEL-07 finding literally
+names. That probe now reports **DEL-07 PASS, zero findings**.
+
+**The second commit is the interesting one.** The first version was wrong in a way twelve green
+tests could not see: TypeORM returns `[rows, affectedCount]` for `UPDATE … RETURNING`, and the code
+treated the tuple as the row list. Every audit row was written with an **undefined entity id** — the
+right number of rows, the assignments still bare, and a 201 on the way out. The unit fixture served
+rows directly, a shape production never produces. Found by reading the database after a live run.
+
+### C-25 · MEDIUM · open · found and not fixed
+Four things the assayer lane surfaced and correctly left alone:
+
+- **`roster-import.service.ts:1607/1643` writes empanelments directly** through `manager.save`,
+  bypassing the guarded path. It serialises correctly against the new lock, but it is a fourth
+  writer with no version discipline of its own.
+- **`AssayerVettingTab.tsx` `HARD_BLOCKED_STANDINGS`** treats REJECTED, TERMINATED, EXPIRED and
+  SUSPENDED as final on the client, contradicting the backend's deliberate reversible-with-a-reason
+  rule. **The screen cannot reach a decision the API allows.**
+- **`soft-delete-cascade.spec.ts` scans raw source including comments**, so a backtick-quoted SQL
+  phrase inside a comment matches as if it were a statement. The project's own rule is that
+  source-scanning guards strip comments.
+- **`lifecycle-bypass.mjs` EMP-04, EMP-05 and ELG-03 contradict themselves.** All three set a
+  standing to ACTIVE with no reason, which the reversal guard already refused at baseline, leaving
+  the row REJECTED — then EMP-04 asserts the row is ACTIVE while EMP-02 asserts it was refused.
+  These are the three "failures" investigated earlier and classified as fixture state; this is the
+  actual mechanism.
+
+
 ### C-20 · HIGH · audit truth · **FIXED** `59b83607`
 **The endpoint whose whole purpose is "what happened to this" answered that nothing had.**
 `GET /audit-log/trail?limit=-5` returned **200 OK with 0 entries** on a record carrying 240 audit
