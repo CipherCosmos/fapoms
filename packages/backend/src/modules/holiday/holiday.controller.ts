@@ -21,7 +21,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsDateString, IsArray } from 'class-validator';
 
 import { HolidayService, CreateHolidayDto } from './holiday.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
@@ -86,6 +86,19 @@ export class HolidayController {
   }
 
   @Get()
+  /**
+   * The holiday calendar is reference data, and a role granted reference data may read it.
+   *
+   * The class-level `@Roles(...STAFF_ROLES)` is a closed list of built-in names, so a role built in
+   * Admin → Roles was refused — which is why bank holidays stopped shading the `/scheduling`
+   * calendar for one, silently, on the screen where "is that date a holiday" is the question.
+   * `@RolesFallbackPermissions` and not `@RequirePermissions` for the same reason as
+   * `GET /assignments`: PRODUCT_SUPPORT is on STAFF_ROLES and holds no grants, so requiring a
+   * permission outright would take this list away from a role that reads it today.
+   *
+   * Read only. Creating, editing and deleting a holiday stay on `canManageHolidays`' gate.
+   */
+  @RolesFallbackPermissions('reference_data:view:organization')
   @ApiOperation({ summary: 'List and filter holiday records' })
   async findAll(
     // Same gap, same fix as ZoneController.findAll: an unguarded `page`/`limit` reached the

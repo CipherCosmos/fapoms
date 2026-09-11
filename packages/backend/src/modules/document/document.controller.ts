@@ -15,7 +15,7 @@ import { StorageEngine } from '../../infrastructure/storage/storage-engine.inter
 import { OcrProcessingService } from '../../infrastructure/ocr/ocr-processing.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod } from '@fapoms/shared';
 
@@ -1297,6 +1297,12 @@ export class DocumentController {
   @Get('operations/overview')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @RequirePermissions('document:view:organization')
+  // …and a role built in Admin → Roles holding `document:view` too. The comment above says this
+  // route "must admit every role the frontend /documents route allows"; that table admits a custom
+  // role on this permission, so until now the sentence was only true of built-in names and the page
+  // drew full chrome with no data and nothing said. RolesGuard's fallback reads permissions from
+  // the caller's unrecognised roles only, so no built-in role's access changes.
+  @AllowPermissionFallback()
   @ApiOperation({ summary: 'Document control console: branch context, transport trail, pipeline and action queues' })
   @ApiQuery({ name: 'page', required: false, description: 'Branch list page (1-based).' })
   @ApiQuery({ name: 'limit', required: false, description: 'Branch rows per page; clamped server-side.' })

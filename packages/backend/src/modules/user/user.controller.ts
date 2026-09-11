@@ -32,7 +32,7 @@ import { Transform } from 'class-transformer';
  */
 const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, PasswordChangeExempt } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, PasswordChangeExempt, AllowPermissionFallback } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
@@ -258,6 +258,17 @@ export class UserController {
   @Get()
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:view:organization')
+  /**
+   * A role built in Admin -> Roles and granted `user:view` may read the directory.
+   *
+   * Reading only. Every write in this controller — creating an account, creating or
+   * re-permissioning a ROLE, changing who holds which role — asks for `user:edit:organization`
+   * and deliberately carries no fallback, because `PUT /users/roles/:id/permissions` can assign
+   * ANY permission in the catalogue, `system:approve:platform` included. Making that grantable
+   * through the roles screen would turn one custom-role grant into the whole platform. So the
+   * read is a permission and the writes stay a name.
+   */
+  @AllowPermissionFallback()
   @ApiOperation({ summary: 'List all users' })
   // `page` reached `userService.findAll`'s `skip: (page - 1) * limit` unguarded: `?page=0`,
   // `?page=-1` and `?page=abc` each produced a negative or NaN `skip`, rejected by Postgres/
@@ -300,6 +311,7 @@ export class UserController {
   @Get('roles')
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:view:organization')
+  @AllowPermissionFallback()  // read-only, as on `findAll` above; the role WRITES keep the name gate
   @ApiOperation({ summary: 'List all available roles' })
   async findAllRoles() {
     const roles = await this.userService.findAllRoles();
@@ -313,6 +325,7 @@ export class UserController {
   @Get('permissions')
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:view:organization')
+  @AllowPermissionFallback()  // read-only, as on `findAll` above
   @ApiOperation({ summary: 'List every permission that can be granted to a role' })
   async findAllPermissions() {
     const permissions = await this.userService.findAllPermissions();

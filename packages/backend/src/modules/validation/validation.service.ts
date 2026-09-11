@@ -12,6 +12,8 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { EventCategory, ValidationStatus, SystemRole, VALIDATION_TRANSITIONS, ValidationQueryStatus, toWorkflowTransitions } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { applyBranchScope } from '../../infrastructure/scope/apply-scope';
 
 export interface CreateValidationCaseDto {
   projectBranchId: string;
@@ -100,6 +102,7 @@ export class ValidationService implements OnModuleInit {
     reviewerId?: string,
     search?: string,
     workedBy?: string,
+    scope?: Partial<GlobalScope>,
   ): Promise<{ validationCases: ValidationCaseEntity[]; total: number }> {
     // Query builder rather than findAndCount: the queue filters on the BRANCH (search)
     // and on the packet's worker (workedBy), neither of which is a column of this table.
@@ -110,6 +113,21 @@ export class ValidationService implements OnModuleInit {
       .leftJoinAndSelect('vc.assessment', 'a')
       .leftJoinAndSelect('a.branch', 'ab')
       .where('vc.isActive = true');
+
+    /**
+     * The desk queue, narrowed to the regions this account is assigned to.
+     *
+     * This board had no region ceiling at all — not on the list, not on the detail, not on the
+     * transitions. Confirmed live: `cert_desk_east` (`users.regions = ['EAST']`) opened the
+     * validation queue and got 15 cases, every one of them a Maharashtra branch, and could
+     * assign, transition and bulk-transition all of them. `b` is the branch the queue already
+     * joins for its own `search` filter, so the ceiling costs no extra join — it was simply
+     * never asked for.
+     *
+     * `applyBranchScope` rather than a hand-written `b.region IN (…)`, so this board filters by
+     * exactly the rule every other list uses.
+     */
+    applyBranchScope(qb, scope, { branch: 'b' });
 
     if (projectBranchId) qb.andWhere('vc.projectBranchId = :pbid', { pbid: projectBranchId });
     if (status) qb.andWhere('vc.status = :status', { status });

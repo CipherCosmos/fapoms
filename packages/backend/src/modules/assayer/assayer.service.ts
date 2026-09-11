@@ -611,6 +611,32 @@ export interface UpdateAssayerDto {
   unavailableReason?: AssayerUnavailableReason;
 }
 
+/**
+ * What a bulk lifecycle walk did, per row. Four outcomes, and the boundary between them is a
+ * claim about the DATABASE rather than about how far the loop got:
+ *
+ *   succeeded  the person is at `to`. `via` is the route walked to get there — `[]` when they
+ *              were already there, which is a truthful no-op rather than a move.
+ *   partial    some hops committed and the target was not reached. `reached` is the state they
+ *              are actually in, re-read from the row. This bucket exists because the response
+ *              used to say `failed` for exactly this case, and an operator who is told "failed"
+ *              stops looking.
+ *   skipped    nothing happened, and it was known before the first hop that nothing could —
+ *              no path, or a hop the supplied reason does not cover, or an activation the
+ *              identity gate would refuse.
+ *   failed     nothing happened, and the attempt threw. The record is where it started.
+ *
+ * `partial` is deliberately a fourth array rather than a flag on `failed`: a caller that has not
+ * been taught about it must not be able to read a part-moved person as a clean failure, and an
+ * array it does not know about is at least visibly missing rather than quietly misread.
+ */
+export interface BulkLifecycleResult {
+  succeeded: { id: string; from: string; to: string; via: string[] }[];
+  partial: { id: string; from: string; reached: string; target: string; via: string[]; reason: string }[];
+  skipped: { id: string; current: string; reason: string }[];
+  failed: { id: string; reason: string }[];
+}
+
 @Injectable()
 export class AssayerService implements OnModuleInit {
   private readonly logger = new Logger(AssayerService.name);
@@ -2500,70 +2526,320 @@ export class AssayerService implements OnModuleInit {
    * Every intermediate step still runs through the normal workflow command,
    * activity log and audit trail. Rows that cannot reach the target are skipped,
    * and per-row errors are isolated so one bad row never aborts the rest.
+   *
+   * ## THE CONTRACT, stated because it was previously only implied
+   *
+   * A walk is **staged, not atomic**, and it is staged because the domain cannot express the
+   * alternative — not because nobody got round to a transaction:
+   *
+   *   - Each hop is its own workflow command, and `WorkflowEngine.executeCommand` is explicit
+   *     that one transaction makes "the whole COMMAND atomic". The unit of atomicity in this
+   *     system is the hop.
+   *   - `audit_events` is append-only by database trigger. A hop that committed has written a
+   *     row that nothing can retract, so "the walk never happened" is not a state the trail can
+   *     be put back into.
+   *   - The lifecycle map is very nearly one-directional. There is no DOCUMENT_VERIFICATION →
+   *     INVITED edge, no BACKGROUND_VERIFICATION → DOCUMENT_VERIFICATION edge, and so on — so
+   *     "return them to their exact original state" is not a move the state machine has. Undoing
+   *     a walk would mean writing `lifecycle_status` directly, which is the precise bypass this
+   *     module has spent its history removing.
+   *   - Hops cascade beyond the row: departure dates, empanelment close-out, assignment
+   *     cancellation, an `ASSAYER_ONBOARDED` notification. Those are not compensatable either.
+   *
+   * ## What changed: the walk is now decided BEFORE it starts
+   *
+   * Staged did not have to mean "find out half way". Everything a walk can be refused for that
+   * is a property of the plan rather than of the world — the path, and the per-hop reason
+   * requirement, and the identity gate when it is enforcing — is now checked against the WHOLE
+   * path before the first hop is taken. A refusal of that kind lands in `skipped`, and nothing
+   * moved. This is where the old code was actually dangerous:
+   *
+   *     INVITED → INACTIVE with no reason
+   *       hop 1  INVITED → DOCUMENT_VERIFICATION      needs no reason, COMMITTED
+   *       hop 2  DOCUMENT_VERIFICATION → INACTIVE     needs a reason, refused
+   *       response said:  failed
+   *       the database said: DOCUMENT_VERIFICATION
+   *
+   * The operator read "failed" and believed nothing had happened. Something had. The same call
+   * now reports `skipped` and the person is still INVITED, because the missing reason was known
+   * before hop one.
+   *
+   * ## What is left, and how it is reported
+   *
+   * A hop can still fail for a reason that is not knowable in advance — somebody else moved the
+   * same person between hops (the funnel's compare-and-swap answers 409), or the database went
+   * away. Then the walk really is part-done, and that row is reported as **`partial`**, naming
+   * the state the person is actually in, re-read from the database rather than inferred from how
+   * far the loop got. A row whose state changed is NEVER reported as `failed`: `failed` means the
+   * record is exactly where it started.
+   *
+   * `via` is on every outcome for the same reason — a two-hop walk that reports only its
+   * endpoints is not a truthful account of what was written to somebody's employment record.
    */
   async bulkTransitionLifecycle(
     ids: string[],
     targetStatus: string,
     userId: string,
     reason?: string,
-  ): Promise<{
-    succeeded: { id: string; from: string; to: string }[];
-    skipped: { id: string; current: string; reason: string }[];
-    failed: { id: string; reason: string }[];
-  }> {
+  ): Promise<BulkLifecycleResult> {
     const validTargets = Object.values(AssayerLifecycleStatus);
     if (!validTargets.includes(targetStatus as AssayerLifecycleStatus)) {
       throw new BadRequestException(`Invalid target status: ${targetStatus}`);
     }
 
     /**
-     * The reason is NOT checked here any more, and that is the fix rather than an omission.
+     * The ceiling, once for the request rather than once per row.
      *
-     * This used to test `LIFECYCLE_MOVES_NEEDING_A_REASON` against `targetStatus` — the FINAL
-     * destination — and then hand whatever it was given to every hop of the walk below. So any
-     * path whose destination happens not to need a reason carried none through the states that
-     * do. Two reproductions from the certification, both returning 201 with no reason supplied:
-     *
-     *   TRAINING → ARCHIVED   walked TRAINING → INACTIVE → ARCHIVED. The deactivation, which the
-     *                         single route always refuses without a reason, was recorded with
-     *                         nothing but "Lifecycle transition: TRAINING → INACTIVE".
-     *   RESIGNED → ACTIVE     walked all five hops of a rehire. A departed person came back to
-     *                         work, through document and background verification, and not one of
-     *                         the five audit rows says why.
-     *
-     * `doTransitionLifecycle` now enforces it per hop, so the walk stops at the first hop that
-     * needs a reason it does not have — and the hops already committed stay committed, which is
-     * the honest outcome: they happened.
+     * `doTransitionLifecycle` enforces it too and is the authority; checking it here as well is
+     * what keeps an over-long reason from being a per-row failure on every id in the batch after
+     * the first row has already moved. Nothing has been touched at this point, so a throw here
+     * is honest about having changed nothing — which is exactly what the single-transition route
+     * does with the same input.
      */
-    const succeeded: { id: string; from: string; to: string }[] = [];
-    const skipped: { id: string; current: string; reason: string }[] = [];
-    const failed: { id: string; reason: string }[] = [];
+    if (reason && reason.length > LIFECYCLE_REASON_MAX_LENGTH) {
+      throw new BadRequestException(
+        `That reason is ${reason.length} characters. Keep it under ${LIFECYCLE_REASON_MAX_LENGTH} — `
+        + 'it goes onto the employment record and into the audit trail, which cannot be edited later.',
+      );
+    }
+
+    const succeeded: BulkLifecycleResult['succeeded'] = [];
+    const partial: BulkLifecycleResult['partial'] = [];
+    const skipped: BulkLifecycleResult['skipped'] = [];
+    const failed: BulkLifecycleResult['failed'] = [];
 
     for (const id of ids) {
+      let from: string | undefined;
+      /** Hops this walk actually committed, pushed the instant `executeCommand` resolves. */
+      const completed: AssayerLifecycleStatus[] = [];
+
       try {
         const assayer = await this.findOne(id);
-        const path = AssayerStateMachine.findPathTo(assayer.lifecycleStatus, targetStatus);
+        from = assayer.lifecycleStatus;
+        const path = AssayerStateMachine.findPathTo(from, targetStatus) as AssayerLifecycleStatus[] | null;
         if (path === null) {
           skipped.push({
             id,
-            current: assayer.lifecycleStatus,
-            reason: `No valid path from ${assayer.lifecycleStatus} to ${targetStatus}`,
+            current: from,
+            reason: `No valid path from ${from} to ${targetStatus}`,
           });
           continue;
         }
-        const from = assayer.lifecycleStatus;
+
+        /**
+         * The whole plan, held against the rules, before any of it is carried out. A blocker
+         * here is a refusal of the WALK, and the record is untouched — so it is a skip.
+         */
+        const blocker = await this.lifecycleWalkBlocker(assayer, from, path, targetStatus, reason);
+        if (blocker) {
+          skipped.push({ id, current: from, reason: blocker });
+          continue;
+        }
+
         for (const step of path) {
-          const { saved, event } = await this.doTransitionLifecycle(id, step as AssayerLifecycleStatus, userId, reason);
-          if (event) this.eventPublisher.publish(event.constructor.name, event);
+          const { saved, event } = await this.doTransitionLifecycle(id, step, userId, reason);
+          // Recorded BEFORE the publish: past this line the hop's transaction has committed, and
+          // a subscriber that throws must not be able to make a committed hop look untaken.
+          completed.push(step);
+          if (event) {
+            try {
+              this.eventPublisher.publish(event.constructor.name, event);
+            } catch (err) {
+              this.logger.error(
+                `Bulk lifecycle: ${step} committed for ${id} but publishing `
+                + `${event.constructor.name} failed: ${(err as Error).message}`,
+              );
+            }
+          }
           void saved;
         }
-        succeeded.push({ id, from, to: targetStatus });
+        succeeded.push({ id, from, to: targetStatus, via: path });
       } catch (e) {
-        failed.push({ id, reason: (e as Error).message });
+        const message = (e as Error).message;
+
+        /**
+         * WHICH BUCKET, decided by the database rather than by our own bookkeeping.
+         *
+         * `completed` is what this loop believes it committed, and it is very probably right —
+         * but "the response must not say failed for a record that moved" is a claim about the
+         * database, so the database is what gets asked. `reachedState` reads the row directly,
+         * archived rows included (`findOne` filters `is_active`, and ARCHIVED clears it, so the
+         * ordinary reader cannot see the very row a walk to ARCHIVED just wrote).
+         *
+         * If the read itself fails we fall back to `completed`, and a walk that committed
+         * nothing and cannot be re-read is the only case that still reports `failed` without
+         * having confirmed the state — which is also the case where the record was never
+         * loadable in the first place.
+         */
+        const reached = await this.reachedState(id).catch(() => undefined);
+        const landed = reached ?? (completed.length > 0 ? completed[completed.length - 1] : undefined);
+        const moved = from !== undefined && landed !== undefined && landed !== from;
+
+        /**
+         * Arrived anyway. `WorkflowEngine.executeCommand` runs `afterTransition` AFTER its
+         * transaction has committed, so the last hop of a walk can commit and still throw — and
+         * this loop, which pushes to `completed` only on a clean return, would call that
+         * `partial` while the person is standing exactly where the operator asked. The database
+         * decides: if they are at the target, the walk succeeded, and `via` reports the hops this
+         * loop is sure of rather than claiming the one it never saw return.
+         */
+        if (from !== undefined && landed === targetStatus) {
+          succeeded.push({ id, from, to: targetStatus, via: completed });
+          continue;
+        }
+
+        if (moved || completed.length > 0) {
+          const reachedState = landed ?? from!;
+          partial.push({
+            id,
+            from: from!,
+            reached: reachedState,
+            target: targetStatus,
+            via: completed,
+            reason: message,
+          });
+          await this.recordAbandonedWalk(id, from!, reachedState, targetStatus, userId, message);
+          continue;
+        }
+
+        failed.push({ id, reason: message });
       }
     }
 
-    return { succeeded, skipped, failed };
+    return { succeeded, partial, skipped, failed };
+  }
+
+  /**
+   * Why this walk cannot be taken at all, or null when every hop of it will be allowed.
+   *
+   * Only rules that are a property of the PLAN belong here — ones whose answer cannot change
+   * between this check and the last hop, so that a "yes" is not a promise this method had no
+   * right to make. The reason requirement and the identity gate qualify; a concurrent transition
+   * by another operator does not, which is why that one is still discovered mid-walk and reported
+   * as `partial`.
+   *
+   * Every rule below is ALSO enforced by `doTransitionLifecycle`, per hop, and that is the
+   * authority. This is a rehearsal of it, not a second copy of it: it reads the same
+   * `LIFECYCLE_MOVES_NEEDING_A_REASON` set and calls the same `identityStanding`, and its only
+   * job is to move the refusal from after hop one to before it. If the two ever disagree the
+   * funnel wins and the row lands in `partial` — which is the safe direction, because `partial`
+   * tells the truth about the outcome either way.
+   */
+  private async lifecycleWalkBlocker(
+    assayer: AssayerEntity,
+    from: string,
+    path: AssayerLifecycleStatus[],
+    targetStatus: string,
+    reason?: string,
+  ): Promise<string | null> {
+    const route = path.length > 1 ? ` (via ${[from, ...path].join(' → ')})` : '';
+
+    if (!reason?.trim()) {
+      const needsOne = path.find((hop) => AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(hop));
+      if (needsOne) {
+        return `${AssayerService.lifecycleReasonSentence(needsOne)}`
+          + ` Reaching ${targetStatus} from ${from} passes through ${needsOne}${route}, so the whole`
+          + ' move needs that sentence. Nothing was changed.';
+      }
+    }
+
+    /**
+     * The identity gate, asked about the ACTIVATION HOP rather than about the destination.
+     *
+     * `INVITED → ACTIVE` is the batch HR actually runs, and it is four hops. With the gate set to
+     * enforce and the documents unchecked, three of those hops committed and the fourth was
+     * refused — leaving a queue of people parked in TRAINING and a response that said they had
+     * failed. Asked here, the same batch is refused before it starts and everybody is still
+     * INVITED.
+     *
+     * Only when the gate is actually enforcing: under `warn` (the shipping default) and `off` the
+     * activation is not refused at all, so pre-empting it would refuse a walk the funnel would
+     * have allowed. A one-hop walk is left to the funnel too — it cannot be partial, and the
+     * funnel's refusal is the same refusal the single-transition route gives.
+     */
+    if (path.length > 1 && path.includes(AssayerLifecycleStatus.ACTIVE) && this.rosterRecords) {
+      const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
+      if (mode === 'enforce') {
+        const standing = await this.rosterRecords.identityStanding(assayer.id);
+        if (!standing.ok) {
+          const outstanding = [...standing.missing, ...standing.rejected]
+            .map((d) => ONBOARDING_DOCUMENT_LABELS[d]).join(' and ');
+          return `${assayer.displayName} cannot be activated yet: ${outstanding} `
+            + (standing.rejected.length > 0
+              ? 'was sent back and has not been replaced. '
+              : 'has not been checked against the original. ')
+            + `Reaching ${targetStatus} from ${from} passes through ACTIVE${route}, so the whole `
+            + 'move is refused. Nothing was changed.';
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * The sentence a reason-requiring move is refused with, in one place.
+   *
+   * Said by the funnel when a single transition arrives without one and by the walk rehearsal
+   * above when a batch would hit that hop three states from now. An operator who is told two
+   * different things about the same rule reasonably concludes there are two rules.
+   */
+  private static lifecycleReasonSentence(target: AssayerLifecycleStatus | string): string {
+    return `Say why this assayer is being moved to ${String(target).toLowerCase().replace(/_/g, ' ')}. `
+      + 'This goes on their employment record and is what the decision will be judged on later.';
+  }
+
+  /**
+   * The lifecycle state this id is actually in, archived rows included.
+   *
+   * Deliberately not `findOne`, which filters `isActive: true` — a walk whose last committed hop
+   * was ARCHIVED has cleared that flag, so the ordinary reader 404s on the very row we are trying
+   * to tell the truth about. Tenant-scoped by the same ambient filter every other read uses, so
+   * this cannot become a way to read across tenants.
+   */
+  private async reachedState(id: string): Promise<string | undefined> {
+    const row = await this.assayerRepository.findOne({
+      where: tenantWhere<AssayerEntity>({ id }),
+      select: { id: true, lifecycleStatus: true },
+    });
+    return row?.lifecycleStatus;
+  }
+
+  /**
+   * Put the abandonment itself on the record, not only the hops that landed.
+   *
+   * The hops are already audited one row each — that is what makes a partial walk auditable at
+   * all. What no row said was that somebody had asked for something else: the trail showed a
+   * person moved to DOCUMENT_VERIFICATION with no hint that the request had been "make them
+   * INACTIVE" and had stopped. Six months later, in a dispute, "why is this person half way
+   * through onboarding" needs an answer, and the answer is here.
+   *
+   * Best-effort on purpose. This runs after the hops have committed, outside their transactions;
+   * failing to write the note must not turn a truthfully-reported partial into a thrown error
+   * that aborts the remaining rows of the batch.
+   */
+  private async recordAbandonedWalk(
+    id: string,
+    from: string,
+    reached: string,
+    target: string,
+    userId: string,
+    why: string,
+  ): Promise<void> {
+    const remarks = `Bulk move to ${target} stopped part way: asked to go ${from} → ${target}, `
+      + `stopped at ${reached}. ${why}`;
+    await this.recordActivity(id, 'ASSAYER_LIFECYCLE_WALK_ABANDONED', from, reached, userId, remarks)
+      .catch((err) => this.logger.error(`Could not record the abandoned walk for ${id}: ${(err as Error).message}`));
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_LIFECYCLE_WALK_ABANDONED',
+      entityType: 'ASSAYER',
+      entityId: id,
+      previousState: from,
+      newState: reached,
+      userId,
+      remarks,
+    }).catch((err) => this.logger.error(`Could not audit the abandoned walk for ${id}: ${(err as Error).message}`));
   }
 
   /**
@@ -2743,10 +3019,7 @@ export class AssayerService implements OnModuleInit {
          * all pass through, and per hop.
          */
         if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
-          throw new BadRequestException(
-            `Say why this assayer is being moved to ${targetStatus.toLowerCase().replace(/_/g, ' ')}. `
-            + 'This goes on their employment record and is what the decision will be judged on later.',
-          );
+          throw new BadRequestException(AssayerService.lifecycleReasonSentence(targetStatus));
         }
 
         /**

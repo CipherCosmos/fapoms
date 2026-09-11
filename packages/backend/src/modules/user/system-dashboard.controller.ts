@@ -2,7 +2,7 @@ import { Controller, Get, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RoleOnly } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RoleOnly, AllowPermissionFallback } from '../auth/guards';
 import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -39,6 +39,21 @@ export class SystemDashboardController {
   // The one permission all six of those roles hold, and the right floor for a dashboard: the
   // payload is assembled per role, so this asks only whether the caller works the book at all.
   @RequirePermissions('project:view:organization')
+  /**
+   * …and a role built in Admin → Roles holding that permission gets in too.
+   *
+   * Without this the @Roles list above is a closed whitelist of names, which no database-defined
+   * role can ever match, so every custom role was 403'd here — while the web app's own routing
+   * table (`config/route-permissions.ts`) offered them `/dashboard` on the strength of exactly this
+   * permission. Measured: a custom role holding 15 grants including PROJECT:VIEW landed on
+   * `/dashboard` and got an empty shell that never filled.
+   *
+   * Safe by construction: RolesGuard's fallback reads permissions only from the caller's
+   * UNRECOGNISED roles, so no built-in role gains anything from this line, and the snapshot is
+   * still assembled per role below — a custom role sees the sections its names imply, which is
+   * none, so it gets the same floor a permission-only caller should get.
+   */
+  @AllowPermissionFallback()
   @ApiOperation({ summary: "Role-scoped operational snapshot: only the sections the caller's roles include" })
   async getOperations(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // Sections follow the caller's own roles rather than a query parameter, so the

@@ -386,7 +386,7 @@ describe('billing overview region scoping, reconciled against the real schema', 
 
     // An invoice's regions are the distinct, non-null regions of its lines. It is in scope when
     // there is at least one AND every one of them is held. (`billing_entries` is not filtered by
-    // is_active here, matching `invoiceRegions`/`findInvoicesPage`.)
+    // is_active here, matching `assertInvoiceInScope`/`findInvoicesPage`.)
     const linesOf = new Map<string, Array<string | null>>();
     for (const e of entryRows) {
       if (!e.invoice_id) continue;

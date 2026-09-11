@@ -16,6 +16,8 @@ import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Max, MaxLength
 
 import { JwtAuthGuard, PermissionsGuard, Roles, RolesGuard } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { AssayerRemarksService, RemarkActor } from './assayer-remarks.service';
 import {
   AssayerRemarkCategory,
@@ -55,7 +57,10 @@ class CreateAssayerRemarkRequestDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('assayer-remarks')
 export class AssayerRemarksController {
-  constructor(private readonly remarks: AssayerRemarksService) {}
+  constructor(
+    private readonly remarks: AssayerRemarksService,
+    private readonly regionGuard: RegionGuardService,
+  ) {}
 
   private actor(req: any): RemarkActor {
     const roleNames: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
@@ -67,13 +72,26 @@ export class AssayerRemarksController {
     };
   }
 
+  /**
+   * Both routes carry the assayer's own region ceiling, which `GET /assayers/:id` has always
+   * applied and these did not.
+   *
+   * A remark is a rated judgement about a named person that the planning engine scores from and
+   * the next operator reads before phoning them. Reading and writing one about somebody in a
+   * region this account is refused sight of is the same boundary as reading their record.
+   * Confirmed live: `cert_ops_east` (EAST) posted a rated remark about a WEST assayer, 201.
+   *
+   * `assertAssayerInScope` is the existing helper — this needed no new join, only the call.
+   */
   @Get('assayer/:assayerId')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Remarks about one assayer, newest first, with the summary the engine scores from' })
   async listForAssayer(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Query('limit') limit?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const parsed = Number(limit);
     const data = await this.remarks.listForAssayer(assayerId, Number.isFinite(parsed) && parsed > 0 ? parsed : 100);
     return { success: true, data };
@@ -83,7 +101,11 @@ export class AssayerRemarksController {
   @HttpCode(201)
   @Roles(...REMARK_WRITE_ROLES)
   @ApiOperation({ summary: 'Record a rated remark about an assayer' })
-  async create(@Body() dto: CreateAssayerRemarkRequestDto, @Req() req: any) {
+  async create(@Body() dto: CreateAssayerRemarkRequestDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(dto.assayerId, scope);
+    // The optional assignment a remark is hung off is region-anchored too, and it is
+    // caller-supplied: without this, an in-region remark could cite another region's job.
+    await this.regionGuard.assertAssignmentInScope(dto.assignmentId, scope);
     const remark = await this.remarks.create(
       {
         assayerId: dto.assayerId,
@@ -103,7 +125,15 @@ export class AssayerRemarksController {
   // caller is the author or a moderator and refuses otherwise.
   @Roles(...REMARK_WRITE_ROLES)
   @ApiOperation({ summary: 'Retract (author) or remove (moderator) a remark' })
-  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<void> {
+    // The author check the service performs is not the region ceiling: a MODERATOR passes it for
+    // every remark in the company, including ones about people in regions this account cannot
+    // see. Asserted here, before the service decides who may remove what.
+    await this.regionGuard.assertAssayerRemarkInScope(id, scope);
     await this.remarks.remove(id, this.actor(req));
   }
 }

@@ -85,6 +85,25 @@ export class OperationsSnapshotService {
    */
   private static readonly TERRITORIAL_SECTIONS = ['funnel', 'due', 'capacity', 'projects'];
 
+  /**
+   * What a caller whose role names this table does not know is shown.
+   *
+   * That used to be AUDITOR's set, and it was unreachable in practice — the route's `@Roles` list
+   * refused every unrecognised name before this service ran, so the branch was dead code written
+   * for safety. It stopped being dead the moment the route began honouring the permission fallback
+   * (`@AllowPermissionFallback()` on `getOperations`), and AUDITOR's set is the wrong thing to hand
+   * out: it includes `activity`, the national, org-wide audit-trail feed that the comment in
+   * `snapshot()` records as the site of a real cross-tenant leak. Inheriting a whole built-in
+   * role's view by failing to be recognised is precisely the escalation this system is supposed to
+   * refuse.
+   *
+   * So the fallback is now the two project-shaped sections and nothing else. They are exactly what
+   * the route's own `project:view:organization` names, both carry the caller's global scope, and
+   * neither is an audit trail or a money figure. A role built in Admin → Roles gets a dashboard
+   * with real content on it, and gets it because of what it was granted.
+   */
+  private static readonly UNRECOGNISED_ROLE_SECTIONS = ['funnel', 'projects'];
+
   async snapshot(roles: string[] = [], userId?: string, scope?: Partial<GlobalScope>): Promise<any> {
     // Union of every section the viewer's roles allow. A role with no entry here at all falls
     // back to the read-only set rather than being shown nothing. A role WITH an entry that is
@@ -102,7 +121,7 @@ export class OperationsSnapshotService {
       recognizedAnyRole = true;
       roleSections.forEach((s) => sections.add(s));
     }
-    if (!recognizedAnyRole) OperationsSnapshotService.ROLE_SECTIONS.AUDITOR.forEach((s) => sections.add(s));
+    if (!recognizedAnyRole) OperationsSnapshotService.UNRECOGNISED_ROLE_SECTIONS.forEach((s) => sections.add(s));
 
     const focus = roles.map((r) => OperationsSnapshotService.ROLE_FOCUS[r]).find(Boolean)
       ?? OperationsSnapshotService.ROLE_FOCUS.AUDITOR;

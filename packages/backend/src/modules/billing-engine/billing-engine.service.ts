@@ -2622,10 +2622,12 @@ export class BillingEngineService implements OnModuleInit {
   /**
    * One page of invoices, with a line count and the client's name, and never the lines.
    *
-   * An invoice can cover assignments in more than one region (see `invoiceRegions`), so the
-   * ceiling here mirrors the detail route's: a scoped caller sees an invoice only when NONE of
-   * its lines resolve to a region outside their assignment — a partially-in-scope invoice would
-   * otherwise be visible on the list but 403 when opened.
+   * An invoice can cover assignments in more than one region (see the region guard's
+   * `assertInvoiceInScope`, which both this list and the detail route now share), so the ceiling
+   * here mirrors the detail route's: a scoped caller sees an invoice only when NONE of its lines
+   * resolve to a region outside their assignment — a partially-in-scope invoice would otherwise
+   * be visible on the list but 403 when opened. Both honour `security.regionScope.mode`, so that
+   * pairing holds in Log and Off mode too.
    */
   async findInvoicesPage(
     filters: { clientId?: string; projectId?: string; status?: InvoiceStatus; page?: number | string; limit?: number | string } = {},
@@ -2703,7 +2705,7 @@ export class BillingEngineService implements OnModuleInit {
   async getInvoice(invoiceId: string, scope?: Partial<GlobalScope>): Promise<any> {
     const invoice = await this.invoiceRepository.findOne({ where: { id: invoiceId }, relations: ['entries', 'payments'] });
     if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
-    await this.assertInvoiceRegionAllowed(invoiceId, scope, 'billing-engine:invoice');
+    await this.regionGuard.assertInvoiceInScope(invoiceId, scope, 'billing-engine:invoice');
     const [entries, clientRows] = await Promise.all([
       this.attachEntryNames(invoice.entries ?? []),
       this.invoiceRepository.manager.query(`SELECT name FROM clients WHERE id = $1`, [invoice.clientId]),
@@ -2731,7 +2733,7 @@ export class BillingEngineService implements OnModuleInit {
   async getInvoiceDocument(invoiceId: string, scope?: Partial<GlobalScope>): Promise<any> {
     const invoice = await this.invoiceRepository.findOne({ where: { id: invoiceId }, relations: ['entries'] });
     if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
-    await this.assertInvoiceRegionAllowed(invoiceId, scope, 'billing-engine:invoice-document');
+    await this.regionGuard.assertInvoiceInScope(invoiceId, scope, 'billing-engine:invoice-document');
 
     const [lines, clientRows, seller] = await Promise.all([
       this.attachEntryNames(invoice.entries ?? []),
@@ -3643,41 +3645,6 @@ export class BillingEngineService implements OnModuleInit {
       [projectBranchId],
     );
     return rows?.[0]?.region ?? null;
-  }
-
-  /**
-   * The distinct, non-null regions touched by an invoice's lines.
-   *
-   * An invoice is a set of assignments for one client (`createInvoice`'s `assignmentIds`), and
-   * nothing stops that set spanning more than one region — a client's audit project can cover
-   * branches in different states. So this returns every region the invoice's lines resolve to,
-   * not one: `assertInvoiceRegionAllowed` below refuses if ANY of them is outside the caller's
-   * assignment, matching the "may this request read this record" ceiling the single-region
-   * helpers apply, just extended to a row that can legitimately span more than one.
-   */
-  private async invoiceRegions(invoiceId: string): Promise<string[]> {
-    const rows = await this.invoiceRepository.manager.query(
-      `SELECT DISTINCT b.region
-         FROM billing_entries e
-         JOIN assignments a ON a.id = e.assignment_id
-         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
-         LEFT JOIN branches b ON b.id = pb.branch_id
-        WHERE e.invoice_id = $1 AND b.region IS NOT NULL`,
-      [invoiceId],
-    );
-    return rows.map((r: any) => r.region as string);
-  }
-
-  /**
-   * The staged ceiling for one invoice. Only queries at all when the caller actually holds a
-   * region restriction — an unrestricted (national) caller never pays for the resolution.
-   */
-  private async assertInvoiceRegionAllowed(invoiceId: string, scope: Partial<GlobalScope> | undefined, context: string): Promise<void> {
-    if (!scope?.regions?.length) return;
-    const regions = await this.invoiceRegions(invoiceId);
-    for (const region of regions.length ? regions : [null]) {
-      await this.regionGuard.assertRegionAllowedStaged(region, scope, context);
-    }
   }
 
   private seq(): string {

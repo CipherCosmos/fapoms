@@ -5,6 +5,8 @@ import { DeskEscalationService } from './desk-escalation.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ValidationStatus } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString, IsArray } from 'class-validator';
 
@@ -53,6 +55,21 @@ class BulkTransitionValidationCaseDto {
   remarks?: string;
 }
 
+/**
+ * The desk's region ceiling.
+ *
+ * This controller had none — not on the list, not on the detail, not on any of the three
+ * transitions. A DESK account assigned to one region opened the validation board and worked the
+ * whole country's packets. Confirmed live before this change: `cert_desk_east`
+ * (`users.regions = ['EAST']`) received 15 cases from `GET /validation` and **all 15** were
+ * Maharashtra branches; `POST /validation` registered a WEST project branch for validation, 201;
+ * and every case id it had just been shown was assignable and transitionable.
+ *
+ * Every case reaches a region the same way — `validation_cases.project_branch_id` →
+ * `project_branches.branch_id` → `branches.region` — so the list narrows through
+ * `applyBranchScope` and the by-id routes assert `assertValidationCaseInScope`, which is that
+ * join written once.
+ */
 @ApiTags('Validation')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -63,6 +80,7 @@ export class ValidationController {
   constructor(
     private readonly validationService: ValidationService,
     private readonly deskEscalation: DeskEscalationService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   @Post()
@@ -72,7 +90,14 @@ export class ValidationController {
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @RequirePermissions('validation:create:organization')
   @ApiOperation({ summary: 'Register a project branch for document validation' })
-  async create(@Body() dto: CreateValidationCaseRequestDto, @Req() req: any) {
+  async create(
+    @Body() dto: CreateValidationCaseRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // No case exists yet, so the ceiling is checked on the project branch the case will be about
+    // — the same shape `assignment.create` uses for the same reason.
+    await this.regionGuard.assertProjectBranchInScope(dto.projectBranchId, scope);
     const vCase = await this.validationService.create(dto, req.user.id);
     return {
       success: true,
@@ -86,6 +111,7 @@ export class ValidationController {
     @Req() req: any,
     @Query('page') page = 1,
     @Query('limit') limit = 50,
+    @GlobalScopeFilter() scope?: GlobalScope,
     @Query('projectBranchId') projectBranchId?: string,
     @Query('status') status?: ValidationStatus,
     // 'me' resolves to the caller — a validator's own queue without knowing their uuid.
@@ -97,7 +123,7 @@ export class ValidationController {
     const resolvedReviewer = reviewerId === 'me' ? req.user.id : reviewerId;
     const resolvedWorkedBy = workedBy === 'me' ? req.user.id : workedBy;
     const { validationCases, total } = await this.validationService.findAll(
-      Number(page), Number(limit), projectBranchId, status, resolvedReviewer, search, resolvedWorkedBy,
+      Number(page), Number(limit), projectBranchId, status, resolvedReviewer, search, resolvedWorkedBy, scope,
     );
     return {
       success: true,
@@ -147,13 +173,15 @@ export class ValidationController {
 
   @Get(':id/trail')
   @ApiOperation({ summary: 'Merged audit trail for a case and its branch packets' })
-  async trail(@Param('id', ParseUUIDPipe) id: string) {
+  async trail(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertValidationCaseInScope(id, scope);
     return { success: true, data: await this.validationService.trail(id) };
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get details for a validation case by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertValidationCaseInScope(id, scope);
     const vCase = await this.validationService.findOne(id);
     return {
       success: true,
@@ -172,7 +200,9 @@ export class ValidationController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignReviewerDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertValidationCaseInScope(id, scope);
     const vCase = await this.validationService.assign(id, dto.reviewerId, req.user.id);
     return {
       success: true,
@@ -187,7 +217,12 @@ export class ValidationController {
   async bulkTransition(
     @Body() dto: BulkTransitionValidationCaseDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Asked once about the whole batch, before any case moves — a bulk route is its single-id
+    // sibling with an extra loop, and refusing halfway through would leave the desk's queue in a
+    // state nobody asked for.
+    await this.regionGuard.assertValidationCasesInScope(dto.ids, scope);
     const result = await this.validationService.bulkTransition(dto.ids, dto.targetStatus, req.user.id, dto.remarks);
     return { success: true, data: result };
   }
@@ -203,7 +238,12 @@ export class ValidationController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: TransitionValidationCaseDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Authorisation before the state machine: a caller with no access to this case is told 403
+    // about access, not 400 about which transitions are legal from a status they should never
+    // have been told the case is in.
+    await this.regionGuard.assertValidationCaseInScope(id, scope);
     const vCase = await this.validationService.transition(id, dto.targetStatus, req.user.id, dto.remarks, dto.notes, dto.ocrResult);
     return {
       success: true,

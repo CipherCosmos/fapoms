@@ -50,7 +50,10 @@ describe('ReportJobsService', () => {
 
   describe('enqueue', () => {
     it('adds a NAMED job matching the processor handler', async () => {
-      await service.enqueueBilling({ clientId: 'c-1' }, 'user-1');
+      // `scope` is required on the payload rather than optional, like the sibling exports'.
+      // An optional field is one an enqueue site can forget, and the billing export is exactly
+      // the one that forgot it — the worker then ran unscoped and produced the national book.
+      await service.enqueueBilling({ clientId: 'c-1', scope: null }, 'user-1');
 
       expect(queue.add.mock.calls[0][0]).toBe(REPORT_JOB.BILLING);
       expect(queue.add.mock.calls[0][0]).toBeTruthy();

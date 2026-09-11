@@ -2,7 +2,7 @@ import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Re
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsUUID, IsDateString } from 'class-validator';
 import { SchedulingService, CreateScheduleDto } from './scheduling.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
@@ -119,6 +119,21 @@ export class SchedulingController {
   // per-client ceiling (see `global-scope.ts#resolveClientScope`), so this grant is deliberate.
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
   @RequirePermissions('scheduling:view:organization')
+  /**
+   * A role built in Admin → Roles and granted `scheduling:view` gets the calendar.
+   *
+   * This is the route whose refusal produced the worst screen in the product: `/scheduling`
+   * rendered the 403 as "0 active schedules · 0 unscheduled confirmed offers", an empty calendar
+   * and "No audits scheduled for this date" — five confident, wrong statements about what work
+   * exists (the rendering half of that is fixed in the web app's `queryClient.ts`). The web app
+   * offered the page on the strength of this exact permission while the route accepted only names.
+   *
+   * The permission IS the gate here and always was; the `@Roles` list adds no distinction this key
+   * cannot express — note that CLIENT_USER's ceiling is enforced by `findAll`'s
+   * `branchScopeWhere(scope)` on the data, not by the name on this line. A custom role is scoped by
+   * the same call.
+   */
+  @AllowPermissionFallback()
   @ApiOperation({ summary: 'List all active schedules' })
   async findAll(
     @Query('page', new ParsePagePipe()) page: number,

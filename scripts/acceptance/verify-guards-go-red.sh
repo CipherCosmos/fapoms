@@ -116,5 +116,12 @@ run_case G9-rejected-empanelment-reason \
   'if (false) {' \
   'empanelment-rejection-reversal'
 
+run_case G10-assayer-child-row-region \
+  packages/backend/src/modules/assayer/assayer.controller.ts \
+  'await this.regionGuard.assertAssayerDocumentInScope(id, scope);
+    const found = await this.rosterRecords.fileKey(id, Number(index));' \
+  'const found = await this.rosterRecords.fileKey(id, Number(index));' \
+  'write-region-parity|assayer-controller-region-scope'
+
 echo "=== final tree check (must be clean) ==="
 git status --short -- packages/backend/src | head -5 || true

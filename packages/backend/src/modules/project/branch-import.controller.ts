@@ -46,6 +46,8 @@ import { SystemRole } from '@fapoms/shared';
 import { ProjectService } from './project.service';
 import { ImportJobService } from '../import/import-job.service';
 import type { ImportScope } from '../import/import.contract';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
@@ -64,6 +66,7 @@ export class BranchImportController {
   constructor(
     private readonly projectService: ProjectService,
     private readonly importJobService: ImportJobService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   /**
@@ -88,11 +91,18 @@ export class BranchImportController {
     @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
+    @GlobalScopeFilter() globalScope?: GlobalScope,
   ) {
     // A submitted form with no file attached arrives as `undefined`; reading `.buffer` off it
     // threw a TypeError the operator saw as "Internal server error".
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
+
+    // The same ceiling the project-scoped upload applies, for the same reason — see the note
+    // there. This door creates branches too; it just does not link them to a project.
+    for (const region of await this.projectService.branchExcelRegions(file.buffer)) {
+      this.regionGuard.assertRegionSettable(region, globalScope);
     }
 
     // Parsed in the request either way, so an unreadable file — or the assayer roster uploaded to

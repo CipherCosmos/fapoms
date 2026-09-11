@@ -29,7 +29,7 @@ import { DayPlannerService } from './day-planner.service';
 import { PlanningJobsService } from './planning-jobs.service';
 import { OperationsPlanningService, PlanOverrideDto } from './operations-planning.service';
 import { CoveragePlanStatus } from './coverage-plan.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -155,6 +155,25 @@ class SimulateScenarioRequestDto {
 
 @ApiTags('Planning')
 @ApiBearerAuth()
+/**
+ * Reading the plan is a permission; changing it is still a name.
+ *
+ * Every route below that asks only for `planning:view:organization` carries
+ * `@AllowPermissionFallback()`, so a role built in Admin → Roles and granted planning:view reaches
+ * it. Without that the `@Roles` lists were closed whitelists of built-in names, and a custom role
+ * holding PLANNING:VIEW got a 403 from `/planning/command-center` while the web app's own routing
+ * table offered it `/executive-map` and `/planning` on the strength of that very grant — the page
+ * opened and could not fill itself.
+ *
+ * The `planning:create`, `planning:edit` and `planning:delete` routes deliberately do NOT carry it.
+ * Opening a screen and committing a coverage plan against real branches are different decisions,
+ * and this change is scoped to the first. A custom role granted a planning write today still meets
+ * the `@Roles` list; widening that is a product decision, not a parity repair, and the safe
+ * direction to leave it in is the one where nothing new can be written.
+ *
+ * The POST `…/jobs` routes are on the read side on purpose: they require only planning:view because
+ * they queue a computation and return a job id. They read the book; they do not change it.
+ */
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('planning')
 export class PlanningController {
@@ -198,6 +217,7 @@ export class PlanningController {
   @Get('projects/:projectId/coverage-plan')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Generate detailed coverage planning statistics, capacity analysis, and cluster plans' })
   async getProjectCoveragePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -231,6 +251,7 @@ export class PlanningController {
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Queue coverage plan generation; returns a job id to poll' })
   async queueProjectCoveragePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -321,6 +342,7 @@ export class PlanningController {
   @Get('projects/:projectId/candidates')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Retrieve candidates for all unassigned branches of a project' })
   async getProjectCandidates(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -343,6 +365,7 @@ export class PlanningController {
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Queue the project-wide candidates report; returns a job id to poll' })
   async queueProjectCandidates(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -394,6 +417,7 @@ export class PlanningController {
   @Get('command-center')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' })
   async commandCenter(@GlobalScopeFilter() scope: GlobalScope) {
     // Takes the whole global scope now — the map is the surface where an operator most expects
@@ -404,6 +428,7 @@ export class PlanningController {
   @Get('suggest-date')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Suggest the first workable audit date for a branch (skips Sundays, holidays, off Saturdays)' })
   async suggestAuditDate(
     @Query('branchId', ParseUUIDPipe) branchId: string,
@@ -416,6 +441,7 @@ export class PlanningController {
   @Get('recommendations')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch, for a given audit date' })
   async getRecommendations(
     /**
@@ -507,6 +533,7 @@ export class PlanningController {
   @Get('day-plans')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Generate day plans spanning several projects, so one assayer can cover nearby branches across engagements' })
   async getMultiProjectDayPlans(
     @Query('projectIds') projectIds: string,
@@ -558,6 +585,7 @@ export class PlanningController {
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Queue multi-project day plan generation; returns a job id to poll' })
   async queueMultiProjectDayPlans(
     @Query('projectIds') projectIds: string,
@@ -583,6 +611,7 @@ export class PlanningController {
   @Get('projects/:projectId/day-plans')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Generate multi-branch day plans grouping nearby branches for single assayer coverage' })
   async getDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -612,6 +641,7 @@ export class PlanningController {
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Queue day plan generation for one project; returns a job id to poll' })
   async queueDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -649,6 +679,7 @@ export class PlanningController {
   @Get('jobs/:jobId')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Poll a queued planning job for progress and, once done, its result' })
   async getPlanningJob(@Param('jobId') jobId: string, @Req() req: any) {
     return { success: true, data: await this.planningJobsService.status(jobId, req.user?.id) };

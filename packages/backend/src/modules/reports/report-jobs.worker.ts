@@ -58,9 +58,12 @@ export class ReportJobsWorker {
 
   @Process({ name: REPORT_JOB.BILLING, concurrency: ONE_AT_A_TIME })
   async billing(job: Job<BillingReportJobData>): Promise<ReportJobResult> {
-    const { clientId, projectId, assayerId, state } = job.data;
+    const { clientId, projectId, assayerId, state, scope } = job.data;
     return this.produce(job, `billing_${job.id}.xlsx`, (onProgress) =>
-      this.reportsService.billing({ clientId, projectId, assayerId, state }, onProgress),
+      // `scope ?? undefined`: a job enqueued before this field existed carries no `scope` key at
+      // all, and `undefined` is what `billing()` reads as "unrestricted" — the behaviour those
+      // in-flight jobs were enqueued expecting. New jobs always carry an explicit value.
+      this.reportsService.billing({ clientId, projectId, assayerId, state, scope: scope ?? undefined }, onProgress),
     );
   }
 

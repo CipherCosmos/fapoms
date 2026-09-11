@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConflictException, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BillingEngineService } from './billing-engine.service';
 import { BillingJobsService } from './billing-jobs.service';
@@ -224,7 +224,12 @@ describe('BillingEngineService', () => {
   // `stagedMode` and assert on `assertRegionAllowedStaged`'s calls directly.
   const stagedMode = jest.fn(async () => 'log' as 'off' | 'log' | 'enforce');
   const assertRegionAllowedStaged = jest.fn(async () => undefined);
-  const regionGuard = { stagedMode, assertRegionAllowedStaged };
+  // The invoice ceiling lives entirely in the guard (`assertInvoiceInScope`), which resolves the
+  // invoice's regions itself. This service's remaining job is to CALL it, under the right context
+  // label, before it returns anything — so it is stubbed and asserted on, exactly like
+  // `assertRegionAllowedStaged` above, rather than reimplemented here.
+  const assertInvoiceInScope = jest.fn(async () => undefined);
+  const regionGuard = { stagedMode, assertRegionAllowedStaged, assertInvoiceInScope };
   // Platform settings, keyed. Only `security.segregationOfDuties.mode` is exercised by name below
   // — every other key (billing.tdsSection, etc.) keeps resolving to `null`, same as before this
   // was made key-aware, so no unrelated test needs to know this map exists.
@@ -1362,12 +1367,16 @@ describe('BillingEngineService', () => {
   //
   // Billing rows carry no region of their own. Every one of them reaches a region through the
   // assignment → project_branch → branch chain, except an assayer, which carries its own
-  // `region` column directly. `RegionGuardService.assertRegionAllowedStaged` itself is mocked
-  // here (it is `RegionGuardService`'s own contract, not this service's) — what these tests
-  // cover is that BillingEngineService resolves the right region(s) and calls it correctly:
-  // never for an unrestricted caller, with every distinct region for a multi-region invoice,
-  // and — for the list routes — filtering the query only in `enforce` mode while `log`'s count
-  // comes from the page already fetched, with no second query.
+  // `region` column directly. The guard's own methods are mocked here (they are
+  // `RegionGuardService`'s contract, not this service's) — what these tests cover is that
+  // BillingEngineService resolves the right region(s) where that is still its job, and calls the
+  // guard correctly where it is not: never for an unrestricted caller, under the right context
+  // label per route, and — for the list routes — filtering the query only in `enforce` mode while
+  // `log`'s count comes from the page already fetched, with no second query.
+  //
+  // The two invoice READS are the exception: the invoice walk is the guard's
+  // `assertInvoiceInScope`, so what is asserted below is the delegation and the label, and the
+  // multi-region looping lives in `region-guard.service.spec.ts` where the rule now lives.
 
   describe('Region scoping (staged) — detail routes', () => {
     const restricted: Partial<GlobalScope> = { regions: ['NORTH'] as any };
@@ -1400,34 +1409,53 @@ describe('BillingEngineService', () => {
       expect(assertRegionAllowedStaged).not.toHaveBeenCalled();
     });
 
-    it('getInvoice loops the staged assert over every distinct region an invoice’s lines resolve to — a multi-branch invoice may span more than one', async () => {
+    it('getInvoice hands the invoice to the guard under its own context label', async () => {
       invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()], payments: [] }));
-      managerQuery.mockImplementation(async (sql: string) => {
-        if (sql.includes('DISTINCT b.region')) return [{ region: 'SOUTH' }, { region: 'NORTH' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ name: 'Client A' }];
-        return [];
-      });
+      managerQuery.mockImplementation(async (sql: string) => (sql.includes('FROM clients WHERE id') ? [{ name: 'Client A' }] : []));
       await service.getInvoice('invoice-1', restricted);
-      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', restricted, 'billing-engine:invoice');
-      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('NORTH', restricted, 'billing-engine:invoice');
+      expect(assertInvoiceInScope).toHaveBeenCalledWith('invoice-1', restricted, 'billing-engine:invoice');
     });
 
-    it('getInvoice skips the region-resolution query entirely for an unrestricted caller', async () => {
+    it('getInvoiceDocument uses its own context label, distinct from getInvoice', async () => {
+      // Two labels, not one, so a Log-mode line says which of the two reads nearly refused.
+      invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()] }));
+      managerQuery.mockImplementation(async (sql: string) => (sql.includes('FROM clients c') ? [{ name: 'Client A' }] : []));
+      await service.getInvoiceDocument('invoice-1', restricted);
+      expect(assertInvoiceInScope).toHaveBeenCalledWith('invoice-1', restricted, 'billing-engine:invoice-document');
+    });
+
+    it('passes an unrestricted scope straight through — the short-circuit is the guard’s, not a second copy of it', async () => {
+      // The service must not grow its own "is this caller restricted" test. That question is
+      // answered once, in `assertInvoiceInScope`, whose first line is the short-circuit.
       invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()], payments: [] }));
       await service.getInvoice('invoice-1', { regions: null });
-      expect(assertRegionAllowedStaged).not.toHaveBeenCalled();
+      expect(assertInvoiceInScope).toHaveBeenCalledWith('invoice-1', { regions: null }, 'billing-engine:invoice');
+    });
+
+    /**
+     * The regression guard for the duplication this pair of reads was built out of.
+     *
+     * `invoiceRegions` and `assertInvoiceRegionAllowed` were a private second copy of
+     * `RegionGuardService.assertInvoiceInScope` — the same four-table walk, on this service's own
+     * repository manager. They are gone. If either comes back, the walk shows up on `managerQuery`
+     * again and this goes red, naming the read that reintroduced it.
+     */
+    const BOTH_READS: Array<{ read: string; call: (scope: Partial<GlobalScope>) => Promise<unknown> }> = [
+      { read: 'getInvoice', call: (scope) => service.getInvoice('invoice-1', scope) },
+      { read: 'getInvoiceDocument', call: (scope) => service.getInvoiceDocument('invoice-1', scope) },
+    ];
+
+    it.each(BOTH_READS)('$read resolves no invoice region itself — the rule has exactly one home', async ({ call }) => {
+      invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()], payments: [] }));
+      managerQuery.mockImplementation(async () => []);
+      await call(restricted);
       expect(managerQuery.mock.calls.some(([sql]) => sql.includes('DISTINCT b.region'))).toBe(false);
     });
 
-    it('getInvoiceDocument asserts under its own context label, distinct from getInvoice', async () => {
-      invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()] }));
-      managerQuery.mockImplementation(async (sql: string) => {
-        if (sql.includes('DISTINCT b.region')) return [{ region: 'SOUTH' }];
-        if (sql.includes('FROM clients c')) return [{ name: 'Client A' }];
-        return [];
-      });
-      await service.getInvoiceDocument('invoice-1', restricted);
-      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', restricted, 'billing-engine:invoice-document');
+    it.each(BOTH_READS)('$read returns nothing when the guard refuses — the refusal is not swallowed', async ({ call }) => {
+      invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()], payments: [] }));
+      assertInvoiceInScope.mockImplementationOnce(async () => { throw new ForbiddenException('nope'); });
+      await expect(call(restricted)).rejects.toThrow(ForbiddenException);
     });
   });
 

@@ -26,7 +26,7 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
 import { OperationalIntegrityService } from './operational-integrity.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, MaxLength } from 'class-validator';
 
@@ -394,6 +394,21 @@ export class AssignmentController {
   // The whole assignment book — staff only. Assayers reach their own work via
   // GET /assignments/assayer/:id.
   @Roles(...STAFF_ROLES)
+  /**
+   * …and a role built in Admin → Roles granted `assignment:view`.
+   *
+   * `@RolesFallbackPermissions` rather than `@RequirePermissions`, because this route declares no
+   * permission of its own and must not start requiring one: `PermissionsGuard` enforces
+   * `@RequirePermissions` on EVERY caller, and PRODUCT_SUPPORT — on STAFF_ROLES above — holds no
+   * grants at all, so adding one here would refuse a role that reads this list today. This
+   * decorator is read only inside RolesGuard's fallback branch, which never runs for a caller
+   * already matched by name, so the six roles above are untouched.
+   *
+   * Why it matters: this is the unscheduled-offer queue on `/scheduling`. Without it, no custom
+   * role however granted could ever load it, and the panel drew "No unscheduled confirmed offers"
+   * over a refusal.
+   */
+  @RolesFallbackPermissions('assignment:view:organization')
   @Get()
   @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, or priority' })
   async findAll(

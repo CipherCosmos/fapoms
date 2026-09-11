@@ -49,9 +49,25 @@ const AUTHORIZATION_CALLS = [
   'assertAssayerInScope', 'assertAssignmentInScope', 'assertProjectInScope', 'assertBranchInScope',
   'assertProjectBranchInScope', 'assertScheduleInScope', 'assertProjectsInScope',
   'assertCoveragePlanInScope', 'assertRegionAllowed', 'assertRegionAllowedStaged',
+  // The guards added on 2026-09-10 for the routes keyed on a CHILD row, plus the one that checks
+  // the region a write is SETTING rather than the one it is replacing. Listed here for the same
+  // reason as their siblings above: a method that returns before calling one of these is a method
+  // that can answer before it has decided whether the caller may be answered, and this file's
+  // whole subject is that ordering.
+  'assertRegionSettable', 'assertBranchContactInScope', 'assertBranchDocumentInScope',
+  'assertPayableInScope', 'assertPayablesInScope', 'assertBillingEntryInScope',
+  'assertAssignmentsInScope', 'assertInvoiceInScope', 'assertPaymentInScope',
+  'assertValidationCaseInScope', 'assertValidationCasesInScope', 'assertAssayerRemarkInScope',
+  'assertAssayerInvoiceInScope', 'assertCommercialProfileInScope', 'assertAssayerDocumentInScope',
+  'assertEmpanelmentInScope',
+  // The four added on 2026-09-11 when the assayer workstream closed its sixteen child-row
+  // routes and found four more child tables keyed the same way. Same standing as the three
+  // above them.
+  'assertWorkforceAttributeInScope', 'assertScoreOverrideInScope', 'assertAssayerReferenceInScope',
+  'assertImportIssueInScope', 'assertImportIssuesInScope',
   'assertOwnedAssayer', 'assertTenantOwns', 'assertAssayerInTenant', 'assertSelfOrPrivileged',
   'assertAssayerMayDownload', 'assertJobVisibleTo', 'assertClientAllowed',
-  'assertSegregationOfDuties', 'assertAssayerAssignedToBranch', 'assertInvoiceRegionAllowed',
+  'assertSegregationOfDuties', 'assertAssayerAssignedToBranch',
   'assertDocumentRegion', 'assertMaySubmitReturnFor', 'assertAssayerOwnsQuery',
   'assertCanOverrideEmpanelment', 'assertMayOverride', 'assertAudienceAllowed',
   'requireOrganizationId',
@@ -94,12 +110,58 @@ const REVIEWED: Record<string, string> = {
     'unrestricted caller, or no plan named — the plan project is never resolved',
   'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertScheduleInScope':
     'unrestricted caller, or no schedule named — the schedule branch is never resolved',
+  // ── The guards added on 2026-09-10 to close the read/write asymmetry. Every one of them has
+  //    the identical first line as the ten above — `if (!id || !scope?.regions?.length) return;`
+  //    — and it is that line, not an oversight, that answers "this account holds every region".
+  //    They exist because the routes keyed on a CHILD row (a branch contact, a payable, a client
+  //    line, a validation case, an assayer's commercial profile) had no guard to call, so their
+  //    authors wrote none.
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertRegionSettable':
+    'unrestricted caller, or a target region that does not resolve — a null region is a data gap, the same one assertRegionAllowed lets through on the read side',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertBranchContactInScope':
+    'unrestricted caller, or no contact named — the contact row is never loaded',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertBranchDocumentInScope':
+    'unrestricted caller, or no document named — the document row is never loaded',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertPayableInScope':
+    'unrestricted caller, or no payout named — the payable is never resolved to a branch',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertPayablesInScope':
+    'unrestricted caller, or an empty id list — nothing is resolved and nothing is refused',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertBillingEntryInScope':
+    'unrestricted caller, or no client line named — the entry is never resolved to a branch',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertAssignmentsInScope':
+    'unrestricted caller, or an empty id list — nothing is resolved and nothing is refused',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertInvoiceInScope':
+    'unrestricted caller, or no invoice named — the invoice lines are never resolved',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertPaymentInScope':
+    'unrestricted caller, no payment named, or a payment row that does not exist — a payment settling nothing has no region to inherit and nothing has been disclosed',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertAssayerRemarkInScope':
+    'unrestricted caller, or no remark named — the remark is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertAssayerInvoiceInScope':
+    'unrestricted caller, or no assayer invoice named — the invoice is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertValidationCaseInScope':
+    'unrestricted caller, or no case named — the case is never resolved to a branch',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertValidationCasesInScope':
+    'unrestricted caller, or an empty id list — nothing is resolved and nothing is refused',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertCommercialProfileInScope':
+    'unrestricted caller, or no profile named — the profile is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertAssayerDocumentInScope':
+    'unrestricted caller, or no document named — the document is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertEmpanelmentInScope':
+    'unrestricted caller, or no empanelment named — the row is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertWorkforceAttributeInScope':
+    'unrestricted caller, or no attribute named — the row is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertScoreOverrideInScope':
+    'unrestricted caller, or no override named — the row is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertAssayerReferenceInScope':
+    'unrestricted caller, or no reference named — the row is never resolved to an assayer',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertImportIssueInScope':
+    'unrestricted caller, or no issue named — the row is never resolved; an issue that names no assayer is separately let through by assertRegionAllowed, which is the rule listIssues already applies on the read side',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertImportIssuesInScope':
+    'unrestricted caller, or an empty id list — nothing is resolved and nothing is refused',
   'modules/assayer/assayer.service.ts :: AssayerService.assertAssayerInTenant':
     'no tenant filter in force — single-organization deployments have nothing to compare against',
   'modules/assayer/roster-records.service.ts :: RosterRecordsService.assertOwnedAssayer':
     'no tenant filter in force',
-  'modules/billing-engine/billing-engine.service.ts :: BillingEngineService.assertInvoiceRegionAllowed':
-    'unrestricted caller — the invoice regions are not even resolved',
   'modules/document/document.controller.ts :: DocumentController.assertDocumentRegion':
     'the document does not exist; the caller gets the same nothing either way',
   'modules/validation-query/validation-query.controller.ts :: ValidationQueryController.assertAssayerOwnsQuery':

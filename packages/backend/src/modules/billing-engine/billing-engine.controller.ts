@@ -13,7 +13,7 @@ import { AssayerInvoiceService } from './assayer-invoice.service';
 import { BillingJobsService } from './billing-jobs.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
 import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from './billing-roles';
 import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus, AssayerInvoiceStatus } from '@fapoms/shared';
 
@@ -148,6 +148,18 @@ class SubmitInvoiceInvitationDto {
  * staff; approving, paying and holding payouts for finance and administrators only — money
  * leaving the business has one gate. The two `invoice-invitation` routes are the sole
  * assayer-facing writes: an assayer reviews and submits their OWN invitation, nothing else.
+ *
+ * ## Reading the book is a permission
+ *
+ * Every route gated on `BILLING_READ_ROLES` + `billing:view:organization` carries
+ * `@AllowPermissionFallback()`, so a role built in Admin → Roles and granted billing:view can read
+ * the book. Before that the `@Roles` list was a closed set of built-in names: a custom role holding
+ * BILLING:VIEW:PLATFORM opened `/billing` — the web app's own table admits it on exactly that grant
+ * — and got full page chrome with no data and nothing on screen saying why.
+ *
+ * Nothing on the money-out side moves. `billing:create`, `billing:edit` and `billing:approve` keep
+ * their name gates, so booking a line, editing an invoice, and approving or paying a payout remain
+ * what this file's own heading says they are: one gate for money leaving the business.
  */
 @ApiTags('Billing')
 @ApiBearerAuth()
@@ -178,6 +190,7 @@ export class BillingEngineController {
   @Get('overview')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'The finance overview: payouts, receivables, margin, tax, cash, attention, by client' })
   async overview(@GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.overview(scope) };
@@ -188,6 +201,7 @@ export class BillingEngineController {
   @Get('payouts')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'Assayer payouts (fee and reimbursement payables) with labels, paged' })
   async payouts(@Query() q: PayoutsQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return {
@@ -203,11 +217,34 @@ export class BillingEngineController {
     };
   }
 
+  /**
+   * The money routes below all carry the ceiling `GET /billing-engine/payouts` already applies.
+   *
+   * `listPayouts`, `listClientLines`, `findInvoicesPage`, `listInvoiceable`, `assignmentMoneyLine`
+   * and `overview` are every one of them region-narrowed — 14 of the 15 reads on this controller
+   * were, and the write half was not: 10 of 13 writes took no `@GlobalScopeFilter()` at all, so
+   * an EAST-assigned account that is shown an empty book could still act on all of it. Confirmed
+   * live before this change, all as `cert_ops_east` (`users.regions = ['EAST']`) against WEST
+   * rows it is refused sight of: `payouts/approve` returned 201 and moved a ₹2,250 payable from
+   * PENDING to APPROVED, `payouts/:id/hold` stopped a payment run, `payouts/bank-file` handed
+   * back a beneficiary's account number and IFSC, `assignments/:id/client-line` booked a −₹100
+   * adjustment, and `invoices` minted an invoice for the work.
+   *
+   * The ids are all child-row ids — a payable, a client line, a payment — which is why these
+   * routes had nothing to call: the ceiling's helpers all took a branch, project-branch or
+   * assignment id. `assertPayableInScope`, `assertPayablesInScope`, `assertInvoiceInScope` and
+   * `assertPaymentInScope` are those missing joins, written once in `region-guard.service.ts`.
+   *
+   * Batch routes ask about the WHOLE list before touching any of it. A per-id check inside the
+   * payment loop would approve the in-region payables and then throw, which is a half-run
+   * payment batch — a worse outcome than either allowing or refusing the request.
+   */
   @Post('payouts/approve')
   @Roles(...DISBURSEMENT_ROLES)
   @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Approve payouts (the one gate before payment)' })
-  async approvePayouts(@Body() dto: PayoutIdsDto, @Req() req: any) {
+  async approvePayouts(@Body() dto: PayoutIdsDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertPayablesInScope(dto.payableIds, scope);
     return { success: true, data: await this.service.approvePayouts(dto.payableIds, this.userId(req)) };
   }
 
@@ -215,8 +252,9 @@ export class BillingEngineController {
   @Roles(...DISBURSEMENT_ROLES)
   @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Pay approved payouts in full, each as a recorded disbursement' })
-  async payPayouts(@Body() dto: PayPayoutsDto, @Req() req: any) {
+  async payPayouts(@Body() dto: PayPayoutsDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     const { payableIds, ...payment } = dto;
+    await this.regionGuard.assertPayablesInScope(payableIds, scope);
     return { success: true, data: await this.service.payPayouts(payableIds, payment, this.userId(req)) };
   }
 
@@ -225,13 +263,15 @@ export class BillingEngineController {
   @RequirePermissions('billing:approve:organization')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Bank details (beneficiary, account, IFSC, net amount) for the selected approved-unpaid payouts, for the NEFT bank file' })
-  async payoutBankFile(@Body() dto: PayoutIdsDto, @Req() req: any) {
+  async payoutBankFile(@Body() dto: PayoutIdsDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertPayablesInScope(dto.payableIds, scope);
     return { success: true, data: await this.service.payoutBankDetails(dto.payableIds, this.userId(req)) };
   }
 
   @Get('tds-report')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'PAN-wise TDS withheld from assayers over a period, for TDS substantiation' })
   async tdsReport(@Query() q: TdsReportQuery, @Req() req: any) {
     /**
@@ -259,7 +299,13 @@ export class BillingEngineController {
   // sends money that was stopped. It sits with approve/pay/bank-file, not with `billing:edit`.
   @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Put a payout on hold, or release it' })
-  async holdPayout(@Param('id', ParseUUIDPipe) id: string, @Body() dto: HoldDto, @Req() req: any) {
+  async holdPayout(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: HoldDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertPayableInScope(id, scope);
     return { success: true, data: await this.service.holdPayout(id, dto.onHold, dto.reason, this.userId(req)) };
   }
 
@@ -340,6 +386,7 @@ export class BillingEngineController {
   @Get('assayer-invoices')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'Assayer invoices with labels, paged' })
   async listAssayerInvoices(@Query() q: AssayerInvoicesQuery) {
     return { success: true, data: await this.assayerInvoices.list(q) };
@@ -348,8 +395,14 @@ export class BillingEngineController {
   @Get('assayer-invoices/:id')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'One assayer invoice with its lines' })
-  async assayerInvoice(@Param('id', ParseUUIDPipe) id: string) {
+  async assayerInvoice(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    // An assayer invoice is anchored on the assayer's own region, like the invitation routes
+    // below it (`assertAssayerInScope`). This read and the two writes under it were the three
+    // routes on the assayer-invoice group that carried no ceiling at all, while the invite and
+    // both invitation routes did — an inconsistency inside one feature rather than between two.
+    await this.regionGuard.assertAssayerInvoiceInScope(id, scope);
     return { success: true, data: await this.assayerInvoices.getById(id) };
   }
 
@@ -357,7 +410,8 @@ export class BillingEngineController {
   @Roles(...DISBURSEMENT_ROLES)
   @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Approve a submitted assayer invoice — approves every line payable in the same transaction' })
-  async approveAssayerInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async approveAssayerInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInvoiceInScope(id, scope);
     return { success: true, data: await this.assayerInvoices.approve(id, this.userId(req)) };
   }
 
@@ -365,7 +419,13 @@ export class BillingEngineController {
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:edit:organization')
   @ApiOperation({ summary: 'Cancel an invited/submitted assayer invoice; its lines return to the eligible pool' })
-  async cancelAssayerInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
+  async cancelAssayerInvoice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReasonDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInvoiceInScope(id, scope);
     return { success: true, data: await this.assayerInvoices.cancel(id, this.userId(req), dto.reason) };
   }
 
@@ -413,6 +473,7 @@ export class BillingEngineController {
   @Get('invoiceable')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'Completed work not yet invoiced, grouped by client' })
   async invoiceable(@Query() q: InvoiceableQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.listInvoiceable({ clientId: q.clientId }, scope) };
@@ -422,13 +483,19 @@ export class BillingEngineController {
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:create:organization')
   @ApiOperation({ summary: 'Invoice a set of completed assignments for one client' })
-  async createInvoice(@Body() dto: CreateInvoiceDto, @Req() req: any) {
+  async createInvoice(@Body() dto: CreateInvoiceDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    // Asserted on the ASSIGNMENTS, because there is no invoice yet — the same reasoning as
+    // `assignment.create` asserting on the project branch. `listInvoiceable`, the read that feeds
+    // this screen, is region-narrowed; without this, an operator shown nothing to invoice could
+    // still invoice it by passing the ids.
+    await this.regionGuard.assertAssignmentsInScope(dto.assignmentIds, scope);
     return { success: true, data: await this.service.createInvoice(dto, this.userId(req)) };
   }
 
   @Get('invoices')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'Invoices, paged' })
   async invoices(@Query() q: InvoicesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.findInvoicesPage(q, scope) };
@@ -437,6 +504,7 @@ export class BillingEngineController {
   @Get('invoices/:id')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'One invoice with its lines and payments' })
   async invoice(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.getInvoice(id, scope) };
@@ -445,6 +513,7 @@ export class BillingEngineController {
   @Get('invoices/:id/document')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'The GST tax invoice document: both GSTINs, place of supply, CGST/SGST or IGST split, amount in words' })
   async invoiceDocument(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.getInvoiceDocument(id, scope) };
@@ -454,7 +523,8 @@ export class BillingEngineController {
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:edit:organization')
   @ApiOperation({ summary: 'Mark an invoice as sent to the client' })
-  async sendInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async sendInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertInvoiceInScope(id, scope);
     return { success: true, data: await this.service.sendInvoice(id, this.userId(req)) };
   }
 
@@ -462,7 +532,13 @@ export class BillingEngineController {
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:create:organization')
   @ApiOperation({ summary: 'Record money received against a sent invoice' })
-  async recordPayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: InvoicePaymentDto, @Req() req: any) {
+  async recordPayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: InvoicePaymentDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertInvoiceInScope(id, scope);
     return { success: true, data: await this.service.recordPayment({ ...dto, invoiceId: id }, this.userId(req)) };
   }
 
@@ -470,7 +546,13 @@ export class BillingEngineController {
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:edit:organization')
   @ApiOperation({ summary: 'Cancel an unpaid invoice; its lines become invoiceable again' })
-  async cancelInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
+  async cancelInvoice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReasonDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertInvoiceInScope(id, scope);
     return { success: true, data: await this.service.cancelInvoice(id, dto.reason, this.userId(req)) };
   }
 
@@ -480,7 +562,15 @@ export class BillingEngineController {
   // than with `billing:edit`, which is where invoice corrections live.
   @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Reverse a recorded payment (either direction)' })
-  async reversePayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
+  async reversePayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReasonDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // A payment has no region of its own — it takes the one belonging to whatever it settles,
+    // exactly as `paymentInRegion` does for the overview totals.
+    await this.regionGuard.assertPaymentInScope(id, scope);
     return { success: true, data: await this.service.reversePayment(id, dto.reason, this.userId(req)) };
   }
 
@@ -489,6 +579,7 @@ export class BillingEngineController {
   @Get('assignments/:id/money')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'Everything money-related about one assignment' })
   async assignmentMoney(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.assignmentMoneyLine(id, scope) };
@@ -498,7 +589,16 @@ export class BillingEngineController {
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:edit:organization')
   @ApiOperation({ summary: 'Adjust or hold the client line for an assignment (before invoicing)' })
-  async editClientLine(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ClientLineDto, @Req() req: any) {
+  async editClientLine(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ClientLineDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Keyed on the ASSIGNMENT id, like its read sibling `GET /assignments/:id/money` — which
+    // takes the scope and this one did not, so the same account was refused reading the figures
+    // it could still adjust.
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     return { success: true, data: await this.service.editClientLine(id, dto, this.userId(req)) };
   }
 
@@ -513,6 +613,7 @@ export class BillingEngineController {
   @Get('lines')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: the read gate is billing:view
   @ApiOperation({ summary: 'Client lines with labels, paged' })
   async lines(@Query() q: LinesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.listClientLines(q, scope, true) };

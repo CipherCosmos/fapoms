@@ -1454,7 +1454,13 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { resolution: string },
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Keyed on the ISSUE, so the guard walks issue → assayer rather than reading a path segment:
+    // `:id` here is the queue row, and the assayer it concerns is a nullable column on it. The
+    // read half (`listIssues`) has been scoped by that same join since it was written; closing a
+    // row is the write half of the queue this desk can see, and it was open to anybody.
+    await this.regionGuard.assertImportIssueInScope(id, scope);
     const data = await this.rosterRecords.resolveIssue(id, body?.resolution, req.user.id);
     return { success: true, data };
   }
@@ -1475,7 +1481,18 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Close several import issues at once, with a per-id outcome for each' })
-  async resolveImportIssues(@Body() dto: BatchResolveImportIssuesDto, @Req() req: any) {
+  async resolveImportIssues(
+    @Body() dto: BatchResolveImportIssuesDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Asked once for the whole list, before any row is closed — not per id inside the loop. The
+    // per-id outcome shape below exists for ids that are unknown or already closed; letting a
+    // cross-region refusal take that shape too would report "somebody else got there first"
+    // about a row the caller was never allowed to touch, and would close this region's half of
+    // the group while silently skipping the other. Guarding only the singular route would have
+    // left this one as the way around it.
+    await this.regionGuard.assertImportIssuesInScope(dto.ids, scope);
     const data = await this.rosterRecords.resolveIssues(dto.ids, dto.resolution, req.user.id);
     return { success: true, data };
   }
@@ -1790,7 +1807,14 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateLiveLocationDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Before the self-or-staff test below, not after: this is the route where "staff may set it
+    // for anyone" is literally true, so a region-assigned desk could pin another territory's
+    // appraiser onto a map coordinate of its choosing — and the base coordinate is what planning
+    // measures distance and travel cost from. An ASSAYER principal carries no regions, so this
+    // costs their own device nothing.
+    await this.regionGuard.assertAssayerInScope(id, scope);
     const isStaff = isStaffAssayerEditor(req.user);
     if (!isStaff && req.user?.id !== id) {
       throw withCode(
@@ -1811,7 +1835,15 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateLiveLocationDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // A no-op for the caller this route actually has. The principal here is the assayer's own
+    // handset, and an ASSAYER token carries no `regions`, so the assertion returns on its first
+    // line; the self-only check immediately below is and remains the gate that refuses one field
+    // user writing another's position. This is here so the route cannot become the exception if
+    // the `@Roles` list ever makes good on ADMIN/OPERATIONS — they are declared and currently
+    // refused by that same check.
+    await this.regionGuard.assertAssayerInScope(id, scope);
     if (req.user?.id !== id) {
       throw withCode(
         new ForbiddenException('You may only update your own live location'),
@@ -1865,7 +1897,14 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UploadLocationPingsDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Above the ownership test, and not instead of it. `assertSelfOrPrivileged` lets a
+    // privileged staff account write anybody's trail, which is deliberate — corrections have to
+    // be possible and `createdBy` records who made them — but that authority was national. The
+    // trail is what a travel claim is paid against, so writing into another region's is writing
+    // into their evidence. An ASSAYER principal holds no regions and is unaffected.
+    await this.regionGuard.assertAssayerInScope(id, scope);
     // An assayer may only write their own trail: a movement record another field user can write
     // into is not evidence of anything. HR/admin retain access for attributed corrections, and
     // `createdBy` on each row records who actually submitted it.
@@ -1885,7 +1924,12 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateLiveTrackingDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Same standing as `updateLiveLocation`: a no-op for the handset that actually calls this,
+    // and the self-only check below is the real gate. Present so the two halves of live sharing
+    // carry the same ceiling.
+    await this.regionGuard.assertAssayerInScope(id, scope);
     if (req.user?.id !== id) {
       throw withCode(
         new ForbiddenException('You may only change your own live-location sharing'),
@@ -1960,7 +2004,13 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCommercialProfileRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // This route edits what a person is PAID. Its create and read siblings a few lines up are
+    // keyed on `:assayerId` and have asserted the ceiling since it existed; this one is keyed on
+    // the profile's own id, which is why it had nothing to call until
+    // `assertCommercialProfileInScope` was written.
+    await this.regionGuard.assertCommercialProfileInScope(id, scope);
     const profile = await this.assayerService.updateCommercialProfile(id, dto, req.user.id);
     return {
       success: true,
@@ -2041,7 +2091,11 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateWorkforceAttributeRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // A skill, a language or a certification is what the planning engine matches an appraiser to
+    // work on, so editing one changes who gets sent where. Keyed on the attribute row.
+    await this.regionGuard.assertWorkforceAttributeInScope(id, scope);
     const attr = await this.assayerService.updateWorkforceAttribute(id, dto, req.user.id);
     return {
       success: true,
@@ -2053,7 +2107,12 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Remove a workforce attribute by ID' })
-  async removeWorkforceAttribute(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async removeWorkforceAttribute(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertWorkforceAttributeInScope(id, scope);
     await this.assayerService.removeWorkforceAttribute(id, req.user.id);
     return {
       success: true,
@@ -2084,6 +2143,21 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Transition a batch of assayers forward to a target lifecycle stage' })
+  /**
+   * Four outcomes per row, not three — see `BulkLifecycleResult`.
+   *
+   * `succeeded` / `skipped` / `failed` were the whole vocabulary, and between them they could not
+   * say the one thing an operator most needs to hear: that a row was moved PART of the way. A
+   * reasonless `INVITED → INACTIVE` committed `INVITED → DOCUMENT_VERIFICATION`, was refused at
+   * the next hop, and answered `failed` — so the screen said nothing happened while the database
+   * said the person had been advanced. `partial` is that case, named, with the state they are
+   * actually in.
+   *
+   * The HTTP status is unchanged at 201 whatever the mix, because per-row isolation is the point
+   * of this route: one bad id must not decide the fate of the other 499. The row-level buckets
+   * are where the truth lives, and a caller that reads only `succeeded.length` was always
+   * reading an incomplete answer.
+   */
   async bulkTransitionLifecycle(
     @Body() dto: BulkTransitionLifecycleDto,
     @Req() req: any,
@@ -2244,7 +2318,16 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Clear an override — the computed score comes back into force' })
-  async clearScoreOverride(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+  async clearScoreOverride(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<void> {
+    // `setScoreOverride` above is keyed on `:assayerId` and guarded; clearing one is keyed on the
+    // override row. Both move the number the planning engine ranks candidates by, so leaving the
+    // clear open meant another region's desk could put an appraiser back into contention (or out
+    // of it) by discarding the judgement this region had recorded about them.
+    await this.regionGuard.assertScoreOverrideInScope(id, scope);
     await this.qualificationScores.clearOverride(id, req.user.id);
   }
 
@@ -2288,7 +2371,13 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { remarks?: string },
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Recording that a reference was actually spoken to is part of the identity gate an
+    // appraiser passes through on the way to ACTIVE. Keyed on the reference row, so it walks
+    // reference → assayer rather than reading the assayer from the path, which this route has
+    // never carried.
+    await this.regionGuard.assertAssayerReferenceInScope(id, scope);
     const data = await this.rosterRecords.markReferenceChecked(id, req.user.id, body?.remarks);
     return { success: true, data };
   }
@@ -2298,7 +2387,12 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Remove a reference' })
-  async removeReference(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+  async removeReference(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<void> {
+    await this.regionGuard.assertAssayerReferenceInScope(id, scope);
     await this.rosterRecords.removeReference(id, req.user.id);
   }
 
@@ -2323,7 +2417,15 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Withdraw a client standing' })
-  async removeEmpanelment(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+  async removeEmpanelment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<void> {
+    // An empanelment is what makes this person eligible for that bank's work, so withdrawing one
+    // takes an appraiser off a client's roster. `setEmpanelment` above is keyed on `:assayerId`
+    // and guarded; this is the same act reached by the row's own id.
+    await this.regionGuard.assertEmpanelmentInScope(id, scope);
     await this.rosterRecords.removeEmpanelment(id, req.user.id);
   }
 
@@ -2512,7 +2614,13 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('index') index: string,
     @Res() res: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
+    // The bytes of somebody's PAN card, Aadhaar card or bank proof. `GET /assayers/:id` refuses a
+    // region-assigned account the masked RECORD, and `:id/sensitive/:field` refuses it the number
+    // — while this route handed over the scan of the same document to anyone who knew the
+    // document's id. Keyed on that id, so the ceiling comes through document → assayer.
+    await this.regionGuard.assertAssayerDocumentInScope(id, scope);
     const found = await this.rosterRecords.fileKey(id, Number(index));
     if (!found) throw new NotFoundException('No such file on this document.');
     const stream = await this.storage.getFileStream(found.key);
@@ -2572,7 +2680,12 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Res() res: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
+    // Asserted on the document, which is what `versionFileKey` scopes the version lookup by. A
+    // ceiling on the current scan that stopped at the current scan would be no ceiling at all:
+    // the retained evidence is the same identity document at an earlier index.
+    await this.regionGuard.assertAssayerDocumentInScope(id, scope);
     const found = await this.rosterRecords.versionFileKey(id, versionId);
     if (!found) throw new NotFoundException('No such file on this document version.');
     const stream = await this.storage.getFileStream(found.key);
@@ -2607,7 +2720,11 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('index') index: string,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
+    // Before the detach, because the detach is the destruction. The retention rule below decides
+    // whether the stored object may be erased; it has never decided whose object it was.
+    await this.regionGuard.assertAssayerDocumentInScope(id, scope);
     const detached = await this.rosterRecords.detachFile(id, Number(index), req.user.id);
     // The reference is gone whether or not the object was; a storage failure must not leave the
     // record pointing at something nobody can fetch.
@@ -2629,7 +2746,13 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: VerifyDocumentRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Above the verdict, the version check and the holder-identity comparison, because saying
+    // "this document matches the original" is the assertion a client's branch relies on to admit
+    // somebody to a vault. A desk that may not read the scan (the route above) must not be able
+    // to attest to it.
+    await this.regionGuard.assertAssayerDocumentInScope(id, scope);
     const data = await this.rosterRecords.verifyDocument(
       id, body?.verdict as any, req.user.id, body?.remarks,
       {

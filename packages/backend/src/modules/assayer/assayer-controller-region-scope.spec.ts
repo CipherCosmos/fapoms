@@ -88,54 +88,78 @@ describe('AssayerController region-scope fitness test', () => {
   }));
 
   /**
-   * A route path that names the assayer directly: `:assayerId` anywhere in the path, or one of
-   * the two historical `:id`-named exceptions (`findOne`'s bare `:id`, and `transitionLifecycle`'s
-   * `:id/lifecycle` — both predate the `assayerId` naming convention). Deliberately NOT a bare
-   * `:id` match on its own: `commercial/:id`, `reference/:id`, `workforce-attribute/:id` and
-   * friends all use `:id` for a SUB-RESOURCE id, not the assayer's, and need a different,
-   * join-based check this test does not ask for — see the allowlist below.
+   * A route path that names the assayer directly: `:assayerId` anywhere, or a `:id` in the FIRST
+   * segment. On this controller a leading `:id` is always the assayer — `:id`, `:id/lifecycle`,
+   * `:id/sensitive/:field`, `:id/payables`, `:id/base-location`, `:id/live`,
+   * `:id/recovery/…` — because the routes that predate the `assayerId` naming convention put the
+   * person first and everything since puts a noun first.
+   *
+   * This used to name `:id` and `:id/lifecycle` as the two historical exceptions, literally, and
+   * so matched only those two: `:id/base-location`, `:id/live-location`, `:id/location-pings`,
+   * `:id/live`, `:id/payables`, `:id/sensitive/:field` and the three `:id/recovery/…` routes
+   * were invisible to this file — nine routes, including the one that hands over a bank account
+   * number. Position is the rule that was always meant; spelling out two instances of it is what
+   * made the rest unexamined.
    */
-  const ASSAYER_ID_ROUTE = /@(?:Get|Post|Put|Delete|Patch)\(\s*['"`](?:[^'"`]*:assayerId[^'"`]*|:id|:id\/lifecycle)['"`]/;
+  const ASSAYER_ID_ROUTE = /@(?:Get|Post|Put|Delete|Patch)\(\s*['"`](?:[^'"`]*:assayerId[^'"`]*|:id(?:\/[^'"`]*)?)['"`]/;
 
   /**
-   * Routes that reach an assayer only through a SUB-RESOURCE id (a reference, empanelment,
-   * workforce-attribute, commercial-profile, score-override or document id) are a real, currently
-   * accepted gap, not an oversight this test is failing to notice: fixing them needs a new
-   * join-based guard method per sub-resource type (mirroring `assertAssignmentInScope`'s
-   * sub-resource → owner → region shape), which is follow-up work, not this fix. Named here so
-   * growing this list is a decision someone makes on purpose, in a code review, rather than a
-   * route silently staying unguarded because nobody's route path happened to say `:assayerId`.
+   * A route keyed on a SUB-RESOURCE id: `:id` somewhere other than the first path segment, and
+   * no `:assayerId` anywhere. `commercial/:id`, `reference/:id/checked`,
+   * `qualification/override/:id`, `document/:id/file/:index`,
+   * `roster/import-issues/:id/resolve` — in every one of them the `:id` is a child row's own id
+   * and the assayer is reached by a join the handler cannot see. Position is what tells the two
+   * apart, and it is a property of the route string: `:id/live` is the assayer's, `commercial/
+   * :id` is not.
+   *
+   * These used to be a hand-written set of nine method names called KNOWN_SUB_RESOURCE_GAP,
+   * recorded as an accepted gap because closing them needed a join-based guard per child table
+   * and none existed. All nine were closed on 2026-09-11, along with seven more, once
+   * `RegionGuardService` grew those guards. The set is not shortened here, it is deleted: a list
+   * of names somebody maintains by hand is the same instrument that let nineteen of twenty-three
+   * routes go unguarded in the first place, and a route added next month under
+   * `background-check/:id` would inherit the exemption by never being written down. Derived from
+   * the route strings, it cannot.
    */
-  const KNOWN_SUB_RESOURCE_GAP = new Set([
-    'markReferenceChecked', 'removeReference', 'removeEmpanelment',
-    'updateWorkforceAttribute', 'removeWorkforceAttribute', 'updateCommercial',
-    'clearScoreOverride', 'removeDocumentFile', 'verifyDocument',
-  ]);
+  const SUB_RESOURCE_ROUTE =
+    /@(?:Get|Post|Put|Delete|Patch)\(\s*['"`](?![^'"`]*:assayerId)[^'"`]*[A-Za-z0-9-]\/:id(?:\/[^'"`]*)?['"`]/;
 
   const assayerIdRoutes = blocks.filter((b) => ASSAYER_ID_ROUTE.test(b.text));
+  const subResourceRoutes = blocks.filter((b) => SUB_RESOURCE_ROUTE.test(b.text));
 
-  // A canary for the fitness test itself: if this drops much below 23, the regex above has
-  // stopped matching real routes (a decorator style changed) rather than the app having gotten
-  // safer, and the per-route assertions below would be silently checking nothing.
+  // A canary for the fitness test itself: if either of these drops, a regex above has stopped
+  // matching real routes (a decorator style changed) rather than the app having gotten safer,
+  // and the per-route assertions below would be silently checking nothing. 34 and 12 are what
+  // the controller declares today; the floors are the counts themselves rather than a round
+  // number below them, because a route disappearing from a scan is the failure being guarded
+  // against and a slack floor is how it goes unnoticed.
   it('finds the assayer-id-shaped routes it expects to find', () => {
-    expect(assayerIdRoutes.length).toBeGreaterThanOrEqual(23);
+    expect(assayerIdRoutes.length).toBeGreaterThanOrEqual(34);
+  });
+
+  it('finds the sub-resource-keyed routes it expects to find', () => {
+    expect(subResourceRoutes.length).toBeGreaterThanOrEqual(12);
   });
 
   for (const block of assayerIdRoutes) {
-    if (KNOWN_SUB_RESOURCE_GAP.has(block.name)) continue;
     it(`${block.name} checks the caller's region against the assayer's`, () => {
       expect(block.text).toMatch(/regionGuard\.assertAssayerInScope/);
     });
   }
 
-  /**
-   * The allowlist itself must name only what it needs to. A method removed from the controller,
-   * or renamed, leaves a dead entry here that looks like an active exemption to the next reader —
-   * this fails loudly instead, so the list is trimmed as part of whatever change made it stale.
-   */
-  it('does not allowlist a method that no longer exists', () => {
-    const blockNames = new Set(blocks.map((b) => b.name));
-    const stale = [...KNOWN_SUB_RESOURCE_GAP].filter((name) => !blockNames.has(name));
-    expect(stale).toEqual([]);
-  });
+  for (const block of subResourceRoutes) {
+    it(`${block.name} reaches the assayer's region through its child row`, () => {
+      // Some join-based guard, not a named one: which of them is right depends on which table
+      // the `:id` belongs to, and that is not readable from the route string. What IS readable
+      // is that it must not be `assertAssayerInScope` — passing a child row's id to a lookup
+      // that expects an assayer's would compare a reference id against `assayers.id`, find
+      // nothing, and pass. A guard that always passes is worse than none, because the route
+      // then reads as guarded.
+      expect(block.text).toMatch(/regionGuard\.assert[A-Za-z]+InScope/);
+      expect(block.text).not.toMatch(/regionGuard\.assertAssayerInScope/);
+      // And the scope it asserts against has to arrive. Every guard returns on its first line
+      // when `scope` is undefined, so the call without the parameter refuses nothing at all.
+      expect(block.text).toMatch(/GlobalScopeFilter/);
+    });
+  }
 });

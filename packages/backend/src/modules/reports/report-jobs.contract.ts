@@ -58,6 +58,12 @@ export interface BillingReportJobData extends QueuedJobEnvelope {
   projectId?: string;
   assayerId?: string;
   state?: BillingState;
+  /**
+   * The resolved region ceiling, frozen at enqueue time — the one field this payload was missing
+   * while its three siblings all carried it. The worker has no request and no principal, so a
+   * billing export run without this produced the national book for a regional caller.
+   */
+  scope: Partial<GlobalScope> | null;
 }
 
 export interface CommandCenterReportJobData extends QueuedJobEnvelope {

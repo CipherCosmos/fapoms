@@ -20,10 +20,11 @@
  *    visible only to an unrestricted one. Including it instead would add the same rupees to
  *    North's total and to East's, so no region's figure would be the money in that region and
  *    the regions would not add up to the organisation.
- *  - "every region" — an invoice can legitimately span regions (see `invoiceRegions` in the
- *    service). One that does is counted for a caller holding all of them and for nobody else,
- *    which is the same ceiling `findInvoicesPage` and `assertInvoiceRegionAllowed` already
- *    apply to the list and the detail route: you do not get a partial view of an invoice.
+ *  - "every region" — an invoice can legitimately span regions (see
+ *    `RegionGuardService.assertInvoiceInScope`). One that does is counted for a caller holding
+ *    all of them and for nobody else, which is the same ceiling `findInvoicesPage` and that
+ *    guard already apply to the list and the detail route: you do not get a partial view of an
+ *    invoice.
  *
  * ## Why the path is `assignments → project_branches → branches`
  *
@@ -169,8 +170,9 @@ export function assignmentInRegion(
  * therefore strictly narrower than the list's and can never surface an invoice the list would
  * hide.
  *
- * Neither half filters `rg_e.is_active`, matching `invoiceRegions` and `findInvoicesPage`
- * exactly: an invoice must not be counted here and then 403 when the operator opens it.
+ * Neither half filters `rg_e.is_active`, matching `RegionGuardService.assertInvoiceInScope`
+ * and `findInvoicesPage` exactly: an invoice must not be counted here and then 403 when the
+ * operator opens it.
  */
 export function invoiceInRegion(
   invoiceIdExpr: string,

@@ -770,6 +770,37 @@ export class ProjectService implements OnModuleInit {
     };
   }
 
+  /**
+   * The distinct regions a branch workbook would write into.
+   *
+   * A file upload is a bulk `POST /branches`, and it was the one door the region ceiling could
+   * not see through: `POST /branches` now refuses a region the caller is not assigned to, and a
+   * spreadsheet naming the same state creates the same branch without anyone asking. Both upload
+   * routes (`POST /projects/:id/branches/upload` and `POST /branches/import/:clientId`) call this
+   * before deciding anything, so an out-of-region row is refused at the door — including on the
+   * queued path, which runs later in a worker that has no principal to check anything against.
+   *
+   * Reads the state column exactly as the importer's own row loop does, through the same
+   * `rowReader` aliases and the same `resolveRegion`, so a row this says is WEST is a row that
+   * would have been written as WEST. Rows with no state are ignored here: the importer already
+   * refuses them by name ("No state for …"), and they resolve to no region, so there is nothing
+   * for a ceiling to compare.
+   */
+  async branchExcelRegions(fileBuffer: Buffer): Promise<string[]> {
+    const sheet = this.parseBranchSheet(fileBuffer);
+    const regions = new Set<string>();
+    for (const row of sheet.rows) {
+      const get = rowReader(row);
+      const name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
+      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code');
+      // The same blank-trailing-row test the importer uses.
+      if (!name && !solId) continue;
+      const region = resolveRegion(get('STATE', 'State', 'StateName'));
+      if (region) regions.add(region);
+    }
+    return [...regions];
+  }
+
   async preflightBranchExcel(scope: ImportScope, fileBuffer: Buffer): Promise<BranchImportPreflight> {
     const target = await this.resolveImportTarget(scope);
     const sheet = this.parseBranchSheet(fileBuffer);

@@ -276,7 +276,18 @@ export class ProjectController {
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
     @Body() dto: MarkUnableToCoverRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    /**
+     * The same ceiling `getBranchHistory` asserts on this exact id, one route above.
+     *
+     * Declaring a branch unstaffable is a client-facing coverage decision — it is what the
+     * coverage report shows the bank as the reason their branch was not audited — and a
+     * region-scoped operator could make it for a branch in another region that they are refused
+     * a plain `GET /projects/branches/:id/history` on. Confirmed live: `cert_ops_east` marked a
+     * Maharashtra project branch unable-to-cover, 201, and could not then read the row it wrote.
+     */
+    await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
     return {
       success: true,
       data: await this.projectService.markBranchUnableToCover(projectBranchId, req.user.id, dto.reason),
@@ -290,7 +301,11 @@ export class ProjectController {
   async reopenBranchCoverage(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // The undo of `unable-to-cover`, and it had the identical hole: putting another region's
+    // branch back into the planning pool is as much a coverage decision as taking it out.
+    await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
     return {
       success: true,
       data: await this.projectService.reopenBranchCoverage(projectBranchId, req.user.id),
@@ -451,12 +466,30 @@ export class ProjectController {
     @UploadedFile() file: any,
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
+    @GlobalScopeFilter() globalScope?: GlobalScope,
   ) {
     // A submitted form with no file attached reaches here as `undefined`, and reading
     // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
     // needs to be told to pick a file, not shown a crash.
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
+
+    /**
+     * An upload is a bulk `POST /branches`, so it carries the same ceiling that route now does.
+     *
+     * `POST /branches` refuses a region the caller does not hold; a spreadsheet naming the same
+     * state creates the identical branch. Checked before the queue decision, because the queued
+     * path runs in a worker with no request and therefore nothing left to check against — a file
+     * accepted here is a file that will be written, whichever path it takes.
+     *
+     * Refused whole rather than per row: a partially-imported branch list is a worse outcome for
+     * an operator than a refusal that names the region, and "which rows did it skip and why"
+     * is a question the skipped-row report exists to answer about data faults, not about
+     * permissions.
+     */
+    for (const region of await this.projectService.branchExcelRegions(file.buffer)) {
+      this.regionGuard.assertRegionSettable(region, globalScope);
     }
 
     /**

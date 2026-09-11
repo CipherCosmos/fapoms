@@ -73,8 +73,17 @@ export class ReportsService {
    * (scheduled / confirmed / remaining) but row-per-branch so it can be filtered and totalled
    * in Excel.
    */
-  async coverage(projectId: string): Promise<Buffer> {
-    const branches = await this.projectQueryService.findProjectBranches(projectId);
+  async coverage(projectId: string, scope?: Partial<GlobalScope>): Promise<Buffer> {
+    /**
+     * `scope` reaches `findProjectBranches`, which already knows how to narrow by branch region.
+     *
+     * It is belt-and-braces rather than the control: `ReportsController.coverage` refuses the
+     * whole export when the project touches a region the caller does not hold, because a coverage
+     * percentage computed over a silently-shortened branch list is a wrong number in a file that
+     * gets sent to the client. Passing the scope down as well means that if this method is ever
+     * called from somewhere that forgets the assertion, it under-reports rather than over-shares.
+     */
+    const branches = await this.projectQueryService.findProjectBranches(projectId, scope);
 
     /**
      * `findProjectBranches` is a plain `.find()` — it has no opinion on whether `projectId`
@@ -237,25 +246,66 @@ export class ReportsService {
   // ── Billing ──────────────────────────────────────────────────────────────
 
   /** Client lines and invoices, matching the finance screens. */
+  /**
+   * The Invoices sheet, under the caller's region ceiling.
+   *
+   * An invoice can legitimately span regions, and the rule for who may see one is therefore not
+   * "does it touch my region" but "does it touch ONLY regions I hold" — you do not get a partial
+   * view of an invoice. That rule is already written, once, inside `findInvoicesPage`, which is
+   * what `GET /billing-engine/invoices` serves the screen from. `findInvoices`, which this export
+   * used, takes no scope at all.
+   *
+   * So a restricted caller is served by paging the scoped reader rather than by a second copy of
+   * the rule living here: a duplicated region predicate is exactly how the screen and the
+   * workbook came to disagree in the first place. `BILLING_PAGE_MAX` caps a page at 100, so this
+   * is one query per hundred invoices, bounded by the same `EXPORT_ROW_CAP` the client-line half
+   * uses — and only for a restricted caller.
+   *
+   * An unrestricted caller takes the original single `findInvoices` call, unchanged, so the
+   * national export costs exactly what it always did.
+   */
+  private async invoicesForExport(
+    q: { clientId?: string; projectId?: string; scope?: Partial<GlobalScope> },
+  ): Promise<any[]> {
+    if (!q.scope?.regions?.length) {
+      return this.billingService.findInvoices({ clientId: q.clientId, projectId: q.projectId });
+    }
+    const out: any[] = [];
+    for (let page = 1; out.length < EXPORT_ROW_CAP; page++) {
+      const { items, total } = await this.billingService.findInvoicesPage(
+        { clientId: q.clientId, projectId: q.projectId, page, limit: 100 },
+        q.scope,
+      );
+      out.push(...items);
+      if (items.length === 0 || out.length >= total) break;
+    }
+    return out.slice(0, EXPORT_ROW_CAP);
+  }
+
   async billing(
-    q: { clientId?: string; projectId?: string; assayerId?: string; state?: string },
+    q: { clientId?: string; projectId?: string; assayerId?: string; state?: string; scope?: Partial<GlobalScope> },
     onProgress?: ProgressCallback,
   ): Promise<Buffer> {
     await onProgress?.(0, EXPORT_PHASES, 'Loading client lines and invoices');
+    /**
+     * `q.scope` — the caller's region ceiling — reaches both halves of this workbook.
+     *
+     * `listClientLines` has taken a `scope` argument since the billing reads were narrowed; this
+     * method simply never passed one, so the Export button produced the national book for an
+     * account whose `/billing` screen showed nothing at all. That is the whole of the client-line
+     * fix: one argument, into the same implementation the screen uses, so the two cannot drift.
+     */
     const allEntries = await this.billingService.listClientLines({
       clientId: q.clientId,
       projectId: q.projectId,
       assayerId: q.assayerId,
       state: q.state as any,
-    });
+    }, q.scope);
     // listClientLines has no page/limit of its own (see EXPORT_ROW_CAP comment) — cap here so a
     // wide or unfiltered billing export can't outgrow the other exports' 5000-row ceiling.
     const truncated = allEntries.length > EXPORT_ROW_CAP;
     const entries = truncated ? allEntries.slice(0, EXPORT_ROW_CAP) : allEntries;
-    const invoices = await this.billingService.findInvoices({
-      clientId: q.clientId,
-      projectId: q.projectId,
-    });
+    const invoices = await this.invoicesForExport(q);
     await onProgress?.(1, EXPORT_PHASES, 'Building rows');
 
     const entryRows = entries.map((e: any) => [
@@ -293,7 +343,10 @@ export class ReportsService {
       inr(inv.total),
       inr(inv.paidAmount),
       inr(inv.outstandingAmount),
-      (inv.entries ?? []).length,
+      // `entryCount` from the paged reader, `entries` from the unpaged one. Both are "how many
+      // lines are on this invoice"; see `invoicesForExport` for why the export reads the paged
+      // one now.
+      inv.entryCount ?? (inv.entries ?? []).length,
       inv.notes ?? '',
     ]);
 

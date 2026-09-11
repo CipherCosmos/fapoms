@@ -17,7 +17,10 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject, IsUUID } from 'class-validator';
-import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
+import {
+  BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto,
+  branchRegionAtCreate, branchRegionAfterUpdate,
+} from './branch.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
@@ -145,7 +148,22 @@ export class BranchController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Create a new branch' })
-  async create(@Body() dto: CreateBranchRequestDto, @Req() req: any) {
+  async create(
+    @Body() dto: CreateBranchRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    /**
+     * There is no existing record to anchor on, so the ceiling is checked against the region this
+     * request is ASKING FOR — resolved by the same function `BranchService.create` is about to
+     * use, so the guard and the write can never disagree about what "the region" means.
+     *
+     * Verified live before this existed: an EAST-assigned OPERATIONS account posted
+     * `{ state: 'Maharashtra', region: 'WEST' }` and got 201 with a branch it could not then read
+     * (`GET /branches/<new id>` → 403). Creating work in a region you are refused sight of is the
+     * same defect as editing it there, one step earlier.
+     */
+    this.regionGuard.assertRegionSettable(branchRegionAtCreate(dto), scope);
     const branch = await this.branchService.create(dto, req.user.id, req.user.organizationId);
     return { success: true, data: branch };
   }
@@ -227,6 +245,24 @@ export class BranchController {
     // operator refused reading a branch in another region could still edit it (the same read/write
     // asymmetry found on the schedule transition). Branches are the region anchor, so assert by id.
     await this.regionGuard.assertBranchInScope(id, scope);
+    /**
+     * …and the region this edit is MOVING IT TO, which is the other half and was missing.
+     *
+     * The assertion above reads the branch's current region. `BranchService.update` then
+     * overwrites `branch.region` from `dto.region` (or from `dto.state`, which the region
+     * follows) with nothing checking the new value. So a scoped operator could take a branch
+     * inside their own ceiling and push it out of it: region laundering, and the loss is
+     * permanent from their side — the row is now invisible to the only account that was
+     * looking at it. Confirmed live: an EAST-assigned OPERATIONS account sent
+     * `PUT /branches/<east id> {"region":"WEST"}`, got 200, and `branches.region` read `WEST`;
+     * `{"state":"Maharashtra"}` did the same thing without naming a region at all.
+     *
+     * Both checks run before `branchService.update`, so an out-of-scope caller is refused before
+     * any state validation — a 403 about access, not a 400 about a SOL ID they were never
+     * entitled to be told about.
+     */
+    const current = await this.branchService.regionAnchorOf(id);
+    this.regionGuard.assertRegionSettable(branchRegionAfterUpdate(dto, current), scope);
     const branch = await this.branchService.update(id, dto, req.user.id);
     return { success: true, data: branch };
   }
@@ -251,9 +287,25 @@ export class BranchController {
   // Contacts
   // -----------------------------------------------------------------------
 
+  /**
+   * The contact and document routes below all carry the branch's own ceiling.
+   *
+   * They are the branch's child rows: a contact is a named person at a bank branch with their
+   * direct line, a document is that branch's paperwork. `GET /branches/:id` is 403 across the
+   * region boundary, so reading and writing this branch's contents through a nested route must be
+   * too — otherwise the ceiling is only on the parent's own columns, which is not a boundary.
+   *
+   * Note WHICH id each one asserts on. The three routes keyed on a child id (`:contactId`,
+   * `:documentId`) assert on the CHILD, not on the `:id` in the path, because the handlers load
+   * by the child id alone — `branchService.updateContact(contactId, …)` never looks at `:id`. A
+   * guard on the path's branch id would have been satisfied by any branch the caller does hold
+   * while the row it actually edits sits in a region they do not. `assertBranchContactInScope`
+   * and `assertBranchDocumentInScope` exist for exactly this and were what these routes lacked.
+   */
   @Get(':id/contacts')
   @ApiOperation({ summary: 'List branch contacts' })
-  async findContacts(@Param('id', ParseUUIDPipe) id: string) {
+  async findContacts(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertBranchInScope(id, scope);
     const contacts = await this.branchService.findContacts(id);
     return { success: true, data: contacts };
   }
@@ -262,7 +314,13 @@ export class BranchController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Add branch contact' })
-  async addContact(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateContactRequestDto, @Req() req: any) {
+  async addContact(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateContactRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertBranchInScope(id, scope);
     const contact = await this.branchService.addContact(id, dto, req.user.id);
     return { success: true, data: contact };
   }
@@ -271,7 +329,13 @@ export class BranchController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch contact' })
-  async updateContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Body() dto: UpdateContactRequestDto, @Req() req: any) {
+  async updateContact(
+    @Param('contactId', ParseUUIDPipe) contactId: string,
+    @Body() dto: UpdateContactRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertBranchContactInScope(contactId, scope);
     const contact = await this.branchService.updateContact(contactId, dto, req.user.id);
     return { success: true, data: contact };
   }
@@ -280,7 +344,12 @@ export class BranchController {
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Remove branch contact' })
-  async removeContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Req() req: any) {
+  async removeContact(
+    @Param('contactId', ParseUUIDPipe) contactId: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertBranchContactInScope(contactId, scope);
     await this.branchService.removeContact(contactId, req.user.id);
     return { success: true, data: { message: 'Contact removed successfully' } };
   }
@@ -291,7 +360,8 @@ export class BranchController {
 
   @Get(':id/documents')
   @ApiOperation({ summary: 'List branch documents' })
-  async findDocuments(@Param('id', ParseUUIDPipe) id: string) {
+  async findDocuments(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertBranchInScope(id, scope);
     const documents = await this.branchService.findDocuments(id);
     return { success: true, data: documents };
   }
@@ -300,7 +370,13 @@ export class BranchController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Add branch document' })
-  async addDocument(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateDocumentRequestDto, @Req() req: any) {
+  async addDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateDocumentRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertBranchInScope(id, scope);
     const doc = await this.branchService.addDocument(id, dto, req.user.id);
     return { success: true, data: doc };
   }
@@ -309,7 +385,12 @@ export class BranchController {
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Remove branch document' })
-  async removeDocument(@Param('documentId', ParseUUIDPipe) documentId: string, @Req() req: any) {
+  async removeDocument(
+    @Param('documentId', ParseUUIDPipe) documentId: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertBranchDocumentInScope(documentId, scope);
     await this.branchService.removeDocument(documentId, req.user.id);
     return { success: true, data: { message: 'Document removed successfully' } };
   }

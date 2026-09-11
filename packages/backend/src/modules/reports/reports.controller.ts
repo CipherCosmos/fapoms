@@ -7,6 +7,7 @@ import { STAFF_ROLES } from '../auth/staff-roles';
 import { BILLING_READ_ROLES } from '../billing-engine/billing-roles';
 import { BillingState } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { rolesOf } from '../assayer/assayer-visibility';
 import { ReportsService } from './reports.service';
 import { ReportJobsService } from './report-jobs.service';
@@ -24,6 +25,7 @@ export class ReportsController {
   constructor(
     private readonly reportsService: ReportsService,
     private readonly reportJobsService: ReportJobsService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   private send(res: Response, buffer: Buffer, filename: string): void {
@@ -45,8 +47,25 @@ export class ReportsController {
   async coverage(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Res() res: Response,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
-    const buffer = await this.reportsService.coverage(projectId);
+    /**
+     * Refused whole, not silently narrowed — `assertProjectInScope`'s rule, for its reason.
+     *
+     * This route took no scope at all: a region-assigned account whose branch list, coverage
+     * screen and planning queue are all narrowed to its own region could download the entire
+     * project's branch-level coverage, every branch in every region, one click away from the
+     * screens that hide them. Confirmed live: `cert_ops_east` (EAST) exported a project made
+     * entirely of Maharashtra branches, 200, full workbook.
+     *
+     * Narrowing to the in-scope slice would have been worse than refusing. The workbook's own
+     * subject is "this project's coverage" and its percentages are of the whole project; a
+     * silently-shortened one still says 100% at the bottom, and it is the file that gets emailed
+     * to the client. A project that spans regions is not a report a single region's operator can
+     * be handed a truthful version of, so they are told no.
+     */
+    await this.regionGuard.assertProjectInScope(projectId, scope);
+    const buffer = await this.reportsService.coverage(projectId, scope);
     this.send(res, buffer, `coverage_${projectId}.xlsx`);
   }
 
@@ -79,9 +98,23 @@ export class ReportsController {
     @Query('projectId') projectId?: string,
     @Query('assayerId') assayerId?: string,
     @Query('state') state?: BillingState,
+    @GlobalScopeFilter() scope?: GlobalScope,
     @Res() res?: Response,
   ): Promise<void> {
-    const buffer = await this.reportsService.billing({ clientId, projectId, assayerId, state });
+    /**
+     * The export and the screen must agree about what the caller may see, and they did not.
+     *
+     * `GET /billing-engine/lines` is region-narrowed; this workbook is built from the same
+     * service method with the scope argument simply omitted. Confirmed live: `cert_ops_east`
+     * (`users.regions = ['EAST']`) was shown **0** client lines on `/billing` and handed **all
+     * 13** — every Maharashtra line, with the assayer's name, the branch, the fee, the tax and
+     * the outstanding amount — in the downloaded file. An export is a read; a read that a screen
+     * refuses is not one an Export button may perform.
+     *
+     * `@GlobalScopeFilter()` sits before `@Res()` deliberately: the decorator resolves the
+     * ceiling from `users.regions`, so `?region=` can only narrow, never widen.
+     */
+    const buffer = await this.reportsService.billing({ clientId, projectId, assayerId, state, scope });
     this.send(res!, buffer, `billing_${Date.now()}.xlsx`);
   }
 
@@ -171,9 +204,15 @@ export class ReportsController {
     @Query('projectId') projectId?: string,
     @Query('assayerId') assayerId?: string,
     @Query('state') state?: BillingState,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Same fix as the GET twin, and for the same reason the assignment job already froze its
+    // scope into the payload: the worker has no request and therefore no principal, so a queued
+    // export that did not carry the resolved ceiling would run unscoped and produce the national
+    // workbook the synchronous route has just stopped producing. Queueing an export must not be
+    // a way to obtain the version of it you were refused.
     const enqueued = await this.reportJobsService.enqueueBilling(
-      { clientId, projectId, assayerId, state },
+      { clientId, projectId, assayerId, state, scope: scope ?? null },
       req.user?.id,
     );
     return { success: true, data: enqueued };
