@@ -29,7 +29,50 @@ Ten business days improved from 80/85 at the last campaign to 85/85, with no cha
 
 ## Findings
 
-### C-01 · MEDIUM · performance · OPEN
+### C-03 · **CLOSED — not a product defect** (measurement artifact)
+**The 60-second login does not reproduce, and the mechanism is fully explained.**
+
+Twelve controlled sequential logins against the rig: **0.199 s – 0.323 s**, every one a 200, no
+outlier. That is ordinary bcrypt-comparison latency.
+
+The 60.4 s came from the probe measuring its own deliberate backoff. `POST /auth/login` is
+`@Throttle({ limit: 20, ttl: 60_000 })` — twenty per minute per IP — and
+`scripts/acceptance/_lib.mjs` `req()` honours `Retry-After` on a 429, waiting up to 30 s a time
+within a 90 s budget before retrying. A run that exceeds twenty logins in a minute therefore
+records **wait + request** as one elapsed time and ends on a 200. "60.4s -> 200" is exactly that
+shape.
+
+**The real finding underneath is smaller and belongs to the tooling**: a performance probe that
+folds its own rate-limit wait into a latency number will mislead whoever reads it. It should report
+the request time and the waiting separately, or exclude throttled attempts from the sample.
+- **Evidence**: API, 12 controlled trials · SOURCE
+- **Handed to**: the lane that owns `scripts/acceptance/**`
+
+### C-01 · MEDIUM · performance · **FIXED** `b75ed1b7`
+**Resolved, and it was three tables rather than one.** `assignments` already carried
+`idx_assignments_recent_page` for this exact shape; the roster, the document list and the
+validation queue order by the same kind of key and had nothing covering it.
+
+The acceptance rig holds 51 assayers, where the difference is invisible — the first measurement
+showed a 2.9 ms sequential scan and would have justified doing nothing. Measured instead on a
+200,000-row copy of the real `assayers` definition, carrying its twenty real indexes, built and
+dropped for the purpose:
+
+| | without index | with index |
+|---|---|---|
+| first page | 30.6 ms · 6,878 buffers | 0.027 ms · 4 buffers |
+| deep keyset page, 50,000 in | 38.7 ms · 6,818 buffers | 0.500 ms · 4 buffers |
+
+The second row is the one that decides it. Keyset pagination exists so that page 5,000 costs what
+page 1 costs; with no covering index it degrades to a full scan on every page and the cursor buys
+nothing. With the index the cost is four buffers at any depth.
+
+Each index is partial on `is_active`, and each is declared on its entity as well as in the
+migration — a `synchronize: true` environment rewrites the schema from the entity classes and would
+silently drop a migration-only index, restoring the full scan without changing a line of SQL. That
+is the same trap that would have undone the live-money unique indexes.
+
+### C-01-OLD · superseded
 **The roster list has no index for the column it sorts and pages on.** `assayers` is ordered by
 `created_at DESC, id DESC` for both the list and its keyset cursor, and no index covers
 `created_at`. The plan is a sequential scan plus a sort at both data volumes measured.
