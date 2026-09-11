@@ -201,7 +201,10 @@ export const ScopeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // follows a successful sign-in.
     enabled: Boolean(localStorage.getItem('fapoms_token')),
     staleTime: 5 * 60_000,
-    retry: 1,
+    // No local `retry: 1` override. The shared policy in queryClient.ts declines to retry a
+    // refusal, and a retry is the only thing that can leave a query PAUSED — pending forever with
+    // neither data nor error — when the tab is not in front. That state on THIS query is the worst
+    // one available: it mounts above the router, so every screen in the app waits on it.
   });
 
   const options: ScopeOptions = useMemo(() => {

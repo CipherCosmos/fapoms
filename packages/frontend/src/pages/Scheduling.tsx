@@ -12,10 +12,11 @@ import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { scheduleStatusLabel, localDateKey, todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
-import { queryClient } from '../queryClient';
+import { queryClient, loadFailed } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { Modal, FilterSelect, AlertBanner, Select, useConfirm, PageHeader } from '../components/ui';
+import { LoadFailure } from '../components/LoadFailure';
 import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
@@ -219,24 +220,43 @@ export const Scheduling: React.FC = () => {
   const monthEnd = new Date(currentYear, currentMonth + 2, 0);
   const dateFrom = localDateKey(monthStart);
   const dateTo = localDateKey(monthEnd);
-  const { data: rawSchedules = [], isLoading: isLoadingSchedules, isError: schedulesError, refetch: refetchSchedules } = useQuery({
+  /**
+   * The whole query result is kept, not destructured with a `= []` default, and that is the fix for
+   * this screen's worst behaviour rather than a style preference.
+   *
+   * `isError` was the only thing asked, and on a 403 it was never true: the retry these two queries
+   * asked for pauses instead of erroring whenever the tab is not visible, leaving the query at
+   * `pending` with no data and no error (the mechanism is written out on `loadFailed` in
+   * queryClient.ts). The `= []` default then turned that into "0 active schedules · 0 unscheduled
+   * confirmed offers", a full empty calendar and "No audits scheduled for this date" — the screen
+   * whose job is to say what work exists, saying there is none, to someone who was simply refused.
+   *
+   * `retry: 1` is gone from both. The shared policy in queryClient.ts already retries what is worth
+   * retrying and refuses to retry a refusal, and a local numeric override silently opted these two
+   * back out of it.
+   */
+  const schedulesQ = useQuery({
     queryKey: [...queryKeys.schedules.list, dateFrom, dateTo, scopeKey],
     queryFn: () => api.request<Schedule[]>(`/schedules?dateFrom=${dateFrom}&dateTo=${dateTo}&limit=500&${scopeQuery}`),
     staleTime: 5_000,
-    retry: 1,
     refetchOnWindowFocus: true,
     refetchOnMount: 'always',
   });
+  const isLoadingSchedules = schedulesQ.isLoading;
+  const schedulesError = loadFailed(schedulesQ);
+  const rawSchedules = schedulesQ.data ?? [];
   const schedules = Array.isArray(rawSchedules) ? rawSchedules : [];
 
-  const { data: rawAssignments = [], isLoading: isLoadingAssignments, isError: assignmentsError, refetch: refetchAssignments } = useQuery({
+  const assignmentsQ = useQuery({
     queryKey: [...queryKeys.assignments.all, 'available', scopeKey],
     queryFn: () => api.request<AssignmentOption[]>(`/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100&${scopeQuery}`),
     staleTime: 5_000,
-    retry: 1,
     refetchOnWindowFocus: true,
     refetchOnMount: 'always',
   });
+  const isLoadingAssignments = assignmentsQ.isLoading;
+  const assignmentsError = loadFailed(assignmentsQ);
+  const rawAssignments = assignmentsQ.data ?? [];
   const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
 
   // The header's global scope is applied by the server (both queries send it, and both keys
@@ -576,7 +596,19 @@ export const Scheduling: React.FC = () => {
         <PageHeader
           icon={<Calendar size={20} />}
           title="Scheduling Workspace"
-          subtitle={`${scopedSchedules.length} active schedules · ${scopedAssignments.length} unscheduled confirmed offers`}
+          /*
+            A count is a claim. Where a load failed there is no count to make, and printing
+            "0 active schedules" is the single most confident wrong sentence this page can say.
+
+            Reported per half rather than as one verdict on the whole workspace: these are two
+            independent fetches and refusing one is the common case (a role granted the calendar
+            but not the assignment book). Saying the workspace failed when the calendar in front of
+            the reader is full of real audits is its own small lie.
+          */
+          subtitle={[
+            schedulesError ? 'active schedules unavailable' : `${scopedSchedules.length} active schedules`,
+            assignmentsError ? 'unscheduled offers unavailable' : `${scopedAssignments.length} unscheduled confirmed offers`,
+          ].join(' · ')}
         />
 
         {/* Action Controls & Navigation Shortcuts */}
@@ -673,20 +705,17 @@ export const Scheduling: React.FC = () => {
       {successMsg && (
         <AlertBanner type="success" message={successMsg} />
       )}
-      {(schedulesError || assignmentsError) && (
-        // A failed load must not masquerade as an empty calendar / clear queue.
-        <AlertBanner type="error">
-          <span style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            {schedulesError ? 'Could not load schedules.' : 'Could not load the unscheduled queue.'} Check your connection and try again.
-            <button
-              onClick={() => { if (schedulesError) void refetchSchedules(); if (assignmentsError) void refetchAssignments(); }}
-              className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '11px' }}
-            >
-              Retry
-            </button>
-          </span>
-        </AlertBanner>
-      )}
+      {/*
+        A failed load must not masquerade as an empty calendar / clear queue.
+
+        This was hand-written here and said "Check your connection and try again" whatever had
+        actually happened — advice that sends someone refused by their role to their network. The
+        shared banner quotes the real reason and only offers Retry where retrying could change it.
+      */}
+      <LoadFailure loads={[
+        { label: 'schedules', query: schedulesQ },
+        { label: 'the unscheduled queue', query: assignmentsQ },
+      ]} />
 
       {/* ── WORKSPACE BODY: RESPONSIVE 3-PANEL FLEX ── */}
       <div className="responsive-grid-split" style={{ flex: 1, minHeight: 0, overflow: 'auto', gridTemplateColumns: '260px 1fr 260px' }}>
@@ -699,12 +728,19 @@ export const Scheduling: React.FC = () => {
               <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>Confirmed Offers</div>
             </div>
             <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
-              {scopedAssignments.length}
+              {assignmentsError ? '—' : scopedAssignments.length}
             </span>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
-            {isLoadingAssignments ? (
+            {assignmentsError ? (
+              /* Not "no unscheduled offers" with a green tick — that is a claim about the work,
+                 and the queue was never read. The reason is in the banner at the top. */
+              <div style={{ textAlign: 'center', padding: '30px 16px', color: 'var(--text-muted)', fontSize: '12px' }}>
+                <X size={24} style={{ margin: '0 auto 8px', opacity: 0.4, color: 'var(--danger)' }} />
+                This queue could not be loaded, so it is not being shown.
+              </div>
+            ) : isLoadingAssignments ? (
               <div style={{ textAlign: 'center', padding: '30px 16px', color: 'var(--text-muted)', fontSize: '12px' }}>
                 <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
                 Loading unscheduled assignments…
@@ -989,7 +1025,7 @@ export const Scheduling: React.FC = () => {
               </div>
             </div>
             <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(216,174,71,0.15)', color: 'var(--accent)', fontWeight: 700 }}>
-              {dateSchedules.length} Job{dateSchedules.length !== 1 ? 's' : ''}
+              {schedulesError ? '— Jobs' : `${dateSchedules.length} Job${dateSchedules.length !== 1 ? 's' : ''}`}
             </span>
           </div>
 
@@ -1023,7 +1059,14 @@ export const Scheduling: React.FC = () => {
               );
             })()}
 
-            {dateSchedules.length === 0 ? (
+            {schedulesError ? (
+              /* "No audits scheduled for this date" is the sentence a coordinator acts on. It must
+                 not be printed when the calendar was refused rather than read. */
+              <div style={{ textAlign: 'center', padding: '24px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>
+                <X size={24} style={{ margin: '0 auto 6px', opacity: 0.35, color: 'var(--danger)' }} />
+                The calendar could not be loaded, so this day's work is unknown.
+              </div>
+            ) : dateSchedules.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '24px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>
                 <CalendarDays size={24} style={{ margin: '0 auto 6px', opacity: 0.3 }} />
                 No audits scheduled for this date.

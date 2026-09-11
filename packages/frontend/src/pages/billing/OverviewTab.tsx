@@ -7,6 +7,7 @@ import { activityEventLabel, type BillingAttentionItem } from '@fapoms/shared';
 import { useBillingOverview } from '../../hooks/useBilling';
 import { moneyTotal as money, moneyExact } from '../../utils/money';
 import { Card, SectionLabel, Empty, fmtDate, th, td, tdNum } from './shared';
+import { LoadFailure } from '../../components/LoadFailure';
 
 /**
  * The finance overview — three questions, in order: what needs doing, where the money is, and
@@ -14,10 +15,20 @@ import { Card, SectionLabel, Empty, fmtDate, th, td, tdNum } from './shared';
  * Payouts and Invoices tabs show; nothing is added up here.
  */
 export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices', filter?: string) => void }> = ({ onGo }) => {
-  const { data, isLoading, error } = useBillingOverview();
+  const overview = useBillingOverview();
+  const { data, isLoading } = overview;
 
   if (isLoading) return <Empty>Loading the book…</Empty>;
-  if (error || !data) return <Empty>Could not load the finance overview.</Empty>;
+  /**
+   * Why, not just that.
+   *
+   * This said "Could not load the finance overview." for every cause, so someone refused by their
+   * role and someone with a dropped connection read the same nine words and had no idea which
+   * applied. `LoadFailure` quotes the actual reason and only offers Retry where retrying could
+   * change it — and it also catches the state a bare `error` check misses, a query PAUSED after a
+   * failure, which reports no error at all (see queryClient.ts).
+   */
+  if (!data) return <LoadFailure loads={[{ label: 'the finance overview', query: overview }]} />;
 
   const { payouts, receivables, margin, tax, cashflow, attention, byClient } = data;
   const overdue = receivables.aging.d1_30 + receivables.aging.d31_60 + receivables.aging.d61_90 + receivables.aging.d90_plus;

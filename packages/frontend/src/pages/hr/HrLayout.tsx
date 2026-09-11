@@ -7,11 +7,11 @@ import {
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
-import { AlertBanner, PageHeader } from '../../components/ui';
+import { PageHeader } from '../../components/ui';
 import { useImportIssues } from './useImportIssues';
 import { fmtWhen } from './hr-ui';
 import { LEGACY_TABS, LEGACY_PATHS, resolveHrDestination } from './hr-destinations';
-import { userMessage } from '../../services/errors';
+import { LoadFailure } from '../../components/LoadFailure';
 
 // Re-exported so existing importers keep working; the list itself lives in hr-destinations.ts.
 export { LEGACY_PATHS, resolveHrDestination };
@@ -129,7 +129,8 @@ const PAGES: readonly {
 
 
 export const HrLayout: React.FC = () => {
-  const { data, isLoading, error, refetch } = useHrWorkforce();
+  const workforce = useHrWorkforce();
+  const { data, isLoading } = workforce;
   const [params] = useSearchParams();
   const roles = useCurrentRoles();
   const canManage = canManageAssayers(roles);
@@ -163,21 +164,24 @@ export const HrLayout: React.FC = () => {
     );
   }
 
-  if (error || !data) {
+  if (!data) {
+    /**
+     * Why it failed, in its own words.
+     *
+     * This block used to print a fixed heading and then `userMessage(error)` underneath. When the
+     * query had PAUSED rather than errored — the state a failed fetch lands in whenever a retry
+     * comes due while the tab is not in front (see queryClient.ts) — `error` was `null`, and
+     * `userMessage(null)` produced "An unknown problem occurred. Please try again." So the one
+     * screen in this section that WAS honest about having failed was wrong about what had failed,
+     * and offered a Retry that could only fail identically. Measured: that is exactly what a
+     * custom role refused by `GET /hr/workforce` was shown.
+     *
+     * `LoadFailure` reads the paused state as a failure, quotes the real reason, and withholds
+     * Retry from a refusal.
+     */
     return (
-      // The same banner every other failure in this section now uses, rather than a fifth
-      // hand-rolled red block with its own spacing and its own three type sizes.
       <div style={{ padding: '24px' }}>
-        <AlertBanner type="error" style={{ alignItems: 'flex-start' }}>
-          <div style={{ fontWeight: 600 }}>The workforce figures could not be loaded just now.</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>{userMessage(error)}</div>
-          <div style={{ fontSize: 12, marginTop: 6 }}>
-            Nothing has been lost — try again, and tell IT if it keeps happening.
-          </div>
-          <button onClick={() => refetch()} className="btn btn-primary" style={{ marginTop: 14, padding: '8px 16px', fontSize: 12 }}>
-            Retry
-          </button>
-        </AlertBanner>
+        <LoadFailure loads={[{ label: 'the workforce figures', query: workforce }]} style={{ alignItems: 'flex-start' }} />
       </div>
     );
   }
@@ -293,7 +297,7 @@ export const HrLayout: React.FC = () => {
         })}
       </nav>
 
-      <Outlet context={{ data: d, canManage, refetch } satisfies HrContext} />
+      <Outlet context={{ data: d, canManage, refetch: workforce.refetch } satisfies HrContext} />
     </div>
   );
 };
