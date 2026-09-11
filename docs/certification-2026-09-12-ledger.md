@@ -236,8 +236,13 @@ check-out actually happened, which for these rows it did not.
    audited return, and say the departure was not recorded. That is defensible. A fabricated
    timestamp discovered in cross-examination is not.
 
-- **Census after the change** (this rig): 15 historical, unexplained; 1 closed with a stated reason
-  by the probe; total completed 37, with a departure 3.
+- **Census after the change** (this rig): **15 historical, unexplained** — the same 15, unmoved and
+  unbackfilled. The rest of the rule's findings are the probe's own rows, each carrying a stated
+  reason, and that split is the number to read: the unexplained count is the gap, and it has stopped
+  growing. `SELECT completed_without_check_out_reason IS NULL, count(*) … GROUP BY 1` separates them.
+  The probe was run three consecutive times, 21/21 each time, after being made deterministic — its
+  first version picked a random empanelled assayer and was refused by the client's 200 km service
+  radius, which is a fixture defect, not a product one.
 - **Still open at the seam** (see the lane report): two callers satisfy the requirement with a
   machine-written string rather than a person's answer — `document.controller.ts:846`
   (`Audited return PDF uploaded (<file>)`, and it swallows the refusal into a `console.error`) and
