@@ -5,6 +5,8 @@ import { formatRupees as money } from '@fapoms/shared';
 import { useAssayerStatement, useAssayerInvoices } from '../../hooks/useBilling';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { userMessage } from '../../services/errors';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import type { AssayerStatement } from '../../services/billing';
 import { BILLING_PAGE_SIZE } from '../../services/billing';
 import { Select } from '../../components/ui';
@@ -104,9 +106,17 @@ export const AssayerStatementPage: React.FC = () => {
       </div>
 
       {!assayerId && <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>Pick an assayer to see their statement.</div>}
-      {assayerId && statement.isLoading && <div style={{ ...card, color: 'var(--text-muted)' }}>Loading statement…</div>}
-      {assayerId && statement.error && <div style={{ ...card, color: 'var(--danger)' }}>{(statement.error as Error).message}</div>}
-      {statement.data && <StatementBody data={statement.data} />}
+      {/*
+        `(statement.error as Error).message` printed whatever the throw carried — a bare
+        "Request failed with status code 403", or the raw body of a 500 — to a finance manager
+        about to sign a disbursement. `LoadFailure` says the same thing in the words the rest of
+        the app uses, and drops the Retry button when retrying cannot help. It also catches the
+        paused-with-no-data state `error` alone misses, which here rendered nothing at all: no
+        statement, no loading line, no reason.
+      */}
+      {assayerId && loadFailed(statement) && <LoadFailure loads={[{ label: "this assayer's statement", query: statement }]} />}
+      {assayerId && !loadFailed(statement) && statement.isLoading && <div style={{ ...card, color: 'var(--text-muted)' }}>Loading statement…</div>}
+      {statement.data && !loadFailed(statement) && <StatementBody data={statement.data} />}
     </div>
   );
 };
@@ -188,6 +198,20 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
 const AssayerInvoicesSection: React.FC<{ assayerId: string }> = ({ assayerId }) => {
   const invoices = useAssayerInvoices({ assayerId, limit: BILLING_PAGE_SIZE });
   const items = invoices.data?.items ?? [];
+  /**
+   * This section hides itself when the assayer has never been invited to invoice, which is the
+   * right thing for most of the roster — and the wrong thing for a refused load, which arrived at
+   * `items.length === 0` by the same route and disappeared the section entirely. "Why is this
+   * payout not approved yet?" then has no answer on screen at all, not even a wrong one.
+   */
+  if (loadFailed(invoices)) {
+    return (
+      <div style={card}>
+        <div style={{ ...label, marginBottom: 10 }}>Assayer invoices</div>
+        <LoadFailure loads={[{ label: "this assayer's invoices", query: invoices }]} />
+      </div>
+    );
+  }
   if (items.length === 0) return null;
   const dates = (inv: (typeof items)[number]) =>
     [

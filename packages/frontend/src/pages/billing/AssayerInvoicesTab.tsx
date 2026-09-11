@@ -6,6 +6,8 @@ import { DetailDrawer, Pagination, Select, useConfirm, useToast } from '../../co
 import { useAssayerInvoices, useAssayerInvoice, useApproveAssayerInvoice, useCancelAssayerInvoice } from '../../hooks/useBilling';
 import { BILLING_PAGE_SIZE } from '../../services/billing';
 import { userMessage } from '../../services/errors';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { moneyTotal as money, moneyExact } from '../../utils/money';
 import { Card, Empty, AssayerInvoiceStatusPill, PayoutStatusPill, assayerInvoiceStatusLabel, fmtDate, inputStyle, th, td, tdNum } from './shared';
 
@@ -65,9 +67,11 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>{total} invoice{total === 1 ? '' : 's'}</span>
       </div>
 
-      {invoices.isLoading ? <Empty>Loading assayer invoices…</Empty> : invoices.isError ? (
-        <Empty>Could not load assayer invoices — this is not saying there are none. Check your connection and try again.</Empty>
-      ) : rows.length === 0 ? (
+      {/* Failure before emptiness — see the note in PayoutsTab. "Nothing waiting for approval" is
+          a claim about an assayer's confirmed money; it must never be printed over a refusal. */}
+      {loadFailed(invoices) ? (
+        <LoadFailure loads={[{ label: 'assayer invoices', query: invoices }]} />
+      ) : invoices.isLoading ? <Empty>Loading assayer invoices…</Empty> : rows.length === 0 ? (
         <Empty>
           {filter === 'ALL'
             ? 'No assayer invoices yet. Invite assayers from Payouts; submitted invoices appear here for approval.'

@@ -44,6 +44,24 @@ export type MonitoredLoad = {
   };
 };
 
+/**
+ * The same thing, for a screen that fetches with `useState` + `useEffect` rather than React Query.
+ *
+ * A good half of this app predates the query client: `DataEntryOverview`, `ExpenseReview`,
+ * `Branches`, `Holidays` and others hold their rows in state and their failures in a `catch`.
+ * Those screens still owe the reader the same four states, and they should owe them through this
+ * component rather than through a private red `<div>` each — that divergence is the defect.
+ *
+ * So this adapts a caught error into the shape `LoadFailure` reads. Pass the error you caught and
+ * the function that would try again; pass `null` and the load is simply not failing.
+ *
+ * It is deliberately NOT a way to opt out of `loadFailed`. There is no paused state to miss here:
+ * a promise either resolved or it threw, and the screen knows which.
+ */
+export function caughtLoad(error: unknown, refetch: () => unknown): MonitoredLoad['query'] {
+  return { isError: error != null, fetchStatus: 'idle', data: undefined, error, refetch };
+}
+
 /** The error to describe: the settled one, or the one a paused retry is sitting on. */
 function reasonOf(query: MonitoredLoad['query']): unknown {
   return query.error ?? query.failureReason ?? null;

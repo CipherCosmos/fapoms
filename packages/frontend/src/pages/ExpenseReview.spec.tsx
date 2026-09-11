@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ExpenseReview } from './ExpenseReview';
 import { ToastProvider } from '../components/ui';
 import * as expensesService from '../services/expenses';
+import { AppError } from '../services/errors';
 
 /**
  * The rejection reason picker: preset+Other, the same pattern as PayoutsTab's HoldModal.
@@ -202,5 +203,64 @@ describe('ExpenseReview — movement trail visibility', () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
     expect(screen.queryByTitle('Check the recorded movement trail')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A queue that could not be read is not a queue that is clear.
+ *
+ * The load used to `catch`, fire a toast, and leave `claims` at `[]`. Four seconds later the only
+ * thing on screen was "No expense claims are awaiting review." over "0 pending · ₹0" — a claim
+ * about assayers' own reimbursements that nobody had verified. The banner has to outlive the
+ * toast, and the table has to stop contradicting it.
+ */
+describe('ExpenseReview — a refused queue is not a cleared one', () => {
+  const refused = new AppError(
+    'You do not have permission to perform this action. Ask an administrator if you require access.',
+    'Forbidden', 403, 'permission-required',
+  );
+  /**
+   * The banner, told apart from the toast. Both say "Could not load", which is the point — the
+   * toast is for the reviewer who is looking, the banner for the one who is not — so every query
+   * here names the banner's own sentence rather than the shared prefix.
+   */
+  const banner = /Could not load the expense claims waiting for review/;
+
+  it('states the refusal, and does not say the queue is empty', async () => {
+    mockGetPending.mockReset().mockRejectedValue(refused);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(banner)).toBeInTheDocument());
+    // Once in the banner, once in the toast — the reason is quoted, not summarised as "unknown".
+    expect(screen.getAllByText(/do not have permission/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('No expense claims are awaiting review.')).not.toBeInTheDocument();
+  });
+
+  it('offers no Retry for a refusal — pressing it could only fail the same way', async () => {
+    mockGetPending.mockReset().mockRejectedValue(refused);
+    renderPage();
+    await waitFor(() => expect(screen.getByText(banner)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  it('does offer Retry when the failure is one a retry could fix', async () => {
+    mockGetPending.mockReset().mockRejectedValue(
+      new AppError('The server could not complete that request.', 'Internal Server Error', 500, 'retryable'),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText(banner)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('clears the banner once a later load succeeds', async () => {
+    mockGetPending.mockReset()
+      .mockRejectedValueOnce(refused)
+      .mockResolvedValue([claim()]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText(banner)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTitle('Refresh'));
+    await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
+    expect(screen.queryByText(banner)).not.toBeInTheDocument();
   });
 });

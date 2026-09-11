@@ -5,8 +5,9 @@ import { Link } from 'react-router-dom';
 import { onboardingNextStep, cannotBePaid, payoutBlockingGaps } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
-import { userMessage } from '../../services/errors';
-import { AlertBanner, DataTable, SearchInput } from '../../components/ui';
+import { DataTable, SearchInput } from '../../components/ui';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { listPhase } from '../../components/ui/list-phase';
 import { card, label, Empty, Notice, fmtDate, fmtWhen } from './hr-ui';
 import { counted } from '../../utils/plural';
@@ -146,7 +147,13 @@ export const HrPayPage: React.FC = () => {
     [payQuery.data],
   );
   const loading = rosterQuery.isLoading || payQuery.isLoading;
-  const error = rosterQuery.error ? userMessage(rosterQuery.error) : payQuery.error ? userMessage(payQuery.error) : null;
+  /**
+   * `rosterQuery.error || payQuery.error` missed the state a query reaches when it fails and
+   * PAUSES: no error, no data, `isLoading` false. The page then drew its four tiles over
+   * `roster = []` — "0 people have no agreed base fee", "0 cannot be paid" — which is the same
+   * confident zero the /scheduling 403 produced. `loadFailed` is the predicate that sees it.
+   */
+  const failed = loadFailed(rosterQuery) || loadFailed(payQuery);
   const refreshing = rosterQuery.isFetching || payQuery.isFetching;
   const refresh = () => { void rosterQuery.refetch(); void payQuery.refetch(); };
   /**
@@ -194,9 +201,25 @@ export const HrPayPage: React.FC = () => {
   const anyoneMissingBankDetailsCount = roster
     .filter((a) => payoutBlockingGaps(a as unknown as Record<string, unknown>).length > 0).length;
 
-  // The error still takes over the screen — there is nothing to show and something to fix.
-  // Loading does not: see below, where the page keeps its shape and the rows fill in.
-  if (error) return <AlertBanner type="error" message={error} style={{ margin: '20px 4px' }} />;
+  /**
+   * The failure still takes over the screen — there is nothing to show and something to fix.
+   * Loading does not: see below, where the page keeps its shape and the rows fill in.
+   *
+   * Both halves are named, because they fail for different reasons: the roster walk is a scoped
+   * read anyone in HR can do, while `/assayers/commercial/roster` is everyone's pay in one call
+   * and is refused far more often. Told apart, the banner can say which one was withheld.
+   */
+  if (failed) {
+    return (
+      <LoadFailure
+        style={{ margin: '20px 4px' }}
+        loads={[
+          { label: 'the roster', query: rosterQuery },
+          { label: 'what people are paid', query: payQuery },
+        ]}
+      />
+    );
+  }
 
   /**
    * The page keeps its own shape while it loads.

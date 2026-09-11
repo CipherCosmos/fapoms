@@ -6,6 +6,8 @@ import type { AssayerPayable } from '@fapoms/shared';
 import { Modal, Select, useToast } from '../../components/ui';
 import { useAssignmentMoney, useEditClientLine, useAssayerInvoiceLookup } from '../../hooks/useBilling';
 import { userMessage } from '../../services/errors';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { moneyExact as money } from '../../utils/money';
 import { LineStatePill, PayoutStatusPill, InvoiceStatusPill, AssayerInvoiceStatusPill, fmtDate, inputStyle } from './shared';
 // The client line and the assayer payout are held for the same reasons — the same "put this on
@@ -32,7 +34,8 @@ const CLIENT_LINE_ADJUSTMENT_REASONS = [
  */
 export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: string; canEdit: boolean; compact?: boolean }> = ({ assignmentId, status, canEdit, compact }) => {
   const done = status === AssignmentStatus.COMPLETED;
-  const { data, isLoading } = useAssignmentMoney(assignmentId, { enabled: done });
+  const money$ = useAssignmentMoney(assignmentId, { enabled: done });
+  const { data, isLoading } = money$;
   const [editing, setEditing] = useState(false);
   /**
    * The assayer invoice the fee payable rides, if any. The money line's payable is the raw
@@ -45,6 +48,22 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
   const assayerInvoice = payableInvoiceId ? invoiceById.get(payableInvoiceId) : undefined;
 
   if (!done) return null;
+  /**
+   * The failed branch has to come before the `!data` branch, because they are the same shape.
+   *
+   * `isLoading || !data` printed "Loading…" — forever — for every way this fetch can end without
+   * data: a 403 from a role that cannot see money, a 404 from a deleted assignment, a 500, a
+   * paused retry. A spinner that never stops is the one state an operator cannot act on: they
+   * wait, then reload, then call someone. Say which it was instead.
+   */
+  if (loadFailed(money$)) {
+    return (
+      <div style={wrap}>
+        <span style={title}><Wallet size={11} /> MONEY</span>
+        <LoadFailure loads={[{ label: "this assignment's money", query: money$ }]} />
+      </div>
+    );
+  }
   if (isLoading || !data) {
     return <div style={wrap}><span style={title}><Wallet size={11} /> MONEY</span><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading…</span></div>;
   }

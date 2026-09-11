@@ -8,6 +8,8 @@ import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { useReconcile, useReconcilePreview } from '../hooks/useBilling';
 import { billingApi } from '../services/billing';
 import { userMessage } from '../services/errors';
+import { LoadFailure } from '../components/LoadFailure';
+import { loadFailed } from '../queryClient';
 import { OverviewTab } from './billing/OverviewTab';
 import { PayoutsTab, type PayoutFilter } from './billing/PayoutsTab';
 import { InvoicesTab, type InvoiceFilter } from './billing/InvoicesTab';
@@ -172,8 +174,17 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
         Only assignments completed on or after <span style={{ fontWeight: 400 }}>(blank = the whole book)</span>
         <StyledInput type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 200 }} />
       </label>
+      {/*
+        "Could not count." was the whole of what this said when the preview failed — no reason, no
+        way to tell a refusal from a timeout — and it sat next to a disabled button reading
+        "Nothing to book", which is the opposite claim: one says it does not know, the other says
+        it does. The count is what somebody decides on, so the failure states its reason.
+      */}
+      {loadFailed(preview) && <LoadFailure loads={[{ label: 'the count of assignments waiting to be booked', query: preview }]} />}
       <div style={{ fontSize: 13, padding: '10px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
-        {preview.isLoading ? 'Counting…' : count === undefined ? 'Could not count.' : count === 0 ? 'Every completed assignment is booked. Nothing to do.' : <>This will book <strong>{count}</strong> completed assignment{count === 1 ? '' : 's'}.</>}
+        {loadFailed(preview)
+          ? 'The count above could not be read, so nothing can be booked from here until it can.'
+          : preview.isLoading ? 'Counting…' : count === undefined ? 'Could not count.' : count === 0 ? 'Every completed assignment is booked. Nothing to do.' : <>This will book <strong>{count}</strong> completed assignment{count === 1 ? '' : 's'}.</>}
         {jobId && <div style={{ marginTop: 6, color: 'var(--accent)' }}>{progress}</div>}
       </div>
     </Modal>

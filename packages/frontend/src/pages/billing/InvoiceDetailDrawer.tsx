@@ -4,6 +4,8 @@ import { DetailDrawer, StyledInput, Select, useConfirm, useToast } from '../../c
 import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment } from '../../hooks/useBilling';
 import { InvoiceStatus, PaymentMethod, paymentMethodLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { todayDateKey } from '../../utils/statusLabels';
 import { moneyExact as money } from '../../utils/money';
 import { billingApi } from '../../services/billing';
@@ -48,7 +50,8 @@ const Row: React.FC<{ label: string; value: React.ReactNode; strong?: boolean }>
 export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => void; canAct: boolean }> = ({ invoiceId, onClose, canAct }) => {
   const { toast } = useToast();
   const { confirm, confirmDialog } = useConfirm();
-  const { data: invoice } = useBillingInvoice(invoiceId);
+  const invoiceQuery = useBillingInvoice(invoiceId);
+  const invoice = invoiceQuery.data;
   const send = useSendInvoice();
   const pay = useRecordBillingPayment();
   const cancel = useCancelInvoice();
@@ -99,6 +102,22 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
     }
   };
 
+  /**
+   * A refused or missing invoice is not a slow one.
+   *
+   * `if (!invoice)` covered both, so the drawer opened titled "Loading…" over an empty body and
+   * stayed that way: a 403 for a role without billing, a 404 for an invoice someone cancelled and
+   * deleted, a 500. The one thing a person can do with a permanent spinner is wait for it, which
+   * is the wrong thing in all three cases. Checked before the loading branch, because they are
+   * indistinguishable from here otherwise.
+   */
+  if (loadFailed(invoiceQuery)) {
+    return (
+      <DetailDrawer open onClose={onClose} title="This invoice could not be opened" width={640}>
+        <LoadFailure loads={[{ label: 'this invoice', query: invoiceQuery }]} />
+      </DetailDrawer>
+    );
+  }
   if (!invoice) return <DetailDrawer open onClose={onClose} title="Loading…" width={640}><div /></DetailDrawer>;
 
   const outstanding = Number(invoice.outstandingAmount);

@@ -11,6 +11,8 @@ import {
 import { BILLING_PAGE_SIZE, billingApi, isInvoicingNotEnabled } from '../../services/billing';
 import type { PayoutRow, AssayerInvoiceInviteAllResult } from '../../services/billing';
 import { userMessage } from '../../services/errors';
+import { LoadFailure } from '../../components/LoadFailure';
+import { loadFailed } from '../../queryClient';
 import { moneyTotal as money } from '../../utils/money';
 import { visibleSelection } from '../../utils/selection';
 import { downloadCsv, datedFilename } from '../../utils/csv';
@@ -336,9 +338,19 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
         </div>
       )}
 
-      {payouts.isLoading ? <Empty>Loading payouts…</Empty> : payouts.isError ? (
-        <Empty>Could not load payouts — this is not saying there are none. Check your connection and try again.</Empty>
-      ) : groups.length === 0 ? (
+      {/*
+        Failure is decided before emptiness, and it is `loadFailed` that decides it.
+        The check here used to be a bare `payouts.isError`, which misses a query that failed and
+        PAUSED — no error, no data, `groups.length === 0` — so a refused load fell through to
+        "No payouts yet. They appear here the moment an assignment completes." on a screen about
+        money somebody is owed. And when it did fire it said "Check your connection and try
+        again", which sends a person whose role simply excludes payouts to their router.
+        `LoadFailure` quotes the server's own sentence and offers Retry only where retrying could
+        change the answer.
+      */}
+      {loadFailed(payouts) ? (
+        <LoadFailure loads={[{ label: 'payouts', query: payouts }]} />
+      ) : payouts.isLoading ? <Empty>Loading payouts…</Empty> : groups.length === 0 ? (
         <Empty>{filter === 'ALL' ? 'No payouts yet. They appear here the moment an assignment completes.' : 'Nothing here.'}</Empty>
       ) : (
         <Card>

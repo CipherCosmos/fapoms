@@ -10,6 +10,7 @@ import {
 } from '../services/expenses';
 import { TravelEvidence } from '../components/TravelEvidence';
 import { userMessage } from '../services/errors';
+import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/queryKeys';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
@@ -54,6 +55,16 @@ export const ExpenseReview: React.FC = () => {
   const qc = useQueryClient();
   const [claims, setClaims] = useState<ExpenseClaim[]>([]);
   const [loading, setLoading] = useState(true);
+  /**
+   * Why the table is empty, when it is empty for a reason other than there being no claims.
+   *
+   * The load used to catch, toast, and leave `claims` at `[]`. A toast is gone in four seconds;
+   * the table it left behind says "No expense claims are awaiting review." indefinitely, and the
+   * header above it says "0 pending · ₹0". A reviewer who arrives after the toast has faded — or
+   * who was looking at another tab when it fired — reads a queue of assayer reimbursements as
+   * cleared. Held in state so the screen keeps saying so.
+   */
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<ExpenseClaim | null>(null);
   const [rejectPreset, setRejectPreset] = useState('');
@@ -71,8 +82,14 @@ export const ExpenseReview: React.FC = () => {
     setLoading(true);
     try {
       setClaims(await getPendingExpenses());
+      setLoadError(null);
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not load claims', message: `Check your connection and refresh the page. ${userMessage(err)}` });
+      // The rows are dropped rather than left stale: what is on screen must match what the
+      // banner says. The toast stays for the reviewer who is looking; the banner is for the one
+      // who is not.
+      setClaims([]);
+      setLoadError(err);
+      toast({ type: 'error', title: 'Could not load claims', message: userMessage(err) });
     } finally {
       setLoading(false);
     }
@@ -380,6 +397,13 @@ export const ExpenseReview: React.FC = () => {
         </div>
       )}
 
+      {loadError != null && (
+        <LoadFailure
+          style={{ marginBottom: 12 }}
+          loads={[{ label: 'the expense claims waiting for review', query: caughtLoad(loadError, () => void load()) }]}
+        />
+      )}
+
       <DataTable<ExpenseClaim>
         columns={columns}
         rows={claims}
@@ -389,7 +413,9 @@ export const ExpenseReview: React.FC = () => {
         onToggleSelect={toggleSelect}
         onSelectAll={selectAll}
         loading={loading}
-        emptyMessage="No expense claims are awaiting review."
+        // The table must not claim the queue is clear when the queue was never fetched. The
+        // banner above carries the reason; this only has to stop contradicting it.
+        emptyMessage={loadError != null ? 'The claims could not be loaded — see above.' : 'No expense claims are awaiting review.'}
       />
 
       <Modal
