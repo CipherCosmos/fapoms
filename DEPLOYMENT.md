@@ -298,7 +298,18 @@ A systemd user timer dumps the database and mirrors the stored documents at 02:3
 systemctl --user status fapoms-backup.timer   # is it running
 tail -f ~/apps/fapoms-ops/backup.log          # what it has done
 systemctl --user start fapoms-backup.service  # back up now
+~/apps/fapoms-ops/backup.sh                   # back up now, in front of you
 ```
+
+**Where the dumps are.** `~/backups/fapoms/daily/db-<stamp>.dump`, with the object mirror beside it
+in `~/backups/fapoms/objects`. They are **not** in the `deploy_backupsdata` podman volume — that
+volume belongs to the data-reset danger zone's on-demand snapshots, which is a different feature on
+a different schedule. A stale file in that volume says nothing about whether the nightly backup ran.
+
+Run by hand, the script prints every step and names the dump on its last line; run by the timer, the
+same lines go to the log and to the journal. Silence means it did not run. Any failure exits
+non-zero and says what failed, so `backup.sh && <the risky thing>` is a safe way to sequence a
+backup before an operation you might have to undo.
 
 Two things here cannot be rebuilt from this repository, and they fail differently. The database is
 the audit record; the object store holds the scanned returns, which are the evidence the audit
@@ -310,10 +321,23 @@ internally consistent while the app stays live. Objects are mirrored **append-on
 not passed, because audit evidence is not supposed to be deleted and a bucket that loses an object
 must not cause the backup to lose it too.
 
-Every dump is verified rather than assumed. A dump truncated by a full disk still leaves a
-plausible-looking file behind, and that gets discovered when someone needs it — the worst possible
-moment. `pg_restore --list` parses the archive's table of contents, so a truncated file fails
-loudly, with a table-count floor on top.
+Every dump is verified rather than assumed, and the run exits zero only if that verification
+passed. A dump truncated by a full disk still leaves a plausible-looking file behind, and that gets
+discovered when someone needs it — the worst possible moment. `pg_restore --list` parses the
+archive's table of contents, so a truncated file fails loudly; on top of that, the archive must
+carry data for at least as many tables as `public` held when the dump started. That floor is asked
+of the live database on every run rather than written into the script, where it would quietly go
+stale as the schema grew.
+
+A dump that fails either check is renamed to `db-<stamp>.rejected` and the failure is reported. The
+name is deliberate: it keeps the evidence for diagnosis while putting the file outside the
+`db-*.dump` pattern, so neither the retention pass nor `restore.sh` can ever mistake it for a
+backup. The object mirror is checked the same way — the file count in the mirror is compared with
+the object count in the bucket, and a mirror holding fewer fails the run.
+
+The two halves fail together, not separately: if the database dump succeeds but the documents were
+not backed up because the object-store credentials are missing, that is a failure, not a warning.
+Half a backup reported as success is the version of this script that is most dangerous to have.
 
 Retention is 14 nightlies plus one dump per month for a year: a fault noticed late needs something
 older than the nightly window to compare against.

@@ -125,6 +125,15 @@ detailed below.
 database and of every object in `public`; a restore is the escape hatch if the deployment cannot
 start afterwards.
 
+The script prints what it did and finishes by naming the dump it wrote, which lands in
+`~/backups/fapoms/daily/` on the host — not in the `deploy_backupsdata` podman volume, which holds
+the data-reset danger zone's on-demand snapshots and is a different feature entirely. It exits
+non-zero and says why on any failure, and it exits zero only after reading the dump back and
+checking it carries data for at least as many tables as the live database had when the dump
+started. So the dump named on the last line is one that has already been verified; to go further
+and prove it restores, `deploy/restore.sh --drill` restores it into a scratch database and drops
+it again.
+
 1. **Add the secrets** to the deploy environment: `DB_ADMIN_URL` (the existing superuser is fine —
    it is used only at deploy time from here on), `FAPOMS_MIGRATION_PASSWORD` and
    `FAPOMS_RUNTIME_PASSWORD`, both freshly generated.
