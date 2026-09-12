@@ -6,7 +6,7 @@ import { memoryStorage } from 'multer';
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import {
-  IsEnum, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength,
+  IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength,
 } from 'class-validator';
 import { OnboardingDocument, EmploymentCategory } from '@fapoms/shared';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';

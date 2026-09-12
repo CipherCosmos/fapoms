@@ -717,8 +717,17 @@ describe('billing overview region scoping, reconciled against the real schema', 
 
     it('is not silently empty — every kind this fixture raises is present for region A', async () => {
       const out = await scoped([A]);
+      // `aMA` belongs here as well as under HELD below, and one assignment raising two kinds is
+      // how this list already works — `aA2` is both FEE_CHANGED and HELD a few lines down. It is
+      // COMPLETED, and its only billing entry (`eMA`) is CANCELLED, so it has no LIVE entry:
+      // UNBOOKED reads "completed, with nothing live booked against it", and a cancelled entry is
+      // dead by `billing-liveness.ts`'s not-dead rule. Its payable `pMA` is live and on hold, so
+      // the money out is booked while the money in is not — exactly what this kind exists to
+      // surface. The list was short because no one had ever seen this query's real output: every
+      // region-scoped case in this file raised `invalid reference to FROM-clause entry` until the
+      // alias fix, so the enumeration was written by hand and never checked against a run.
       expect(mineOf(out, 'UNBOOKED').map((i: any) => i.assignmentNumber).sort())
-        .toEqual([`${RUN}-aA4`, `${RUN}-aA5`, `${RUN}-aA6`]);
+        .toEqual([`${RUN}-aA4`, `${RUN}-aA5`, `${RUN}-aA6`, `${RUN}-aMA`]);
       expect(mineOf(out, 'UNSETTLED_FEE').map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aA1`]);
       expect(mineOf(out, 'FEE_CHANGED').map((i: any) => i.assignmentNumber)).toEqual([`${RUN}-aA2`]);
       // A held payout and a held client line are both `HELD` — `BillingAttentionItem` has no
