@@ -3181,6 +3181,18 @@ export class BillingEngineService implements OnModuleInit {
     const rg = billingRegionFilters(enforced);
     // `[]` for an unrestricted caller: the SQL below carries no placeholder to bind in that case.
     const rgp: unknown[] = enforced ? [enforced] : [];
+    /**
+     * How the payables table must be referred to INSIDE the first query below.
+     *
+     * `rg.as('p')` appends an alias only when region scoping is enforcing, so the same SQL reads
+     * `FROM assayer_payables` in one mode and `FROM assayer_payables p` in the other — and once a
+     * table carries an alias Postgres refuses its original name outright ("invalid reference to
+     * FROM-clause entry for table assayer_payables"). The two `livePayableSql(...)` FILTERs wrote
+     * that original name literally, so the billing overview failed for precisely the region-scoped
+     * callers the scoping exists to serve, and for nobody else — which is why it survived the unit
+     * suite. Deriving the reference from the same switch keeps the two in step by construction.
+     */
+    const payableRef = rg.as('p') ? 'p' : 'assayer_payables';
 
     const [payRows, entryRows, invRows, ageRows, cashRows, clientRows, history, attention] = await Promise.all([
       mgr.query(`
@@ -3191,8 +3203,8 @@ export class BillingEngineService implements OnModuleInit {
                COUNT(*) FILTER (WHERE status = 'PENDING'  AND on_hold = false)::int                              AS due_count,
                COUNT(*) FILTER (WHERE status = 'APPROVED' AND on_hold = false)::int                              AS approved_count,
                COUNT(*) FILTER (WHERE on_hold = true)::int                                                       AS held_count,
-               COALESCE(SUM(base_amount + travel_amount) FILTER (WHERE ${livePayableSql('assayer_payables')}), 0) AS gross_cost,
-               COALESCE(SUM(tds_amount) FILTER (WHERE ${livePayableSql('assayer_payables')}), 0)                     AS tds_from_assayers
+               COALESCE(SUM(base_amount + travel_amount) FILTER (WHERE ${livePayableSql(payableRef)}), 0) AS gross_cost,
+               COALESCE(SUM(tds_amount) FILTER (WHERE ${livePayableSql(payableRef)}), 0)                     AS tds_from_assayers
           FROM assayer_payables${rg.as('p')} WHERE is_active = true${rg.payable('p')}`, rgp),
       mgr.query(`
         SELECT ${UNBILLED_RECEIVABLE_SQL} AS unbilled,

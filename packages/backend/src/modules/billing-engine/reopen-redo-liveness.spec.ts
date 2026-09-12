@@ -186,7 +186,16 @@ describe('a dead financial row is history, not a booking', () => {
     });
 
     it('excludes voided payables from cost and margin, as revenue already excludes cancelled', () => {
-      expect(src).toContain("SUM(base_amount + travel_amount) FILTER (WHERE ${livePayableSql('assayer_payables')})");
+      /**
+       * The table reference is `payableRef`, not a literal, and that is load-bearing rather than
+       * cosmetic: `overview` aliases the table (`FROM assayer_payables p`) only when region
+       * scoping is enforcing, and Postgres refuses the original name once an alias exists. Pinning
+       * the literal `'assayer_payables'` here is what let that mismatch ship — the filter read
+       * correctly in review and threw `invalid reference to FROM-clause entry` for region-scoped
+       * callers only. What this test is for is unchanged: the liveness filter must be on this sum.
+       */
+      expect(src).toContain('SUM(base_amount + travel_amount) FILTER (WHERE ${livePayableSql(payableRef)})');
+      expect(src).toContain("const payableRef = rg.as('p') ? 'p' : 'assayer_payables';");
       expect(src).toContain("andLivePayableSql('ap')");
     });
 
