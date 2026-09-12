@@ -18,7 +18,6 @@ import { RosterRecordsService } from './roster-records.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { hashCode, numericCode, hashesEqual } from '../auth/otp-codes';
@@ -120,7 +119,6 @@ export class RegistrationApplicationService {
     private readonly auditService: AuditService,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly emailProvider: EmailProvider,
-    private readonly smsProvider: SmsProvider,
     private readonly cache: CacheService,
     private readonly settings: PlatformSettingsService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
@@ -275,10 +273,30 @@ export class RegistrationApplicationService {
 
   // ── OTP ──────────────────────────────────────────────────────────────────
 
+  /**
+   * Send the candidate a verification code, by email.
+   *
+   * Email is the delivery channel for everything that reaches a candidate or an assayer here —
+   * the owner's decision, and the only one that works: MSG91 is unconfigured
+   * (`SMS_PROVIDER_API_KEY` is blank in `.env.production.example` and absent from `.env.docker`),
+   * so an SMS-only code meant nobody could finish registering at all.
+   *
+   * What that costs, stated plainly because it is a real reduction: the invite link already
+   * arrived in this mailbox, so a code sent to the same mailbox proves the same thing the link
+   * did. It confirms the person holding the link is the person invited; it does NOT verify the
+   * mobile number the way an SMS would. The number is still captured and still bound to the code
+   * below, so the record gets it — but it is captured on trust, not proven. Wiring MSG91 is what
+   * would make this a second factor again.
+   */
   async requestOtp(rawToken: string, phone: string): Promise<void> {
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
+    }
+    if (!application.email) {
+      throw new BadRequestException(
+        'There is no email address on this application to send a code to. Ask HR to add one and resend your link.',
+      );
     }
     const tokenHash = hashCode(rawToken);
 
@@ -302,24 +320,32 @@ export class RegistrationApplicationService {
     await this.cache.setJson(sendCounterKey, { count: sent + 1 }, OTP_SEND_WINDOW_SECONDS);
     await this.cache.setJson(lastSentKey, Date.now(), OTP_SEND_WINDOW_SECONDS);
 
-    const delivered = await this.smsProvider.send(
-      phone,
-      `Your Appraiser registration verification code is ${code}. It expires in 5 minutes.`,
-    );
+    const result = await this.emailProvider.send({
+      to: application.email,
+      subject: 'Your Appraiser registration code',
+      text: `Your Appraiser registration verification code is ${code}. It expires in 5 minutes.`,
+      html: renderEmailHtml({
+        title: 'Your registration code',
+        bodyLines: [
+          `Your verification code is ${code}.`,
+          'It expires in 5 minutes. If you did not ask for it, you can ignore this message.',
+        ],
+      }),
+    });
     /**
      * A code that was never sent is a dead end, so say so instead of answering "sent".
      *
-     * `SmsProvider.send` answers `false` — it does not throw — when MSG91 is unconfigured, and
-     * unconfigured is the shipped state (`SMS_PROVIDER_API_KEY` is blank in
-     * `.env.production.example` and absent from `.env.docker`). This route used to log that and
-     * return success, so the candidate read "a verification code has been sent to this number"
-     * and waited for a message that was never going to arrive, with nothing anywhere saying
-     * otherwise. Now the failure reaches the person who can act on it.
+     * `EmailProvider.send` answers `{ success: false }` — it does not throw — when the transport
+     * is off or the send fails. This route used to log that and return success, so the candidate
+     * read that a code was on its way and waited for a message nobody had sent.
      */
-    if (!delivered) {
-      this.logger.warn(`Registration OTP SMS delivery failed for token ${tokenHash.slice(0, 8)}…`);
+    if (!result?.success) {
+      this.logger.warn(
+        `Registration OTP email to ${application.email} failed for token ${tokenHash.slice(0, 8)}…: `
+        + `${result?.error ?? 'email transport reported no success'}`,
+      );
       throw new BadRequestException(
-        'We could not send a verification code to that number just now. Check the number, or contact HR — they can help you finish registering.',
+        'We could not email you a verification code just now. Contact HR — they can help you finish registering.',
       );
     }
   }

@@ -218,7 +218,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     if (isOtpVerificationLost(err)) {
       setOtpVerified(false);
       setCodeSent(false);
-      setOtpError('Your verification has expired. Verify your mobile number again to continue.');
+      setOtpError('Your verification has expired. Request a new code to continue.');
     }
   }, []);
 
@@ -265,7 +265,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     try {
       await requestRegistrationOtp(token, trimmed);
       setCodeSent(true);
-      setOtpInfo('A verification code has been sent to this number.');
+      setOtpInfo(`A verification code has been emailed to ${application?.email ?? 'your email address'}.`);
     } catch (err) {
       setOtpError(userMessage(err));
     } finally {
@@ -447,7 +447,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
         <div>
           <div style={{ fontSize: '19px', fontWeight: 700 }}>Appraiser registration</div>
           <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
-            Verify your mobile number, then fill in your details and attach your documents. You can
+            Confirm your email with the code we send, then fill in your details and attach your documents. You can
             come back to this same link at any time before you submit.
           </div>
         </div>
@@ -462,7 +462,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
         <div style={SECTION_STYLE}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Phone size={16} style={{ color: 'var(--text-muted)' }} aria-hidden />
-            <div style={SECTION_TITLE_STYLE}>Verify your mobile number</div>
+            <div style={SECTION_TITLE_STYLE}>Confirm it&apos;s you</div>
             {otpVerified && (
               <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--success)', fontWeight: 600 }}>
                 <Check size={13} aria-hidden /> Verified
@@ -472,7 +472,13 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
           {!otpVerified ? (
             <>
               <div>
-                <label htmlFor="reg-phone" style={LABEL_STYLE}>Mobile number</label>
+                {/* The code goes to the mailbox that received the invite, not to this number —
+                    SMS is not configured, and email is the channel for everything here. The number
+                    is still collected because the record needs it. */}
+                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                  We&apos;ll email a 6-digit code to <strong>{application.email ?? 'your email address'}</strong>.
+                </div>
+                <label htmlFor="reg-phone" style={LABEL_STYLE}>Your mobile number</label>
                 <input
                   id="reg-phone"
                   value={phone}

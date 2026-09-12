@@ -61,8 +61,10 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
   const rosterRecords = { attachFile: jest.fn(async () => ({})) };
   const auditService = { recordEventSafe: jest.fn(async () => undefined) };
   const notificationDispatch = { emitSafe: jest.fn(async () => undefined) };
-  const emailProvider = { send: jest.fn(async () => ({ success: true })) };
-  const smsProvider = { send: jest.fn(async (_phone: string, _message: string) => true) };
+  const emailProvider = {
+    send: jest.fn(async (_payload: { to: string; subject: string; text: string; html?: string }) =>
+      ({ success: true } as { success: boolean; error?: string })),
+  };
   const cache = {
     getJson: jest.fn(async (k: string) => (k in cacheData ? cacheData[k] : null)),
     setJson: jest.fn(async (k: string, v: unknown) => { cacheData[k] = v; }),
@@ -72,13 +74,13 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
 
   const service = new RegistrationApplicationService(
     applications as any, applicationDocuments as any, assayerService as any, rosterRecords as any,
-    auditService as any, notificationDispatch as any, emailProvider as any, smsProvider as any,
+    auditService as any, notificationDispatch as any, emailProvider as any,
     cache as any, settings as any, storage as any,
   );
 
   return {
     service, application, applications, applicationDocuments, assayerService, rosterRecords,
-    auditService, notificationDispatch, emailProvider, smsProvider, cache, settings, storage, cacheData,
+    auditService, notificationDispatch, emailProvider, cache, settings, storage, cacheData,
   };
 }
 
@@ -125,20 +127,20 @@ describe('registration invite tokens', () => {
 });
 
 describe('pre-account OTP', () => {
-  it('never stores the code itself — only its hash, beside the phone it was sent to', async () => {
-    const { service, cacheData, smsProvider } = makeService();
+  it('never stores the code itself — only its hash, beside the phone it is bound to', async () => {
+    const { service, cacheData, emailProvider } = makeService();
     await service.requestOtp(RAW_TOKEN, '9822014455');
 
     const entry = cacheData[`regotp:code:${TOKEN_HASH}`];
     expect(entry.hash).toMatch(/^[0-9a-f]{64}$/);
-    const sent = smsProvider.send.mock.calls[0][1] as string;
+    const sent = emailProvider.send.mock.calls[0][0].text;
     const code = sent.match(/\b(\d{6})\b/)![1];
     expect(entry).not.toMatchObject({ code });
   });
 
-  it('caps how many codes one link may send, so a stolen link cannot bomb a phone', async () => {
-    // IP throttling cannot stop this on its own — the same link from rotating addresses is one
-    // person's phone being paid for, in real SMS, with no account to lock.
+  it('caps how many codes one link may send, so a stolen link cannot bomb an inbox', async () => {
+    // IP throttling cannot stop this on its own: the same link from rotating addresses hammers one
+    // person's mailbox, with no account to lock and nothing else counting.
     const { service } = makeService({ cache: { [`regotp:sent:${TOKEN_HASH}`]: { count: 5 } } });
     await expect(service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/Too many verification codes/i);
   });
@@ -150,19 +152,19 @@ describe('pre-account OTP', () => {
 
   it('tells the candidate when the code could not be sent, instead of answering "sent"', async () => {
     /**
-     * `SmsProvider.send` answers false — it does not throw — when MSG91 is unconfigured, and
-     * unconfigured is the shipped state. This used to log a warning and return success, so the
-     * page said a code was on its way and the candidate waited for a message nobody had sent.
+     * `EmailProvider.send` answers `{success:false}` — it does not throw — when the transport is
+     * off. This used to log a warning and return success, so the page said a code was on its way
+     * and the candidate waited for a message nobody had sent.
      */
     const ctx = makeService();
-    ctx.smsProvider.send.mockResolvedValueOnce(false);
-    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/could not send a verification code/i);
+    ctx.emailProvider.send.mockResolvedValueOnce({ success: false, error: 'transport off' });
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/could not email you a verification code/i);
   });
 
   it('rejects a wrong code, and a right code offered for a different phone', async () => {
-    const { service, cacheData, smsProvider } = makeService();
+    const { service, cacheData, emailProvider } = makeService();
     await service.requestOtp(RAW_TOKEN, '9822014455');
-    const code = (smsProvider.send.mock.calls[0][1] as string).match(/\b(\d{6})\b/)![1];
+    const code = emailProvider.send.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
 
     await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000000')).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.verifyOtp(RAW_TOKEN, '9999999999', code)).rejects.toBeInstanceOf(BadRequestException);
