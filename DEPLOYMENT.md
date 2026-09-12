@@ -87,11 +87,16 @@ wait on it with `condition: service_completed_successfully`.
 > are ready, so by the time `db-migrate` exits non-zero the old `backend` is already gone and the
 > new one never starts, because its dependency condition is never met.
 >
-> Plan for that. Take the backup first and know it is restorable — `deploy/backup.sh` exited 0
-> while writing nothing until `b274f302`, so an older dump may not be what its timestamp suggests.
-> Apply the migrations to a copy first when the batch is large: a gate that has been correctly
-> refusing for a while releases everything it held in one jump, which is how that box came to sit
-> 118 commits behind and then take all of them at once.
+> Plan for that. Take the backup first and confirm it is restorable. Apply the migrations to a copy
+> first when the batch is large: a gate that has been correctly refusing for a while releases
+> everything it held in one jump, which is how that box came to sit 118 commits behind and then take
+> all of them at once.
+>
+> `deploy/backup.sh` writes a verified nightly dump and always did. It used to log to a file and
+> print nothing to the terminal, so a hand-run looked exactly like a no-op — which cost one session
+> an hour and a redundant manual dump before it checked the right directory. `b274f302` makes it
+> speak on stdout, name the dump it wrote, exit non-zero on every failure path, and take a lock so
+> the nightly timer and a hand-run cannot race.
 
 `setup.sh` generates `FAPOMS_RUNTIME_PASSWORD`, `FAPOMS_MIGRATION_PASSWORD` and `DB_ADMIN_URL` on a
 fresh install, and adds them to an older `.env.docker` that predates them — naming what it added.
