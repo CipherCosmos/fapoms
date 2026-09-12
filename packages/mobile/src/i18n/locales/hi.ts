@@ -685,6 +685,11 @@ export const hi: PartialCatalogue<typeof en> = {
     failedBodyReason: '%{file} नहीं भेजा गया: %{reason}। ब्रांच छोड़ने से पहले दोबारा कोशिश करें।',
     allUploadedOne: 'पेज भेज दिया गया।',
     allUploadedMany: 'सभी %{count} पेज भेज दिए गए।',
+    notClosedTitle: 'भेज दिया — काम अभी खुला है',
+    notClosedBody:
+      '%{file} डेस्क तक पहुँच गया, लेकिन विज़िट अभी बंद नहीं हुई: %{reason} साइट पर चेक-आउट करें, या डेस्क से बंद करवाएँ।',
+    notClosedBodyNoReason:
+      '%{file} डेस्क तक पहुँच गया, लेकिन विज़िट अभी बंद नहीं हुई। ब्रांच छोड़ने से पहले चेक-आउट करें, या डेस्क से बंद करवाएँ।',
     partialTitle: 'कुछ पेज नहीं भेजे जा सके',
     partialOne:
       '%{total} में से %{uploaded} भेजे गए। पेज %{pages} नहीं गया — ब्रांच छोड़ने से पहले उसे दोबारा स्कैन करें।',

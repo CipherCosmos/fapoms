@@ -142,6 +142,20 @@ export interface AddressCheck {
   kmFromWrittenAddress: number | null;
 }
 
+/**
+ * `assignmentCompletion` is the backend's answer to "did filing this actually close the job".
+ *
+ * Since the departure rule landed, an upload no longer completes an assignment whose attendance
+ * record is incomplete — it stores the document and reports `{ completed: false, blockedReason }`.
+ * Dropping that here is how the app came to tell an assayer their branch was done while the desk
+ * still had it open, which is the exact failure `audit-packet-upload.ts` warns about in its own
+ * docblock.
+ */
+export interface AssignmentCompletionOutcome {
+  completed: boolean;
+  blockedReason?: string;
+}
+
 export class MobileApiService {
   static authToken: string | null = null;
   static refreshToken: string | null = null;
@@ -1169,7 +1183,7 @@ export class MobileApiService {
     fileUri: string,
     assignmentId?: string,
     onProgress?: (percent: number) => void,
-  ): Promise<{ success: boolean; documentUrl?: string; error?: string }> {
+  ): Promise<{ success: boolean; documentUrl?: string; error?: string; assignmentCompletion?: AssignmentCompletionOutcome }> {
     const info = await FileSystem.getInfoAsync(fileUri, { size: true });
     if (!info.exists) return { success: false, error: 'The scanned file is no longer on the device.' };
     const fileSize = (info as any).size as number;
@@ -1321,7 +1335,11 @@ export class MobileApiService {
       );
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.success) {
-        return { success: true, documentUrl: `/documents/${data.data?.id}/download` };
+        return {
+          success: true,
+          documentUrl: `/documents/${data.data?.id}/download`,
+          assignmentCompletion: data?.assignmentCompletion,
+        };
       }
       return { success: false, error: data?.message || 'The upload could not be finalised.' };
     } catch (err: any) {
@@ -2040,7 +2058,7 @@ export class MobileApiService {
     fileName: string,
     source: { uri?: string; blob?: any; base64?: string } | string | undefined,
     assignmentId?: string,
-  ): Promise<{ success: boolean; documentUrl?: string; error?: string }> {
+  ): Promise<{ success: boolean; documentUrl?: string; error?: string; assignmentCompletion?: AssignmentCompletionOutcome }> {
     // A bare string is legacy base64 from older call sites.
     const src = typeof source === 'string' ? { base64: source } : source || {};
 
@@ -2103,7 +2121,7 @@ export class MobileApiService {
       const response = await this.fetchWithAuth(url, { method: 'POST', body: form as any });
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success) {
-        return { done: true, result: { success: true, documentUrl: `/documents/${data.data?.id}/download` } };
+        return { done: true, result: { success: true, documentUrl: `/documents/${data.data?.id}/download`, assignmentCompletion: data?.assignmentCompletion } };
       }
       return {
         done: false,
@@ -2139,7 +2157,7 @@ export class MobileApiService {
 
     const data = JSON.parse(result.body || '{}');
     if (result.status >= 200 && result.status < 300 && data.success) {
-      return { done: true, result: { success: true, documentUrl: `/documents/${data.data?.id}/download` } };
+      return { done: true, result: { success: true, documentUrl: `/documents/${data.data?.id}/download`, assignmentCompletion: data?.assignmentCompletion } };
     }
     return {
       done: false,

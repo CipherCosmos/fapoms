@@ -18,7 +18,18 @@ export type AuditPacketOutcome =
   /** Image fallback: every page arrived. */
   | { kind: 'pages-uploaded'; total: number }
   /** Image fallback: some pages did not. `failed` holds their 1-based page numbers. */
-  | { kind: 'pages-partial'; total: number; uploaded: number; failed: number[] };
+  | { kind: 'pages-partial'; total: number; uploaded: number; failed: number[] }
+  /**
+   * The packet reached the desk, and the job did NOT close.
+   *
+   * Filing the audited return used to complete the assignment on the way past. Since the
+   * departure rule, it completes only when the attendance record already stands on its own; an
+   * arrival with no departure stores the document and leaves the job open, saying why. That is
+   * the right behaviour and it needs its own outcome here, because reporting it as `uploaded`
+   * is precisely the half-delivered success this file's docblock refuses to allow — the assayer
+   * drives away believing the branch is done.
+   */
+  | { kind: 'uploaded-not-closed'; fileName: string; pageCount: number; reason?: string };
 
 /**
  * Send a completed audit packet for one assignment.
@@ -47,9 +58,21 @@ export async function uploadScannedAuditPacket(
       assignmentId,
     ).catch((err: any) => ({ success: false, error: err?.message }));
 
-    return res?.success
-      ? { kind: 'uploaded', fileName: doc.fileName, pageCount: doc.pageCount }
-      : { kind: 'failed', fileName: doc.fileName, error: (res as any)?.error };
+    if (!res?.success) {
+      return { kind: 'failed', fileName: doc.fileName, error: (res as any)?.error };
+    }
+    // `assignmentCompletion` absent means an older backend that still closed the job on upload;
+    // treat that as closed rather than warning every assayer on a deployment that has not moved.
+    const completion = (res as any)?.assignmentCompletion;
+    if (completion && completion.completed === false) {
+      return {
+        kind: 'uploaded-not-closed',
+        fileName: doc.fileName,
+        pageCount: doc.pageCount,
+        reason: completion.blockedReason,
+      };
+    }
+    return { kind: 'uploaded', fileName: doc.fileName, pageCount: doc.pageCount };
   }
 
   const total = doc.pages.length;

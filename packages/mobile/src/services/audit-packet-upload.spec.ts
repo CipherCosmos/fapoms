@@ -130,3 +130,52 @@ describe('uploading a scanned audit packet', () => {
     });
   });
 });
+
+describe('when the packet lands but the visit is still open', () => {
+  /**
+   * The contract that broke when the departure rule shipped on the backend and the app did not
+   * follow. Filing the audited return used to close the assignment on the way past; now it closes
+   * it only when the attendance record stands on its own, and reports `{ completed: false }`
+   * otherwise. Reading that as plain success is how an assayer drives away from a branch the desk
+   * still has open — which is exactly what this file's docblock exists to refuse.
+   */
+  const doc = { fileName: 'return.pdf', pageCount: 3, pdfUri: 'file:///tmp/return.pdf', pages: [] } as any;
+
+  it('reports not-closed, and carries the reason through', async () => {
+    (MobileApiService.uploadAuditPdfResumable as jest.Mock).mockResolvedValue({
+      success: true,
+      assignmentCompletion: { completed: false, blockedReason: 'no departure was recorded.' },
+    });
+
+    const outcome = await uploadScannedAuditPacket('asn-1', doc);
+
+    expect(outcome.kind).toBe('uploaded-not-closed');
+    expect((outcome as any).reason).toContain('no departure');
+    expect((outcome as any).fileName).toBe('return.pdf');
+  });
+
+  it('reports plain success when the job did close', async () => {
+    (MobileApiService.uploadAuditPdfResumable as jest.Mock).mockResolvedValue({
+      success: true,
+      assignmentCompletion: { completed: true },
+    });
+
+    expect((await uploadScannedAuditPacket('asn-1', doc)).kind).toBe('uploaded');
+  });
+
+  it('treats an older backend that says nothing as closed, not as a warning', async () => {
+    // A deployment that has not taken the departure rule yet still closes the job on upload.
+    // Warning every assayer on that estate would be crying wolf about a rule it does not run.
+    (MobileApiService.uploadAuditPdfResumable as jest.Mock).mockResolvedValue({ success: true });
+
+    expect((await uploadScannedAuditPacket('asn-1', doc)).kind).toBe('uploaded');
+  });
+
+  it('a failed upload is still a failure, not a not-closed', async () => {
+    (MobileApiService.uploadAuditPdfResumable as jest.Mock).mockResolvedValue({
+      success: false, error: 'network died',
+    });
+
+    expect((await uploadScannedAuditPacket('asn-1', doc)).kind).toBe('failed');
+  });
+});

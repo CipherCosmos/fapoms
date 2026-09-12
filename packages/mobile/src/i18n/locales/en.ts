@@ -864,6 +864,17 @@ export const en = {
      */
     allUploadedOne: 'The page was uploaded.',
     allUploadedMany: 'All %{count} pages were uploaded.',
+    /**
+     * The packet arrived and the job is still open — since the departure rule, filing the return
+     * closes an assignment only when the attendance record stands on its own. Worded as an
+     * instruction rather than an error, because nothing went wrong with the upload and the fix is
+     * one the assayer can do before they drive away.
+     */
+    notClosedTitle: 'Sent — the job is still open',
+    notClosedBody:
+      '%{file} reached the desk, but the visit is not closed yet: %{reason} Check out on site, or ask the desk to close it.',
+    notClosedBodyNoReason:
+      '%{file} reached the desk, but the visit is not closed yet. Check out on site before leaving, or ask the desk to close it.',
     partialTitle: 'Some pages did not upload',
     partialOne:
       '%{uploaded} of %{total} uploaded. Page %{pages} failed — please scan it again before leaving the branch.',

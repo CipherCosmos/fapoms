@@ -1087,6 +1087,21 @@ function AppMain() {
                     : tr('scan.failedBody', { file: outcome.fileName }),
                 );
                 break;
+              case 'uploaded-not-closed':
+                /**
+                 * The packet is safe at the desk and the visit is NOT closed — the backend
+                 * refused completion because the attendance record is incomplete. Warning, not
+                 * success: reporting this as "upload complete" is how an assayer drives away
+                 * from a branch the desk still has open, which is the failure this whole path
+                 * is written to prevent.
+                 */
+                feedback.warning(
+                  tr('scan.notClosedTitle'),
+                  outcome.reason
+                    ? tr('scan.notClosedBody', { file: outcome.fileName, reason: outcome.reason })
+                    : tr('scan.notClosedBodyNoReason', { file: outcome.fileName }),
+                );
+                break;
               case 'pages-uploaded':
                 feedback.success(
                   tr('scan.uploadedTitle'),
