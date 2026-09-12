@@ -1,9 +1,6 @@
 import {
-  BillingState,
   ClientLifecycleStatus,
   DocumentStatus,
-  InvoiceStatus,
-  AssayerPayableStatus,
   ProjectStatus,
   ScheduleStatus,
   ValidationStatus,
@@ -178,27 +175,40 @@ export function isValidTransition<T extends string>(
 }
 
 /**
- * The client-side line. Invoicing moves UNBILLED → INVOICED; recording the last rupee moves
- * INVOICED → PAID; cancelling the invoice moves INVOICED → UNBILLED (the work is still billable).
- * CANCELLED is terminal — a line that will never be billed.
+ * Money has no transition table here, and that is the decision rather than the omission.
+ *
+ * `BILLING_STATE_TRANSITIONS`, `INVOICE_TRANSITIONS` and `PAYABLE_TRANSITIONS` used to sit at the
+ * bottom of this file with **no consumers in any package**, and they had drifted four ways while
+ * nobody was reading them: `PAYABLE_TRANSITIONS` had no `VOIDED` at all — the single most common
+ * end for a payable on the live rig, and the one the reopen path depends on — and all three
+ * called their `PAID` state terminal, which reversing a payment has never respected. Anyone
+ * reading them to learn how money moves learned a lifecycle that does not exist. The docblock on
+ * `PROJECT_TRANSITIONS` above says why that is worse than nothing.
+ *
+ * They were deleted rather than wired, because a table cannot be the authority here:
+ *
+ *  - **The target is an amount, not a state.** Whether a disbursement leaves a payable APPROVED
+ *    or moves it to PAID is decided by what is still owed, not by where it came from; the same is
+ *    true of every client line an invoice collects against. A table could only re-assert the
+ *    answer afterwards, never produce it.
+ *  - **The refusals carry reasons a table cannot hold.** "already paid — it cannot be voided, only
+ *    reversed by finance", "on hold: <reason>", "awaiting assayer invoice <n> — approve the
+ *    invoice instead", segregation of duties, a missing PAN or IFSC, an amount above what is
+ *    owed. Routing those through a from/to lookup would answer the caller with less than the code
+ *    already knows.
+ *  - **The writes are not all in one module.** Reopening an assignment cancels its client line
+ *    from `assignment.service.ts`. A table obeyed by the billing engine and not by that path
+ *    would be a third opinion with an import, which is the thing it was supposed to remove.
+ *
+ * So each question about money has exactly one home, and none of them is here:
+ *
+ *  - **which states exist** — the enums in `./enums`, pinned by `CK_assayer_payables_status`,
+ *    `CK_billing_entries_state` and `CK_billing_invoices_status` (migrations `1791500000000`,
+ *    `1796300000000`). `billing-engine/money-state-authority.db.spec.ts` holds the two together, reading the
+ *    constraints out of the live catalogue rather than the migration — the migration is what was
+ *    intended, the catalogue is what is true, and those parted company once already.
+ *  - **which states are dead** — `./billing-liveness`, in the shape TypeScript needs and the shape
+ *    the partial unique indexes of migration `1798000000000` need.
+ *  - **which moves are allowed, and why one was refused** — the guards in
+ *    `billing-engine.service.ts`, which are also the message the caller gets.
  */
-export const BILLING_STATE_TRANSITIONS: TransitionMap<BillingState> = {
-  [BillingState.UNBILLED]: [BillingState.INVOICED, BillingState.CANCELLED],
-  [BillingState.INVOICED]: [BillingState.PAID, BillingState.UNBILLED],
-  [BillingState.PAID]: [],
-  [BillingState.CANCELLED]: [],
-};
-
-export const INVOICE_TRANSITIONS: TransitionMap<InvoiceStatus> = {
-  [InvoiceStatus.DRAFT]: [InvoiceStatus.ISSUED, InvoiceStatus.CANCELLED],
-  [InvoiceStatus.ISSUED]: [InvoiceStatus.PAID, InvoiceStatus.CANCELLED],
-  [InvoiceStatus.PAID]: [],
-  [InvoiceStatus.CANCELLED]: [],
-};
-
-/** One approval, then payment. PAID is only ever reached by recording a disbursement. */
-export const PAYABLE_TRANSITIONS: TransitionMap<AssayerPayableStatus> = {
-  [AssayerPayableStatus.PENDING]: [AssayerPayableStatus.APPROVED],
-  [AssayerPayableStatus.APPROVED]: [AssayerPayableStatus.PAID],
-  [AssayerPayableStatus.PAID]: [],
-};
