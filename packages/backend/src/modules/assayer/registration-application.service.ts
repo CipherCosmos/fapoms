@@ -140,6 +140,20 @@ export class RegistrationApplicationService {
   }
 
   /**
+   * The candidate-facing URL for a freshly minted token.
+   *
+   * Returned to the person who just minted it, and to nobody else: the token IS the candidate's
+   * authorisation, so it never appears in a list, a read, or an audit remark. Handing it back at
+   * the moment of minting is what makes the flow work on a deployment whose email is off — which
+   * is every deployment until someone configures a mailbox. Without it a PASS verdict produced a
+   * token that existed only inside an email that was never sent, and the candidate had no way in
+   * at all.
+   */
+  private inviteLink(rawToken: string): string {
+    return `${appPublicUrl()}/register/${rawToken}`;
+  }
+
+  /**
    * Returns whether the link actually went out — callers must not assume it did.
    *
    * `EmailProvider.send` never throws; it answers `{ success: false }` when the transport is off
@@ -153,7 +167,7 @@ export class RegistrationApplicationService {
     intro: string,
   ): Promise<boolean> {
     if (!application.email) return false;
-    const link = `${appPublicUrl()}/register/${rawToken}`;
+    const link = this.inviteLink(rawToken);
     const greeting = application.fullName ? `Hello ${application.fullName},` : 'Hello,';
     const result = await this.emailProvider.send({
       to: application.email,
@@ -187,7 +201,7 @@ export class RegistrationApplicationService {
     mobile: string;
     email?: string | null;
     organizationId?: string | null;
-  }): Promise<{ application: AssayerApplicationEntity; emailed: boolean }> {
+  }): Promise<{ application: AssayerApplicationEntity; emailed: boolean; inviteLink: string }> {
     const application = this.applications.create({
       interviewId: input.interviewId ?? null,
       fullName: input.fullName ?? null,
@@ -203,7 +217,7 @@ export class RegistrationApplicationService {
       rawToken,
       'Use the link below to complete your Appraiser registration — from your phone or any computer, no app required.',
     );
-    return { application: saved, emailed };
+    return { application: saved, emailed, inviteLink: this.inviteLink(rawToken) };
   }
 
   /**
@@ -218,16 +232,16 @@ export class RegistrationApplicationService {
    * It mints a new token rather than re-sending the old one, for the same reason `requestMoreInfo`
    * does: only the hash was ever stored, so the original raw token no longer exists anywhere.
    */
-  async resendInvite(id: string, actorUserId: string): Promise<{ application: AssayerApplicationEntity; emailed: boolean }> {
+  async resendInvite(id: string, actorUserId: string): Promise<{ application: AssayerApplicationEntity; emailed: boolean; inviteLink: string }> {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found.');
     if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
       throw new BadRequestException('This application has already been decided — there is nothing left to complete.');
     }
-    if (!application.email) {
-      throw new BadRequestException('There is no email address on this application to send a link to.');
-    }
 
+    // A missing email used to be a refusal. It is not one: the desk can read the link out over
+    // the phone or paste it into a message, and on a deployment with email switched off that is
+    // the ONLY way a candidate is ever reached. Minting still happens; only the send is skipped.
     const rawToken = await this.mintToken(application);
     const saved = await this.applications.save(application);
     const emailed = await this.sendInviteEmail(
@@ -241,9 +255,13 @@ export class RegistrationApplicationService {
       entityType: 'ASSAYER_APPLICATION',
       entityId: saved.id,
       userId: actorUserId,
-      remarks: emailed ? `Fresh link sent to ${saved.email}.` : `Fresh link generated but delivery to ${saved.email} failed.`,
+      remarks: emailed
+        ? `Fresh link sent to ${saved.email}.`
+        : saved.email
+          ? `Fresh link generated but delivery to ${saved.email} failed — it was handed to the desk instead.`
+          : 'Fresh link generated and handed to the desk; there is no email address on this application.',
     });
-    return { application: saved, emailed };
+    return { application: saved, emailed, inviteLink: this.inviteLink(rawToken) };
   }
 
   // ── Token resolution ─────────────────────────────────────────────────────

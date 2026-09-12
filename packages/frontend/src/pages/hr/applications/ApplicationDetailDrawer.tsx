@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApplicationStatus, APPLICATION_TERMINAL_STATUSES } from '@fapoms/shared';
 
 import { api } from '../../../services/api';
@@ -9,7 +9,7 @@ import { loadFailed } from '../../../queryClient';
 import { LoadFailure } from '../../../components/LoadFailure';
 import { DetailDrawer, AlertBanner, StatusBadge, useConfirm } from '../../../components/ui';
 import { humanizeStatus } from '../../../config/status-registry';
-import { Field, fmtDate, fmtWhen } from '../hr-ui';
+import { Field, fmtDate, fmtWhen, InviteLinkBox } from '../hr-ui';
 import type { AssayerApplicationDetail } from './HrApplicationsPage';
 
 /**
@@ -25,8 +25,17 @@ export const ApplicationDetailDrawer: React.FC<{
   onSuccess: (notice: { tone: 'ok' | 'err'; text: string }) => void;
 }> = ({ id, onClose, onSuccess }) => {
   const { confirm, confirmWithReason, confirmDialog } = useConfirm();
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  /**
+   * The freshly minted link, kept HERE rather than handed to `onSuccess`.
+   *
+   * Every other action on this drawer ends the review, so `onSuccess` closes it. A resend does
+   * not: the desk still has to deliver the link, and the link only exists in this one response.
+   * Closing the drawer on it would throw away the thing the action was for.
+   */
+  const [resent, setResent] = useState<{ emailed: boolean; inviteLink: string } | null>(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.hr.applicationDetail(id),
@@ -126,12 +135,12 @@ export const ApplicationDetailDrawer: React.FC<{
     setActionError(null);
     setBusy(true);
     try {
-      const { emailed } = await api.request<{ emailed: boolean }>(`/hr/applications/${id}/resend-invite`, {
-        method: 'POST',
-      });
-      onSuccess(emailed
-        ? { tone: 'ok', text: `A fresh registration link was emailed to ${app?.email}.` }
-        : { tone: 'err', text: `A fresh link was generated but the email to ${app?.email} did not go out. Check email delivery in Platform Settings.` });
+      const { emailed, inviteLink } = await api.request<{ emailed: boolean; inviteLink: string }>(
+        `/hr/applications/${id}/resend-invite`,
+        { method: 'POST' },
+      );
+      setResent({ emailed, inviteLink });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
     } catch (err) {
       setActionError(userMessage(err));
     } finally {
@@ -152,20 +161,20 @@ export const ApplicationDetailDrawer: React.FC<{
           app ? (
             isReviewable ? (
               <>
-                {/* Only where it can do anything: an application with no address on it has
-                    nowhere to send, and the server refuses that case too. */}
-                {app.email ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={handleResend}
-                    disabled={busy}
-                    title="Send a fresh registration link. Any earlier link stops working."
-                    style={{ fontSize: '12px', padding: '8px 14px', marginRight: 'auto' }}
-                  >
-                    Resend link
-                  </button>
-                ) : null}
+                {/* Offered whether or not an address is on file. It used to be hidden without
+                    one, because the server refused that case — but a link the desk delivers by
+                    hand needs no mailbox, and on a deployment with email switched off that is the
+                    only delivery there is. */}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleResend}
+                  disabled={busy}
+                  title="Mint a fresh registration link. Any earlier link stops working."
+                  style={{ fontSize: '12px', padding: '8px 14px', marginRight: 'auto' }}
+                >
+                  {app.email ? 'Resend link' : 'Get link'}
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={handleRequestInfo} disabled={busy} style={{ fontSize: '12px', padding: '8px 14px' }}>
                   Request info
                 </button>
@@ -201,6 +210,19 @@ export const ApplicationDetailDrawer: React.FC<{
             {actionError && (
               <AlertBanner type="error" onClose={() => setActionError(null)}>
                 {actionError}
+              </AlertBanner>
+            )}
+
+            {/* An undelivered invite is an action item, not a cheerful confirmation — the same
+                reading the interview screen gives it. AlertBanner has no warning tone. */}
+            {resent && (
+              <AlertBanner type={resent.emailed ? 'success' : 'error'} onClose={() => setResent(null)}>
+                {resent.emailed
+                  ? `A fresh registration link was emailed to ${app.email}. Any earlier link has stopped working.`
+                  : app.email
+                    ? `A fresh link was minted but the email to ${app.email} did not go out — send it yourself, and check email delivery in Platform Settings.`
+                    : 'A fresh link was minted. There is no email address on this application, so send it to the candidate yourself.'}
+                <InviteLinkBox link={resent.inviteLink} />
               </AlertBanner>
             )}
 

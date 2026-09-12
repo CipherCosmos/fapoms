@@ -11,7 +11,7 @@ import { LoadFailure } from '../../../components/LoadFailure';
 import { PageHeader, AlertBanner, DataTable, StatusBadge, EmptyState } from '../../../components/ui';
 import type { Column } from '../../../components/ui';
 import { getSemanticTokens } from '../../../config/status-registry';
-import { Section, Field, fieldInput, fmtWhen } from '../hr-ui';
+import { Section, Field, fieldInput, fmtWhen, InviteLinkBox } from '../hr-ui';
 
 /**
  * The Appraiser Recruitment spec's Module 1 — HR's own gate before a candidate can self-register.
@@ -36,6 +36,12 @@ export interface AssayerInterviewRow {
    * below is the only thing that reads it.
    */
   inviteEmailed?: boolean;
+  /**
+   * Also only on the response to recording a PASS: the candidate's registration link, handed back
+   * so the desk can deliver it itself. Never present when the log is listed back — the token is
+   * stored only as a hash, and this is the one moment it exists in the clear.
+   */
+  inviteLink?: string;
 }
 
 interface InterviewFormState {
@@ -53,6 +59,8 @@ export const AssayerInterviewsPage: React.FC = () => {
   const [form, setForm] = useState<InterviewFormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+  /** Cleared with the notice: both describe the same submission. */
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
 
   const interviewsQuery = useQuery({
     queryKey: queryKeys.hr.interviews,
@@ -86,6 +94,7 @@ export const AssayerInterviewsPage: React.FC = () => {
        * line below while nothing left the building, and the candidate then never appeared.
        */
       const passedAndEmailed = interview.outcome === InterviewOutcome.PASS && interview.inviteEmailed;
+      setInviteLink(interview.outcome === InterviewOutcome.PASS ? interview.inviteLink ?? null : null);
       setNotice({
         // An undelivered invite is a stall, not a success — it needs somebody to act, so it reads
         // as an error rather than a cheerful confirmation nobody looks twice at.
@@ -94,8 +103,8 @@ export const AssayerInterviewsPage: React.FC = () => {
           ? (passedAndEmailed
             ? `${interview.candidateName} passed — a self-registration invite has been emailed to ${interview.email}.`
             : interview.email
-              ? `${interview.candidateName} passed and an application was created, but the invite email to ${interview.email} did not go out. Check email delivery in Platform Settings, then resend from Applications.`
-              : `${interview.candidateName} passed and an application was created, but no email is on file to deliver the invite link. Add one before contacting the candidate.`)
+              ? `${interview.candidateName} passed and an application was created, but the invite email to ${interview.email} did not go out. Send them the link below, and check email delivery in Platform Settings.`
+              : `${interview.candidateName} passed and an application was created. There is no email on file, so send them the link below.`)
           : `${interview.candidateName}'s interview was recorded as a fail. No invite was sent.`,
       });
       setForm(EMPTY_FORM);
@@ -167,8 +176,9 @@ export const AssayerInterviewsPage: React.FC = () => {
       />
 
       {notice && (
-        <AlertBanner type={notice.tone === 'ok' ? 'success' : 'error'} onClose={() => setNotice(null)}>
+        <AlertBanner type={notice.tone === 'ok' ? 'success' : 'error'} onClose={() => { setNotice(null); setInviteLink(null); }}>
           {notice.text}
+          {inviteLink && <InviteLinkBox link={inviteLink} />}
         </AlertBanner>
       )}
 

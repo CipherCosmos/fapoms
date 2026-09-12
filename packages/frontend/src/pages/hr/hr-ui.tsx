@@ -1,6 +1,6 @@
 import React from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ExternalLink, AlertTriangle, Info } from 'lucide-react';
+import { ExternalLink, AlertTriangle, Info, Copy, Check } from 'lucide-react';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { Modal } from '../../components/ui';
 
@@ -382,6 +382,56 @@ export const attritionExplainer = (a: HrWorkforceOverview['attrition']): {
       + 'percentage is worked out without them — add their leaving dates and it will change.'
     : null,
 });
+
+/**
+ * The candidate's registration link, shown to the person who just minted it.
+ *
+ * It exists because delivery is not guaranteed and never was. The invite goes out by email, the
+ * homeserver has email switched off in Platform Settings, and the raw token is stored only as a
+ * hash — so an undelivered invite used to be a dead end with no copy of the link anywhere in the
+ * product. The desk can now read it out, paste it into a message, or send it however it actually
+ * reaches this candidate.
+ *
+ * Treat it as a credential: the link IS the candidate's authorisation, it is returned only at the
+ * moment of minting, and a later resend retires it.
+ */
+export const InviteLinkBox: React.FC<{ link: string; note?: string }> = ({ link, note }) => {
+  const [copied, setCopied] = React.useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* Clipboard blocked (insecure origin, or the browser refused): the link is on screen and
+         selectable, which is why it is rendered as text rather than hidden behind the button. */
+    }
+  };
+  return (
+    <div style={{
+      marginTop: 10, padding: 12, borderRadius: 8,
+      background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
+    }}>
+      <p style={{ margin: '0 0 8px', fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+        {note ?? 'Send this registration link to the candidate'}
+      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <code style={{
+          flex: 1, minWidth: 240, fontFamily: 'var(--font-mono, monospace)', fontSize: 12,
+          background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+          borderRadius: 6, padding: '8px 10px', color: 'var(--text-primary)', wordBreak: 'break-all',
+        }}>{link}</code>
+        <button type="button" onClick={copy} className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy link'}
+        </button>
+      </div>
+      <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+        Anyone holding this link can complete the application, so send it to the candidate only.
+        It expires, and resending replaces it.
+      </p>
+    </div>
+  );
+};
 
 export const OpenLink: React.FC<{ onClick: () => void; label?: string }> = ({ onClick, label: text = 'Open' }) => (
   <LinkButton onClick={onClick} style={{ color: 'var(--accent)' }}>

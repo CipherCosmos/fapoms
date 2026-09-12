@@ -339,10 +339,28 @@ describe('HR review', () => {
       expect(emailed).toBe(false);
     });
 
-    it('refuses when there is no address to send to, and once the application is decided', async () => {
+    it('still mints a link when there is no address to send to — the desk delivers it', async () => {
       const noEmail = makeService({ application: submitted({ status: ApplicationStatus.DRAFT, email: null }) });
-      await expect(noEmail.service.resendInvite('app-1', 'user-1')).rejects.toThrow(/no email address/i);
+      const { emailed, inviteLink } = await noEmail.service.resendInvite('app-1', 'user-1');
 
+      // No mailbox is not a refusal. The link is the deliverable; email is one way to deliver it,
+      // and on a deployment with email switched off it is not a way at all.
+      expect(emailed).toBe(false);
+      expect(noEmail.emailProvider.send).not.toHaveBeenCalled();
+      expect(inviteLink).toMatch(/\/register\/[0-9a-f]{16,}$/);
+    });
+
+    it('hands the minted link back to the caller, and it is the token that now resolves', async () => {
+      const ctx = makeService({ application: submitted({ status: ApplicationStatus.DRAFT }) });
+      const { inviteLink } = await ctx.service.resendInvite('app-1', 'user-1');
+      const rawToken = inviteLink.split('/register/')[1];
+
+      expect(rawToken).toBeTruthy();
+      expect(require('crypto').createHash('sha256').update(rawToken).digest('hex'))
+        .toBe(ctx.application!.tokenHash);
+    });
+
+    it('refuses once the application is decided', async () => {
       const decided = makeService({ application: submitted({ status: ApplicationStatus.APPROVED }) });
       await expect(decided.service.resendInvite('app-1', 'user-1')).rejects.toThrow(/already been decided/i);
     });

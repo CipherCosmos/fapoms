@@ -37,7 +37,7 @@ export class AssayerInterviewService {
     userId: string,
     userName: string | undefined,
     organizationId?: string | null,
-  ): Promise<AssayerInterviewEntity & { inviteEmailed: boolean }> {
+  ): Promise<AssayerInterviewEntity & { inviteEmailed: boolean; inviteLink?: string }> {
     if (!dto.candidateName?.trim()) throw new BadRequestException('Candidate name is required.');
     if (!dto.mobile?.trim()) throw new BadRequestException('Mobile number is required.');
 
@@ -55,8 +55,11 @@ export class AssayerInterviewService {
     const saved = await this.interviews.save(interview);
 
     let inviteEmailed = false;
+    // Handed back to the interviewer on a PASS so the desk can deliver the link itself when the
+    // email did not go — see `RegistrationApplicationService.inviteLink`.
+    let inviteLink: string | undefined;
     if (dto.outcome === InterviewOutcome.PASS) {
-      const { application, emailed } = await this.registrationApplications.createInvite({
+      const { application, emailed, inviteLink: link } = await this.registrationApplications.createInvite({
         interviewId: saved.id,
         fullName: saved.candidateName,
         mobile: saved.mobile,
@@ -64,10 +67,11 @@ export class AssayerInterviewService {
         organizationId,
       });
       inviteEmailed = emailed;
+      inviteLink = link;
       saved.spawnedApplicationId = application.id;
       await this.interviews.save(saved);
     }
-    return Object.assign(saved, { inviteEmailed });
+    return Object.assign(saved, { inviteEmailed, inviteLink });
   }
 
   async list(): Promise<AssayerInterviewEntity[]> {
