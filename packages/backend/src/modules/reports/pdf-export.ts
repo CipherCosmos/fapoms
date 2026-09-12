@@ -1,6 +1,8 @@
-// See the note in `modules/assayer/id-card.ts`: a default import of pdfkit compiles but throws
-// at runtime here, because esModuleInterop is off and pdfkit is a CommonJS `export =` module.
-import PDFDocument = require('pdfkit');
+// A DEFAULT import of pdfkit compiles here and throws `is not a constructor` at runtime, because
+// this project sets allowSyntheticDefaultImports without esModuleInterop and pdfkit is a CommonJS
+// `export =` module. A namespace import emits the bare require that actually works — the same form
+// `xlsx` is pulled in with next door.
+import * as PDFDocument from 'pdfkit';
 
 /**
  * The admin dashboard's PDF export sibling to `excel-export.ts`'s `buildWorkbook` — same idea
@@ -64,7 +66,7 @@ export async function buildTablePdf(spec: TablePdfSpec): Promise<Buffer> {
       doc.font('Helvetica').fontSize(8).fillColor('#5b6270')
         .text(`Generated ${new Date().toLocaleString('en-IN')}`, PAGE_MARGIN, PAGE_MARGIN + 16);
 
-      let y = PAGE_MARGIN + 36;
+      const y = PAGE_MARGIN + 36;
       doc.font('Helvetica-Bold').fontSize(FONT_SIZE).fillColor('#ffffff');
       doc.rect(PAGE_MARGIN, y, pageWidth, HEADER_HEIGHT).fill('#29695a');
       doc.fillColor('#ffffff');

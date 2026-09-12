@@ -1,8 +1,8 @@
-// `import PDFDocument from 'pdfkit'` compiles here (allowSyntheticDefaultImports is on) but
-// throws "pdfkit_1.default is not a constructor" at runtime, because esModuleInterop is OFF in
-// this project's tsconfig and pdfkit is a CommonJS `export =` module. This is the form that
-// actually emits a bare require, matching how `xlsx` is pulled in beside it.
-import PDFDocument = require('pdfkit');
+// `import PDFDocument from 'pdfkit'` compiles here (allowSyntheticDefaultImports is on) but throws
+// "pdfkit_1.default is not a constructor" at runtime, because esModuleInterop is OFF in this
+// project's tsconfig and pdfkit is a CommonJS `export =` module. A namespace import emits the bare
+// require that actually works, and unlike `import x = require()` it is lint-clean.
+import * as PDFDocument from 'pdfkit';
 import type { Readable } from 'stream';
 
 export async function streamToBuffer(stream: Readable): Promise<Buffer> {

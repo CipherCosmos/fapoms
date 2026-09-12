@@ -454,7 +454,7 @@ export class RegistrationApplicationService {
       entityId: saved.id,
       remarks: `Registration application submitted by ${saved.fullName ?? saved.mobile}.`,
     });
-    await this.notificationDispatch.emitSafe({
+    this.notificationDispatch.emitSafe({
       type: 'ASSAYER_APPLICATION_SUBMITTED',
       payload: { applicantName: saved.fullName ?? saved.mobile },
       entityType: 'ASSAYER_APPLICATION',
@@ -624,7 +624,7 @@ export class RegistrationApplicationService {
       userId: actorUserId,
       remarks: `Promoted to assayer ${assayer.assayerCode}.`,
     });
-    await this.notificationDispatch.emitSafe({
+    this.notificationDispatch.emitSafe({
       type: 'ASSAYER_CODE_ISSUED',
       payload: { assayerName: assayer.displayName, assayerCode: assayer.assayerCode },
       assayerId: assayer.id,
