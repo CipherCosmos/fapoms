@@ -530,3 +530,51 @@ describe('the extended profile the wizard collects', () => {
     );
   });
 });
+
+describe('the desk files an application instead of writing the roster', () => {
+  it('creates it submitted, sourced HR_DESK, and says so on the audit trail', async () => {
+    const ctx = makeService({ application: null });
+
+    const saved = await ctx.service.createStaffApplication(
+      { fullName: 'Desk Entered', mobile: '9822000001', state: 'Maharashtra',
+        extendedProfile: { commercial: { baseFee: 1200 } } },
+      'hr-maker', 'org-1',
+    );
+
+    expect(ctx.applications.save).toHaveBeenCalledWith(expect.objectContaining({
+      source: ApplicationSource.HR_DESK,
+      status: ApplicationStatus.PENDING_VALIDATION, // no draft phase — the author is this session
+      createdBy: 'hr-maker',
+      extendedProfile: { commercial: { baseFee: 1200 } },
+    }));
+    expect(saved.id).toBeTruthy();
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'ASSAYER_APPLICATION_SUBMITTED',
+      remarks: expect.stringContaining('different reviewer'),
+    }));
+  });
+
+  it('staff document upload lands through the SAME row logic as the candidate door', async () => {
+    const ctx = makeService({ application: {
+      id: 'app-1', status: ApplicationStatus.PENDING_VALIDATION, source: ApplicationSource.HR_DESK,
+    } });
+
+    const row = await ctx.service.uploadDocumentAsStaff('app-1', OnboardingDocument.PAN_CARD, {
+      originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 1,
+    });
+
+    expect(ctx.storage.saveFile).toHaveBeenCalled();
+    expect(row.filePaths).toEqual(['uploads/scan.png']);
+  });
+
+  it('refuses to accrete evidence onto a decided application', async () => {
+    const ctx = makeService({ application: {
+      id: 'app-1', status: ApplicationStatus.REJECTED, source: ApplicationSource.HR_DESK,
+    } });
+
+    await expect(ctx.service.uploadDocumentAsStaff('app-1', OnboardingDocument.PAN_CARD, {
+      originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 1,
+    })).rejects.toThrow(/already been decided/);
+    expect(ctx.storage.saveFile).not.toHaveBeenCalled();
+  });
+});

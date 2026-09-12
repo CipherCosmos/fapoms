@@ -419,6 +419,19 @@ export class RegistrationApplicationService {
       allowed: SCAN_UPLOAD_TYPES,
       hint: 'Photograph the document in better light rather than at higher resolution.',
     });
+    return this.attachDocumentRow(application, requirement, file);
+  }
+
+  /**
+   * The storage-and-row half of a document upload, shared by the candidate door (token) and the
+   * staff door (session). One implementation, so the two doors cannot drift on what "attached"
+   * means — the exact drift that produced four disagreeing upload paths elsewhere.
+   */
+  private async attachDocumentRow(
+    application: AssayerApplicationEntity,
+    requirement: OnboardingDocument,
+    file: { originalname: string; buffer: Buffer; mimetype: string; size: number },
+  ): Promise<AssayerApplicationDocumentEntity> {
     const key = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype, file.size);
     const existing = await this.applicationDocuments.findOne({
       where: { applicationId: application.id, requirement },
@@ -426,6 +439,88 @@ export class RegistrationApplicationService {
     const row = existing ?? this.applicationDocuments.create({ applicationId: application.id, requirement, filePaths: [] });
     row.filePaths = [...(row.filePaths ?? []), key];
     return this.applicationDocuments.save(row);
+  }
+
+  /**
+   * The staff half of the same two doors. No token and no OTP — the uploader is an authenticated
+   * HR session and the guards on the controller already said who. Terminal applications refuse:
+   * evidence must not accrete onto a decision that has been taken.
+   */
+  async uploadDocumentAsStaff(
+    applicationId: string,
+    requirement: OnboardingDocument,
+    file: { originalname: string; buffer: Buffer; mimetype: string; size: number },
+  ): Promise<AssayerApplicationDocumentEntity> {
+    const application = await this.applications.findOne({ where: { id: applicationId } });
+    if (!application) throw new NotFoundException('No such application.');
+    if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
+      throw new BadRequestException('This application has already been decided.');
+    }
+    if (!Object.values(OnboardingDocument).includes(requirement)) {
+      throw new BadRequestException('That is not a recognised document type.');
+    }
+    assertUploadAllowed({
+      contentType: file.mimetype,
+      fileName: file.originalname,
+      size: file.size,
+      allowed: SCAN_UPLOAD_TYPES,
+      hint: 'Photograph the document in better light rather than at higher resolution.',
+    });
+    return this.attachDocumentRow(application, requirement, file);
+  }
+
+  /**
+   * A candidate typed in AT THE DESK — the owner's drawing routes this through the same
+   * application record and review as the self-service doors, instead of the wizard's old direct
+   * write to the roster. Submitted immediately: the staff member is identified by their session,
+   * so there is no token to consume and no OTP to verify, and the draft phase belongs to
+   * candidates editing over days, not to a desk entering a person in one sitting. Maker–checker
+   * is enforced at approval, keyed on `source` and `createdBy` — see `approve()`.
+   */
+  async createStaffApplication(
+    dto: {
+      fullName: string; mobile: string; email?: string; dateOfBirth?: string; gender?: string;
+      address?: string; state?: string; city?: string; pincode?: string;
+      experienceYears?: number; currentEmployer?: string; employmentCategory?: EmploymentCategory;
+      expertise?: string; availability?: string;
+      extendedProfile?: Record<string, unknown>;
+    },
+    actorUserId: string,
+    organizationId?: string | null,
+  ): Promise<AssayerApplicationEntity> {
+    const application = this.applications.create({
+      organizationId: organizationId ?? null,
+      fullName: dto.fullName,
+      mobile: dto.mobile,
+      email: dto.email ?? null,
+      dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null,
+      gender: dto.gender ?? null,
+      address: dto.address ?? null,
+      state: dto.state ?? null,
+      city: dto.city ?? null,
+      pincode: dto.pincode ?? null,
+      experienceYears: dto.experienceYears ?? null,
+      currentEmployer: dto.currentEmployer ?? null,
+      employmentCategory: dto.employmentCategory ?? null,
+      expertise: dto.expertise ?? null,
+      availability: dto.availability ?? null,
+      source: ApplicationSource.HR_DESK,
+      extendedProfile: dto.extendedProfile ?? null,
+      status: ApplicationStatus.PENDING_VALIDATION,
+      createdBy: actorUserId,
+      updatedBy: actorUserId,
+    } as Partial<AssayerApplicationEntity>);
+    const saved = await this.applications.save(application);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_APPLICATION_SUBMITTED',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: saved.id,
+      userId: actorUserId,
+      remarks: 'Entered at the HR desk; awaiting approval by a different reviewer.',
+    });
+    return saved;
   }
 
   // ── Submit ───────────────────────────────────────────────────────────────
@@ -595,7 +690,18 @@ export class RegistrationApplicationService {
 
     if (profile.commercial && Object.keys(profile.commercial).length > 0) {
       try {
-        await this.assayerService.createCommercialProfile(assayerId, profile.commercial as never, actorUserId);
+        /**
+         * `createCommercialProfile` requires an effective-start date — the wizard always sends
+         * one, and `new Date(undefined)` is an Invalid Date that Postgres refuses as
+         * "0NaN-NaN-NaN…". Found by this method's own gap-naming on its first live run. The
+         * rates take effect on the day of approval unless the application said otherwise, which
+         * is also the honest date: nothing was in force before the person existed.
+         */
+        const commercial = {
+          effectiveStartDate: new Date().toISOString().slice(0, 10),
+          ...(profile.commercial as Record<string, unknown>),
+        };
+        await this.assayerService.createCommercialProfile(assayerId, commercial as never, actorUserId);
       } catch (err: any) {
         gaps.push(`commercial rates (${err?.message ?? 'refused'})`);
       }
