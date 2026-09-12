@@ -178,7 +178,10 @@ describe('bulk lifecycle — the contract between the response and the database'
         { provide: CacheService, useValue: { del: jest.fn().mockResolvedValue(undefined) } },
         {
           provide: RosterRecordsService,
-          useValue: { identityStanding: jest.fn(async () => ({ ok: identityOk, verified: [], missing: identityOk ? [] : ['PAN_CARD'], rejected: [] })) },
+          useValue: {
+            identityStanding: jest.fn(async () => ({ ok: identityOk, verified: [], missing: identityOk ? [] : ['PAN_CARD'], rejected: [] })),
+            latestBackgroundVerdict: jest.fn(async () => null),
+          },
         },
         { provide: PlatformSettingsService, useValue: { get: jest.fn(async () => identityGateMode) } },
       ],

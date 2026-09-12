@@ -162,6 +162,9 @@ export const UNAVAILABLE_LABELS: Record<string, string> = {
   [AssayerUnavailableReason.DECEASED]: 'Deceased',
   [AssayerUnavailableReason.NO_WORK_IN_AREA]: 'No work in their area',
   [AssayerUnavailableReason.MOVED_ABROAD]: 'Moved out of India',
+  // The owner's "failed, not onboarded" outcome — stamped by the lifecycle service when an
+  // adverse background verdict parks somebody, so the roster says why instead of a bare Inactive.
+  [AssayerUnavailableReason.BGV_FAILED]: 'Background verification failed',
   [AssayerUnavailableReason.MOVED_TO_COMPANY]: 'Now engaged through a company',
 };
 

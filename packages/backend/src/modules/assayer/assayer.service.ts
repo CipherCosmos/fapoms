@@ -2,7 +2,7 @@ import {
   Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt, randomUUID, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
 } from '@fapoms/shared';
@@ -3153,6 +3153,40 @@ export class AssayerService implements OnModuleInit {
          * Now it runs after `validateTransition` has accepted the edge, inside the transaction,
          * so it can only ever describe an activation that is actually going to happen.
          */
+        const fromStatus = assayer.lifecycleStatus;
+
+        /**
+         * The other half of vetting — see `assessBackgroundGate` in identity-artifacts.ts for the
+         * whole decision table and why its two arms carry different strictness. Same placement
+         * discipline as the identity gate below: after the edge is validated, inside the
+         * transaction, so a refusal leaves no evidence of a move that never happened.
+         */
+        const runBackgroundGate = async (site: 'leave-bgv' | 'activate') => {
+          if (!this.rosterRecords) return;
+          const verdict = await this.rosterRecords.latestBackgroundVerdict(preRead.id);
+          const decision = assessBackgroundGate(verdict, site);
+          if (decision.refusal) {
+            throw withCode(
+              new BadRequestException(`${assayer.displayName} cannot be moved: ${decision.refusal}`),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
+          if (!decision.gated) return;
+          const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
+          if (mode === 'off') return;
+          const sentence = `${assayer.displayName}: ${decision.gated}`;
+          if (mode === 'enforce') {
+            throw withCode(new BadRequestException(sentence), ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR);
+          }
+          this.logger.warn(`Background gate (warn only): ${sentence}`);
+          await this.recordActivity(
+            preRead.id, 'ASSAYER_UPDATED', null, null, userId,
+            `Moved out of background verification with no completed check on file. The identity `
+            + 'gate is set to warn; switch it to Enforce in Settings once the vetting queue is worked.',
+            manager,
+          ).catch(() => undefined);
+        };
+
         const runIdentityGate = async () => {
           if (targetStatus !== AssayerLifecycleStatus.ACTIVE || !this.rosterRecords) return;
           const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
@@ -3184,9 +3218,14 @@ export class AssayerService implements OnModuleInit {
         } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
           event = AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
+          // The onboarding exit the owner's drawing gates: PASSED goes forward, FAILED does not.
+          await runBackgroundGate('leave-bgv');
           event = AssayerStateMachine.startTraining(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
           AssayerStateMachine.assertCanActivate(assayer);
+          // Adverse-verdict arm only (see the decision table): this is what keeps a record parked
+          // as BGV_FAILED from re-entering the workforce until a newer check clears them.
+          await runBackgroundGate('activate');
           await runIdentityGate();
           event = AssayerStateMachine.activate(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.ON_LEAVE) {
@@ -3195,6 +3234,23 @@ export class AssayerService implements OnModuleInit {
           event = AssayerStateMachine.suspend(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
           event = AssayerStateMachine.deactivate(assayer, userId);
+          /**
+           * Name the parking, so the roster can say WHY.
+           *
+           * A person leaving background verification for INACTIVE with an adverse verdict on
+           * file used to become indistinguishable from every other inactive record — the drawing
+           * the owner approved has an explicit "failed, not onboarded" outcome, and this is it.
+           * Stamped only when the verdict actually says so; an unchecked person parked for other
+           * reasons keeps whatever reason the operator gave.
+           */
+          if (fromStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION && this.rosterRecords) {
+            const verdict = await this.rosterRecords.latestBackgroundVerdict(preRead.id);
+            if (verdict !== null
+                && verdict !== BackgroundCheckVerdict.CLEAR
+                && verdict !== BackgroundCheckVerdict.NOT_CHECKED) {
+              assayer.unavailableReason = AssayerUnavailableReason.BGV_FAILED;
+            }
+          }
         } else if (targetStatus === AssayerLifecycleStatus.RESIGNED) {
           event = AssayerStateMachine.acceptResignation(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.TERMINATED) {

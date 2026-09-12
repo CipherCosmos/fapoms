@@ -41,7 +41,12 @@ describe('activation is gated on a verified identity', () => {
     });
     const svc: any = Object.create(AssayerService.prototype);
     svc.logger = { warn: jest.fn(), log: jest.fn() };
-    svc.rosterRecords = { identityStanding: jest.fn().mockResolvedValue(standing(identityOk, missing)) };
+    svc.rosterRecords = {
+      identityStanding: jest.fn().mockResolvedValue(standing(identityOk, missing)),
+      // The double mirrors production's shape — the background gate reads this on the same moves.
+      // Null = no check ever recorded: passes activation, rides the warn default at the BGV exit.
+      latestBackgroundVerdict: jest.fn().mockResolvedValue(null),
+    };
     svc.platformSettings = { get: jest.fn().mockResolvedValue(mode) };
     svc.findOne = jest.fn(async () => row());
     svc.hydrateWorkforceAttributes = jest.fn().mockResolvedValue(undefined);

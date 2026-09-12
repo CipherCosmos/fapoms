@@ -55,6 +55,15 @@ export enum AssayerUnavailableReason {
   NO_WORK_IN_AREA = 'NO_WORK_IN_AREA',
   /** Now engaged through a company rather than as an individual. */
   MOVED_TO_COMPANY = 'MOVED_TO_COMPANY',
+  /**
+   * Background verification came back adverse and the person was not onboarded.
+   *
+   * Stamped by the lifecycle service when somebody leaves BACKGROUND_VERIFICATION for INACTIVE
+   * with an adverse verdict on file, so the roster can say WHY this record is parked instead of
+   * showing a bare "inactive". Not terminal by force — recording a newer CLEAR check is the one
+   * path back, and the activation gate enforces exactly that.
+   */
+  BGV_FAILED = 'BGV_FAILED',
 }
 
 /** The outcome of a background check, separate from how risky it was judged to be. */

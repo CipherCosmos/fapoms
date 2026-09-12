@@ -1,6 +1,7 @@
 import { AssayerLifecycleStatus, BackgroundCheckVerdict } from '@fapoms/shared';
 import {
   ID_CARD_VALIDITY_DEFAULTS,
+  assessBackgroundGate,
   assessIdentityArtifact,
   idCardValidTill,
 } from './identity-artifacts';
@@ -99,5 +100,37 @@ describe('who may be handed the artifact', () => {
     });
     expect(a.refusals).toHaveLength(1);
     expect(a.gated).toHaveLength(2);
+  });
+});
+
+describe('the background-verification exit rule', () => {
+  it('a clear verdict passes both sites', () => {
+    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, 'leave-bgv')).toEqual({ refusal: null, gated: null });
+    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, 'activate')).toEqual({ refusal: null, gated: null });
+  });
+
+  it.each([
+    BackgroundCheckVerdict.CIVIL_CASE,
+    BackgroundCheckVerdict.CRIMINAL_CASE,
+    BackgroundCheckVerdict.ADVERSE_FINDING,
+  ])('an adverse verdict (%s) refuses in EVERY mode, at both sites', (verdict) => {
+    // refusal, not gated: somebody recorded this on purpose. Warn-mode must not be able to
+    // quietly onboard a criminal-case record with only an audit row to show for it.
+    expect(assessBackgroundGate(verdict, 'leave-bgv').refusal).toContain('adverse');
+    expect(assessBackgroundGate(verdict, 'activate').refusal).toBeTruthy();
+    expect(assessBackgroundGate(verdict, 'activate').gated).toBeNull();
+  });
+
+  it('an absent check gates the onboarding exit — enforce refuses, warn audits', () => {
+    expect(assessBackgroundGate(null, 'leave-bgv').gated).toContain('no completed background check');
+    expect(assessBackgroundGate(BackgroundCheckVerdict.NOT_CHECKED, 'leave-bgv').gated).toBeTruthy();
+  });
+
+  it('an absent check does NOT gate activation — a return from leave is not onboarding', () => {
+    // The estate has never run a check on most of the working roster. The day the mode turns to
+    // enforce, people coming back from leave must not find the door locked over a check that was
+    // never part of their joining. The adverse arm above still guards this site.
+    expect(assessBackgroundGate(null, 'activate')).toEqual({ refusal: null, gated: null });
+    expect(assessBackgroundGate(BackgroundCheckVerdict.NOT_CHECKED, 'activate')).toEqual({ refusal: null, gated: null });
   });
 });

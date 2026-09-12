@@ -1470,6 +1470,20 @@ export class RosterRecordsService {
   }
 
   /**
+   * The most recent background check's verdict, or null when none was ever recorded.
+   *
+   * One reader, used by the lifecycle gate and the ID-card gate both, so "what did the last check
+   * say" cannot quietly mean two different things in two places.
+   */
+  async latestBackgroundVerdict(assayerId: string): Promise<BackgroundCheckVerdict | null> {
+    const latest = await this.checks.findOne({
+      where: { assayerId, isActive: true },
+      order: { checkedOn: 'DESC', createdAt: 'DESC' },
+    });
+    return latest?.verdict ?? null;
+  }
+
+  /**
    * Everything the ID-card route needs to decide whether the card may leave the building.
    *
    * The card is the identity artifact a person hands across a bank counter, so it answers to the
@@ -1496,16 +1510,16 @@ export class RosterRecordsService {
     const assayer = await this.assayers.findOne({ where: { id: assayerId } });
     if (!assayer) return { refusals: ['no such record'], gated: [], gateMode: 'warn', issuedOn: new Date(), validTill: new Date() };
 
-    const [identity, latestCheck] = await Promise.all([
+    const [identity, latestVerdict] = await Promise.all([
       this.identityStanding(assayerId),
-      this.checks.findOne({ where: { assayerId, isActive: true }, order: { checkedOn: 'DESC', createdAt: 'DESC' } }),
+      this.latestBackgroundVerdict(assayerId),
     ]);
 
     const { refusals, gated } = assessIdentityArtifact({
       lifecycleStatus: assayer.lifecycleStatus,
       identityOk: identity.ok,
       identityMissing: identity.missing.map((d) => ONBOARDING_DOCUMENT_LABELS[d] ?? String(d)),
-      latestVerdict: latestCheck?.verdict ?? null,
+      latestVerdict,
     });
 
     const gateMode = (await this.platformSettings?.get<string>('onboarding.identityGate.mode')) ?? 'warn';

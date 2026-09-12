@@ -116,6 +116,16 @@ export const ASSAYER_ERROR_CODES = {
    * guessing which of a dozen rules stopped them.
    */
   IDENTITY_NOT_VERIFIED: 'IDENTITY_NOT_VERIFIED',
+  /**
+   * A lifecycle move refused because the background check is adverse or absent.
+   *
+   * Adverse (civil case, criminal case, adverse finding) refuses in EVERY mode — it is a decision
+   * deliberately recorded on the person, not an estate backlog, and the only path forward is a
+   * newer check that clears them. Absent/NOT_CHECKED rides `onboarding.identityGate.mode`, the
+   * same rollout knob as the identity arm, for the same reason: the estate this shipped into had
+   * never operated the check once.
+   */
+  BACKGROUND_NOT_CLEAR: 'BACKGROUND_NOT_CLEAR',
   /** The request claimed a file but carried none. */
   UPLOAD_NO_FILE: 'UPLOAD_NO_FILE',
   /** Over the size ceiling. The message names the limit. */
