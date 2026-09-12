@@ -78,8 +78,20 @@ the tables from the code and not from the credential.
 Migrations therefore no longer run inside the API. `deploy/docker-compose.prod.yml` has a one-shot
 `db-migrate` service that creates the roles, applies the migrations as `fapoms_migrator`, hardens,
 and verifies the result from a `fapoms_runtime` connection; `backend` and `backend-worker` both
-wait on it completing successfully, so a failed migration stops the deploy with the previous
-containers still serving.
+wait on it with `condition: service_completed_successfully`.
+
+> **A failed migration takes the site down. It does not hold the previous containers.**
+>
+> This paragraph used to promise the opposite, and the homeserver disproved it on 12 September 2026
+> with roughly ten minutes of 502. `docker compose up` recreates the services before the new ones
+> are ready, so by the time `db-migrate` exits non-zero the old `backend` is already gone and the
+> new one never starts, because its dependency condition is never met.
+>
+> Plan for that. Take the backup first and know it is restorable — `deploy/backup.sh` exited 0
+> while writing nothing until `b274f302`, so an older dump may not be what its timestamp suggests.
+> Apply the migrations to a copy first when the batch is large: a gate that has been correctly
+> refusing for a while releases everything it held in one jump, which is how that box came to sit
+> 118 commits behind and then take all of them at once.
 
 `setup.sh` generates `FAPOMS_RUNTIME_PASSWORD`, `FAPOMS_MIGRATION_PASSWORD` and `DB_ADMIN_URL` on a
 fresh install, and adds them to an older `.env.docker` that predates them — naming what it added.
