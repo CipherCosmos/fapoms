@@ -148,6 +148,17 @@ describe('pre-account OTP', () => {
     await expect(service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/wait/i);
   });
 
+  it('tells the candidate when the code could not be sent, instead of answering "sent"', async () => {
+    /**
+     * `SmsProvider.send` answers false — it does not throw — when MSG91 is unconfigured, and
+     * unconfigured is the shipped state. This used to log a warning and return success, so the
+     * page said a code was on its way and the candidate waited for a message nobody had sent.
+     */
+    const ctx = makeService();
+    ctx.smsProvider.send.mockResolvedValueOnce(false);
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/could not send a verification code/i);
+  });
+
   it('rejects a wrong code, and a right code offered for a different phone', async () => {
     const { service, cacheData, smsProvider } = makeService();
     await service.requestOtp(RAW_TOKEN, '9822014455');
@@ -302,6 +313,37 @@ describe('HR review', () => {
   it('refuses a request for more information with nothing asked for', async () => {
     const { service } = makeService({ application: submitted() });
     await expect(service.requestMoreInfo('app-1', 'user-1', '')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  describe('resending a lost link', () => {
+    it('mints a fresh link and kills the old one', async () => {
+      // Both the candidate's "Ask HR to resend it" and the interview screen's advice pointed at
+      // this; until it existed an undelivered invite was a dead end.
+      const { service, application, emailProvider } = makeService({ application: submitted({ status: ApplicationStatus.DRAFT }) });
+      const { emailed } = await service.resendInvite('app-1', 'user-1');
+
+      expect(application!.tokenHash).not.toBe(TOKEN_HASH);
+      expect(application!.tokenConsumedAt).toBeNull();
+      expect(emailed).toBe(true);
+      expect(emailProvider.send).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('earlier link has stopped working') }),
+      );
+    });
+
+    it('reports honestly when the resend itself did not go out', async () => {
+      const ctx = makeService({ application: submitted({ status: ApplicationStatus.DRAFT }) });
+      ctx.emailProvider.send.mockResolvedValueOnce({ success: false, error: 'transport off' } as any);
+      const { emailed } = await ctx.service.resendInvite('app-1', 'user-1');
+      expect(emailed).toBe(false);
+    });
+
+    it('refuses when there is no address to send to, and once the application is decided', async () => {
+      const noEmail = makeService({ application: submitted({ status: ApplicationStatus.DRAFT, email: null }) });
+      await expect(noEmail.service.resendInvite('app-1', 'user-1')).rejects.toThrow(/no email address/i);
+
+      const decided = makeService({ application: submitted({ status: ApplicationStatus.APPROVED }) });
+      await expect(decided.service.resendInvite('app-1', 'user-1')).rejects.toThrow(/already been decided/i);
+    });
   });
 });
 

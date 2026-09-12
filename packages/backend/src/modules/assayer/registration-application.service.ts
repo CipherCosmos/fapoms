@@ -138,11 +138,23 @@ export class RegistrationApplicationService {
     return rawToken;
   }
 
-  private async sendInviteEmail(application: AssayerApplicationEntity, rawToken: string, intro: string): Promise<void> {
-    if (!application.email) return;
+  /**
+   * Returns whether the link actually went out — callers must not assume it did.
+   *
+   * `EmailProvider.send` never throws; it answers `{ success: false }` when the transport is off
+   * or the send failed. Discarding that answer is how the HR screen came to say "an invite has
+   * been emailed to …" purely because an address existed, while a deployment with email switched
+   * off sent nothing at all. An invite nobody receives is the whole flow stalled with no signal.
+   */
+  private async sendInviteEmail(
+    application: AssayerApplicationEntity,
+    rawToken: string,
+    intro: string,
+  ): Promise<boolean> {
+    if (!application.email) return false;
     const link = `${appPublicUrl()}/register/${rawToken}`;
     const greeting = application.fullName ? `Hello ${application.fullName},` : 'Hello,';
-    await this.emailProvider.send({
+    const result = await this.emailProvider.send({
       to: application.email,
       subject: 'Your Appraiser registration link',
       text: `${greeting}\n\n${intro}\n\n${link}`,
@@ -153,33 +165,84 @@ export class RegistrationApplicationService {
         linkLabel: 'Continue registration',
       }),
     });
+    if (!result?.success) {
+      this.logger.warn(
+        `Registration invite for application ${application.id} was NOT delivered to ${application.email}: `
+        + `${result?.error ?? 'email transport reported no success'}`,
+      );
+    }
+    return !!result?.success;
   }
 
-  /** Called by `AssayerInterviewService` on a PASS outcome. */
+  /**
+   * Called by `AssayerInterviewService` on a PASS outcome.
+   *
+   * `emailed` is reported rather than assumed, so the interview screen can say what actually
+   * happened instead of announcing a delivery on the strength of an address being present.
+   */
   async createInvite(input: {
     interviewId?: string | null;
     fullName?: string | null;
     mobile: string;
     email?: string | null;
     organizationId?: string | null;
-  }): Promise<AssayerApplicationEntity> {
+  }): Promise<{ application: AssayerApplicationEntity; emailed: boolean }> {
     const application = this.applications.create({
       interviewId: input.interviewId ?? null,
       fullName: input.fullName ?? null,
       mobile: input.mobile,
       email: input.email ?? null,
-      deliveryEmail: input.email ?? null,
       organizationId: input.organizationId ?? null,
       status: ApplicationStatus.DRAFT,
     });
     const rawToken = await this.mintToken(application);
     const saved = await this.applications.save(application);
-    await this.sendInviteEmail(
+    const emailed = await this.sendInviteEmail(
       saved,
       rawToken,
       'Use the link below to complete your Appraiser registration — from your phone or any computer, no app required.',
     );
-    return saved;
+    return { application: saved, emailed };
+  }
+
+  /**
+   * Send the candidate a fresh link.
+   *
+   * Two places already told people this existed — the candidate's own "This registration link is
+   * not valid. Ask HR to resend it." and the interview screen's advice after a failed send — while
+   * nothing could actually do it. A lost or undelivered invite was therefore a dead end: the
+   * application sits in DRAFT, the roster never gains the person, and the only route back was a
+   * second interview record.
+   *
+   * It mints a new token rather than re-sending the old one, for the same reason `requestMoreInfo`
+   * does: only the hash was ever stored, so the original raw token no longer exists anywhere.
+   */
+  async resendInvite(id: string, actorUserId: string): Promise<{ application: AssayerApplicationEntity; emailed: boolean }> {
+    const application = await this.applications.findOne({ where: { id } });
+    if (!application) throw new NotFoundException('Application not found.');
+    if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
+      throw new BadRequestException('This application has already been decided — there is nothing left to complete.');
+    }
+    if (!application.email) {
+      throw new BadRequestException('There is no email address on this application to send a link to.');
+    }
+
+    const rawToken = await this.mintToken(application);
+    const saved = await this.applications.save(application);
+    const emailed = await this.sendInviteEmail(
+      saved,
+      rawToken,
+      'Here is a fresh link to complete your Appraiser registration. Any earlier link has stopped working.',
+    );
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_APPLICATION_INVITE_RESENT',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: saved.id,
+      userId: actorUserId,
+      remarks: emailed ? `Fresh link sent to ${saved.email}.` : `Fresh link generated but delivery to ${saved.email} failed.`,
+    });
+    return { application: saved, emailed };
   }
 
   // ── Token resolution ─────────────────────────────────────────────────────
@@ -243,8 +306,21 @@ export class RegistrationApplicationService {
       phone,
       `Your Appraiser registration verification code is ${code}. It expires in 5 minutes.`,
     );
+    /**
+     * A code that was never sent is a dead end, so say so instead of answering "sent".
+     *
+     * `SmsProvider.send` answers `false` — it does not throw — when MSG91 is unconfigured, and
+     * unconfigured is the shipped state (`SMS_PROVIDER_API_KEY` is blank in
+     * `.env.production.example` and absent from `.env.docker`). This route used to log that and
+     * return success, so the candidate read "a verification code has been sent to this number"
+     * and waited for a message that was never going to arrive, with nothing anywhere saying
+     * otherwise. Now the failure reaches the person who can act on it.
+     */
     if (!delivered) {
       this.logger.warn(`Registration OTP SMS delivery failed for token ${tokenHash.slice(0, 8)}…`);
+      throw new BadRequestException(
+        'We could not send a verification code to that number just now. Check the number, or contact HR — they can help you finish registering.',
+      );
     }
   }
 

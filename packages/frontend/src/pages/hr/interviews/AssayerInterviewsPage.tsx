@@ -30,6 +30,12 @@ export interface AssayerInterviewRow {
   interviewedByName: string | null;
   interviewedAt: string;
   spawnedApplicationId: string | null;
+  /**
+   * Only on the response to recording an interview, and only meaningful on a PASS: whether the
+   * invite email actually went out. Absent when the log is listed back, which is why the banner
+   * below is the only thing that reads it.
+   */
+  inviteEmailed?: boolean;
 }
 
 interface InterviewFormState {
@@ -74,12 +80,22 @@ export const AssayerInterviewsPage: React.FC = () => {
           outcome: form.outcome,
         }),
       });
+      /**
+       * `inviteEmailed` comes from the send itself, not from an address being present. A
+       * deployment with email switched off used to produce the cheerful "has been emailed to …"
+       * line below while nothing left the building, and the candidate then never appeared.
+       */
+      const passedAndEmailed = interview.outcome === InterviewOutcome.PASS && interview.inviteEmailed;
       setNotice({
-        tone: 'ok',
+        // An undelivered invite is a stall, not a success — it needs somebody to act, so it reads
+        // as an error rather than a cheerful confirmation nobody looks twice at.
+        tone: interview.outcome === InterviewOutcome.PASS && !interview.inviteEmailed ? 'err' : 'ok',
         text: interview.outcome === InterviewOutcome.PASS
-          ? (interview.email
+          ? (passedAndEmailed
             ? `${interview.candidateName} passed — a self-registration invite has been emailed to ${interview.email}.`
-            : `${interview.candidateName} passed and an application was created, but no email is on file to deliver the invite link. Add one before contacting the candidate.`)
+            : interview.email
+              ? `${interview.candidateName} passed and an application was created, but the invite email to ${interview.email} did not go out. Check email delivery in Platform Settings, then resend from Applications.`
+              : `${interview.candidateName} passed and an application was created, but no email is on file to deliver the invite link. Add one before contacting the candidate.`)
           : `${interview.candidateName}'s interview was recorded as a fail. No invite was sent.`,
       });
       setForm(EMPTY_FORM);
@@ -145,7 +161,9 @@ export const AssayerInterviewsPage: React.FC = () => {
       <PageHeader
         icon={<UserCheck size={20} />}
         title="Interviews"
-        subtitle="HR's own gate before a candidate can self-register. A pass emails them a registration link automatically — nothing else is needed here."
+        // "nothing else is needed here" was not always true — when the email does not go out, a
+        // resend from Applications is exactly what is needed — and the banner below now says so.
+        subtitle="HR's own gate before a candidate can self-register. A pass emails them a registration link; anyone whose link does not arrive is picked up under Applications → Not started."
       />
 
       {notice && (

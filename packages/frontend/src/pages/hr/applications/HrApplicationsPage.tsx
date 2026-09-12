@@ -58,13 +58,19 @@ export interface AssayerApplicationDetail {
 }
 
 /**
- * The four statuses HR ever needs to filter by. `DRAFT` is deliberately absent — a candidate
- * still filling the form in has nothing yet for HR to act on, and the backend's own default
- * (`GET /hr/applications` with no `status`) returns every row including drafts, so this screen
- * always sends one explicitly rather than ever rendering that unfiltered list.
+ * The statuses HR filters by. The backend's own default (`GET /hr/applications` with no `status`)
+ * returns every row, so this screen always sends one explicitly rather than rendering that
+ * unfiltered list.
+ *
+ * `DRAFT` was originally left out on the grounds that somebody mid-form has nothing for HR to act
+ * on. That is true of half the people in it. The other half were invited and never arrived —
+ * their email bounced, was filtered, or (with email delivery switched off) was never sent — and
+ * they are invisible to everyone while the interview log cheerfully reports an invite. "Not
+ * started" is where those are found, and the drawer's Resend link is what it is for.
  */
 const STATUS_FILTERS: readonly { key: ApplicationStatus; label: string; hint: string }[] = [
   { key: ApplicationStatus.PENDING_VALIDATION, label: 'Pending review', hint: 'Submitted by the candidate; awaiting an HR decision' },
+  { key: ApplicationStatus.DRAFT, label: 'Not started', hint: 'Invited, but not yet submitted — including anyone whose link never reached them' },
   { key: ApplicationStatus.AWAITING_INFO, label: 'Awaiting info', hint: 'HR asked for a correction or an extra document' },
   { key: ApplicationStatus.REJECTED, label: 'Rejected', hint: 'HR declined these' },
   { key: ApplicationStatus.APPROVED, label: 'Approved', hint: 'Promoted to a live assayer record' },
@@ -83,7 +89,11 @@ export const HrApplicationsPage: React.FC = () => {
   });
   const rows = applicationsQuery.data ?? [];
 
-  const handleActionSuccess = (n: { tone: 'ok'; text: string }) => {
+  /**
+   * Not always a success: a resend can generate a fresh link and still fail to deliver it, and
+   * that outcome has to reach the operator rather than be reported as done.
+   */
+  const handleActionSuccess = (n: { tone: 'ok' | 'err'; text: string }) => {
     setNotice(n);
     setSelectedId(null);
     void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
@@ -123,8 +133,10 @@ export const HrApplicationsPage: React.FC = () => {
       render: (r) => <StatusBadge domain="applicationStatus" status={r.status} />,
     },
     {
-      key: 'submitted',
-      header: 'Submitted',
+      // `createdAt` is when the invite was raised, which is not the same as when it was submitted
+      // — and on the "Not started" view nothing has been submitted at all.
+      key: 'invited',
+      header: 'Invited',
       render: (r) => <span>{fmtWhen(r.createdAt)}</span>,
     },
   ];

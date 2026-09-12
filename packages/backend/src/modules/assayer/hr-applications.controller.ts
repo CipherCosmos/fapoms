@@ -54,6 +54,14 @@ export class HrApplicationsController {
     return { success: true, data: assayer };
   }
 
+  @Post(':id/resend-invite')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Send the candidate a fresh registration link, invalidating any earlier one' })
+  async resendInvite(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    return { success: true, data: await this.registrationApplications.resendInvite(id, req.user.id) };
+  }
+
   @Post(':id/reject')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')

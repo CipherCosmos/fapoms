@@ -28,12 +28,16 @@ export class AssayerInterviewService {
     private readonly registrationApplications: RegistrationApplicationService,
   ) {}
 
+  /**
+   * `inviteEmailed` says whether the candidate was actually reached, not whether an address was
+   * on file — the screen announces one of those and must not announce the other.
+   */
   async record(
     dto: RecordInterviewDto,
     userId: string,
     userName: string | undefined,
     organizationId?: string | null,
-  ): Promise<AssayerInterviewEntity> {
+  ): Promise<AssayerInterviewEntity & { inviteEmailed: boolean }> {
     if (!dto.candidateName?.trim()) throw new BadRequestException('Candidate name is required.');
     if (!dto.mobile?.trim()) throw new BadRequestException('Mobile number is required.');
 
@@ -50,18 +54,20 @@ export class AssayerInterviewService {
     });
     const saved = await this.interviews.save(interview);
 
+    let inviteEmailed = false;
     if (dto.outcome === InterviewOutcome.PASS) {
-      const application = await this.registrationApplications.createInvite({
+      const { application, emailed } = await this.registrationApplications.createInvite({
         interviewId: saved.id,
         fullName: saved.candidateName,
         mobile: saved.mobile,
         email: saved.email,
         organizationId,
       });
+      inviteEmailed = emailed;
       saved.spawnedApplicationId = application.id;
       await this.interviews.save(saved);
     }
-    return saved;
+    return Object.assign(saved, { inviteEmailed });
   }
 
   async list(): Promise<AssayerInterviewEntity[]> {

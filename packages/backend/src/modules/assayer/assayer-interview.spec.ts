@@ -26,7 +26,8 @@ describe('interview outcomes', () => {
       find: jest.fn(async () => []),
     };
     const registrationApplications = {
-      createInvite: jest.fn(async (_input: Record<string, any>) => ({ id: 'app-1' })),
+      createInvite: jest.fn(async (_input: Record<string, any>) =>
+        ({ application: { id: 'app-1' }, emailed: true })),
     };
     const service = new AssayerInterviewService(interviews as any, registrationApplications as any);
     return { service, interviews, registrationApplications, saved };
@@ -55,6 +56,40 @@ describe('interview outcomes', () => {
     expect(registrationApplications.createInvite).not.toHaveBeenCalled();
     expect(interview.spawnedApplicationId).toBeUndefined();
     expect(interview.outcome).toBe(InterviewOutcome.FAIL);
+  });
+
+  it('reports whether the invite actually reached the candidate, not merely that an address existed', async () => {
+    /**
+     * The screen announces "an invite has been emailed to …" off the back of this. With email
+     * switched off in a deployment, the send answers `{success:false}` and nothing leaves — so a
+     * flat `true` here would have HR believe a candidate was contacted who was not, and the
+     * application then sits in DRAFT forever with nobody looking for it.
+     */
+    const { service, registrationApplications } = setup();
+    registrationApplications.createInvite.mockResolvedValueOnce({ application: { id: 'app-1' }, emailed: false });
+
+    const interview = await service.record(
+      { candidateName: 'Ramesh', mobile: '9822014455', email: 'r@example.com', outcome: InterviewOutcome.PASS },
+      'user-1', 'HR', 'org-1',
+    );
+    expect(interview.inviteEmailed).toBe(false);
+  });
+
+  it('says an invite went out when it actually did', async () => {
+    const { service } = setup();
+    const interview = await service.record(
+      { candidateName: 'Ramesh', mobile: '9822014455', email: 'r@example.com', outcome: InterviewOutcome.PASS },
+      'user-1', 'HR', 'org-1',
+    );
+    expect(interview.inviteEmailed).toBe(true);
+  });
+
+  it('never claims an invite for a failed interview', async () => {
+    const { service } = setup();
+    const interview = await service.record(
+      { candidateName: 'Suresh', mobile: '9811100033', outcome: InterviewOutcome.FAIL }, 'u', undefined,
+    );
+    expect(interview.inviteEmailed).toBe(false);
   });
 
   it('keeps who decided it and when, because this is the record of a decision', async () => {

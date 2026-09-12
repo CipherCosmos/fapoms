@@ -74,8 +74,7 @@ export class AppraiserRecruitmentApplicationLayer1798400000000 implements Migrat
         "promoted_assayer_id" uuid,
         "token_hash" varchar(128),
         "token_expires_at" timestamptz,
-        "token_consumed_at" timestamptz,
-        "delivery_email" varchar(255)
+        "token_consumed_at" timestamptz
       )
     `);
     await q.query(`

@@ -22,7 +22,7 @@ export const ApplicationDetailDrawer: React.FC<{
   id: string;
   onClose: () => void;
   /** Called only once an action has actually succeeded — the caller closes and refreshes the list. */
-  onSuccess: (notice: { tone: 'ok'; text: string }) => void;
+  onSuccess: (notice: { tone: 'ok' | 'err'; text: string }) => void;
 }> = ({ id, onClose, onSuccess }) => {
   const { confirm, confirmWithReason, confirmDialog } = useConfirm();
   const [busy, setBusy] = useState(false);
@@ -115,6 +115,30 @@ export const ApplicationDetailDrawer: React.FC<{
     }
   };
 
+  /**
+   * The way out of an invite that never arrived.
+   *
+   * A candidate whose email was lost, filtered or never sent sits in DRAFT with a link nobody
+   * holds — and the message they see if they find an old one says "Ask HR to resend it". This is
+   * that action. It mints a new link and retires the previous one.
+   */
+  const handleResend = async () => {
+    setActionError(null);
+    setBusy(true);
+    try {
+      const { emailed } = await api.request<{ emailed: boolean }>(`/hr/applications/${id}/resend-invite`, {
+        method: 'POST',
+      });
+      onSuccess(emailed
+        ? { tone: 'ok', text: `A fresh registration link was emailed to ${app?.email}.` }
+        : { tone: 'err', text: `A fresh link was generated but the email to ${app?.email} did not go out. Check email delivery in Platform Settings.` });
+    } catch (err) {
+      setActionError(userMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       {confirmDialog}
@@ -128,6 +152,20 @@ export const ApplicationDetailDrawer: React.FC<{
           app ? (
             isReviewable ? (
               <>
+                {/* Only where it can do anything: an application with no address on it has
+                    nowhere to send, and the server refuses that case too. */}
+                {app.email ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={handleResend}
+                    disabled={busy}
+                    title="Send a fresh registration link. Any earlier link stops working."
+                    style={{ fontSize: '12px', padding: '8px 14px', marginRight: 'auto' }}
+                  >
+                    Resend link
+                  </button>
+                ) : null}
                 <button type="button" className="btn btn-secondary" onClick={handleRequestInfo} disabled={busy} style={{ fontSize: '12px', padding: '8px 14px' }}>
                   Request info
                 </button>

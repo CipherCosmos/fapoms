@@ -107,10 +107,13 @@ export class AssayerApplicationEntity extends BaseEntity {
   @Column({ name: 'token_expires_at', type: 'timestamptz', nullable: true })
   tokenExpiresAt: Date | null;
 
-  /** Set the first time the link is opened — informational, and NOT what blocks reuse (expiry does). */
+  /**
+   * Set the first time the link is opened — NOT what blocks reuse (expiry does).
+   *
+   * It is the only record of whether an invited candidate ever arrived, which is the difference
+   * between "still filling it in" and "never received the email" — two very different people who
+   * otherwise both just sit in `DRAFT`.
+   */
   @Column({ name: 'token_consumed_at', type: 'timestamptz', nullable: true })
   tokenConsumedAt: Date | null;
-
-  @Column({ name: 'delivery_email', type: 'varchar', length: 255, nullable: true })
-  deliveryEmail: string | null;
 }
