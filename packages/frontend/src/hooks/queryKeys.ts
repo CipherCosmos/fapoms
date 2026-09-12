@@ -191,6 +191,21 @@ export const queryKeys = {
      * failure the badge exists to prevent.
      */
     importIssues: ['hr', 'import-issues'] as const,
+    /**
+     * The Appraiser Recruitment interview gate (`/hr/interviews`) — one flat log, no server-side
+     * filter, so one key covers the page's whole read.
+     */
+    interviews: ['hr', 'interviews'] as const,
+    /** Prefix: every applications query regardless of status filter. */
+    applicationsAll: ['hr', 'applications'] as const,
+    /**
+     * The self-registration review queue (`/hr/applications`), keyed by the status filter — a
+     * different status is a different server query (`GET /hr/applications?status=`), not a
+     * re-slice of whatever the last one returned.
+     */
+    applications: (status: string) => ['hr', 'applications', status] as const,
+    /** One application's full detail (fields + documents), for the review drawer. */
+    applicationDetail: (id: string) => ['hr', 'applications', 'detail', id] as const,
   },
   documents: {
     all: ['documents'] as const,

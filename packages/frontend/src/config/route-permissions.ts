@@ -232,6 +232,36 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // Permission off, mirroring `/hr/register` above — these two must always agree.
   },
   {
+    /**
+     * Appraiser Recruitment's interview gate — HR's own screen for recording an interview
+     * outcome before a candidate is invited to self-register. Mirrors
+     * `@Roles(ADMIN, OPERATIONS)` on `AssayerInterviewController` exactly.
+     *
+     * Permission off, for the same reason `/hr/register` is: the controller carries
+     * `@RequirePermissions('assayer:create:organization' | 'assayer:view:organization')` on its
+     * two routes but neither offers `@AllowPermissionFallback()`/`@RolesFallbackPermissions(...)`,
+     * so a custom role holding that grant would still be hard-denied by `RolesGuard` before the
+     * permission is ever read. Naming the permission here would open a page whose own API refuses
+     * exactly the role this table let in — the one thing this table's own note (above) says it
+     * must not do.
+     */
+    path: '/hr/interviews',
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+  },
+  {
+    /**
+     * Appraiser Recruitment's HR review queue for self-registration applications — a separate,
+     * NEW candidate-facing intake path that coexists with (does not replace) `/hr/register` above.
+     * Mirrors `@Roles(ADMIN, OPERATIONS)` on `HrApplicationsController` exactly.
+     *
+     * Permission off, for the same reason as `/hr/interviews` just above: every route on this
+     * controller declares a `@RequirePermissions(...)` (view/create/edit) but none carries the
+     * fallback decorator, so `RolesGuard` never reaches the permission check for a custom role.
+     */
+    path: '/hr/applications',
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+  },
+  {
     // The comment this replaced ("no permission: gated by role name and declare none") was true
     // of most reads under this controller but not this page's own main content fetch:
     // `Documents.tsx`'s `loadOverview()` calls `GET /documents/operations/overview`, whose handler

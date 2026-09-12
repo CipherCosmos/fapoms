@@ -73,6 +73,15 @@ export const en = {
      */
     needsAppAccess: "You don't have app access yet. Ask your HR contact to set it up for you.",
     authorisedOnly: 'Authorised field personnel only',
+    /**
+     * The one way into self-registration from a logged-out handset.
+     *
+     * There is no deep link registered for the invite email's `/register/<token>` web link (no
+     * `scheme` in app.config.js), so this is a plain link to a token-entry step rather than
+     * something the OS can hand the app directly. See `SelfRegistrationScreen`.
+     */
+    registerLink: "New here? Start your registration",
+    registerLinkAccessibility: 'Start appraiser self-registration',
     server: {
       hideSettings: 'Hide server settings',
       openSettings: 'Server settings',
@@ -225,6 +234,119 @@ export const en = {
       DRIVING_LICENCE: 'Both sides, if your address is printed on the back.',
       VOTER_ID: 'The side with your photo on it.',
       PASSPORT: 'The page with your photo and details on it.',
+    },
+  },
+
+  /**
+   * The Appraiser Recruitment self-registration flow, reached from `LoginScreen` without
+   * signing in — see `SelfRegistrationScreen`. Deliberately its own namespace, separate from
+   * `registration` above: that one is an already-authenticated assayer's own paperwork
+   * checklist, and shares no screen, no token and no editable-field set with this.
+   */
+  selfRegistration: {
+    tokenEntry: {
+      title: 'Start your registration',
+      body: 'Paste the registration link or code you were sent by email or SMS.',
+      inputLabel: 'REGISTRATION LINK OR CODE',
+      inputPlaceholder: 'Paste your link here',
+      continueLabel: 'Continue',
+      missingToken: 'Paste your registration link or code first.',
+      backToSignIn: 'Back to sign in',
+    },
+    loading: 'Loading your application…',
+    loadFailedTitle: 'Could not open this link',
+    tryDifferentLink: 'Try a different link',
+    status: {
+      pendingTitle: 'Submitted',
+      pendingBody: 'Your application is with our HR team for review. We will contact you once it has been checked.',
+      approvedTitle: 'Application approved',
+      approvedBody: 'Welcome aboard. HR will be in touch with your next steps.',
+      rejectedTitle: 'Application not approved',
+      rejectedBodyFallback: 'After review, we are unable to proceed with your application at this time.',
+      awaitingInfoTitle: 'More information needed',
+      awaitingInfoBody: 'HR asked for the following before your application can continue:',
+    },
+    otp: {
+      title: 'Verify your mobile number',
+      body: 'We will send a one-time code to confirm this number before you continue.',
+      phoneLabel: 'MOBILE NUMBER',
+      phonePlaceholder: '9876543210',
+      sendCode: 'Send code',
+      resendCode: 'Resend code',
+      resendIn: 'Resend in %{seconds}s',
+      sentTitle: 'Code sent',
+      sentBody: 'Enter the 6-digit code sent to %{phone}.',
+      codeLabel: 'VERIFICATION CODE',
+      codePlaceholder: '123456',
+      verify: 'Verify',
+      verifiedTitle: 'Number verified',
+      verifiedBody: 'You can continue filling in your details below.',
+      missingPhone: 'Enter your mobile number first.',
+      missingCode: 'Enter the code you were sent.',
+      sendFailedTitle: 'Could not send the code',
+      verifyFailedTitle: 'Could not verify that code',
+      change: 'Use a different number',
+    },
+    form: {
+      title: 'Your details',
+      savingHint: 'Saved automatically as you go.',
+      fullName: 'FULL NAME',
+      fullNamePlaceholder: 'As on your identity documents',
+      email: 'EMAIL',
+      emailPlaceholder: 'you@example.com',
+      dateOfBirth: 'DATE OF BIRTH',
+      dateOfBirthPlaceholder: 'YYYY-MM-DD',
+      dateOfBirthHint: 'Format: YYYY-MM-DD, for example 1990-04-21.',
+      gender: 'GENDER',
+      genderMale: 'Male',
+      genderFemale: 'Female',
+      genderOther: 'Other',
+      address: 'ADDRESS',
+      addressPlaceholder: 'House / street / area',
+      state: 'STATE',
+      chooseState: 'Choose your state',
+      city: 'CITY',
+      cityPlaceholder: 'City or town',
+      pincode: 'PINCODE',
+      pincodePlaceholder: '400001',
+      experienceYears: 'YEARS OF EXPERIENCE',
+      experienceYearsPlaceholder: '0',
+      currentEmployer: 'CURRENT EMPLOYER',
+      currentEmployerPlaceholder: 'If currently employed',
+      expertise: 'AREA OF EXPERTISE',
+      expertisePlaceholder: 'e.g. Gold appraisal, jewellery valuation',
+      availability: 'AVAILABILITY',
+      availabilityPlaceholder: 'e.g. Weekdays, full-time',
+      employmentCategory: 'HOW WILL YOU WORK WITH US',
+      freelancer: 'Freelancer',
+      proprietor: 'Proprietor',
+      saveFailedTitle: 'Could not save that',
+    },
+    documents: {
+      title: 'Documents',
+      hint: 'Upload a clear photo or scan of each document below.',
+      takePhoto: 'Take photo',
+      chooseFile: 'Choose file',
+      retake: 'Replace',
+      uploaded: 'Uploaded',
+      uploading: 'Uploading…',
+      uploadFailedTitle: 'Could not upload that',
+      none: 'Choose how you will work with us above to see the documents needed.',
+      nothingCaptured: 'No photo or file was chosen.',
+    },
+    consent: {
+      title: 'Declaration & consent',
+      text:
+        'I declare that the information and documents I have provided are true and correct to the best of my knowledge, and I consent to their use for my appraiser registration and background verification.',
+      accepted: 'Accepted',
+      failedTitle: 'Could not record your consent',
+    },
+    submit: {
+      button: 'Submit for review',
+      submittedTitle: 'Application submitted',
+      submittedBody: 'Thank you. HR will review your application and get in touch with you.',
+      failedTitle: 'Could not submit',
+      requirementsHint: 'Add your full name, choose how you will work with us, and accept the declaration before submitting.',
     },
   },
 

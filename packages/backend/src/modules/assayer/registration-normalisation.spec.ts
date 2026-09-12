@@ -14,6 +14,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -111,6 +112,7 @@ describe('registration normalisation — the shared rulebook at create AND updat
         { provide: DomainEventPublisher, useValue: mockEventPublisher },
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn() } },
         { provide: SmsProvider, useValue: { send: jest.fn() } },
         { provide: UnitOfWork, useValue: mockUow },

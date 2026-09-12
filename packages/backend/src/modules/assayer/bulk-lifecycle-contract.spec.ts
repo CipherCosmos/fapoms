@@ -39,6 +39,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -169,6 +170,7 @@ describe('bulk lifecycle — the contract between the response and the database'
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
         { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
         { provide: UnitOfWork, useValue: { run: jest.fn((work: any) => work(mockManager)) } },

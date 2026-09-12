@@ -12,6 +12,7 @@ import { ProjectQueryService } from '../project/project-query.service';
 import { scopeAssayerListForRoles, rolesOf } from '../assayer/assayer-visibility';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { buildWorkbook, inr, toDate } from './excel-export';
+import { buildTablePdf } from './pdf-export';
 // Type-only: these methods report which phase they are in and stay ignorant of whether a queue
 // is watching. See `ReportJobsWorker` for the only adapter onto a Bull job.
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
@@ -562,19 +563,39 @@ export class ReportsService {
    * Roster prior to the same role-based PII scoping the assayer list applies, plus a payroll
    * sheet with the in-force commercial rate per assayer.
    */
-  async assayerRoster(
+  private static readonly ROSTER_SHEET_HEADERS = [
+    'Assayer Code',
+    'Name',
+    'Phone',
+    'Email',
+    'Status',
+    'Region',
+    'State',
+    'District',
+    'Employment Type',
+    'Joining Date',
+    'Exit Date',
+    'Total Assignments',
+    'Completed Assignments',
+    'Avg Rating',
+  ];
+
+  /**
+   * The roster's own rows and column headers, shared by the Excel export (which appends a
+   * Pay Roll sheet after this one) and the PDF export (which is roster-only — payroll figures
+   * stay Excel-only, a deliberately narrower surface for compensation data).
+   */
+  private async rosterRowsFor(
     user: any,
     q: { page?: number; limit?: number; scope?: Partial<GlobalScope> },
-    onProgress?: ProgressCallback,
-  ): Promise<Buffer> {
-    await onProgress?.(0, EXPORT_PHASES, 'Loading roster');
+  ): Promise<{ scoped: any[]; rows: Array<Array<unknown>> }> {
     const { assayers } = await this.assayerService.findAll(q.page ?? 1, q.limit ?? EXPORT_ROW_CAP, q.scope);
     // `rolesOf` reads only `user.roles`, so a queued run can pass a `{ id, roles }` snapshot
     // rather than storing a whole user record — with its PAN, bank and contact columns — in
     // Redis for the life of the job. See `PrincipalSnapshot`.
     const scoped = scopeAssayerListForRoles(assayers as any[], rolesOf(user)) as any[];
 
-    const rosterRows = scoped.map((a) => [
+    const rows = scoped.map((a) => [
       a.assayerCode ?? '',
       a.displayName ?? `${a.firstName ?? ''} ${a.lastName ?? ''}`.trim(),
       a.phone ?? '',
@@ -590,6 +611,37 @@ export class ReportsService {
       a.completedAssignments ?? 0,
       a.averageRating ?? '',
     ]);
+    return { scoped, rows };
+  }
+
+  /**
+   * The admin dashboard's PDF roster export (Appraiser Recruitment spec, Area A). Roster columns
+   * only — see `rosterRowsFor`'s comment on why payroll is excluded.
+   */
+  async assayerRosterPdf(
+    user: any,
+    q: { page?: number; limit?: number; scope?: Partial<GlobalScope> },
+    onProgress?: ProgressCallback,
+  ): Promise<Buffer> {
+    await onProgress?.(0, EXPORT_PHASES, 'Loading roster');
+    const { rows } = await this.rosterRowsFor(user, q);
+    await onProgress?.(1, EXPORT_PHASES, 'Writing PDF');
+    const pdf = await buildTablePdf({
+      title: 'Assayer Roster',
+      headers: ReportsService.ROSTER_SHEET_HEADERS,
+      rows,
+    });
+    await onProgress?.(2, EXPORT_PHASES, 'Done');
+    return pdf;
+  }
+
+  async assayerRoster(
+    user: any,
+    q: { page?: number; limit?: number; scope?: Partial<GlobalScope> },
+    onProgress?: ProgressCallback,
+  ): Promise<Buffer> {
+    await onProgress?.(0, EXPORT_PHASES, 'Loading roster');
+    const { scoped, rows: rosterRows } = await this.rosterRowsFor(user, q);
 
     const byId = new Map<string, any>();
     for (const a of scoped) byId.set(a.id, a);
@@ -635,22 +687,7 @@ export class ReportsService {
     return buildWorkbook([
       {
         name: 'Roster',
-        headers: [
-          'Assayer Code',
-          'Name',
-          'Phone',
-          'Email',
-          'Status',
-          'Region',
-          'State',
-          'District',
-          'Employment Type',
-          'Joining Date',
-          'Exit Date',
-          'Total Assignments',
-          'Completed Assignments',
-          'Avg Rating',
-        ],
+        headers: ReportsService.ROSTER_SHEET_HEADERS,
         rows: rosterRows,
       },
       {

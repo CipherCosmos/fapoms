@@ -29,6 +29,13 @@ export const REPORT_JOB = {
   BILLING: 'billing',
   COMMAND_CENTER: 'command-center',
   ASSAYER_ROSTER: 'assayer-roster',
+  /**
+   * The roster again, rendered as PDF rather than a workbook. A separate job name rather than a
+   * flag on `ASSAYER_ROSTER` because the dedupe key is derived from (name, requester, params):
+   * sharing a name would make an Excel export and a PDF export of the same roster deduplicate
+   * onto each other and hand the second caller the wrong file type.
+   */
+  ASSAYER_ROSTER_PDF: 'assayer-roster-pdf',
 } as const;
 
 export type ReportJobName = (typeof REPORT_JOB)[keyof typeof REPORT_JOB];

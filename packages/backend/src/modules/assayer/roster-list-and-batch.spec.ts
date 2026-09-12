@@ -15,6 +15,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -58,6 +59,7 @@ describe('GET /assayers — the per-row document summary', () => {
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
         { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
         { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
@@ -105,7 +107,8 @@ describe('GET /assayers — the per-row document summary', () => {
     page([{ id: 'a-1' }]);
     const { assayers: [row] } = await service.findAll(1, 20);
     expect((row as any).documents.required).toBe(Object.keys(ONBOARDING_DOCUMENT_COLUMNS).length);
-    expect((row as any).documents.required).toBe(21);
+    // 21 original + BGV_REPORT + the 5 Appraiser Recruitment freelancer/proprietor documents.
+    expect((row as any).documents.required).toBe(27);
   });
 
   /**
@@ -211,6 +214,7 @@ describe('preferredContactChannel is settable', () => {
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
         { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
         { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },

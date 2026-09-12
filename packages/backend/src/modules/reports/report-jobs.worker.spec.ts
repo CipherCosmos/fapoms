@@ -52,6 +52,7 @@ describe('ReportJobsWorker', () => {
       ['billing', REPORT_JOB.BILLING],
       ['commandCenter', REPORT_JOB.COMMAND_CENTER],
       ['assayerRoster', REPORT_JOB.ASSAYER_ROSTER],
+      ['assayerRosterPdf', REPORT_JOB.ASSAYER_ROSTER_PDF],
     ])('registers %s under the exact name the enqueue side uses', (method, expectedName) => {
       const meta = Reflect.getMetadata(BULL_MODULE_QUEUE_PROCESS, (ReportJobsWorker.prototype as any)[method]);
 

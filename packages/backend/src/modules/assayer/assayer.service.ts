@@ -2,7 +2,7 @@ import {
   Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt, randomUUID, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
 } from '@fapoms/shared';
@@ -507,6 +507,9 @@ export interface CreateAssayerDto {
   aadhaarNumber?: string;
   bankName?: string;
   dateOfBirth?: string;
+  gender?: string;
+  currentEmployer?: string;
+  employmentCategory?: EmploymentCategory;
   qualification?: string;
   vstsCode?: string;
   hrOwnerName?: string;
@@ -604,6 +607,9 @@ export interface UpdateAssayerDto {
   aadhaarNumber?: string;
   bankName?: string;
   dateOfBirth?: string;
+  gender?: string;
+  currentEmployer?: string;
+  employmentCategory?: EmploymentCategory;
   qualification?: string;
   vstsCode?: string;
   hrOwnerName?: string;
@@ -672,6 +678,11 @@ export class AssayerService implements OnModuleInit {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly workflowEngine: WorkflowEngine,
     private readonly notificationDispatch: NotificationDispatchService,
+    // For `bulkNotify` — a caller-authored subject/message has no catalog entry to render from
+    // (the catalog is fixed-template, role-addressed events), so this bypasses it the same way
+    // `NotificationService.notifyAssayer` already exists to do: addressed straight at a list of
+    // assayer ids, not roles.
+    private readonly notificationService: NotificationService,
     private readonly emailProvider: EmailProvider,
     private readonly smsProvider: SmsProvider,
     private readonly uow: UnitOfWork,
@@ -5007,6 +5018,80 @@ export class AssayerService implements OnModuleInit {
         emailed: succeeded.filter((s) => s.channels.includes('EMAIL')).length,
         texted: succeeded.filter((s) => s.channels.includes('SMS')).length,
       },
+    });
+
+    return { succeeded, skipped, failed };
+  }
+
+  /**
+   * The admin dashboard's bulk-notify action — a caller-authored subject/message to a batch of
+   * assayers. Always an in-app + push notification (`NotificationService.notifyAssayer`, which
+   * addresses a specific assayer id directly rather than a role, so it needs no catalog entry);
+   * email is a caller opt-in, matching this codebase's "email is not routine" convention
+   * (`notification-catalog.ts`) — this route is exactly the deliberate exception to it, not a
+   * new default.
+   */
+  async bulkNotify(
+    ids: string[],
+    subject: string,
+    body: string,
+    sendEmail: boolean,
+    actorId: string,
+  ): Promise<{
+    succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[] }[];
+    skipped: { id: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    if (ids.length > 500) {
+      throw new BadRequestException('Notify at most 500 assayers at a time.');
+    }
+    if (!subject?.trim() || !body?.trim()) {
+      throw new BadRequestException('A subject and a message are required.');
+    }
+
+    const succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[] }[] = [];
+    const skipped: { id: string; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        const assayer = await this.findOne(id);
+        const channels: ('IN_APP' | 'EMAIL')[] = [];
+
+        const { inAppDelivered } = await this.notificationService.notifyAssayer(
+          id,
+          assayer.email,
+          { title: subject.trim(), message: body.trim() },
+          actorId,
+        );
+        if (inAppDelivered) channels.push('IN_APP');
+
+        if (sendEmail && assayer.email) {
+          const emailResult = await this.emailProvider.send({
+            to: assayer.email,
+            subject: subject.trim(),
+            text: body.trim(),
+          });
+          if (emailResult.success) channels.push('EMAIL');
+        } else if (sendEmail && !assayer.email) {
+          skipped.push({ id, reason: 'No email on file — only the in-app notification was sent.' });
+          continue;
+        }
+
+        succeeded.push({ id, channels });
+      } catch (e) {
+        failed.push({ id, reason: (e as Error).message });
+      }
+    }
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'BULK_NOTIFY_SENT',
+      entityType: 'ASSAYER',
+      entityId: 'bulk',
+      userId: actorId,
+      remarks: `Bulk notify "${subject.trim()}": ${succeeded.length} sent, ${skipped.length} skipped, ${failed.length} failed.`,
+      metadata: { requested: ids.length, succeeded: succeeded.length, skipped: skipped.length, failed: failed.length },
     });
 
     return { succeeded, skipped, failed };

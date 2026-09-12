@@ -93,6 +93,7 @@ export const SETTINGS_GROUPS = [
   { key: 'roster', label: 'Roster import', audience: 'business', description: 'How the appraiser roster spreadsheet is brought in.' },
   { key: 'security', label: 'Access boundaries', audience: 'technical', description: 'Rollout controls for access checks being tightened — a value here is a staged switch, never a permanent policy.' },
   { key: 'qualification', label: 'Assayer qualification', audience: 'business', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
+  { key: 'registration', label: 'Self-registration', audience: 'technical', description: 'How the candidate-facing registration link and OTP verification behave — the entry point alongside the HR desk, not a replacement for it.' },
 ] as const;
 
 /**
@@ -1072,6 +1073,20 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: false,
     envVar: 'DOCUMENT_AUTO_SEND_TO_OCR',
     applies: 'next-run',
+  },
+
+  // ── Self-registration ───────────────────────────────────────────────────
+  {
+    key: 'registration.inviteExpiryHours',
+    label: 'Registration link expiry',
+    description: 'How long an emailed self-registration link stays valid before a candidate must be re-invited from the interview log.',
+    group: 'registration', type: 'number', default: 72, min: 1, max: 720, unit: 'hours', applies: 'immediately',
+  },
+  {
+    key: 'registration.otpResendCooldownSeconds',
+    label: 'OTP resend cooldown',
+    description: 'How long a candidate must wait before requesting another mobile verification code on the same registration link.',
+    group: 'registration', type: 'number', default: 60, min: 15, max: 600, unit: 'seconds', applies: 'immediately',
   },
 ];
 

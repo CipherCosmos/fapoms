@@ -25,7 +25,7 @@ const EVERY_VARIABLE = {
   name: 'X', number: 'L1', page: 2, pages: '2, 3', percent: 10, progress: 'p', rate: 50,
   reason: 'r', recorded: 'Kerala', required: 2, round: 1, since: '', skills: 1, state: 'S',
   time: 'T', title: 't', total: 4, uploaded: 2, wait: 'w', what: 'w', who: 'W',
-  actual: 'Sikkim',
+  actual: 'Sikkim', seconds: 5, phone: '9876543210',
 };
 
 function leafKeys(node: unknown, path: string[] = []): string[] {

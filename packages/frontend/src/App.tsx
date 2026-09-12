@@ -73,6 +73,16 @@ const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleAr
  * :assayerId` resumes somebody already begun.
  */
 const RegistrationPage = React.lazy(() => import('./pages/hr/registration/RegistrationPage').then((m) => ({ default: m.RegistrationPage })));
+/**
+ * Appraiser Recruitment: the internal interview gate and the review queue for self-registration
+ * applications — a NEW candidate-facing intake path that coexists with (does not replace) the
+ * HR-desk wizard just above. Sibling pages to `/hr/register` for the same reason: each is a
+ * focused, single-task flow with its own header, not a tab inside `HrLayout`'s roster/pay/where
+ * section strip. See `assayer-interview.controller.ts` and `hr-applications.controller.ts` on
+ * the backend.
+ */
+const AssayerInterviewsPage = React.lazy(() => import('./pages/hr/interviews/AssayerInterviewsPage').then((m) => ({ default: m.AssayerInterviewsPage })));
+const HrApplicationsPage = React.lazy(() => import('./pages/hr/applications/HrApplicationsPage').then((m) => ({ default: m.HrApplicationsPage })));
 const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
 const PacketsQueue = React.lazy(() => import('./pages/dataentry/PacketsQueue'));
 const ReviewsQueue = React.lazy(() => import('./pages/dataentry/ReviewsQueue'));
@@ -86,6 +96,13 @@ const ClarificationsPage = React.lazy(() => import('./pages/dataentry/Clarificat
  * it — and the heavy pdf.js viewer it pulls in — stays out of the sign-in critical path.
  */
 const ViewMark = React.lazy(() => import('./pages/ViewMark').then((m) => ({ default: m.ViewMark })));
+
+/**
+ * Public, token-authorised: a candidate's self-registration, opened from the invite email with no
+ * app, no account and no session — see the early return in App below, the same pattern `/view-mark`
+ * uses. Code-split so it stays out of the sign-in critical path.
+ */
+const PublicRegistration = React.lazy(() => import('./pages/PublicRegistration').then((m) => ({ default: m.PublicRegistration })));
 
 /**
  * Turns `/assayers/:id` into the roster's own deep link, so the record opens where it lives.
@@ -253,6 +270,28 @@ export const App: React.FC = () => {
       <ErrorBoundary area="Marked document">
         <Suspense fallback={<RouteFallback />}>
           <ViewMark />
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
+  /**
+   * Public, token-authorised page — rendered before the whole auth tree, exactly like `/view-mark`
+   * just above.
+   *
+   * A candidate who passed an interview gets `/register/<token>` by email and opens it from
+   * whatever device is in their hand — no login, no app, no web session. `useParams()` cannot
+   * supply the token here: this branch runs before `<Routes>` ever matches anything, so there is
+   * no route context to read a `:token` param from. The token is pulled straight out of
+   * `location.pathname` instead, and is the only authorisation the page needs — it verifies itself
+   * by calling `GET /public/registration/:token` with it.
+   */
+  const registerTokenMatch = /^\/register\/([^/]+)\/?$/.exec(location.pathname);
+  if (registerTokenMatch) {
+    return (
+      <ErrorBoundary area="Registration">
+        <Suspense fallback={<RouteFallback />}>
+          <PublicRegistration token={decodeURIComponent(registerTokenMatch[1])} />
         </Suspense>
       </ErrorBoundary>
     );
@@ -445,6 +484,15 @@ export const App: React.FC = () => {
           */}
           <Route path="/hr/register" element={<RegistrationPage />} />
           <Route path="/hr/register/:assayerId" element={<RegistrationPage />} />
+          {/*
+            Appraiser Recruitment's two HR-facing screens. Siblings of `/hr/register` above, for
+            the same reason — each is a focused, single-task destination with its own header, not
+            a tab inside `HrLayout`'s roster/pay/where strip. `route-permissions.ts` carries both
+            as their own literal entries, mirroring ADMIN/OPERATIONS on the backend controllers
+            exactly (`assayer-interview.controller.ts`, `hr-applications.controller.ts`).
+          */}
+          <Route path="/hr/interviews" element={<AssayerInterviewsPage />} />
+          <Route path="/hr/applications" element={<HrApplicationsPage />} />
           {/*
             HR is a section, not a page. It briefly had eleven URLs, three of which badged off the
             same number — Records, Compliance and Documents all pointed at "this person's file is

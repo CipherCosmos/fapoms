@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRightLeft, KeyRound } from 'lucide-react';
+import { ArrowRightLeft, KeyRound, MessageSquare } from 'lucide-react';
 import {
   AssayerLifecycleStatus,
   assayerLifecycleLabel,
@@ -12,6 +12,7 @@ import {
 } from '../lifecycle-reason-vocabulary';
 import { STAGE_CONSEQUENCE } from '../AssayerRecord';
 import type { RosterPerson } from '../roster-filters';
+import { RosterNotifyDialog } from './RosterNotifyDialog';
 
 export interface RosterBulkToolbarProps {
   selectedRows: RosterPerson[];
@@ -21,8 +22,10 @@ export interface RosterBulkToolbarProps {
   onClearSelection: () => void;
   onBulkTransition: (targetStatus: string, reason: string) => Promise<void>;
   onBulkIssueAppAccess: () => Promise<void>;
+  onBulkNotify: (subject: string, body: string, sendEmail: boolean) => Promise<void>;
   busy: boolean;
   appAccessBusy: boolean;
+  notifyBusy: boolean;
 }
 
 export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
@@ -31,12 +34,15 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
   onClearSelection,
   onBulkTransition,
   onBulkIssueAppAccess,
+  onBulkNotify,
   busy,
   appAccessBusy,
+  notifyBusy,
 }) => {
   const [targetStatus, setTargetStatus] = useState('');
   const [reason, setReason] = useState('');
   const [isOther, setIsOther] = useState(false);
+  const [notifyOpen, setNotifyOpen] = useState(false);
 
   if (selectedRows.length === 0) return null;
 
@@ -173,6 +179,23 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
 
       <button
         type="button"
+        onClick={() => setNotifyOpen(true)}
+        disabled={notifyBusy}
+        className="btn btn-secondary"
+        style={{
+          fontSize: '12px',
+          padding: '6px 12px',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '5px',
+        }}
+      >
+        <MessageSquare size={13} />
+        <span>{notifyBusy ? 'Notifying…' : 'Notify'}</span>
+      </button>
+
+      <button
+        type="button"
         onClick={onClearSelection}
         className="btn btn-secondary"
         style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}
@@ -185,6 +208,18 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
           {STAGE_CONSEQUENCE[targetStatus]} Partial results will be reported; unreachable rows will be skipped safely.
         </div>
       )}
+
+      <RosterNotifyDialog
+        open={notifyOpen}
+        onClose={() => setNotifyOpen(false)}
+        selectedRows={selectedRows}
+        hiddenNote={hiddenNote}
+        busy={notifyBusy}
+        onSend={async (subject, body, sendEmail) => {
+          await onBulkNotify(subject, body, sendEmail);
+          setNotifyOpen(false);
+        }}
+      />
     </div>
   );
 };

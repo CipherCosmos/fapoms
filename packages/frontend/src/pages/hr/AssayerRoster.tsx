@@ -99,10 +99,15 @@ export const AssayerRoster: React.FC<{
   // Bulk operation states
   const [bulkBusy, setBulkBusy] = useState(false);
   const [appAccessBusy, setAppAccessBusy] = useState(false);
+  const [notifyBusy, setNotifyBusy] = useState(false);
 
   // Excel export & import hooks
   const { download: downloadExcel, busy: exporting } = useQueuedExcelExport();
   const handleExportExcel = () => void downloadExcel('/reports/assayer-roster/jobs');
+  // Same queue, same poll-and-save flow — only the renderer on the server differs, and the hook
+  // saves whatever filename the job reports, so nothing here needs to know it is a PDF.
+  const { download: downloadPdf, busy: exportingPdf } = useQueuedExcelExport();
+  const handleExportPdf = () => void downloadPdf('/reports/assayer-roster-pdf/jobs');
   const [uploading, setUploading] = useState(false);
   const [overwriteConflicts, setOverwriteConflicts] = useState(false);
   const rosterImport = useImportJob<RosterImportSummary>();
@@ -306,6 +311,55 @@ export const AssayerRoster: React.FC<{
     }
   };
 
+  /**
+   * Same shape as `handleBulkIssueAppAccess` above: one POST, three buckets back, one notice.
+   * The dialog itself (`RosterNotifyDialog`) is the confirmation step here — there is nothing
+   * further to ask once a clerk has typed a subject and a message and can see who it goes to.
+   */
+  const handleBulkNotify = async (subject: string, body: string, sendEmail: boolean) => {
+    if (selectedRows.length === 0) return;
+    const nameById = Object.fromEntries(
+      selectedRows.map((a) => [a.id, `${a.displayName} (${a.assayerCode})`]),
+    );
+
+    setNotifyBusy(true);
+    const ids = selectedVisibleIds;
+    try {
+      const res = await api.request<{
+        succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[] }[];
+        skipped: { id: string; reason: string }[];
+        failed: { id: string; reason: string }[];
+      }>('/assayers/bulk/notify', {
+        method: 'POST',
+        body: JSON.stringify({ ids, subject, body, sendEmail }),
+      });
+      const { succeeded = [], skipped = [], failed = [] } = res ?? {};
+      const byInApp = succeeded.filter((s) => s.channels.includes('IN_APP')).length;
+      const byEmail = succeeded.filter((s) => s.channels.includes('EMAIL')).length;
+
+      setNotice(
+        failed.length || skipped.length
+          ? {
+              tone: 'err',
+              text: `Notified ${succeeded.length} (${byInApp} in-app, ${byEmail} by email), ${skipped.length} skipped, ${failed.length} failed.`,
+              details: [
+                ...skipped.map((s) => `${nameById[s.id] ?? s.id}: ${s.reason}`),
+                ...failed.map((f) => `${nameById[f.id] ?? f.id}: ${f.reason}`),
+              ],
+            }
+          : {
+              tone: 'ok',
+              text: `Notified ${counted(succeeded.length, 'person', 'people')} (${byInApp} in-app, ${byEmail} by email).`,
+            },
+      );
+    } catch (e) {
+      setNotice({ tone: 'err', text: `Failed to notify. ${userMessage(e)}` });
+    } finally {
+      setNotifyBusy(false);
+      setSelectedIds(new Set());
+    }
+  };
+
   const handleDeleteAssayer = async (a: RosterPerson) => {
     const ok = await confirm({
       title: `Delete ${a.displayName}?`,
@@ -503,8 +557,10 @@ export const AssayerRoster: React.FC<{
           onClearSelection={() => setSelectedIds(new Set())}
           onBulkTransition={handleBulkTransition}
           onBulkIssueAppAccess={handleBulkIssueAppAccess}
+          onBulkNotify={handleBulkNotify}
           busy={bulkBusy}
           appAccessBusy={appAccessBusy}
+          notifyBusy={notifyBusy}
         />
       )}
 
@@ -576,6 +632,8 @@ export const AssayerRoster: React.FC<{
         }
         onExcelExport={handleExportExcel}
         excelBusy={exporting}
+        onPdfExport={handleExportPdf}
+        pdfBusy={exportingPdf}
       />
 
       {/* Import Modal */}

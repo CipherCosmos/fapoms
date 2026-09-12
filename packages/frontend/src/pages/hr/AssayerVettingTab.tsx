@@ -46,6 +46,35 @@ export const VERDICT_LABELS: Record<string, string> = {
 };
 
 /**
+ * The plain word HR actually asks for, on top of the same five verdict values.
+ *
+ * The verdict keeps its five distinctions — CLEAR versus which kind of adverse finding — because
+ * that detail is what a decision-maker reads next, and the lifecycle move-confirm above
+ * (`ADVERSE_BACKGROUND_VERDICTS`) already acts on two of them specifically. But the question a
+ * clerk is holding when they open this tab is simpler: did this person pass their background
+ * check, so they can be moved on to Training? `CLEAR` is the only value that answers yes.
+ * `NOT_CHECKED` is not a failure — nobody has looked yet — so it gets its own word rather than
+ * being folded into "Failed" and read as a verdict that was actually reached and refused.
+ *
+ * This is presentation only. Nothing here changes what is stored or what the lifecycle-move
+ * warning reads off `currentCheck.verdict` — see `move()` in AssayerRecord.tsx.
+ */
+export type PassFail = 'Passed' | 'Failed' | 'Pending';
+export const verdictPassFail = (v?: string | null): PassFail | null => {
+  if (!v) return null;
+  if (v === BackgroundCheckVerdict.CLEAR) return 'Passed';
+  if (v === BackgroundCheckVerdict.NOT_CHECKED) return 'Pending';
+  return 'Failed';
+};
+
+/** One tone per pass/fail word, in the same two-colours-plus-amber the verdict badge already uses. */
+export const PASS_FAIL_TONE: Record<PassFail, { fg: string; bg: string }> = {
+  Passed: { fg: 'var(--success)', bg: 'var(--status-active-bg)' },
+  Failed: { fg: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
+  Pending: { fg: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+};
+
+/**
  * A verdict is not a status badge; it is a decision about somebody's livelihood and access to a
  * vault. Only two colours are used — the ordinary one and the one that means stop — because a
  * five-colour scale invites reading "civil case" as merely worse than "clear" rather than as a
@@ -582,7 +611,17 @@ export const AssayerVettingTab: React.FC<{
    * action on this very tab.
    */
   lifecycleStatus?: string | null;
-}> = ({ assayerId, canManage, section, lifecycleStatus }) => {
+  /**
+   * Switches the record over to the Documents half of this same dossier.
+   *
+   * The background verification *report* — the scan itself — is a document like any other and is
+   * uploaded from the Documents half (`BGV_REPORT`, in the joining-paperwork table), not from
+   * here. Without a way to jump straight there, recording the verdict and attaching the report it
+   * is based on read as two disconnected tasks on two different tabs. Optional: a caller that has
+   * not wired tab-switching still gets the plain text this note falls back to.
+   */
+  onGoToDocuments?: () => void;
+}> = ({ assayerId, canManage, section, lifecycleStatus, onGoToDocuments }) => {
   const [data, setData] = useState<Dossier | null>(null);
   /**
    * Everything on this tab that failed and wants a decision, in one strip at the top.
@@ -1167,11 +1206,20 @@ export const AssayerVettingTab: React.FC<{
           busy={busy}
           width={560}
         >
-          <Field title="Verdict">
+          <Field
+            title="Verdict"
+            hint={(() => {
+              const pf = verdictPassFail(editor.verdict);
+              return pf ? <>Recorded as <strong style={{ color: PASS_FAIL_TONE[pf].fg }}>{pf}</strong>.</> : undefined;
+            })()}
+          >
             <Select
               value={editor.verdict}
               onChange={(v) => setEditor({ ...editor, verdict: String(v) })}
-              options={Object.values(BackgroundCheckVerdict).map((v) => ({ value: v, label: VERDICT_LABELS[v] ?? v }))}
+              options={Object.values(BackgroundCheckVerdict).map((v) => ({
+                value: v,
+                label: `${VERDICT_LABELS[v] ?? v} (${verdictPassFail(v)})`,
+              }))}
             />
           </Field>
           <Field title="Risk">
@@ -1293,18 +1341,41 @@ export const AssayerVettingTab: React.FC<{
           </LinkButton>
         ) : undefined}
       >
+        {/*
+          The report itself lives one tab over, filed as a document (`BGV_REPORT`) like any
+          other joining paperwork — see the note on `onGoToDocuments` above for why. Said before
+          the verdict rather than after: a clerk opening this card with nothing recorded yet
+          should not have to guess where the scan they are holding goes.
+        */}
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+          The signed report itself is attached as a document —{' '}
+          {onGoToDocuments ? (
+            <LinkButton onClick={onGoToDocuments}>open Documents → Background verification report</LinkButton>
+          ) : (
+            <>see Documents → Background verification report.</>
+          )}
+        </div>
         {!check ? (
           <Empty>No background check has been recorded.</Empty>
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '18px', marginBottom: data.backgroundChecks.length > 1 ? '12px' : 0 }}>
             <div>
               <div style={label}>Verdict</div>
-              <StatusBadge
-                size="md"
-                color={verdictTone(check.verdict)}
-                bg={VERDICT_TONE_BG[verdictTone(check.verdict)]}
-                label={VERDICT_LABELS[check.verdict] ?? humanizeEnum(check.verdict)}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                <StatusBadge
+                  size="md"
+                  color={verdictTone(check.verdict)}
+                  bg={VERDICT_TONE_BG[verdictTone(check.verdict)]}
+                  label={VERDICT_LABELS[check.verdict] ?? humanizeEnum(check.verdict)}
+                />
+                {/* The same verdict, in the word HR actually asks for — see `verdictPassFail`. */}
+                {(() => {
+                  const pf = verdictPassFail(check.verdict);
+                  return pf ? (
+                    <StatusBadge size="md" color={PASS_FAIL_TONE[pf].fg} bg={PASS_FAIL_TONE[pf].bg} label={pf} />
+                  ) : null;
+                })()}
+              </div>
             </div>
             {check.riskGrade && (
               <div><div style={label}>Risk</div><div style={{ fontSize: '13px' }}>{RISK_LABELS[check.riskGrade] ?? humanizeEnum(check.riskGrade)}</div></div>

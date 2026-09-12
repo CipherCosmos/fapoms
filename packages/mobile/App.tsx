@@ -37,6 +37,7 @@ import { FeedbackProvider, useFeedback } from './src/components/ui/Feedback';
 
 // Screens
 import { LoginScreen } from './src/screens/LoginScreen';
+import { SelfRegistrationScreen } from './src/screens/SelfRegistrationScreen';
 import { ChangePasswordScreen } from './src/screens/ChangePasswordScreen';
 import { LockScreen } from './src/screens/LockScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
@@ -69,6 +70,9 @@ function AppMain() {
   const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense, stale, lastSyncedAt } = useAssignments();
 
   const [selectedTab, setSelectedTab] = useState<TabType>('HOME');
+  /** Whether the logged-out branch is showing `SelfRegistrationScreen` instead of `LoginScreen`.
+   *  See the note where this is consumed, below. */
+  const [selfRegistrationOpen, setSelfRegistrationOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   // The id of the assignment whose accept/check-in is in flight, so its button shows a spinner
   // and a second tap can't fire a duplicate accept or a duplicate on-site check-in.
@@ -702,6 +706,23 @@ function AppMain() {
   }
 
   if (!isAuthenticated) {
+    /**
+     * Self-registration lives entirely inside the logged-out branch, as a swap alongside
+     * `LoginScreen` rather than a route — this app has no react-navigation stack for the
+     * signed-out state at all, only this manual conditional. Reachable only from the link on
+     * `LoginScreen` below; there is no deep link (no `scheme` in app.config.js, no
+     * `expo-linking`), so a pasted invite link/token is the realistic entry point — see
+     * `SelfRegistrationScreen`'s own note on that.
+     */
+    if (selfRegistrationOpen) {
+      return (
+        <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+          <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
+          <SelfRegistrationScreen onExit={() => setSelfRegistrationOpen(false)} />
+        </SafeAreaView>
+      );
+    }
+
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
         <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
@@ -720,6 +741,7 @@ function AppMain() {
           onBiometricLogin={async () => {
             return await biometricLogin();
           }}
+          onRegister={() => setSelfRegistrationOpen(true)}
         />
       </SafeAreaView>
     );

@@ -17,6 +17,8 @@ import {
   ScheduleStatus,
   FeedbackStatus,
   UserStatus,
+  ApplicationStatus,
+  InterviewOutcome,
 } from '@fapoms/shared';
 
 /**
@@ -103,7 +105,9 @@ export type StatusDomain =
   | 'feedback'
   | 'user'
   | 'attention'
-  | 'rosterAttention';
+  | 'rosterAttention'
+  | 'applicationStatus'
+  | 'interviewOutcome';
 
 // ── 1. Assayer Lifecycle Statuses (11 Canonical States) ──────────────────────
 export const ASSAYER_LIFECYCLE_STATUS_MAP: Record<AssayerLifecycleStatus, StatusDescriptor> = {
@@ -878,6 +882,56 @@ export const ROSTER_ATTENTION_STATUS_MAP: Record<RosterAttentionState, StatusDes
   },
 };
 
+// ── 21. Appraiser Recruitment: self-registration application status (5 States) ─
+export const APPLICATION_STATUS_MAP: Record<ApplicationStatus, StatusDescriptor> = {
+  [ApplicationStatus.DRAFT]: {
+    label: 'Draft',
+    semantic: 'neutral',
+    icon: 'file-edit',
+    description: 'Candidate is still filling this in; not yet visible to HR',
+  },
+  [ApplicationStatus.PENDING_VALIDATION]: {
+    label: 'Pending Review',
+    semantic: 'pending',
+    icon: 'clock',
+    description: 'Submitted by the candidate; awaiting an HR decision',
+  },
+  [ApplicationStatus.AWAITING_INFO]: {
+    label: 'Awaiting Info',
+    semantic: 'warning',
+    icon: 'alert-triangle',
+    description: 'HR asked the candidate for a correction or an additional document',
+  },
+  [ApplicationStatus.REJECTED]: {
+    label: 'Rejected',
+    semantic: 'danger',
+    icon: 'x-circle',
+    description: 'HR declined this application',
+  },
+  [ApplicationStatus.APPROVED]: {
+    label: 'Approved',
+    semantic: 'positive',
+    icon: 'check-circle',
+    description: 'Promoted to a real assayer record',
+  },
+};
+
+// ── 22. Appraiser Recruitment: HR interview outcome (2 States) ─────────────
+export const INTERVIEW_OUTCOME_MAP: Record<InterviewOutcome, StatusDescriptor> = {
+  [InterviewOutcome.PASS]: {
+    label: 'Pass',
+    semantic: 'positive',
+    icon: 'check-circle',
+    description: 'Cleared to receive a self-registration invite',
+  },
+  [InterviewOutcome.FAIL]: {
+    label: 'Fail',
+    semantic: 'danger',
+    icon: 'x-circle',
+    description: 'Not cleared; no invite was sent',
+  },
+};
+
 // ── Backward-compatible Unified Billing Map ─────────────────────────────────
 export const BILLING_STATUS_MAP: Record<string, StatusDescriptor> = {
   ...BILLING_STATE_MAP,
@@ -1017,6 +1071,12 @@ export function getStatusDescriptor(
       break;
     case 'rosterAttention':
       map = ROSTER_ATTENTION_STATUS_MAP as Record<string, StatusDescriptor>;
+      break;
+    case 'applicationStatus':
+      map = APPLICATION_STATUS_MAP as Record<string, StatusDescriptor>;
+      break;
+    case 'interviewOutcome':
+      map = INTERVIEW_OUTCOME_MAP as Record<string, StatusDescriptor>;
       break;
     default:
       map = {};

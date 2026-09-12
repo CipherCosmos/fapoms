@@ -1,7 +1,6 @@
 import { Injectable, Logger, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Not, Repository } from 'typeorm';
-import * as crypto from 'crypto';
 import { EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -12,6 +11,7 @@ import { MfaRecoveryCodeEntity } from './mfa-recovery-code.entity';
 import {
   generateTotpSecret, verifyTotp, otpauthUri, generateRecoveryCodes, hashRecoveryCode,
 } from './totp';
+import { hashCode, numericCode, hashesEqual } from './otp-codes';
 
 const MAX_MFA_ATTEMPTS = 5;
 const MFA_LOCK_MS = 15 * 60_000;
@@ -20,27 +20,6 @@ const MFA_LOCK_MS = 15 * 60_000;
 export type MfaFactorType = 'TOTP' | 'EMAIL' | 'SMS';
 /** A delivered login/enrolment code lives this long. Kept at or under the challenge's own TTL. */
 const DELIVERED_CODE_TTL_S = 300;
-
-/** SHA-256 hex of a short code — codes are never stored or logged in the clear. */
-function hashCode(code: string): string {
-  return crypto.createHash('sha256').update(code.trim()).digest('hex');
-}
-
-/** A cryptographically-random numeric code (leading zeros kept), for email/SMS delivery. */
-function numericCode(digits = 6): string {
-  const max = 10 ** digits;
-  return (crypto.randomInt(0, max)).toString().padStart(digits, '0');
-}
-
-/** Constant-time compare of two equal-length hex digests; false (not throw) on any mismatch. */
-function hashesEqual(a: string, b: string): boolean {
-  if (!a || !b || a.length !== b.length) return false;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
-  } catch {
-    return false;
-  }
-}
 
 /** Mask a destination for display in a response — enough to recognise, not enough to leak. */
 function maskDestination(type: MfaFactorType, dest: string): string {

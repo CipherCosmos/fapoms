@@ -184,6 +184,27 @@ export enum OnboardingDocument {
   DRIVING_LICENCE = 'DRIVING_LICENCE',
   VOTER_ID = 'VOTER_ID',
   PASSPORT = 'PASSPORT',
+  /** The background-verification report itself, filed as a document like any other. */
+  BGV_REPORT = 'BGV_REPORT',
+  /**
+   * The five documents the Appraiser Recruitment spec asks for beyond the shared list, split by
+   * `EmploymentCategory` below. `OFFICE_ADDRESS_PROOF` above already covers the spec's "Shop
+   * Address Proof" for both categories — these five are the ones nothing existing covers.
+   */
+  SHOP_ENTITY_PROOF = 'SHOP_ENTITY_PROOF',
+  ASSOCIATION_LETTER = 'ASSOCIATION_LETTER',
+  RENT_AGREEMENT = 'RENT_AGREEMENT',
+  ELECTRICITY_BILL = 'ELECTRICITY_BILL',
+  EXPERIENCE_LETTER = 'EXPERIENCE_LETTER',
+}
+
+/**
+ * How a candidate is engaged, for the purpose of which extra documents they are asked for during
+ * self-registration. Not stored anywhere before this — the roster has never distinguished the two.
+ */
+export enum EmploymentCategory {
+  FREELANCER = 'FREELANCER',
+  PROPRIETOR = 'PROPRIETOR',
 }
 
 /**
@@ -397,6 +418,14 @@ export const ONBOARDING_DOCUMENT_COLUMNS: Record<OnboardingDocument, string> = {
   [OnboardingDocument.DRIVING_LICENCE]: '',
   [OnboardingDocument.VOTER_ID]: '',
   [OnboardingDocument.PASSPORT]: '',
+  // None of these six have a roster-spreadsheet column either — they only ever arrive through
+  // self-registration or the BGV stage view.
+  [OnboardingDocument.BGV_REPORT]: '',
+  [OnboardingDocument.SHOP_ENTITY_PROOF]: '',
+  [OnboardingDocument.ASSOCIATION_LETTER]: '',
+  [OnboardingDocument.RENT_AGREEMENT]: '',
+  [OnboardingDocument.ELECTRICITY_BILL]: '',
+  [OnboardingDocument.EXPERIENCE_LETTER]: '',
 };
 
 /** What the paperwork is called on screen — the same list, spelled properly. */
@@ -422,6 +451,12 @@ export const ONBOARDING_DOCUMENT_LABELS: Record<OnboardingDocument, string> = {
   [OnboardingDocument.DRIVING_LICENCE]: 'Driving licence',
   [OnboardingDocument.VOTER_ID]: 'Voter ID',
   [OnboardingDocument.PASSPORT]: 'Passport',
+  [OnboardingDocument.BGV_REPORT]: 'Background verification report',
+  [OnboardingDocument.SHOP_ENTITY_PROOF]: 'Shop entity proof',
+  [OnboardingDocument.ASSOCIATION_LETTER]: 'Association letter',
+  [OnboardingDocument.RENT_AGREEMENT]: 'Rent agreement',
+  [OnboardingDocument.ELECTRICITY_BILL]: 'Latest electricity bill',
+  [OnboardingDocument.EXPERIENCE_LETTER]: 'Experience letter',
 };
 
 /** Case, spacing and punctuation are noise. Fold them before matching anything. */

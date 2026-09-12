@@ -84,8 +84,20 @@ export const WORKER_CONCURRENCY = {
    */
   notifications: { deliver: 5, deliverEmail: 3, sweep: 1, failAbandoned: 1, markExhausted: 1 },
 
-  /** Report exports. One per report kind, so a slow roster export cannot block a billing export. */
-  reports: { assignments: 1, billing: 1, commandCenter: 1, assayerRoster: 1 },
+  /**
+   * Report exports. One per report kind, so a slow roster export cannot block a billing export.
+   *
+   * `assayerRosterPdf` joined on 2026-09-12 with the Appraiser Recruitment work. It is the same
+   * roster as `assayerRoster` rendered by pdfkit instead of xlsx, and it is a separate `@Process`
+   * — hence a separate slot — because the two share an enqueue dedupe key derived from the job
+   * name: one name for both would let an Excel request and a PDF request of the same roster
+   * deduplicate onto each other and hand the second caller the wrong file type.
+   *
+   * It does not newly cross the pool line (the total has been past `DB_POOL_MAX` since August
+   * 2026, which the boot warning below already says out loud), and it is the same kind of slot as
+   * its siblings: idle almost always, and holding no connection while pdfkit serialises.
+   */
+  reports: { assignments: 1, billing: 1, commandCenter: 1, assayerRoster: 1, assayerRosterPdf: 1 },
 
   /** OCR. Bounded by CPU on the host rather than by the pool. */
   ocr: { extract: 3 },

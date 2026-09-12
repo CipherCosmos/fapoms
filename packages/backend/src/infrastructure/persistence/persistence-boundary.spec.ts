@@ -92,6 +92,11 @@ const IMPORTS_TYPEORM = [
   // absent from both lists — that one takes `UnitOfWork` and reaches every table through the
   // transaction manager, which is the shape this list is asking for.
   'modules/assayer/roster-records.service.ts',
+  // The Appraiser Recruitment application layer: plain repository access over its three own
+  // tables (interviews, applications, application documents) — `Repository`/`InjectRepository`
+  // only, no DataSource, no transactions.
+  'modules/assayer/assayer-interview.service.ts',
+  'modules/assayer/registration-application.service.ts',
   // The roster's filtered/paginated query path, built with `createQueryBuilder` directly over
   // `AssayerEntity` so a filter maps to one WHERE clause across the whole table instead of a
   // client-side filter over one loaded page. Read-only, no transactions; kept separate from

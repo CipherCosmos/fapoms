@@ -21,6 +21,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -155,6 +156,7 @@ describe('Phase 3 — Assayer Lifecycle, KYC, Empanelment & Financial Integrity'
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: WorkflowEngine, useValue: { executeCommand: jest.fn((kind, id, cmd, prev, next, u, r, p, cb) => cb(null)) } },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: {} },
         { provide: SmsProvider, useValue: {} },
         { provide: UnitOfWork, useValue: mockUow },

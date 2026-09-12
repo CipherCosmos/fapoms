@@ -3,6 +3,7 @@ import { BaseEntity } from '../../core/entities/base.entity';
 import {
   AssayerStatus, AssayerLifecycleStatus,
   AssayerEngagementType, AssayerUnavailableReason,
+  EmploymentCategory,
   operationalStatusFor,
 } from '@fapoms/shared';
 import { encryptedColumn } from '../../infrastructure/security/field-encryption';
@@ -285,6 +286,22 @@ export class AssayerEntity extends BaseEntity {
 
   @Column({ name: 'date_of_birth', type: 'date', nullable: true })
   dateOfBirth: Date | null;
+
+  /** Free text on purpose, matching `qualification` beside it — the roster has never enumerated this. */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  gender: string | null;
+
+  /** Who employs them now, if anyone — distinct from `engagementType`, which is how WE engage them. */
+  @Column({ name: 'current_employer', type: 'varchar', length: 200, nullable: true })
+  currentEmployer: string | null;
+
+  /**
+   * Freelancer vs. proprietor, asked only at self-registration (Appraiser Recruitment spec) — it
+   * decides which extra documents that flow asks for. Null for every assayer admitted through the
+   * HR desk, which has never distinguished the two and still does not need to.
+   */
+  @Column({ name: 'employment_category', type: 'varchar', length: 20, nullable: true })
+  employmentCategory: EmploymentCategory | null;
 
   /**
    * Highest qualification, as recorded. Free text on purpose: the roster holds 104 distinct

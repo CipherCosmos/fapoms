@@ -920,6 +920,55 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     },
   },
 
+  // ── Appraiser Recruitment: self-registration ────────────────────────────
+  // Candidate-facing messages for this flow (the registration link itself, resend on
+  // request-more-info, submission confirmation, approved/rejected) are sent directly via
+  // `EmailProvider`, never through this catalog — a pre-account candidate has no `SystemRole`
+  // principal for `roles`/`special` to address. Only the internal, staff-facing side of the
+  // flow lives here.
+  ASSAYER_APPLICATION_SUBMITTED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    // Same audience and reason as ASSAYER_ONBOARDED above — the review queue is on the HR desk.
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP,
+    title: 'New registration to review',
+    body: '${applicantName} submitted a self-registration application.',
+    link: '/hr/applications',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 900,
+      title: '${count} new registrations to review',
+      body: '${count} candidates submitted a self-registration application.',
+      link: '/hr/applications',
+    },
+  },
+  ASSAYER_BGV_RECORDED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: IN_APP,
+    title: 'Background verification recorded',
+    body: 'Background verification for ${assayerName} was recorded: ${outcome}.',
+    link: '/hr',
+    skipActor: true,
+  },
+  ASSAYER_CODE_ISSUED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.LOW,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: IN_APP,
+    title: 'Appraiser code issued',
+    body: '${assayerName} was issued code ${assayerCode}.',
+    link: '/hr',
+    skipActor: true,
+  },
+
   // ── Feedback & collaboration channel ────────────────────────────────────────
   // The two-way channel between every user and the team that owns feedback. The team
   // (FEEDBACK_TEAM_ROLES — super administrators only, see feedback-roles.ts) hears about

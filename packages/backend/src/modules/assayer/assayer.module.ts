@@ -14,6 +14,9 @@ import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { AssayerScoreOverrideEntity } from './assayer-score-override.entity';
 import { AssayerIdempotencyEntity } from './assayer-idempotency.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
+import { AssayerInterviewEntity } from './assayer-interview.entity';
+import { AssayerApplicationEntity } from './assayer-application.entity';
+import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
 import { QualificationScoreService } from './qualification-score.service';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
@@ -31,6 +34,11 @@ import { RosterQueryService } from './roster-query.service';
 import { AssayerSelfServiceController } from './assayer-self-service.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { GeoModule } from '../geo/geo.module';
+import { RegistrationApplicationService } from './registration-application.service';
+import { AssayerInterviewService } from './assayer-interview.service';
+import { AssayerInterviewController } from './assayer-interview.controller';
+import { PublicRegistrationController } from './public-registration.controller';
+import { HrApplicationsController } from './hr-applications.controller';
 
 @Module({
   imports: [
@@ -60,14 +68,28 @@ import { GeoModule } from '../geo/geo.module';
       AssayerBackgroundCheckEntity,
       AssayerImportIssueEntity,
       AssayerScoreOverrideEntity,
+      AssayerInterviewEntity,
+      AssayerApplicationEntity,
+      AssayerApplicationDocumentEntity,
       ClientEntity,
     ]),
   ],
   // `AssayerSelfServiceController` is listed after `AssayerController` on purpose. Nest matches
   // routes in registration order, and the two share the `assayers` prefix; keeping the
   // long-established routes first means a new self-service path can never shadow one of them.
-  controllers: [AssayerController, HrController, AssayerSelfServiceController],
-  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker, RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService],
-  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService, TypeOrmModule],
+  controllers: [
+    AssayerController, HrController, AssayerSelfServiceController,
+    AssayerInterviewController, PublicRegistrationController, HrApplicationsController,
+  ],
+  providers: [
+    AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker,
+    RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService,
+    RegistrationApplicationService, AssayerInterviewService,
+  ],
+  exports: [
+    AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService,
+    QualificationScoreService, DataIntegrityService, RosterQueryService, RegistrationApplicationService,
+    TypeOrmModule,
+  ],
 })
 export class AssayerModule {}

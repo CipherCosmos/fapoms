@@ -12,6 +12,7 @@ import { Logger } from '@nestjs/common';
 import { Job } from 'bull';
 
 import { EXCEL_MIME } from './excel-export';
+import { PDF_MIME } from './pdf-export';
 import { ReportsService } from './reports.service';
 import { ReportFileStore } from './report-file.store';
 import { progressReporter, ProgressCallback } from '../../infrastructure/queue/queued-job';
@@ -84,6 +85,17 @@ export class ReportJobsWorker {
     );
   }
 
+  @Process({ name: REPORT_JOB.ASSAYER_ROSTER_PDF, concurrency: ONE_AT_A_TIME })
+  async assayerRosterPdf(job: Job<AssayerRosterReportJobData>): Promise<ReportJobResult> {
+    const { principal, scope } = job.data;
+    return this.produce(
+      job,
+      `assayer_roster_${job.id}.pdf`,
+      (onProgress) => this.reportsService.assayerRosterPdf(principal, { scope: scope ?? undefined }, onProgress),
+      PDF_MIME,
+    );
+  }
+
   /**
    * The half of every export that is the same: build, store, describe.
    *
@@ -102,6 +114,7 @@ export class ReportJobsWorker {
     job: Job,
     filename: string,
     build: (onProgress: ProgressCallback) => Promise<Buffer>,
+    mimeType: string = EXCEL_MIME,
   ): Promise<ReportJobResult> {
     this.logger.log(`Export job ${job.id} (${job.name}) starting.`);
 
@@ -109,6 +122,6 @@ export class ReportJobsWorker {
     await this.files.put(String(job.id), buffer);
 
     this.logger.log(`Export job ${job.id} (${job.name}) produced ${filename} — ${(buffer.length / 1024).toFixed(0)} KB.`);
-    return { filename, mimeType: EXCEL_MIME, sizeBytes: buffer.length };
+    return { filename, mimeType, sizeBytes: buffer.length };
   }
 }

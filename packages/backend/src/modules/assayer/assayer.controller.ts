@@ -80,6 +80,7 @@ import {
   AssayerLifecycleStatus,
   AssayerEngagementType,
   AssayerUnavailableReason,
+  EmploymentCategory,
   SELF_EDITABLE_ASSAYER_FIELDS,
   HR_MAINTAINED_ASSAYER_FIELDS,
   isValidPan,
@@ -95,6 +96,7 @@ import {
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { deriveFileIntegrity } from '../document/document-integrity';
+import { buildIdCardPdf, streamToBuffer } from './id-card';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
@@ -548,6 +550,15 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsString()
   hrOwnerName?: string;
 
+  @IsOptional() @IsString()
+  gender?: string;
+
+  @IsOptional() @IsString()
+  currentEmployer?: string;
+
+  @IsOptional() @IsEnum(EmploymentCategory)
+  employmentCategory?: EmploymentCategory;
+
   @IsOptional() @IsEnum(AssayerEngagementType)
   engagementType?: AssayerEngagementType;
 
@@ -722,6 +733,15 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
 
   @IsOptional() @IsString()
   hrOwnerName?: string;
+
+  @IsOptional() @IsString()
+  gender?: string;
+
+  @IsOptional() @IsString()
+  currentEmployer?: string;
+
+  @IsOptional() @IsEnum(EmploymentCategory)
+  employmentCategory?: EmploymentCategory;
 
   @IsOptional() @IsEnum(AssayerEngagementType)
   engagementType?: AssayerEngagementType;
@@ -989,6 +1009,23 @@ export class BulkIssueAppAccessDto {
   @ArrayMaxSize(500, { message: 'Issue app access to at most 500 assayers at a time.' })
   @IsUUID('4', { each: true })
   ids: string[];
+}
+
+export class BulkNotifyDto {
+  @IsArray() @IsNotEmpty()
+  @ArrayMaxSize(500, { message: 'Notify at most 500 assayers at a time.' })
+  @IsUUID('4', { each: true })
+  ids: string[];
+
+  @IsString() @IsNotEmpty() @MaxLength(200)
+  subject: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  body: string;
+
+  /** Default false — email is an opt-in for this one deliberate broadcast action, not routine. */
+  @IsOptional() @IsBoolean()
+  sendEmail?: boolean;
 }
 
 export class CreateGovernmentDocumentRequestDto {
@@ -2676,6 +2713,54 @@ export class AssayerController {
   }
 
   /**
+   * The Appraiser Recruitment spec's Module 8: a templated ID card, generated fresh on every
+   * request — nothing about it is persisted. Expiry is always December 31 of THIS calendar year
+   * (`idCardExpiry`), computed at generation time rather than stored, so the same card downloaded
+   * in different years never carries a stale date. The download itself is what
+   * `@AuditRead` records — there is no separate "who downloaded this" table.
+   */
+  @Get(':assayerId/id-card')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
+  @AuditRead({ resource: 'ASSAYER_ID_CARD', idParam: 'assayerId', eventType: 'ASSAYER_ID_CARD_DOWNLOADED' })
+  @ApiOperation({ summary: 'Download a templated ID card as a PDF' })
+  async downloadIdCard(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Res() res: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<void> {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    const assayer = await this.assayerService.findOne(assayerId);
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+
+    let photograph: Buffer | null = null;
+    if (assayer.photograph) {
+      try {
+        const stream = await this.storage.getFileStream(assayer.photograph);
+        photograph = await streamToBuffer(stream);
+      } catch {
+        // A missing or unreadable stored photo must not block issuing the card at all — the
+        // template already renders a "no photo on file" placeholder for exactly this case.
+        photograph = null;
+      }
+    }
+
+    const pdf = await buildIdCardPdf({
+      fullName: assayer.displayName,
+      assayerCode: assayer.assayerCode,
+      city: assayer.city,
+      state: assayer.state,
+      photograph,
+      generatedOn: new Date(),
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${assayer.assayerCode}-id-card.pdf"`);
+    res.setHeader('Content-Length', String(pdf.length));
+    res.end(pdf);
+  }
+
+  /**
    * One version's scan, addressed by the attestation that depends on it.
    *
    * `document/:id/file/:index` reaches only what is currently attached. An object kept alive
@@ -3031,6 +3116,26 @@ export class AssayerController {
       await this.regionGuard.assertAssayerInScope(id, scope);
     }
     const data = await this.assayerService.bulkIssueAppAccess(dto.ids, req.user.id);
+    return { success: true, data };
+  }
+
+  /**
+   * The admin dashboard's bulk-notify action — see `AssayerService.bulkNotify` for why this
+   * bypasses the notification catalog rather than adding a templated entry to it.
+   */
+  @Post('bulk/notify')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Send a custom message to a batch of assayers' })
+  async bulkNotify(
+    @Body() dto: BulkNotifyDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    for (const id of dto.ids) {
+      await this.regionGuard.assertAssayerInScope(id, scope);
+    }
+    const data = await this.assayerService.bulkNotify(dto.ids, dto.subject, dto.body, !!dto.sendEmail, req.user.id);
     return { success: true, data };
   }
 

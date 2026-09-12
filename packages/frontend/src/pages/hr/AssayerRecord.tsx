@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, KeyRound, ShieldCheck, FileCheck, Gauge, Info, Trash2,
+  Download,
 } from 'lucide-react';
 import {
   nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel,
@@ -212,6 +213,8 @@ export const AssayerRecord: React.FC<{
   const [err, setErr] = useState<string | null>(null);
   const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  /** True while the ID card PDF is being fetched — a second click before it lands would ask the server to build the same file twice. */
+  const [idCardBusy, setIdCardBusy] = useState(false);
 
   const { confirm, confirmDialog } = useConfirm();
   const { toast } = useToast();
@@ -619,6 +622,35 @@ export const AssayerRecord: React.FC<{
     finally { setIssuing(null); }
   };
 
+  /**
+   * Streams the templated ID card PDF and saves it — same pattern the roster's template
+   * download uses (`downloadTemplate` in AssayerRoster.tsx): fetch through `api.request` with
+   * `raw: true` so the auth header rides along (a plain `<a href>` to this route cannot carry
+   * the bearer token), turn the blob into an object URL, and click a throwaway anchor. The
+   * route has no JSON envelope at all — it answers the raw PDF bytes — so this is the one place
+   * on the record that talks to it as a file rather than as data.
+   */
+  const downloadIdCard = async () => {
+    if (!a) return;
+    setIdCardBusy(true);
+    setErr(null);
+    try {
+      const blob = await api.request<Blob>(`/assayers/${assayerId}/id-card`, { raw: true } as any);
+      const url = URL.createObjectURL(blob as any);
+      const el = document.createElement('a');
+      el.href = url;
+      el.download = `${a.assayerCode}-id-card.pdf`;
+      document.body.appendChild(el);
+      el.click();
+      el.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(`Could not download the ID card. ${userMessage(e)}`);
+    } finally {
+      setIdCardBusy(false);
+    }
+  };
+
   if (!a) {
     /**
      * Three different answers, and the screen has to say which one it is.
@@ -754,6 +786,17 @@ export const AssayerRecord: React.FC<{
                   style={{ fontSize: '12px', padding: '6px 10px', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '5px' }}
                 >
                   <Trash2 size={12} /> Delete
+                </button>
+              )}
+              {canManage && !editing && (
+                <button
+                  onClick={downloadIdCard}
+                  disabled={idCardBusy}
+                  className="btn btn-secondary"
+                  title="Download a templated ID card as a PDF"
+                  style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                >
+                  <Download size={12} /> {idCardBusy ? 'Preparing…' : 'Download ID Card'}
                 </button>
               )}
               {a.phone && (
@@ -1240,7 +1283,13 @@ export const AssayerRecord: React.FC<{
           )}
 
           {tab === 'vetting' && (
-            <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="checks" lifecycleStatus={a.lifecycleStatus} />
+            <AssayerVettingTab
+              assayerId={assayerId}
+              canManage={canManage}
+              section="checks"
+              lifecycleStatus={a.lifecycleStatus}
+              onGoToDocuments={() => setTab('documents')}
+            />
           )}
 
           {tab === 'documents' && (

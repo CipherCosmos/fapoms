@@ -90,6 +90,14 @@ export class ReportJobsService {
     return this.add<AssayerRosterReportJobData>(REPORT_JOB.ASSAYER_ROSTER, params, requestedBy);
   }
 
+  /** Same payload as the workbook twin above — only the renderer differs. */
+  async enqueueAssayerRosterPdf(
+    params: Omit<AssayerRosterReportJobData, keyof QueuedJobEnvelope>,
+    requestedBy: string,
+  ): Promise<EnqueueResult> {
+    return this.add<AssayerRosterReportJobData>(REPORT_JOB.ASSAYER_ROSTER_PDF, params, requestedBy);
+  }
+
   /**
    * Poll one export job.
    *

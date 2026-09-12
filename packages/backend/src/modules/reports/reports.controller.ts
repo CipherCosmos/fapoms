@@ -28,10 +28,10 @@ export class ReportsController {
     private readonly regionGuard: RegionGuardService,
   ) {}
 
-  private send(res: Response, buffer: Buffer, filename: string): void {
+  private send(res: Response, buffer: Buffer, filename: string, mime: string = EXCEL_MIME): void {
     const encoded = encodeURIComponent(filename);
     res.set({
-      'Content-Type': EXCEL_MIME,
+      'Content-Type': mime,
       'Content-Disposition': `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`,
       'Content-Length': String(buffer.length),
     });
@@ -147,6 +147,26 @@ export class ReportsController {
     this.send(res!, buffer, `assayer_roster_${Date.now()}.xlsx`);
   }
 
+  /**
+   * The Appraiser Recruitment spec's Area A: a PDF roster export beside the Excel one above.
+   * Roster columns only (no Pay Roll sheet — see `ReportsService.rosterRowsFor`'s comment).
+   * Synchronous only, no queued twin: pdfkit's row-by-row layout is the same kind of blocking
+   * CPU `xlsx.write` is, so a very large roster belongs on the Excel export's queued route
+   * instead of growing this one — this is a smaller, print-friendly export by design.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Get('assayer-roster/pdf')
+  @Roles(...ROSTER_ROLES)
+  @ApiOperation({ summary: 'Export the assayer roster to PDF' })
+  async assayerRosterPdf(
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+    @Res() res?: Response,
+  ): Promise<void> {
+    const buffer = await this.reportsService.assayerRosterPdf(req.user, { scope });
+    this.send(res!, buffer, `assayer_roster_${Date.now()}.pdf`, 'application/pdf');
+  }
+
   // ── Queued exports ───────────────────────────────────────────────────────
   //
   // Every GET above stays exactly as it is — the web app calls them today and this has to be
@@ -254,6 +274,23 @@ export class ReportsController {
   }
 
   /**
+   * The PDF roster's queued twin. Same frozen-principal and frozen-scope reasoning as the
+   * workbook route above — the worker has no request, so both travel in the payload.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('assayer-roster-pdf/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(...ROSTER_ROLES)
+  @ApiOperation({ summary: 'Queue the assayer roster PDF export; returns a job id to poll' })
+  async queueAssayerRosterPdf(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    const enqueued = await this.reportJobsService.enqueueAssayerRosterPdf(
+      { principal: { id: req.user?.id, roles: rolesOf(req.user) }, scope: scope ?? null },
+      req.user?.id,
+    );
+    return { success: true, data: enqueued };
+  }
+
+  /**
    * Poll one export job.
    *
    * Reports `state`, `progress` and — once done — the filename, size and how many seconds are
@@ -291,6 +328,8 @@ export class ReportsController {
   @ApiOperation({ summary: 'Download the workbook produced by a completed export job' })
   async downloadReportJob(@Param('jobId') jobId: string, @Req() req: any, @Res() res: Response): Promise<void> {
     const { buffer, meta } = await this.reportJobsService.download(jobId, req.user?.id);
-    this.send(res, buffer, meta.filename);
+    // `meta.mimeType`, not the Excel default: since the roster also queues as a PDF, serving every
+    // queued file as a spreadsheet would hand the browser a .pdf labelled as .xlsx.
+    this.send(res, buffer, meta.filename, meta.mimeType);
   }
 }

@@ -21,6 +21,13 @@ interface LoginScreenProps {
   onLogin?: (u?: string, p?: string) => void | Promise<any>;
   onVerifyIdentity?: (id: string) => Promise<any>;
   onBiometricLogin?: () => void | Promise<any>;
+  /**
+   * Opens `SelfRegistrationScreen` — the one way a candidate who has never signed in (and never
+   * will sign in through this form; self-registration issues no credentials) can reach the
+   * Appraiser Recruitment flow. Optional so this component still compiles wherever it might be
+   * rendered without that flow wired up; `App.tsx` always supplies it.
+   */
+  onRegister?: () => void;
 }
 
 /**
@@ -43,6 +50,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onLogin,
   onVerifyIdentity,
   onBiometricLogin,
+  onRegister,
   }) => {
   const t = useTheme();
   const tr = useT();
@@ -374,6 +382,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 <AppText variant="small" tone="muted">{tr('login.useBiometric')}</AppText>
               </View>
             </Tappable>
+            )}
+
+            {/*
+              The one way in for a candidate who has never signed in and never will through this
+              form — self-registration issues no password. Placed inside the same card as sign-in
+              rather than buried under the server-address disclosure below, since this is the
+              option a first-time candidate is actually looking for on this screen.
+            */}
+            {onRegister && (
+              <Tappable onPress={onRegister} accessibilityRole="button" accessibilityLabel={tr('login.registerLinkAccessibility')}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
+                  <Icon name="person-add-outline" size={16} color={t.colors.primary} />
+                  <AppText variant="small" style={{ color: t.colors.primary, fontWeight: '700' }}>
+                    {tr('login.registerLink')}
+                  </AppText>
+                </View>
+              </Tappable>
             )}
           </Card>
 

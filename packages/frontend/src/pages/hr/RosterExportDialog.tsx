@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Download, FileSpreadsheet, ShieldAlert } from 'lucide-react';
+import { Download, FileSpreadsheet, FileText, ShieldAlert } from 'lucide-react';
 
 import { Modal } from '../../components/ui';
 import { downloadCsv, datedFilename } from '../../utils/csv';
@@ -58,8 +58,12 @@ export const RosterExportDialog: React.FC<{
   /** Runs the server-built workbook — kept here so the toolbar needs one export control. */
   onExcelExport: () => void;
   excelBusy: boolean;
+  /** The same roster rendered for printing rather than for a spreadsheet. */
+  onPdfExport: () => void;
+  pdfBusy: boolean;
 }> = ({
   open, onClose, filtered, all, truncated, rosterTotal, filterSummary, onExcelExport, excelBusy,
+  onPdfExport, pdfBusy,
 }) => {
   const [scope, setScope] = useState<'filtered' | 'all'>('filtered');
   const [selected, setSelected] = useState<string[]>(
@@ -124,6 +128,19 @@ export const RosterExportDialog: React.FC<{
             style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '8px 14px', color: 'var(--success)', marginLeft: 'auto' }}
           >
             <FileSpreadsheet size={13} /> {excelBusy ? 'Preparing…' : 'Full workbook'}
+          </button>
+          {/*
+            Roster columns only — no pay rates. The workbook beside it is the one that carries
+            money, and a printable handout is the wrong place for it.
+          */}
+          <button
+            onClick={onPdfExport}
+            disabled={pdfBusy}
+            className="btn btn-secondary"
+            title="The roster as a printable PDF — the same people and columns as the CSV, laid out for paper. Pay rates are not included."
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '8px 14px' }}
+          >
+            <FileText size={13} /> {pdfBusy ? 'Preparing…' : 'PDF'}
           </button>
           <button onClick={onClose} className="btn btn-secondary" style={{ fontSize: '12.5px', padding: '8px 14px' }}>
             Cancel

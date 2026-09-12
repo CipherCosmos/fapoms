@@ -55,6 +55,10 @@ export * from './assayer-roster-vocabulary';
 export * from './assayer-qualification';
 export * from './assignment-fee';
 
+// The Appraiser Recruitment application layer — pre-account interview/registration, separate
+// from the guarded live assayer lifecycle
+export * from './assayer-application';
+
 // PAN/Aadhaar/IFSC/phone validation — one rulebook for the importer and every API write path
 export * from './identity-validation';
 

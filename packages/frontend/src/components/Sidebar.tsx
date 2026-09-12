@@ -17,7 +17,7 @@ import {
   Building2,
   Receipt,
   UserCog, Inbox, MessageSquare, BellRing, SlidersHorizontal,
-  ScrollText, AlertTriangle } from 'lucide-react';
+  ScrollText, AlertTriangle, UserCheck, FileCheck2 } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { permissionKeysFrom } from '../hooks/useCurrentRoles';
@@ -85,6 +85,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Billing', path: '/billing', icon: Receipt },
         { name: 'Branches', path: '/branches', icon: GitMerge },
         { name: 'Workforce', path: '/hr', icon: UserCog },
+        // Appraiser Recruitment: the interview gate ahead of self-registration, and the review
+        // queue for applications it spawns. Both sit beside Workforce rather than inside it,
+        // mirroring `/hr/register`'s own placement — see App.tsx's routing comment.
+        { name: 'Interviews', path: '/hr/interviews', icon: UserCheck },
+        { name: 'Applications', path: '/hr/applications', icon: FileCheck2 },
         { name: 'Branch Paperwork', path: '/documents', icon: Files },
         { name: 'Audit Data Entry', path: '/data-entry', icon: Inbox },
       ],

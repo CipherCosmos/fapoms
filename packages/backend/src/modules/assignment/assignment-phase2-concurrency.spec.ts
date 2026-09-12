@@ -104,6 +104,7 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
 
   const mockNotificationService = {
     create: jest.fn().mockImplementation(async (dto) => ({ id: 'notif-123', ...dto })),
+    notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }),
   };
 
   const mockPushNotificationService = {
@@ -1008,6 +1009,7 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
           { provide: DocumentService, useValue: {} },
           { provide: PlatformSettingsService, useValue: {} },
           { provide: NotificationDispatchService, useValue: mockNotificationDispatch },
+          { provide: NotificationService, useValue: mockNotificationService },
           { provide: PushNotificationService, useValue: mockPushNotificationService },
         ],
       }).compile();
