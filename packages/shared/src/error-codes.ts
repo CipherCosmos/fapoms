@@ -126,6 +126,12 @@ export const ASSAYER_ERROR_CODES = {
    * never operated the check once.
    */
   BACKGROUND_NOT_CLEAR: 'BACKGROUND_NOT_CLEAR',
+  /**
+   * The account that typed an HR-desk application in tried to approve it. Maker–checker: the
+   * same person must not be able to manufacture a reviewed-looking record alone — booker cannot
+   * approve, approver cannot pay, and the desk cannot approve its own data entry.
+   */
+  APPLICATION_MAKER_CHECKER: 'APPLICATION_MAKER_CHECKER',
   /** The request claimed a file but carried none. */
   UPLOAD_NO_FILE: 'UPLOAD_NO_FILE',
   /** Over the size ceiling. The message names the limit. */

@@ -9,7 +9,10 @@ import {
   applicationIsEditableByCandidate,
   EmploymentCategory,
   OnboardingDocument,
+  ApplicationSource,
+  ASSAYER_ERROR_CODES,
 } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
 import { AssayerEntity } from './assayer.entity';
@@ -559,6 +562,62 @@ export class RegistrationApplicationService {
     return saved;
   }
 
+  /**
+   * Apply what the wizard collected beyond the application's own columns, AFTER the person is
+   * real — through the same guarded services the wizard used to call directly, so nothing here
+   * invents a second write path.
+   *
+   * Deliberately per-group and forgiving: the approval already happened, the person exists, and
+   * a bank field the roster rejects must not undo their promotion. Each failure becomes a named
+   * gap in the approval's audit remarks — visible, actionable on the record, and nothing lost.
+   */
+  private async applyExtendedProfile(
+    assayerId: string,
+    application: AssayerApplicationEntity,
+    actorUserId: string,
+  ): Promise<string[]> {
+    const profile = (application.extendedProfile ?? null) as {
+      fields?: Record<string, unknown>;
+      commercial?: Record<string, unknown>;
+      empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+    } | null;
+    if (!profile) return [];
+
+    const gaps: string[] = [];
+
+    if (profile.fields && Object.keys(profile.fields).length > 0) {
+      try {
+        await this.assayerService.update(assayerId, profile.fields as never, actorUserId);
+      } catch (err: any) {
+        gaps.push(`profile fields (${err?.message ?? 'refused'})`);
+      }
+    }
+
+    if (profile.commercial && Object.keys(profile.commercial).length > 0) {
+      try {
+        await this.assayerService.createCommercialProfile(assayerId, profile.commercial as never, actorUserId);
+      } catch (err: any) {
+        gaps.push(`commercial rates (${err?.message ?? 'refused'})`);
+      }
+    }
+
+    for (const emp of profile.empanelments ?? []) {
+      try {
+        // A first standing on a fresh record — the guarded upsert path, no expectedVersion needed
+        // for a row that does not exist yet.
+        await this.rosterRecords.setEmpanelment(
+          assayerId, emp.clientId,
+          { status: emp.status as never, statusReason: emp.statusReason },
+          actorUserId,
+        );
+      } catch (err: any) {
+        gaps.push(`empanelment for client ${emp.clientId} (${err?.message ?? 'refused'})`);
+      }
+    }
+
+    return gaps;
+  }
+
   async approve(
     id: string,
     actorUserId: string,
@@ -566,6 +625,38 @@ export class RegistrationApplicationService {
     organizationId?: string | null,
   ): Promise<AssayerEntity> {
     const application = await this.mustBeReviewable(id);
+
+    /**
+     * Maker–checker, on the HR-entered path only.
+     *
+     * On an HR_DESK application the creating account authored the substance, so it may not also
+     * be the account that approves it — booker cannot approve, approver cannot pay, and the desk
+     * cannot approve its own data entry. On SELF_SERVICE the candidate is the maker; the HR user
+     * who merely sent the invite reviews it, which is the point of the review.
+     *
+     * The refusal is audited, like every segregation refusal in this product: an attempt to
+     * self-approve is itself a fact worth keeping.
+     */
+    if (application.source === ApplicationSource.HR_DESK
+        && application.createdBy && application.createdBy === actorUserId) {
+      await this.auditService.recordEventSafe({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSAYER_APPLICATION_APPROVAL_REFUSED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application.id,
+        userId: actorUserId,
+        remarks: 'Maker–checker: the account that entered this application tried to approve it.',
+      });
+      throw withCode(
+        new ForbiddenException(
+          'You entered this application, so somebody else has to approve it. Ask another '
+          + 'authorised HR user to review it — the same rule that keeps one person from booking '
+          + 'and approving the same payment.',
+        ),
+        ASSAYER_ERROR_CODES.APPLICATION_MAKER_CHECKER,
+      );
+    }
+
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
 
     const notesParts = [
@@ -610,6 +701,8 @@ export class RegistrationApplicationService {
       }
     }
 
+    const profileGaps = await this.applyExtendedProfile(assayer.id, application, actorUserId);
+
     application.status = ApplicationStatus.APPROVED;
     application.reviewedBy = actorUserId;
     application.reviewedAt = new Date();
@@ -622,7 +715,9 @@ export class RegistrationApplicationService {
       entityType: 'ASSAYER_APPLICATION',
       entityId: application.id,
       userId: actorUserId,
-      remarks: `Promoted to assayer ${assayer.assayerCode}.`,
+      remarks: profileGaps.length === 0
+        ? `Promoted to assayer ${assayer.assayerCode}.`
+        : `Promoted to assayer ${assayer.assayerCode}. Profile partially applied — fix on the record: ${profileGaps.join('; ')}.`,
     });
     this.notificationDispatch.emitSafe({
       type: 'ASSAYER_CODE_ISSUED',

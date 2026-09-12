@@ -36,6 +36,20 @@ export function applicationIsEditableByCandidate(status: ApplicationStatus): boo
   return status === ApplicationStatus.DRAFT || status === ApplicationStatus.AWAITING_INFO;
 }
 
+/**
+ * Who authored the substance of an application — the rule maker–checker keys on.
+ *
+ * SELF_SERVICE: the candidate filled it in through their invite link (web or mobile). The HR
+ * user who sent the invite is not the maker and may review it.
+ * HR_DESK: a staff account typed the candidate in through the portal wizard. That account is
+ * the maker, and approval must come from somebody else — the same segregation this product
+ * already enforces for money.
+ */
+export enum ApplicationSource {
+  SELF_SERVICE = 'SELF_SERVICE',
+  HR_DESK = 'HR_DESK',
+}
+
 export enum InterviewOutcome {
   PASS = 'PASS',
   FAIL = 'FAIL',

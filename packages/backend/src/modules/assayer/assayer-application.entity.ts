@@ -97,6 +97,19 @@ export class AssayerApplicationEntity extends BaseEntity {
   @Column({ name: 'promoted_assayer_id', type: 'uuid', nullable: true })
   promotedAssayerId: string | null;
 
+  /** See ApplicationSource in @fapoms/shared — SELF_SERVICE (candidate is the maker) or HR_DESK. */
+  @Column({ type: 'varchar', length: 20, default: 'SELF_SERVICE' })
+  source: string;
+
+  /**
+   * The wizard's payload beyond the application's own columns — bank and identity details,
+   * commercial rates, per-client standings — held as a document until approval and applied by
+   * `applyExtendedProfile` afterwards. Nothing in it becomes live roster data for a person who
+   * may yet be rejected.
+   */
+  @Column({ name: 'extended_profile', type: 'jsonb', nullable: true })
+  extendedProfile: Record<string, unknown> | null;
+
   // ── Invite / access token ──────────────────────────────────────────────
   // Only the hash is ever stored — see `document-access-token.service.ts` for the same discipline
   // elsewhere in this codebase. The raw token lives only in the emailed link and the candidate's

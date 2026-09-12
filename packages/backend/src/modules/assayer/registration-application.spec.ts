@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { ApplicationStatus, EmploymentCategory, OnboardingDocument } from '@fapoms/shared';
+import { ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource } from '@fapoms/shared';
 
 import { RegistrationApplicationService, documentsRequestedFor } from './registration-application.service';
 
@@ -440,5 +440,93 @@ describe('which documents a candidate is asked for', () => {
         OnboardingDocument.OFFICE_ADDRESS_PROOF,
       ]));
     }
+  });
+});
+
+describe('maker–checker on the HR-entered path', () => {
+  const hrEntered = () => ({
+    id: 'app-hr', mobile: '9822014455', email: 'c@example.com', fullName: 'Typed In By Desk',
+    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION,
+    organizationId: 'org-1', source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+  });
+
+  it('refuses the account that entered it, audits the attempt, and changes nothing', async () => {
+    const ctx = makeService({ application: hrEntered() });
+
+    await expect(ctx.service.approve('app-hr', 'hr-maker', ['ADMIN'])).rejects.toThrow(/somebody else has to approve/);
+
+    // The refusal is itself a fact worth keeping — same as every segregation refusal here.
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'ASSAYER_APPLICATION_APPROVAL_REFUSED', userId: 'hr-maker' }),
+    );
+    // And nothing moved: no roster record, no status change.
+    expect(ctx.assayerService.create).not.toHaveBeenCalled();
+    expect(ctx.applications.save).not.toHaveBeenCalled();
+  });
+
+  it('a different authorised account approves the same application', async () => {
+    const ctx = makeService({ application: hrEntered() });
+
+    await ctx.service.approve('app-hr', 'hr-checker', ['ADMIN']);
+
+    expect(ctx.assayerService.create).toHaveBeenCalled();
+    expect(ctx.applications.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: ApplicationStatus.APPROVED, reviewedBy: 'hr-checker' }),
+    );
+  });
+
+  it('on a self-service application the inviter may approve — the candidate was the maker', async () => {
+    const ctx = makeService({ application: {
+      ...hrEntered(), id: 'app-self', source: ApplicationSource.SELF_SERVICE, createdBy: 'hr-inviter',
+    } });
+
+    await ctx.service.approve('app-self', 'hr-inviter', ['ADMIN']);
+
+    expect(ctx.assayerService.create).toHaveBeenCalled();
+  });
+});
+
+describe('the extended profile the wizard collects', () => {
+  const withProfile = () => ({
+    id: 'app-x', mobile: '9822014455', fullName: 'Full Payload', state: 'Maharashtra',
+    status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+    source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+    extendedProfile: {
+      fields: { panNumber: 'ABCDE1234K', bankName: 'SBI' },
+      commercial: { baseFee: 1500 },
+      empanelments: [{ clientId: 'client-1', status: 'RECOMMENDED' }],
+    },
+  });
+
+  const arm = (ctx: ReturnType<typeof makeService>) => {
+    (ctx.assayerService as any).update = jest.fn(async () => ({}));
+    (ctx.assayerService as any).createCommercialProfile = jest.fn(async () => ({}));
+    (ctx.rosterRecords as any).setEmpanelment = jest.fn(async () => ({}));
+    return ctx;
+  };
+
+  it('applies fields, rates and standings through the guarded services, after the person is real', async () => {
+    const ctx = arm(makeService({ application: withProfile() }));
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect((ctx.assayerService as any).update).toHaveBeenCalledWith('assayer-1', expect.objectContaining({ panNumber: 'ABCDE1234K' }), 'hr-checker');
+    expect((ctx.assayerService as any).createCommercialProfile).toHaveBeenCalledWith('assayer-1', expect.objectContaining({ baseFee: 1500 }), 'hr-checker');
+    expect((ctx.rosterRecords as any).setEmpanelment).toHaveBeenCalledWith('assayer-1', 'client-1', expect.objectContaining({ status: 'RECOMMENDED' }), 'hr-checker');
+  });
+
+  it('a group the roster refuses becomes a NAMED gap in the approval audit — the promotion survives', async () => {
+    const ctx = arm(makeService({ application: withProfile() }));
+    (ctx.assayerService as any).createCommercialProfile = jest.fn(async () => { throw new Error('rate outside policy'); });
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(result.id).toBe('assayer-1'); // approved despite the gap
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'ASSAYER_APPLICATION_APPROVED',
+        remarks: expect.stringContaining('commercial rates (rate outside policy)'),
+      }),
+    );
   });
 });
