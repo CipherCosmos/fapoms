@@ -24,6 +24,7 @@ import {
   BadRequestException,
   NotFoundException,
   Inject,
+  ConflictException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -2727,11 +2728,33 @@ export class AssayerController {
   async downloadIdCard(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Res() res: any,
+    @Req() req?: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.findOne(assayerId);
     if (!assayer) throw new NotFoundException('Assayer not found.');
+
+    /**
+     * The card is the identity artifact — the thing carried into a bank branch — so it is gated
+     * on what has actually been proven about the person, not on the row merely existing. Before
+     * this, the only check on this route was "no such record": a just-invited person with no
+     * verified document and no background check could be handed an official card. Not being
+     * ACTIVE refuses in every mode; unverified identity and an absent or failed background check
+     * refuse under `onboarding.identityGate.mode = enforce` and are issued-but-audited under
+     * `warn`, the same rollout shape as activation itself. Validity is configurable and computed
+     * fresh each download — see `idCardIssuance` for the December-31st grace rule.
+     */
+    const issuance = await this.rosterRecords.idCardIssuance(assayerId, req?.user?.id ?? 'unknown');
+    if (issuance.refusals.length > 0) {
+      throw new ConflictException(`This ID card cannot be issued: ${issuance.refusals.join('; ')}.`);
+    }
+    if (issuance.gated.length > 0 && issuance.gateMode === 'enforce') {
+      throw new ConflictException(
+        `This ID card cannot be issued until vetting is complete: ${issuance.gated.join('; ')}. `
+        + 'Complete the verification on the vetting screen, or review the identity gate under Admin → Settings.',
+      );
+    }
 
     let photograph: Buffer | null = null;
     if (assayer.photograph) {
@@ -2751,7 +2774,8 @@ export class AssayerController {
       city: assayer.city,
       state: assayer.state,
       photograph,
-      generatedOn: new Date(),
+      generatedOn: issuance.issuedOn,
+      validTill: issuance.validTill,
     });
 
     res.setHeader('Content-Type', 'application/pdf');

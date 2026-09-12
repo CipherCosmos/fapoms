@@ -15,9 +15,14 @@ export async function streamToBuffer(stream: Readable): Promise<Buffer> {
 
 /**
  * The Appraiser Recruitment spec's Module 8: a predefined-template ID card, generated on demand
- * as a PDF. Expiry is always December 31 of the CURRENT calendar year — recomputed fresh on every
- * download, not stored, so a card downloaded in March and one downloaded in November of the same
- * year (or a re-download next year) always states an accurate expiry rather than a stale one.
+ * as a PDF. Validity is computed fresh on every download, never stored, so a re-download always
+ * states an accurate expiry rather than a stale one.
+ *
+ * The builder no longer decides WHAT the validity is. It used to hard-code December 31 of the
+ * current year, which meant a card issued on December 31st expired the day it was printed — the
+ * owner spotted that themselves. The rule now lives in `identity-artifacts.ts`, is configurable
+ * under Admin → Settings (calendar-year with a grace window, or rolling months), and arrives
+ * here as a plain date to print.
  */
 
 const CARD_WIDTH = 504; // 7in landscape at 72pt/in — large enough to read the photo and every field
@@ -33,11 +38,8 @@ export interface IdCardInput {
   state?: string | null;
   photograph?: Buffer | null;
   generatedOn: Date;
-}
-
-/** December 31 of the SAME year as `reference` — always computed fresh, never stored. */
-export function idCardExpiry(reference: Date): Date {
-  return new Date(reference.getFullYear(), 11, 31);
+  /** Computed by `idCardValidTill` from the configured validity rule — policy stays out of here. */
+  validTill: Date;
 }
 
 function formatCardDate(d: Date): string {
@@ -101,7 +103,7 @@ export async function buildIdCardPdf(input: IdCardInput): Promise<Buffer> {
     doc.moveTo(24, bandY).lineTo(CARD_WIDTH - 24, bandY).strokeColor('#d8dce1').lineWidth(1).stroke();
     doc.fillColor(MUTED).fontSize(9).font('Helvetica')
       .text(`Issued on ${formatCardDate(input.generatedOn)}`, 24, bandY + 12)
-      .text(`Valid until ${formatCardDate(idCardExpiry(input.generatedOn))}`, 24, bandY + 28);
+      .text(`Valid until ${formatCardDate(input.validTill)}`, 24, bandY + 28);
 
     doc.end();
   });

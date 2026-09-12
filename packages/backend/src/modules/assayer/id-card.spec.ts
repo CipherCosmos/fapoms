@@ -1,33 +1,13 @@
-import { buildIdCardPdf, idCardExpiry } from './id-card';
+import { buildIdCardPdf } from './id-card';
 
 /**
- * The ID card's expiry rule, pinned on its own.
- *
- * The Appraiser Recruitment spec asks for exactly one thing here — "expiry date as the end of
- * current calendar year" — and it is computed fresh on every download rather than stored, so a
- * card issued in March and one issued in November of the same year both say 31 December, and a
- * re-download next year says the next 31 December. A bug in this is silent: the PDF still renders,
- * it just tells a bank's branch that an appraiser's credential is valid when it is not.
+ * The expiry RULE moved out of this file. It used to be pinned here as "always December 31 of the
+ * current year" — including a test asserting that a card generated on December 31st expires that
+ * same day, which the owner spotted as absurd the moment they saw the process drawn. The rule now
+ * lives in `identity-artifacts.ts`, is configurable, and carries a year-end grace window; its
+ * table of cases, December-31st joiner first, is in `identity-artifacts.spec.ts`. This file now
+ * pins only what the builder still owns: rendering a real PDF from the inputs it is handed.
  */
-describe('ID card expiry', () => {
-  it('is 31 December of the year the card was generated in', () => {
-    const expiry = idCardExpiry(new Date(2026, 8, 12));
-    expect(expiry.getFullYear()).toBe(2026);
-    expect(expiry.getMonth()).toBe(11);
-    expect(expiry.getDate()).toBe(31);
-  });
-
-  it('does not roll into next year for a card generated on the last day', () => {
-    // The boundary that a naive "+1 year" or an off-by-one month would get wrong.
-    expect(idCardExpiry(new Date(2026, 11, 31)).getFullYear()).toBe(2026);
-    expect(idCardExpiry(new Date(2026, 11, 31)).getDate()).toBe(31);
-  });
-
-  it('tracks the year it is asked about, so a re-download next year expires next year', () => {
-    expect(idCardExpiry(new Date(2027, 0, 1)).getFullYear()).toBe(2027);
-    expect(idCardExpiry(new Date(2030, 5, 9)).getFullYear()).toBe(2030);
-  });
-});
 
 describe('ID card rendering', () => {
   const input = {
@@ -37,6 +17,7 @@ describe('ID card rendering', () => {
     state: 'Maharashtra',
     photograph: null,
     generatedOn: new Date(2026, 8, 12),
+    validTill: new Date(2026, 11, 31),
   };
 
   it('produces a real PDF', async () => {

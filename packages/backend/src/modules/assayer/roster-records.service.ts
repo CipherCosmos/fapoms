@@ -31,6 +31,12 @@ import { PlatformSettingsService } from '../../infrastructure/settings/platform-
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AuditService } from '../../core/audit/audit.service';
 import {
+  ID_CARD_VALIDITY_DEFAULTS,
+  IdCardValidityMode,
+  assessIdentityArtifact,
+  idCardValidTill,
+} from './identity-artifacts';
+import {
   assertEmpanelmentVersion, lockEmpanelmentRow, translateConcurrentEmpanelmentCreate,
 } from './empanelment-version';
 
@@ -1461,6 +1467,72 @@ export class RosterRecordsService {
    */
   async identityStanding(assayerId: string): Promise<IdentityStanding> {
     return this.identityStandingFrom(await this.onboarding.find({ where: { assayerId, isActive: true } }));
+  }
+
+  /**
+   * Everything the ID-card route needs to decide whether the card may leave the building.
+   *
+   * The card is the identity artifact a person hands across a bank counter, so it answers to the
+   * SAME gate that decides activation strictness — `onboarding.identityGate.mode` — rather than
+   * to a second knob that could disagree with it. Under `enforce`, an unverified identity or a
+   * missing/failed background check refuses the card. Under `warn` (the shipped default, because
+   * this estate started with not one verified document row), the card is issued and the gap is
+   * written to the audit trail, so the register of who holds a card on incomplete vetting is a
+   * query rather than a mystery. Not being ACTIVE refuses in every mode — there is no backlog
+   * argument for carding somebody who is not on the working roster.
+   *
+   * Validity is configurable (Admin → Settings → Joining and identity). The default is
+   * calendar-year with a grace window: issued within `graceDays` of December 31st, the card
+   * carries to the end of the NEXT year — otherwise a December 31st joiner's card would expire
+   * the day it was printed, which is the owner's own objection recorded verbatim.
+   */
+  async idCardIssuance(assayerId: string, actorId: string): Promise<{
+    refusals: string[];
+    gated: string[];
+    gateMode: string;
+    issuedOn: Date;
+    validTill: Date;
+  }> {
+    const assayer = await this.assayers.findOne({ where: { id: assayerId } });
+    if (!assayer) return { refusals: ['no such record'], gated: [], gateMode: 'warn', issuedOn: new Date(), validTill: new Date() };
+
+    const [identity, latestCheck] = await Promise.all([
+      this.identityStanding(assayerId),
+      this.checks.findOne({ where: { assayerId, isActive: true }, order: { checkedOn: 'DESC', createdAt: 'DESC' } }),
+    ]);
+
+    const { refusals, gated } = assessIdentityArtifact({
+      lifecycleStatus: assayer.lifecycleStatus,
+      identityOk: identity.ok,
+      identityMissing: identity.missing.map((d) => ONBOARDING_DOCUMENT_LABELS[d] ?? String(d)),
+      latestVerdict: latestCheck?.verdict ?? null,
+    });
+
+    const gateMode = (await this.platformSettings?.get<string>('onboarding.identityGate.mode')) ?? 'warn';
+
+    const issuedOn = new Date();
+    const mode = ((await this.platformSettings?.get<string>('onboarding.idCard.validityMode')) ??
+      ID_CARD_VALIDITY_DEFAULTS.mode) as IdCardValidityMode;
+    const rollingMonths = Number((await this.platformSettings?.get<number>('onboarding.idCard.rollingMonths')) ??
+      ID_CARD_VALIDITY_DEFAULTS.rollingMonths);
+    const graceDays = Number((await this.platformSettings?.get<number>('onboarding.idCard.graceDays')) ??
+      ID_CARD_VALIDITY_DEFAULTS.graceDays);
+    const validTill = idCardValidTill(issuedOn, { mode, rollingMonths, graceDays });
+
+    if (refusals.length === 0 && gated.length > 0 && gateMode !== 'enforce') {
+      // Issued anyway — but never silently. This row is how "who holds a card we could not have
+      // defended issuing" stays answerable after the gate is eventually switched to enforce.
+      await this.auditService?.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ASSAYER_ID_CARD_ISSUED_WITH_GAPS',
+        entityType: 'ASSAYER',
+        entityId: assayerId,
+        userId: actorId,
+        remarks: `ID card issued while the identity gate is '${gateMode}': ${gated.join('; ')}`,
+      });
+    }
+
+    return { refusals, gated, gateMode, issuedOn, validTill };
   }
 
   /**

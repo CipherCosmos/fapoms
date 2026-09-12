@@ -737,6 +737,51 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     applies: 'immediately',
   },
   {
+    // Read by RosterRecordsService.idCardIssuance, computed fresh on every download — a card is
+    // never stored, so changing this changes the next card printed, not any card already printed.
+    key: 'onboarding.idCard.validityMode',
+    label: 'ID card validity rule',
+    description: 'How long a printed appraiser ID card is valid. "Calendar year" expires every '
+      + 'card on December 31st, so the whole field re-issues on one known day — with the grace '
+      + 'window below protecting late-year joiners. "Rolling months" gives each card the same '
+      + 'length of validity from its own issue date, at the cost of expiries spread across the '
+      + 'year. The card prints its issue date and its valid-until date; validity is computed at '
+      + 'download time, never stored.',
+    group: 'onboarding',
+    type: 'select',
+    options: [
+      { value: 'CALENDAR_YEAR', label: 'Calendar year — every card expires December 31st' },
+      { value: 'ROLLING_MONTHS', label: 'Rolling — a fixed number of months from issue' },
+    ],
+    default: 'CALENDAR_YEAR',
+    envVar: 'ID_CARD_VALIDITY_MODE',
+    applies: 'immediately',
+  },
+  {
+    key: 'onboarding.idCard.rollingMonths',
+    label: 'ID card validity (months, rolling mode)',
+    description: 'Rolling mode only: how many months from the issue date a card stays valid. '
+      + 'Ignored under the calendar-year rule.',
+    group: 'onboarding',
+    type: 'number',
+    default: 12,
+    envVar: 'ID_CARD_ROLLING_MONTHS',
+    applies: 'immediately',
+  },
+  {
+    key: 'onboarding.idCard.graceDays',
+    label: 'ID card year-end grace window (days)',
+    description: 'Calendar-year mode only. A card issued with fewer than this many days left in '
+      + 'the year is made valid to December 31st of the NEXT year instead — otherwise somebody '
+      + 'joining on December 31st would be handed a card that expires the same day. Set to 0 to '
+      + 'disable the grace and expire strictly on December 31st of the issue year.',
+    group: 'onboarding',
+    type: 'number',
+    default: 45,
+    envVar: 'ID_CARD_GRACE_DAYS',
+    applies: 'immediately',
+  },
+  {
     key: 'security.regionScope.mode',
     label: 'New region boundaries: rollout mode',
     description: 'Six screens (documents, billing, expenses, customer master, validation queries, clients) had no region boundary at all — a region-restricted account could read every region\'s rows through them. "Enforce" (the default) refuses a cross-region read, exactly as every other screen already does. "Log" runs the same check but only records what it would have refused, letting the request through — use it TEMPORARILY if a data-quality problem is causing false refusals and you need to watch real traffic before tightening. "Off" skips the check entirely. An account with no region assignment is unrestricted and is unaffected by any mode, so enforcing is safe wherever staff are national by default.',
