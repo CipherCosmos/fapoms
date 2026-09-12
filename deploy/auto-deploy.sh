@@ -495,10 +495,33 @@ fi
 # are untouched, so no data is at risk here.
 REBUILD_UP=(up -d --renew-anon-volumes)
 
+# The backend image is not one service. `db-migrate` and `backend-worker` are built from the same
+# packages/backend/Dockerfile, and `compose build backend` builds exactly the service it is given.
+# `up -d backend` then starts its dependencies from whatever images they already had.
+#
+# That is how the homeserver came to run a current API against a database whose newest migration
+# had never been applied: the API image was rebuilt on every backend commit, the migrate image was
+# not, and the one-shot migrate container faithfully reported "No migrations to apply" from a
+# month-old copy of the migrations directory. Every public registration request answered 500 with
+# `column AssayerApplicationEntity.source does not exist`. The worker was three days behind the
+# code whose events it was draining. All three containers reported Up or Exited(0) throughout.
+#
+# Built together they cost one image — the second and third are cache hits on the first.
+BACKEND_SERVICES=()
+for svc in db-migrate backend backend-worker; do
+  "${COMPOSE[@]}" config --services 2>/dev/null | grep -qx "$svc" && BACKEND_SERVICES+=("$svc")
+done
+[ ${#BACKEND_SERVICES[@]} -gt 0 ] || BACKEND_SERVICES=(backend)
+
 if $NEED_BACKEND; then
-  log "rebuilding backend (dependencies or Dockerfile changed)"
-  "${COMPOSE[@]}" build backend >> "$LOG" 2>&1
-  "${COMPOSE[@]}" "${REBUILD_UP[@]}" backend >> "$LOG" 2>&1
+  log "rebuilding backend (dependencies or Dockerfile changed): ${BACKEND_SERVICES[*]}"
+  "${COMPOSE[@]}" build "${BACKEND_SERVICES[@]}" >> "$LOG" 2>&1
+  # One at a time, in the listed order, so migrations are applied before the API that expects them
+  # starts — and so the migrate container is recreated explicitly. `up -d backend` alone will not
+  # re-run a one-shot dependency that has already exited successfully, whatever image it ran.
+  for svc in "${BACKEND_SERVICES[@]}"; do
+    "${COMPOSE[@]}" "${REBUILD_UP[@]}" "$svc" >> "$LOG" 2>&1
+  done
 fi
 if $NEED_FRONTEND; then
   log "rebuilding frontend (dependencies or Dockerfile changed)"
