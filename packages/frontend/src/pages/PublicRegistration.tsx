@@ -4,6 +4,7 @@ import {
   ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS,
   SCAN_UPLOAD_ACCEPT, uploadSizeProblem,
 } from '@fapoms/shared';
+import { BrandLogo } from '../components/BrandLogo';
 import { Select } from '../components/ui/Select';
 import { AlertBanner } from '../components/ui/AlertBanner';
 import { userMessage } from '../services/errors';
@@ -229,6 +230,26 @@ const STATUS_COPY: Partial<Record<ApplicationStatus, (app: RegistrationApplicati
 };
 
 /** A full-width primary button, matching the app's own `.btn`/`.btn-primary` classes. */
+/**
+ * Who is asking.
+ *
+ * This is the only screen in the product an OUTSIDER sees, reached from a link in an email, and
+ * the next thing it asks them for is a PAN, an Aadhaar number and a bank account. It carried no
+ * company name and no mark — so did the dead-link state, which rendered one small box in an empty
+ * dark page and looked exactly like a phishing attempt or a broken site.
+ *
+ * The same mark the signed-in product uses, so the page a candidate lands on is recognisably from
+ * the same company as the app they will be given.
+ */
+const PublicMasthead: React.FC = () => (
+  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', marginBottom: '18px' }}>
+    <BrandLogo size="md" showSubtext={false} />
+    <div style={{ fontSize: '12px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+      Appraiser registration
+    </div>
+  </div>
+);
+
 const PrimaryButton: React.FC<{
   onClick: () => void;
   disabled?: boolean;
@@ -491,6 +512,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   if (loadState === 'loading') {
     return (
       <div style={CONTAINER_STYLE}>
+        <PublicMasthead />
         <div style={{ ...CARD_STYLE, textAlign: 'center', paddingTop: '80px', color: 'var(--text-muted)' }}>
           Opening your registration…
         </div>
@@ -501,6 +523,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   if (loadState === 'error' || !application || !form) {
     return (
       <div style={CONTAINER_STYLE}>
+        <PublicMasthead />
         <div style={CARD_STYLE}>
           <div style={{ ...SECTION_STYLE, borderColor: 'var(--danger)' }}>
             <div style={SECTION_TITLE_STYLE}>This link is not valid</div>
@@ -517,6 +540,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   if (statusMessage) {
     return (
       <div style={CONTAINER_STYLE}>
+        <PublicMasthead />
         <div style={CARD_STYLE}>
           <div style={{
             ...SECTION_STYLE,
@@ -541,9 +565,10 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
 
   return (
     <div style={CONTAINER_STYLE}>
+      <PublicMasthead />
       <div style={CARD_STYLE}>
         <div>
-          <div style={{ fontSize: '19px', fontWeight: 700 }}>Appraiser registration</div>
+          <div style={{ fontSize: '19px', fontWeight: 700 }}>Your registration</div>
           <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
             Confirm your email with the code we send, then fill in your details and attach your documents. You can
             come back to this same link at any time before you submit.
