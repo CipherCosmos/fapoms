@@ -372,6 +372,9 @@ export const en = {
       submittedBody: 'Thank you. HR will review your application and get in touch with you.',
       failedTitle: 'Could not submit',
       requirementsHint: 'Add your full name, choose how you will work with us, and accept the declaration before submitting.',
+      /* Shown while the form is open but the code has not been confirmed — filling in is allowed,
+         filing is not. */
+      verifyFirstHint: 'Confirm the code we emailed you before submitting. Everything you have typed is already saved.',
     },
   },
 

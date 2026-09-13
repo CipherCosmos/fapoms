@@ -547,7 +547,8 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
   // ── Submit ───────────────────────────────────────────────────────────────
 
-  const canSubmit = Boolean(draft.fullName?.trim()) && Boolean(draft.employmentCategory) && consentAccepted;
+  const canSubmit = Boolean(draft.fullName?.trim()) && Boolean(draft.employmentCategory)
+    && consentAccepted && otpVerified;
 
   const handleSubmit = async () => {
     if (!canSubmit || submitting) return;
@@ -762,8 +763,16 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
           )}
         </Card>
 
-        {otpVerified && (
-          <>
+        {/*
+          The form is open before the code is.
+
+          Everything below used to be hidden until `otpVerified`, which defeated the server's own
+          rule: the code gates FILING, not typing. It is emailed to the mailbox the link arrived
+          in, so gating the form proved nothing the link had not — and with email switched off, a
+          candidate holding a valid link could not enter a single character. Submitting still needs
+          it; see `canSubmit`.
+        */}
+        <>
             {/* Profile form */}
             <Card level={1} style={{ gap: t.space.lg }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1064,12 +1073,13 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
               />
               {!canSubmit && (
                 <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-                  {tr('selfRegistration.submit.requirementsHint')}
+                  {otpVerified
+                    ? tr('selfRegistration.submit.requirementsHint')
+                    : tr('selfRegistration.submit.verifyFirstHint')}
                 </AppText>
               )}
             </View>
-          </>
-        )}
+        </>
       </ScrollView>
 
       {capturingRequirement && (

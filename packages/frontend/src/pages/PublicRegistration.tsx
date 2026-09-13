@@ -453,8 +453,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
 
   const consentAccepted = Boolean(application?.consentAcceptedAt);
   const canSubmit = useMemo(
-    () => Boolean(form?.fullName.trim()) && Boolean(form?.employmentCategory) && consentAccepted,
-    [form, consentAccepted],
+    () => Boolean(form?.fullName.trim()) && Boolean(form?.employmentCategory) && consentAccepted
+      && otpVerified,
+    [form, consentAccepted, otpVerified],
   );
 
   if (loadState === 'loading') {
@@ -608,8 +609,19 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
           )}
         </div>
 
-        {otpVerified && (
-          <>
+        {/*
+          The form is open before the code is.
+
+          Everything below used to be hidden until `otpVerified`, which defeated the server's own
+          rule: it gates FILING, not typing (`registration-application.service.ts`, "Where the
+          verification code is actually required"). The code is emailed to the mailbox the link
+          arrived in, so gating the form proved nothing the link had not — and on a deployment with
+          email switched off, a candidate holding a valid link could not enter a single character.
+          That is not a hypothetical: this deployment ran with email off until today.
+
+          Submitting still needs the code. See `canSubmit`.
+        */}
+        <>
             {/* ── Profile ────────────────────────────────────────────────── */}
             <div style={SECTION_STYLE}>
               <div style={SECTION_TITLE_STYLE}>Your details</div>
@@ -926,14 +938,14 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               </PrimaryButton>
               {!canSubmit && (
                 <div style={SECTION_NOTE_STYLE}>
-                  Needs your full name, an employment category and the declaration above before this
-                  can be submitted.
+                  {!otpVerified
+                    ? 'Confirm the code we emailed you before submitting. Everything you have typed is already saved.'
+                    : 'Needs your full name, an employment category and the declaration above before this can be submitted.'}
                 </div>
               )}
               {submitError && <AlertBanner type="error" message={submitError} onClose={() => setSubmitError(null)} />}
             </div>
-          </>
-        )}
+        </>
       </div>
     </div>
   );
