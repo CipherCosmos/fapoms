@@ -1,6 +1,5 @@
 export { StatusBadge } from './StatusBadge';
 export { Modal } from './Modal';
-export { KpiCard } from './KpiCard';
 export { StyledInput, SearchInput, FilterSelect } from './inputs';
 export { Select } from './Select';
 export type { SelectOption } from './Select';
@@ -13,7 +12,7 @@ export { SkeletonRows, SkeletonList, Refreshing } from './Loading';
 export { DetailDrawer } from './DetailDrawer';
 export { ToastProvider, useToast } from './Toast';
 export type { ToastType, ToastOptions } from './Toast';
-export { SectionCard, SettingRow, Toggle, Tabs, Pill, controlStyle } from './settings';
+export { SectionCard, SettingRow, Toggle, Pill, controlStyle } from './settings';
 export { useConfirm } from './ConfirmDialog';
 export type { ConfirmOptions, ConfirmTone } from './ConfirmDialog';
 export { ChipMultiSelect } from './ChipMultiSelect';
@@ -21,10 +20,8 @@ export type { ChipOption, ChipMultiSelectProps } from './ChipMultiSelect';
 export { PageHeader } from './PageHeader';
 export type { PageHeaderProps, BreadcrumbItem } from './PageHeader';
 export { EmptyState } from './EmptyState';
-export { FilterBar, FilterChip } from './FilterBar';
+export { FilterBar } from './FilterBar';
 export type { FilterBarProps, FilterChipItem } from './FilterBar';
 export { ConflictModal } from './ConflictModal';
 export type { ConflictModalProps } from './ConflictModal';
-export { FormField, FormSection } from './FormPrimitives';
-export type { FormFieldProps, FormSectionProps, FieldVerificationState } from './FormPrimitives';
 

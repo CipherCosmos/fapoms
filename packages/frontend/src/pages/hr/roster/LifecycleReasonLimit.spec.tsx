@@ -14,6 +14,13 @@ jest.mock('../../../services/api', () => ({ api: { request: jest.fn().mockResolv
 import { LifecycleTransitionModal } from './LifecycleTransitionModal';
 
 /**
+ * Moved here from `pages/hr/record/` on 2026-09-13, with the modal it tests.
+ *
+ * There were two LifecycleTransitionModal implementations, 426 diff lines apart, and this spec
+ * pinned the one nothing rendered — its whole subtree (a cockpit, a profile header, an action bar
+ * and that modal, 793 lines) had no importer. The rule below is real and worth keeping; it was
+ * simply being proven against a screen no user could reach.
+ *
  * The reason box knowing what the server will accept.
  *
  * `AssayerService.doTransitionLifecycle` rejects a reason longer than
@@ -38,20 +45,32 @@ const open = (onConfirm = jest.fn().mockResolvedValue(undefined)) =>
       // screen at all.
       targetStatus={AssayerLifecycleStatus.TERMINATED}
       onConfirm={onConfirm}
+      busy={false}
     />,
   );
 
-const reasonBox = () => screen.getByLabelText(/Reason for transition/i) as HTMLTextAreaElement;
+/**
+ * The live modal offers a vocabulary first and only reveals the free-text box under "Other" —
+ * which is the point of the vocabulary, and why this has to be chosen before the box exists.
+ */
+const chooseOther = () => {
+  fireEvent.click(screen.getByLabelText(/Reason for lifecycle transition/i));
+  fireEvent.click(screen.getByText(/Other \(type written explanation\)/i));
+};
+
+const reasonBox = () => screen.getByLabelText(/Specific reason/i) as HTMLTextAreaElement;
 
 describe('the lifecycle reason box', () => {
   it('is bounded by the same limit the server enforces', () => {
     open();
+    chooseOther();
 
     expect(reasonBox()).toHaveAttribute('maxlength', String(LIFECYCLE_REASON_MAX_LENGTH));
   });
 
   it('stays quiet for the short reasons that make up almost all of them', () => {
     open();
+    chooseOther();
 
     fireEvent.change(reasonBox(), { target: { value: 'Repeated no-shows, see case 4471.' } });
 
@@ -63,6 +82,7 @@ describe('the lifecycle reason box', () => {
 
   it('starts counting down before anything can be lost', () => {
     open();
+    chooseOther();
 
     fireEvent.change(reasonBox(), { target: { value: 'x'.repeat(LIFECYCLE_REASON_MAX_LENGTH - 50) } });
 
@@ -71,6 +91,7 @@ describe('the lifecycle reason box', () => {
 
   it('says so plainly at the ceiling, rather than silently swallowing keystrokes', () => {
     open();
+    chooseOther();
 
     fireEvent.change(reasonBox(), { target: { value: 'x'.repeat(LIFECYCLE_REASON_MAX_LENGTH) } });
 
