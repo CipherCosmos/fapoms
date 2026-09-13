@@ -588,8 +588,8 @@ describe('the roster sends registration to its own page', () => {
         <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
             <Route path="/hr/roster" element={<AssayerRoster />} />
+            <Route path="/hr/roster/:id" element={<Probe />} />
             <Route path="/hr/register" element={<Probe />} />
-            <Route path="/hr/register/:id" element={<Probe />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
@@ -606,20 +606,27 @@ describe('the roster sends registration to its own page', () => {
     expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/register');
   });
 
-  it('the resume icon navigates to /hr/register/:id', async () => {
+  /**
+   * Finishing a registration is editing a record, and there is one place to edit a record.
+   *
+   * This used to open the seven-step wizard on somebody already on the roster — a second form over
+   * the same row, whose only addition was a gap list the record page has carried at the top all
+   * along. Both now land in the same place, which is what stops the two drifting apart.
+   */
+  it('the resume icon opens the record, not a second form', async () => {
     serve([person({ id: 'a-7', assayerCode: 'AS0007', displayName: 'Half Done', lifecycleStatus: AssayerLifecycleStatus.INVITED })]);
     renderWithRegisterRoute();
 
     fireEvent.click(await screen.findByLabelText('Finish registering Half Done'));
 
-    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/register/a-7');
+    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/roster/a-7');
   });
 
-  it('an old ?register=<id> link still lands on the new page', async () => {
+  it('an old ?register=<id> link still opens that person, now on the record', async () => {
     serve([person({ id: 'a-9', displayName: 'Someone Else' })]);
     renderWithRegisterRoute('/hr/roster?register=a-9');
 
-    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/register/a-9');
+    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/roster/a-9');
   });
 });
 

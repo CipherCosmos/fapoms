@@ -476,54 +476,6 @@ export class RegistrationApplicationService {
   }
 
   /**
-   * The desk's own save, as the clerk moves through the registration.
-   *
-   * The same merge the candidate's form uses, plus the three things only a desk can decide: the
-   * pay rates, the references it took up, and which clients the person may be put in front of.
-   * All of it lands in the application, and promotion applies it — so the wizard no longer writes
-   * a live assayer at the end of its first step, and a half-finished registration is a visible
-   * application in the review queue rather than an incomplete person on the roster.
-   *
-   * One route rather than four. A separate endpoint per section is how the old flow ended up
-   * with a record, a commercial profile and a set of references that could each exist without the
-   * others, and no screen that could tell you which had saved.
-   */
-  async updateDeskDraft(
-    id: string,
-    patch: UpdateApplicationDraftDto & {
-      mobile?: string;
-      commercial?: Record<string, unknown>;
-      references?: Array<Record<string, unknown>>;
-      empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
-    },
-    actorUserId: string,
-  ): Promise<AssayerApplicationEntity> {
-    const application = await this.applications.findOne({ where: { id } });
-    if (!application) throw new NotFoundException('Application not found.');
-    if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
-      throw new BadRequestException('This application has already been decided — there is nothing left to edit.');
-    }
-
-    for (const key of EDITABLE_DRAFT_FIELDS) {
-      const incoming = (patch as Record<string, unknown>)[key];
-      if (incoming === undefined) continue;
-      (application as unknown as Record<string, unknown>)[key] =
-        key === 'dateOfBirth' && typeof incoming === 'string' ? new Date(incoming) : incoming;
-    }
-    if (patch.mobile !== undefined) application.mobile = patch.mobile;
-    this.mergeRecordFields(application, patch.record);
-
-    const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
-    if (patch.commercial !== undefined) profile.commercial = patch.commercial;
-    if (patch.references !== undefined) profile.references = patch.references;
-    if (patch.empanelments !== undefined) profile.empanelments = patch.empanelments;
-    application.extendedProfile = profile as never;
-    application.updatedBy = actorUserId;
-
-    return this.applications.save(application);
-  }
-
-  /**
    * What this application is still missing, seen as the person it will become.
    *
    * Offered to every screen that shows an application so HR can chase a gap while the candidate is
@@ -585,91 +537,6 @@ export class RegistrationApplicationService {
     const row = existing ?? this.applicationDocuments.create({ applicationId: application.id, requirement, filePaths: [] });
     row.filePaths = [...(row.filePaths ?? []), key];
     return this.applicationDocuments.save(row);
-  }
-
-  /**
-   * The staff half of the same two doors. No token and no OTP — the uploader is an authenticated
-   * HR session and the guards on the controller already said who. Terminal applications refuse:
-   * evidence must not accrete onto a decision that has been taken.
-   */
-  async uploadDocumentAsStaff(
-    applicationId: string,
-    requirement: OnboardingDocument,
-    file: { originalname: string; buffer: Buffer; mimetype: string; size: number },
-  ): Promise<AssayerApplicationDocumentEntity> {
-    const application = await this.applications.findOne({ where: { id: applicationId } });
-    if (!application) throw new NotFoundException('No such application.');
-    if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
-      throw new BadRequestException('This application has already been decided.');
-    }
-    if (!Object.values(OnboardingDocument).includes(requirement)) {
-      throw new BadRequestException('That is not a recognised document type.');
-    }
-    assertUploadAllowed({
-      contentType: file.mimetype,
-      fileName: file.originalname,
-      size: file.size,
-      allowed: SCAN_UPLOAD_TYPES,
-      hint: 'Photograph the document in better light rather than at higher resolution.',
-    });
-    return this.attachDocumentRow(application, requirement, file);
-  }
-
-  /**
-   * A candidate typed in AT THE DESK — the owner's drawing routes this through the same
-   * application record and review as the self-service doors, instead of the wizard's old direct
-   * write to the roster. Submitted immediately: the staff member is identified by their session,
-   * so there is no token to consume and no OTP to verify, and the draft phase belongs to
-   * candidates editing over days, not to a desk entering a person in one sitting. Maker–checker
-   * is enforced at approval, keyed on `source` and `createdBy` — see `approve()`.
-   */
-  async createStaffApplication(
-    dto: {
-      fullName: string; mobile: string; email?: string; dateOfBirth?: string; gender?: string;
-      address?: string; state?: string; city?: string; pincode?: string;
-      experienceYears?: number; currentEmployer?: string; employmentCategory?: EmploymentCategory;
-      expertise?: string; availability?: string;
-      extendedProfile?: Record<string, unknown>;
-    },
-    actorUserId: string,
-    organizationId?: string | null,
-  ): Promise<AssayerApplicationEntity> {
-    const application = this.applications.create({
-      organizationId: organizationId ?? null,
-      fullName: dto.fullName,
-      mobile: dto.mobile,
-      email: dto.email ?? null,
-      dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null,
-      gender: dto.gender ?? null,
-      address: dto.address ?? null,
-      state: dto.state ?? null,
-      city: dto.city ?? null,
-      pincode: dto.pincode ?? null,
-      experienceYears: dto.experienceYears ?? null,
-      currentEmployer: dto.currentEmployer ?? null,
-      employmentCategory: dto.employmentCategory ?? null,
-      expertise: dto.expertise ?? null,
-      availability: dto.availability ?? null,
-      source: ApplicationSource.HR_DESK,
-      // Through the same filter the candidate's own form uses — one intake, one rule about what a
-      // registration may set, whoever is typing. An empty `fields` is left off rather than stored
-      // as an empty object: the stored profile should say what was collected, not that a filter ran.
-      extendedProfile: filterExtendedProfile(dto.extendedProfile),
-      status: ApplicationStatus.PENDING_VALIDATION,
-      createdBy: actorUserId,
-      updatedBy: actorUserId,
-    } as Partial<AssayerApplicationEntity>);
-    const saved = await this.applications.save(application);
-
-    await this.auditService.recordEventSafe({
-      category: EventCategory.WORKFLOW,
-      eventType: 'ASSAYER_APPLICATION_SUBMITTED',
-      entityType: 'ASSAYER_APPLICATION',
-      entityId: saved.id,
-      userId: actorUserId,
-      remarks: 'Entered at the HR desk; awaiting approval by a different reviewer.',
-    });
-    return saved;
   }
 
   // ── Submit ───────────────────────────────────────────────────────────────
@@ -904,36 +771,18 @@ export class RegistrationApplicationService {
     const application = await this.mustBeReviewable(id);
 
     /**
-     * Maker–checker, on the HR-entered path only.
+     * There is no maker–checker here, and that is a statement rather than an omission.
      *
-     * On an HR_DESK application the creating account authored the substance, so it may not also
-     * be the account that approves it — booker cannot approve, approver cannot pay, and the desk
-     * cannot approve its own data entry. On SELF_SERVICE the candidate is the maker; the HR user
-     * who merely sent the invite reviews it, which is the point of the review.
+     * An application is always the CANDIDATE's own work now. The desk's second intake — a staff
+     * account typing an application on someone's behalf and then approving it — was built beside
+     * the registration wizard, never wired to a screen, and is withdrawn: two desk doors into one
+     * roster is the duplication this pipeline exists to remove. The HR user who sent the invite
+     * reviewing what the candidate filled in IS the review.
      *
-     * The refusal is audited, like every segregation refusal in this product: an attempt to
-     * self-approve is itself a fact worth keeping.
+     * If a desk-typed application ever returns, it brings its own gate back with it: the rule was
+     * `createdBy === actor` refused and audited, and it belongs with whatever re-introduces the
+     * shape it guarded.
      */
-    if (application.source === ApplicationSource.HR_DESK
-        && application.createdBy && application.createdBy === actorUserId) {
-      await this.auditService.recordEventSafe({
-        category: EventCategory.WORKFLOW,
-        eventType: 'ASSAYER_APPLICATION_APPROVAL_REFUSED',
-        entityType: 'ASSAYER_APPLICATION',
-        entityId: application.id,
-        userId: actorUserId,
-        remarks: 'Maker–checker: the account that entered this application tried to approve it.',
-      });
-      throw withCode(
-        new ForbiddenException(
-          'You entered this application, so somebody else has to approve it. Ask another '
-          + 'authorised HR user to review it — the same rule that keeps one person from booking '
-          + 'and approving the same payment.',
-        ),
-        ASSAYER_ERROR_CODES.APPLICATION_MAKER_CHECKER,
-      );
-    }
-
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
 
     const notesParts = [

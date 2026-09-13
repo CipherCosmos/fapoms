@@ -125,9 +125,17 @@ export const AssayerRoster: React.FC<{
     void navigate(`/hr/roster/${encodeURIComponent(wanted)}${qs ? `?${qs}` : ''}`, { replace: true });
   }, [searchParams, navigate]);
 
+  /**
+   * `?register=<id>` used to open the wizard on an existing person — a second editor for a record
+   * the record page already edits, and the only thing it added was a list of gaps that page has
+   * shown at the top since before the wizard existed. It now lands where every other edit lands.
+   *
+   * The parameter is still honoured rather than dropped: it is in links the backend worklist hands
+   * out and in whatever somebody bookmarked.
+   */
   useEffect(() => {
     const id = searchParams.get('register');
-    if (id) void navigate(`/hr/register/${encodeURIComponent(id)}`, { replace: true });
+    if (id) void navigate(`/hr/roster/${encodeURIComponent(id)}?edit=1`, { replace: true });
   }, [searchParams, navigate]);
 
   // Import finish synchronization
@@ -592,7 +600,8 @@ export const AssayerRoster: React.FC<{
         canCreate={canCreate}
         onRowClick={(id) => navigate(`/hr/roster/${id}`)}
         onEdit={(id) => navigate(`/hr/roster/${id}?edit=1`)}
-        onResumeRegistration={(id) => navigate(`/hr/register/${id}`)}
+        // One editor. "Finish registration" opens the record with its gap list, not a second form.
+        onResumeRegistration={(id) => navigate(`/hr/roster/${id}?edit=1`)}
         onStartTransition={(person, targetStatus) =>
           setTransitionTarget({ person, targetStatus })
         }

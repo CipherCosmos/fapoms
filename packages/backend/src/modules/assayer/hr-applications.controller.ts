@@ -94,57 +94,6 @@ class CreateStaffApplicationDto {
 export class HrApplicationsController {
   constructor(private readonly registrationApplications: RegistrationApplicationService) {}
 
-  /**
-   * The desk's door into the SAME gate the candidates use. Submitted immediately — the author is
-   * this session, so there is no token or OTP — and approval must come from a different account.
-   */
-  @Post()
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:create:organization')
-  @ApiOperation({ summary: 'File a candidate application from the HR desk (reviewed by somebody else)' })
-  async createFromDesk(@Body() dto: CreateStaffApplicationDto, @Req() req: any) {
-    const application = await this.registrationApplications.createStaffApplication(
-      dto, req.user.id, req.user.organizationId,
-    );
-    return {
-      success: true,
-      data: application,
-      message: 'Application filed. A different authorised user has to approve it before a roster record exists.',
-    };
-  }
-
-  /** The staff half of the document doors — same storage, same scan, no token. */
-  @Post(':id/documents/:requirement')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:create:organization')
-  @UseInterceptors(FileInterceptor('file', staffUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Attach a document scan to an application from the HR desk' })
-  async uploadFromDesk(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Param('requirement') requirement: string,
-    @UploadedFile() file: any,
-  ) {
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-    const doc = await this.registrationApplications.uploadDocumentAsStaff(
-      id, requirement as OnboardingDocument, file,
-    );
-    return { success: true, data: doc };
-  }
-
-  @Patch(':id')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Save what the desk has typed so far, without deciding the application' })
-  async updateFromDesk(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: Record<string, unknown>,
-    @Req() req: any,
-  ) {
-    return { success: true, data: await this.registrationApplications.updateDeskDraft(id, dto as never, req.user.id) };
-  }
-
   @Get()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')

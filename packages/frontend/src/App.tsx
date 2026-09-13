@@ -109,6 +109,18 @@ const PublicRegistration = React.lazy(() => import('./pages/PublicRegistration')
  * The query string rides along — `?section=`/`?edit=` address a part of the record (see
  * record-sections.ts), and a redirect that strips them turns a precise link into a vague one.
  */
+/**
+ * The wizard's old resume URL, pointed at the one editor.
+ *
+ * `/hr/register/<id>` opened the seven-step registration on somebody who was already on the
+ * roster. `?edit=1` is the record page's own "open me for editing" contract, so the link lands the
+ * clerk in the same place the Edit action does, with the record's gap list above the form.
+ */
+const ResumeRegistrationRedirect: React.FC = () => {
+  const { assayerId } = useParams<{ assayerId: string }>();
+  return <Navigate to={assayerId ? `/hr/roster/${encodeURIComponent(assayerId)}?edit=1` : '/hr/roster'} replace />;
+};
+
 const AssayerDeepLink: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { search } = useLocation();
@@ -483,7 +495,13 @@ export const App: React.FC = () => {
             mirroring canCreateAssayers() rather than `/hr`'s own view-only gate.
           */}
           <Route path="/hr/register" element={<RegistrationPage />} />
-          <Route path="/hr/register/:assayerId" element={<RegistrationPage />} />
+          {/*
+            `/hr/register/:assayerId` is gone. It opened the seven-step wizard on a person who
+            already existed — a second editor for a record `/hr/roster/:assayerId` edits, showing a
+            gap list that page has carried at the top all along. Two forms over one row is how the
+            two drifted. The old link still works: it redirects to the record.
+          */}
+          <Route path="/hr/register/:assayerId" element={<ResumeRegistrationRedirect />} />
           {/*
             Appraiser Recruitment's two HR-facing screens. Siblings of `/hr/register` above, for
             the same reason — each is a focused, single-task destination with its own header, not

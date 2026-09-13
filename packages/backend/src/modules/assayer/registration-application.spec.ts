@@ -471,41 +471,18 @@ describe('which documents a candidate is asked for', () => {
   });
 });
 
-describe('maker–checker on the HR-entered path', () => {
-  const hrEntered = () => ({
-    id: 'app-hr', mobile: '9822014455', email: 'c@example.com', fullName: 'Typed In By Desk',
-    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION,
-    organizationId: 'org-1', source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
-  });
-
-  it('refuses the account that entered it, audits the attempt, and changes nothing', async () => {
-    const ctx = makeService({ application: hrEntered() });
-
-    await expect(ctx.service.approve('app-hr', 'hr-maker', ['ADMIN'])).rejects.toThrow(/somebody else has to approve/);
-
-    // The refusal is itself a fact worth keeping — same as every segregation refusal here.
-    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(
-      expect.objectContaining({ eventType: 'ASSAYER_APPLICATION_APPROVAL_REFUSED', userId: 'hr-maker' }),
-    );
-    // And nothing moved: no roster record, no status change.
-    expect(ctx.assayerService.create).not.toHaveBeenCalled();
-    expect(ctx.applications.save).not.toHaveBeenCalled();
-  });
-
-  it('a different authorised account approves the same application', async () => {
-    const ctx = makeService({ application: hrEntered() });
-
-    await ctx.service.approve('app-hr', 'hr-checker', ['ADMIN']);
-
-    expect(ctx.assayerService.create).toHaveBeenCalled();
-    expect(ctx.applications.save).toHaveBeenCalledWith(
-      expect.objectContaining({ status: ApplicationStatus.APPROVED, reviewedBy: 'hr-checker' }),
-    );
-  });
-
-  it('on a self-service application the inviter may approve — the candidate was the maker', async () => {
+describe('who may approve an application', () => {
+  /**
+   * Everything in this queue is the candidate's own work, so the HR user who sent the invite is
+   * the reviewer rather than the author. The desk's second intake — a staff account typing an
+   * application and approving it — was withdrawn along with the routes nothing called; the gate
+   * that guarded it is documented in `approve()` for whoever brings that shape back.
+   */
+  it('the inviter may approve — the candidate was the maker', async () => {
     const ctx = makeService({ application: {
-      ...hrEntered(), id: 'app-self', source: ApplicationSource.SELF_SERVICE, createdBy: 'hr-inviter',
+      id: 'app-self', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
+      state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION,
+      organizationId: 'org-1', source: ApplicationSource.SELF_SERVICE, createdBy: 'hr-inviter',
     } });
 
     await ctx.service.approve('app-self', 'hr-inviter', ['ADMIN']);
@@ -556,54 +533,6 @@ describe('the extended profile the wizard collects', () => {
         remarks: expect.stringContaining('commercial rates (rate outside policy)'),
       }),
     );
-  });
-});
-
-describe('the desk files an application instead of writing the roster', () => {
-  it('creates it submitted, sourced HR_DESK, and says so on the audit trail', async () => {
-    const ctx = makeService({ application: null });
-
-    const saved = await ctx.service.createStaffApplication(
-      { fullName: 'Desk Entered', mobile: '9822000001', state: 'Maharashtra',
-        extendedProfile: { commercial: { baseFee: 1200 } } },
-      'hr-maker', 'org-1',
-    );
-
-    expect(ctx.applications.save).toHaveBeenCalledWith(expect.objectContaining({
-      source: ApplicationSource.HR_DESK,
-      status: ApplicationStatus.PENDING_VALIDATION, // no draft phase — the author is this session
-      createdBy: 'hr-maker',
-      extendedProfile: { commercial: { baseFee: 1200 } },
-    }));
-    expect(saved.id).toBeTruthy();
-    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
-      eventType: 'ASSAYER_APPLICATION_SUBMITTED',
-      remarks: expect.stringContaining('different reviewer'),
-    }));
-  });
-
-  it('staff document upload lands through the SAME row logic as the candidate door', async () => {
-    const ctx = makeService({ application: {
-      id: 'app-1', status: ApplicationStatus.PENDING_VALIDATION, source: ApplicationSource.HR_DESK,
-    } });
-
-    const row = await ctx.service.uploadDocumentAsStaff('app-1', OnboardingDocument.PAN_CARD, {
-      originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 1,
-    });
-
-    expect(ctx.storage.saveFile).toHaveBeenCalled();
-    expect(row.filePaths).toEqual(['uploads/scan.png']);
-  });
-
-  it('refuses to accrete evidence onto a decided application', async () => {
-    const ctx = makeService({ application: {
-      id: 'app-1', status: ApplicationStatus.REJECTED, source: ApplicationSource.HR_DESK,
-    } });
-
-    await expect(ctx.service.uploadDocumentAsStaff('app-1', OnboardingDocument.PAN_CARD, {
-      originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 1,
-    })).rejects.toThrow(/already been decided/);
-    expect(ctx.storage.saveFile).not.toHaveBeenCalled();
   });
 });
 
@@ -685,40 +614,5 @@ describe('the application carries the whole person', () => {
     const ctx = makeService();
     expect(ctx.service.registrationGaps(ctx.application as never).map((g) => g.key))
       .not.toContain('phone');
-  });
-});
-
-describe('the desk saves into the application, not onto the roster', () => {
-  it('keeps the clerk work in one place: fields, rates, references and standings', async () => {
-    const ctx = makeService();
-    await ctx.service.updateDeskDraft('app-1', {
-      fullName: 'Desk Person',
-      mobile: '9822000002',
-      record: { panNumber: 'ABCDE1234F', latitude: 18.52, longitude: 73.85 },
-      commercial: { baseFee: 1200 },
-      references: [{ name: 'Prior employer', phone: '9876500001' }],
-      empanelments: [{ clientId: 'client-1', status: 'RECOMMENDED' }],
-    } as never, 'hr-1');
-
-    const saved = ctx.applications.save.mock.calls.at(-1)![0];
-    expect(saved.fullName).toBe('Desk Person');
-    expect(saved.mobile).toBe('9822000002');
-    expect(saved.extendedProfile.fields).toEqual({ panNumber: 'ABCDE1234F', latitude: 18.52, longitude: 73.85 });
-    expect(saved.extendedProfile.commercial).toEqual({ baseFee: 1200 });
-    expect(saved.extendedProfile.references).toHaveLength(1);
-    expect(saved.extendedProfile.empanelments).toHaveLength(1);
-    expect(saved.updatedBy).toBe('hr-1');
-  });
-
-  it('refuses to edit an application that has already been decided', async () => {
-    const ctx = makeService({ application: { id: 'app-1', status: ApplicationStatus.APPROVED } });
-    await expect(ctx.service.updateDeskDraft('app-1', { fullName: 'Too late' } as never, 'hr-1'))
-      .rejects.toThrow(/already been decided/i);
-  });
-
-  it('needs no verification code — the clerk is signed in and the candidate is at the desk', async () => {
-    const ctx = makeService();
-    await expect(ctx.service.updateDeskDraft('app-1', { fullName: 'No code needed' } as never, 'hr-1'))
-      .resolves.toBeDefined();
   });
 });
