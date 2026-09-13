@@ -428,6 +428,7 @@ const RequirementRow: React.FC<{
 
     setUploading(true);
     onBusy(true);
+    let uploaded = 0;
     try {
       /**
        * One at a time, deliberately.
@@ -442,11 +443,27 @@ const RequirementRow: React.FC<{
         const body = new FormData();
         body.append('file', file);
         await api.request(`/assayers/${assayerId}/document/${doc.requirement}/file`, { method: 'POST', body });
+        uploaded += 1;
       }
-      onChanged();
     } catch (e) {
-      setRowError(userMessage(e));
+      /**
+       * The files that DID land are on the server, and the screen has to say so.
+       *
+       * `onChanged()` — the dossier reload — used to sit inside the try, after the loop. So a
+       * failure on file three of five left files one and two stored while the row still read
+       * "Nothing scanned yet" beside an error, and the clerk retried the whole batch. Appending
+       * the same key twice is now a no-op on the server, but the row still has to tell the truth
+       * about what is already there, or the clerk cannot tell a partial upload from a failed one.
+       */
+      setRowError(
+        uploaded === 0
+          ? userMessage(e)
+          : `${uploaded} of ${ok.length} uploaded, then it stopped: ${userMessage(e)} `
+            + 'The ones that went are attached below — send only the rest.',
+      );
     } finally {
+      // Always, so a partial batch is visible. It costs one read on the failure path.
+      onChanged();
       setUploading(false);
       onBusy(false);
     }

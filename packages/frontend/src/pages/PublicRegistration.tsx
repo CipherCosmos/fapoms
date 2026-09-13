@@ -305,14 +305,17 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   useEffect(() => { void load(); }, [load]);
 
   /** Re-reads only the requested-documents checklist and status, without disturbing unsaved typing. */
-  const refreshDocumentChecklist = useCallback(async () => {
+  /** Returns the newly requested list, so a caller can say what a change stopped counting. */
+  const refreshDocumentChecklist = useCallback(async (): Promise<string[] | null> => {
     try {
       const result = await hydrateRegistration(token);
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
       setApplication((prev) => (prev ? { ...prev, ...result.application } : result.application));
+      return result.documentsRequested;
     } catch {
       // Non-fatal — the checklist just stays as it was until the next successful reload.
+      return null;
     }
   }, [token]);
 
@@ -403,7 +406,25 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       const saved = await updateRegistrationDraft(token, fieldPatch('employmentCategory', value));
       setApplication(saved);
       setDraftSaved(true);
-      await refreshDocumentChecklist();
+      const stillAsked = await refreshDocumentChecklist();
+      /**
+       * Say when a change to this box stops counting something already sent.
+       *
+       * The requested list depends on the employment category — a freelancer is asked for an
+       * experience letter, a proprietor for a shop proof and an association letter. Switching
+       * after uploading left those files in place and simply removed them from the checklist, so
+       * the candidate saw a requirement they had already met disappear and a new empty one take
+       * its place, with nothing said about either.
+       */
+      if (stillAsked) {
+        const orphaned = documents
+          .filter((d) => d.filePaths.length > 0 && !stillAsked.includes(d.requirement))
+          .map((d) => ONBOARDING_DOCUMENT_LABELS[d.requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? d.requirement);
+        setDraftError(orphaned.length === 0 ? null : (
+          `What you have already sent for ${orphaned.join(' and ')} is not asked for as a `
+          + `${value.toLowerCase()}. It stays on your application, and HR can still see it.`
+        ));
+      }
     } catch (err) {
       setDraftError(userMessage(err));
       onVerificationLost(err);
