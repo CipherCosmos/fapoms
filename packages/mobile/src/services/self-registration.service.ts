@@ -56,6 +56,8 @@ export interface RegistrationHydration {
 /** Mirrors `UpdateApplicationDraftDto` on the backend. Every field optional; only what changed is sent. */
 export interface DraftPatch {
   fullName?: string;
+  /** Their own number. Verifying the code is what makes it the number on the record. */
+  mobile?: string;
   email?: string;
   /** ISO date string, e.g. '1990-04-21'. */
   dateOfBirth?: string;

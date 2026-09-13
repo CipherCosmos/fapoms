@@ -65,6 +65,8 @@ export interface RegistrationHydrateResult {
 
 export interface UpdateRegistrationDraftInput {
   fullName?: string;
+  /** Their own number. Verifying the code is what makes it the number on the record. */
+  mobile?: string;
   email?: string;
   dateOfBirth?: string;
   gender?: string;

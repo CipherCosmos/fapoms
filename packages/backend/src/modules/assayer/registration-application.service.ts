@@ -80,6 +80,9 @@ export function documentsRequestedFor(category?: EmploymentCategory | null): rea
 const EDITABLE_DRAFT_FIELDS = [
   'fullName', 'email', 'dateOfBirth', 'gender', 'address', 'state', 'city', 'pincode',
   'experienceYears', 'currentEmployer', 'expertise', 'availability', 'employmentCategory',
+  // `mobile` is here so a candidate can correct the number before they verify it; `verifyOtp` is
+  // what makes the corrected number stick, because that is where it is proven.
+  'mobile',
 ] as const;
 
 /**
@@ -101,6 +104,8 @@ function filterExtendedProfile(
 
 export interface UpdateApplicationDraftDto {
   fullName?: string;
+  /** The candidate's own number. Confirmed by `verifyOtp`, which is what writes it for good. */
+  mobile?: string;
   email?: string;
   dateOfBirth?: string;
   gender?: string;
@@ -413,6 +418,25 @@ export class RegistrationApplicationService {
       throw new BadRequestException('That code is incorrect or has expired.');
     }
     await this.cache.setJson(`regotp:verified:${tokenHash}`, { phone }, OTP_VERIFIED_TTL_SECONDS);
+
+    /**
+     * The number the candidate confirmed becomes the number on the application.
+     *
+     * Both forms have always rendered "Your mobile number", and the answer was used to key a cache
+     * entry and then thrown away: `mobile` was not editable on the draft, so the number promoted
+     * onto the record stayed whatever HR typed at the interview — for the FIRST critical field on
+     * the record (`assayer-record.ts:28`, "Calling and phone-channel dispatch"). The person in the
+     * field is the one who knows their own number.
+     *
+     * Written here rather than on every keystroke because this is the moment it is confirmed. What
+     * HR typed is not lost: the interview row keeps it, and the review screen shows both so a
+     * mismatch is somebody's decision rather than a silent overwrite.
+     */
+    const application = await this.findByRawToken(rawToken);
+    if (applicationIsEditableByCandidate(application.status) && application.mobile !== phone) {
+      application.mobile = phone;
+      await this.applications.save(application);
+    }
   }
 
   private async assertOtpVerified(rawToken: string): Promise<void> {

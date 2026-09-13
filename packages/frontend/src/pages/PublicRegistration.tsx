@@ -157,34 +157,46 @@ const seedForm = (app: RegistrationApplication): FormState => ({
   ) as Pick<FormState, typeof RECORD_KEYS[number]>,
 });
 
-/** Only the fields actually filled in — an empty box means "unchanged", never "clear this". */
-const buildDraftPatch = (f: FormState): UpdateRegistrationDraftInput => {
-  const patch: UpdateRegistrationDraftInput = {};
-  if (f.fullName.trim()) patch.fullName = f.fullName.trim();
-  if (f.dateOfBirth) patch.dateOfBirth = f.dateOfBirth;
-  if (f.gender) patch.gender = f.gender;
-  if (f.address.trim()) patch.address = f.address.trim();
-  if (f.state.trim()) patch.state = f.state.trim();
-  if (f.city.trim()) patch.city = f.city.trim();
-  if (f.pincode.trim()) patch.pincode = f.pincode.trim();
-  if (f.experienceYears.trim() !== '' && !Number.isNaN(Number(f.experienceYears))) {
-    patch.experienceYears = Number(f.experienceYears);
-  }
-  if (f.currentEmployer.trim()) patch.currentEmployer = f.currentEmployer.trim();
-  if (f.expertise.trim()) patch.expertise = f.expertise.trim();
-  if (f.availability.trim()) patch.availability = f.availability.trim();
-  if (f.employmentCategory) patch.employmentCategory = f.employmentCategory;
+/**
+ * One box, one request.
+ *
+ * `buildDraftPatch` serialised the whole form on every blur and dropped every empty box, which
+ * cost three different things: overlapping saves overwrote each other with stale values, a
+ * candidate could not clear a field they had mistyped, and one invalid value made every later
+ * save fail with a complaint about a box they were no longer looking at.
+ *
+ * A blank IS sent. The server treats it as "clear this" and says so in as many words.
+ */
+function fieldPatch(key: keyof FormState, value: string): UpdateRegistrationDraftInput {
+  const trimmed = (value ?? '').trim();
 
-  // Sent whenever the box holds anything — including a blank, which is how a candidate corrects a
-  // number they mistyped. The server filters the keys and checks PAN, IFSC and Aadhaar.
+  if (key === 'experienceYears') {
+    if (trimmed === '') return {};
+    const years = Number(trimmed);
+    return Number.isNaN(years) ? {} : { experienceYears: years };
+  }
+  // The server enumerates what it will accept; anything else is refused rather than guessed at.
+  if (key === 'employmentCategory') {
+    return trimmed ? { employmentCategory: trimmed as EmploymentCategory } : {};
+  }
+  if ((RECORD_KEYS as readonly string[]).includes(key as string)) {
+    return { record: { [key]: trimmed } };
+  }
+  return { [key]: trimmed } as UpdateRegistrationDraftInput;
+}
+
+/** Every box at once, for the explicit "Save draft" button. */
+function wholeFormPatch(f: FormState): UpdateRegistrationDraftInput {
+  const patch: UpdateRegistrationDraftInput = {};
   const record: Record<string, string> = {};
-  for (const key of RECORD_KEYS) {
-    const value = f[key];
-    if (value !== undefined && value.trim() !== '') record[key] = value.trim();
+  for (const key of Object.keys(f) as (keyof FormState)[]) {
+    const one = fieldPatch(key, String(f[key] ?? ''));
+    if (one.record) Object.assign(record, one.record);
+    else Object.assign(patch, one);
   }
   if (Object.keys(record).length > 0) patch.record = record;
   return patch;
-};
+}
 
 const GENDER_OPTIONS = [
   { value: 'Male', label: 'Male' },
@@ -334,12 +346,13 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     }
   };
 
-  const saveDraft = async (next: FormState) => {
+  const saveDraft = async (patch: UpdateRegistrationDraftInput) => {
+    if (Object.keys(patch).length === 0) return;
     setSavingDraft(true);
     setDraftError(null);
     setDraftSaved(false);
     try {
-      const saved = await updateRegistrationDraft(token, buildDraftPatch(next));
+      const saved = await updateRegistrationDraft(token, patch);
       setApplication(saved);
       setDraftSaved(true);
     } catch (err) {
@@ -355,8 +368,20 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     setDraftSaved(false);
   };
 
-  const handleFieldBlur = () => {
-    if (form) void saveDraft(form);
+  /**
+   * One field per blur, and a blank is a real answer.
+   *
+   * This sent the WHOLE form on every blur, which is the race the phone form documents fixing:
+   * two overlapping saves, the wider one carrying an empty box, and the narrower one's value
+   * overwritten a few milliseconds after it landed. It also dropped blanks — so a candidate who
+   * mistyped their PAN and then cleared the box kept the wrong PAN on the server, under a "Saved"
+   * tick, while the server has always been willing to clear it. And because one bad value went
+   * out with every subsequent save, a single mistyped PAN made saving the BANK NAME fail with a
+   * complaint about the PAN.
+   */
+  const commitField = (key: keyof FormState) => () => {
+    if (!form) return;
+    void saveDraft(fieldPatch(key, form[key]));
   };
 
   const handleEmploymentCategoryChange = async (value: string) => {
@@ -366,7 +391,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     setSavingDraft(true);
     setDraftError(null);
     try {
-      const saved = await updateRegistrationDraft(token, buildDraftPatch(next));
+      const saved = await updateRegistrationDraft(token, fieldPatch('employmentCategory', value));
       setApplication(saved);
       setDraftSaved(true);
       await refreshDocumentChecklist();
@@ -525,6 +550,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   id="reg-phone"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  // Saved like every other box. It used to key the verification cache and nothing
+                  // else, so the number the candidate typed here was discarded and the record kept
+                  // whatever HR entered at the interview — for the first critical field there is.
+                  // Verifying the code is what makes it final; this keeps a corrected number from
+                  // being lost if they wander off before verifying.
+                  onBlur={() => phone.trim() && void saveDraft({ mobile: phone.trim() })}
                   inputMode="tel"
                   placeholder="10-digit mobile number"
                   style={INPUT_STYLE}
@@ -591,7 +622,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     id="reg-fullName"
                     value={form.fullName}
                     onChange={(e) => updateField('fullName', e.target.value)}
-                    onBlur={handleFieldBlur}
+                    onBlur={commitField('fullName')}
                     style={INPUT_STYLE}
                   />
                 </div>
@@ -602,7 +633,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     type="date"
                     value={form.dateOfBirth}
                     onChange={(e) => updateField('dateOfBirth', e.target.value)}
-                    onBlur={handleFieldBlur}
+                    onBlur={commitField('dateOfBirth')}
                     style={INPUT_STYLE}
                   />
                 </div>
@@ -610,7 +641,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <label htmlFor="reg-gender" style={LABEL_STYLE}>Gender</label>
                   <Select
                     value={form.gender}
-                    onChange={(v) => { updateField('gender', v); void saveDraft({ ...form, gender: v }); }}
+                    onChange={(v) => { updateField('gender', v); void saveDraft(fieldPatch('gender', v)); }}
                     options={GENDER_OPTIONS}
                     placeholder="Select…"
                     aria-label="Gender"
@@ -625,7 +656,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   id="reg-address"
                   value={form.address}
                   onChange={(e) => updateField('address', e.target.value)}
-                  onBlur={handleFieldBlur}
+                  onBlur={commitField('address')}
                   rows={2}
                   style={{ ...INPUT_STYLE, resize: 'vertical' }}
                 />
@@ -634,15 +665,15 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               <div style={FIELD_GRID_STYLE}>
                 <div>
                   <label htmlFor="reg-state" style={LABEL_STYLE}>State</label>
-                  <input id="reg-state" value={form.state} onChange={(e) => updateField('state', e.target.value)} onBlur={handleFieldBlur} style={INPUT_STYLE} />
+                  <input id="reg-state" value={form.state} onChange={(e) => updateField('state', e.target.value)} onBlur={commitField('state')} style={INPUT_STYLE} />
                 </div>
                 <div>
                   <label htmlFor="reg-city" style={LABEL_STYLE}>City</label>
-                  <input id="reg-city" value={form.city} onChange={(e) => updateField('city', e.target.value)} onBlur={handleFieldBlur} style={INPUT_STYLE} />
+                  <input id="reg-city" value={form.city} onChange={(e) => updateField('city', e.target.value)} onBlur={commitField('city')} style={INPUT_STYLE} />
                 </div>
                 <div>
                   <label htmlFor="reg-pincode" style={LABEL_STYLE}>Pincode</label>
-                  <input id="reg-pincode" value={form.pincode} onChange={(e) => updateField('pincode', e.target.value)} onBlur={handleFieldBlur} inputMode="numeric" style={INPUT_STYLE} />
+                  <input id="reg-pincode" value={form.pincode} onChange={(e) => updateField('pincode', e.target.value)} onBlur={commitField('pincode')} inputMode="numeric" style={INPUT_STYLE} />
                 </div>
               </div>
 
@@ -651,21 +682,21 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               <div style={FIELD_GRID_STYLE}>
                 <div>
                   <label htmlFor="reg-experience" style={LABEL_STYLE}>Years of experience</label>
-                  <input id="reg-experience" type="number" min={0} max={60} value={form.experienceYears} onChange={(e) => updateField('experienceYears', e.target.value)} onBlur={handleFieldBlur} style={INPUT_STYLE} />
+                  <input id="reg-experience" type="number" min={0} max={60} value={form.experienceYears} onChange={(e) => updateField('experienceYears', e.target.value)} onBlur={commitField('experienceYears')} style={INPUT_STYLE} />
                 </div>
                 <div>
                   <label htmlFor="reg-employer" style={LABEL_STYLE}>Current employer</label>
-                  <input id="reg-employer" value={form.currentEmployer} onChange={(e) => updateField('currentEmployer', e.target.value)} onBlur={handleFieldBlur} style={INPUT_STYLE} />
+                  <input id="reg-employer" value={form.currentEmployer} onChange={(e) => updateField('currentEmployer', e.target.value)} onBlur={commitField('currentEmployer')} style={INPUT_STYLE} />
                 </div>
               </div>
 
               <div>
                 <label htmlFor="reg-expertise" style={LABEL_STYLE}>Expertise</label>
-                <input id="reg-expertise" value={form.expertise} onChange={(e) => updateField('expertise', e.target.value)} onBlur={handleFieldBlur} style={INPUT_STYLE} />
+                <input id="reg-expertise" value={form.expertise} onChange={(e) => updateField('expertise', e.target.value)} onBlur={commitField('expertise')} style={INPUT_STYLE} />
               </div>
               <div>
                 <label htmlFor="reg-availability" style={LABEL_STYLE}>Availability</label>
-                <input id="reg-availability" value={form.availability} onChange={(e) => updateField('availability', e.target.value)} onBlur={handleFieldBlur} style={INPUT_STYLE} />
+                <input id="reg-availability" value={form.availability} onChange={(e) => updateField('availability', e.target.value)} onBlur={commitField('availability')} style={INPUT_STYLE} />
               </div>
 
               {/*
@@ -692,7 +723,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-pan" value={form.panNumber} placeholder="ABCDE1234F"
                     onChange={(e) => updateField('panNumber', e.target.value.toUpperCase())}
-                    onBlur={handleFieldBlur} autoCapitalize="characters" style={INPUT_STYLE}
+                    onBlur={commitField('panNumber')} autoCapitalize="characters" style={INPUT_STYLE}
                   />
                 </div>
                 <div>
@@ -700,7 +731,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-aadhaar" value={form.aadhaarNumber} inputMode="numeric" placeholder="12 digits"
                     onChange={(e) => updateField('aadhaarNumber', e.target.value)}
-                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                    onBlur={commitField('aadhaarNumber')} style={INPUT_STYLE}
                   />
                 </div>
               </div>
@@ -710,7 +741,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-bank-account" value={form.bankAccountNumber} inputMode="numeric"
                     onChange={(e) => updateField('bankAccountNumber', e.target.value)}
-                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                    onBlur={commitField('bankAccountNumber')} style={INPUT_STYLE}
                   />
                 </div>
                 <div>
@@ -718,7 +749,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-ifsc" value={form.ifscCode} placeholder="SBIN0001234"
                     onChange={(e) => updateField('ifscCode', e.target.value.toUpperCase())}
-                    onBlur={handleFieldBlur} autoCapitalize="characters" style={INPUT_STYLE}
+                    onBlur={commitField('ifscCode')} autoCapitalize="characters" style={INPUT_STYLE}
                   />
                 </div>
               </div>
@@ -728,7 +759,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-bank-name" value={form.bankName}
                     onChange={(e) => updateField('bankName', e.target.value)}
-                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                    onBlur={commitField('bankName')} style={INPUT_STYLE}
                   />
                 </div>
                 <div>
@@ -736,7 +767,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-qualification" value={form.qualification} placeholder="Certificate or degree"
                     onChange={(e) => updateField('qualification', e.target.value)}
-                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                    onBlur={commitField('qualification')} style={INPUT_STYLE}
                   />
                 </div>
               </div>
@@ -751,7 +782,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-ec-name" value={form.emergencyContactName}
                     onChange={(e) => updateField('emergencyContactName', e.target.value)}
-                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                    onBlur={commitField('emergencyContactName')} style={INPUT_STYLE}
                   />
                 </div>
                 <div>
@@ -759,7 +790,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <input
                     id="reg-ec-phone" value={form.emergencyContactPhone} inputMode="tel"
                     onChange={(e) => updateField('emergencyContactPhone', e.target.value)}
-                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                    onBlur={commitField('emergencyContactPhone')} style={INPUT_STYLE}
                   />
                 </div>
               </div>
@@ -768,7 +799,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 <input
                   id="reg-ec-relation" value={form.emergencyContactRelation} placeholder="Spouse, parent, sibling…"
                   onChange={(e) => updateField('emergencyContactRelation', e.target.value)}
-                  onBlur={handleFieldBlur} style={INPUT_STYLE}
+                  onBlur={commitField('emergencyContactRelation')} style={INPUT_STYLE}
                 />
               </div>
 
@@ -790,7 +821,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  onClick={() => form && void saveDraft(form)}
+                  // "Save draft" is the one place the whole form legitimately goes at once — the
+                  // candidate asked for it, so there is no concurrent blur to race with.
+                  onClick={() => form && void saveDraft(wholeFormPatch(form))}
                   disabled={savingDraft}
                   className="btn btn-secondary"
                   style={{ padding: '9px 16px', fontSize: '13px' }}

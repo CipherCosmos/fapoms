@@ -35,6 +35,10 @@ class UpdateDraftRequestDto implements UpdateApplicationDraftDto {
   @IsOptional() @IsString() @MaxLength(200)
   fullName?: string;
 
+  /** Their own number, correctable until they verify it. */
+  @IsOptional() @IsString() @MinLength(6) @MaxLength(20)
+  mobile?: string;
+
   @IsOptional() @IsString() @MaxLength(255)
   email?: string;
 

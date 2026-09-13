@@ -616,3 +616,55 @@ describe('the application carries the whole person', () => {
       .not.toContain('phone');
   });
 });
+
+/**
+ * The number the candidate confirms is the number on the record.
+ *
+ * Both forms have always asked for it. `mobile` was not editable on the draft, so the answer keyed
+ * a cache entry and was discarded, and the promoted record kept whatever HR typed at the interview
+ * — for the first critical field there is.
+ */
+describe('the candidate owns their own phone number', () => {
+  const withPending = (phone: string, code: string) => ({
+    [`regotp:code:${TOKEN_HASH}`]: {
+      hash: require('crypto').createHash('sha256').update(code).digest('hex'),
+      phone,
+    },
+  });
+
+  it('writes the confirmed number onto the application', async () => {
+    const ctx = makeService({ cache: withPending('9812345678', '123456') });
+    expect(ctx.application!.mobile).toBe('9822014455');
+
+    await ctx.service.verifyOtp(RAW_TOKEN, '9812345678', '123456');
+
+    expect(ctx.application!.mobile).toBe('9812345678');
+    expect(ctx.applications.save).toHaveBeenCalled();
+  });
+
+  it('saves nothing when the number is the one already on file', async () => {
+    const ctx = makeService({ cache: withPending('9822014455', '123456') });
+    await ctx.service.verifyOtp(RAW_TOKEN, '9822014455', '123456');
+    expect(ctx.applications.save).not.toHaveBeenCalled();
+  });
+
+  it('leaves a decided application alone — the record is HR‘s from then on', async () => {
+    const ctx = makeService({
+      application: {
+        id: 'app-1', mobile: '9822014455', status: ApplicationStatus.APPROVED,
+        tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+      },
+      cache: withPending('9812345678', '123456'),
+    });
+
+    await ctx.service.verifyOtp(RAW_TOKEN, '9812345678', '123456');
+
+    expect(ctx.application!.mobile).toBe('9822014455');
+  });
+
+  it('lets them correct it before verifying, too', async () => {
+    const ctx = makeService();
+    await ctx.service.updateDraft(RAW_TOKEN, { mobile: '9800000001' } as never);
+    expect(ctx.applications.save.mock.calls.at(-1)![0].mobile).toBe('9800000001');
+  });
+});

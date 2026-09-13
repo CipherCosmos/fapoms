@@ -2,7 +2,15 @@ import { CRITICAL_ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
 import { RECORD_FIELD_KEYS } from './self-registration-fields';
 import { en } from '../i18n/locales/en';
 
-/** Facts the application stores as its own columns, asked for higher up the same form. */
+/**
+ * Facts the application stores as its own columns, asked for higher up the same form.
+ *
+ * `phone` earns its place here only since 2026-09-13. The box was always on the form and the
+ * answer was always discarded: `mobile` was not editable on the draft, so the number keyed a
+ * verification cache and the promoted record kept whatever HR typed at the interview. The
+ * behaviour is guarded where it lives — "the candidate owns their own phone number" in
+ * `registration-application.spec.ts` — because it is the confirming step that writes it.
+ */
 const APPLICATION_OWN_COLUMNS = ['phone', 'email', 'dateOfBirth', 'address', 'city', 'state', 'pincode'];
 
 /**

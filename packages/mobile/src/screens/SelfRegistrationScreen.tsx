@@ -716,6 +716,13 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 label={tr('selfRegistration.otp.phoneLabel')}
                 value={phone}
                 onChangeText={setPhone}
+                /*
+                  Saved like every other box. It used to key the verification cache and nothing
+                  else, so the number typed here was discarded and the record kept whatever HR
+                  entered at the interview — for the first critical field on the record. Verifying
+                  the code is what makes it final; this keeps a correction from being lost.
+                */
+                onBlur={() => { if (phone.trim()) void persistDraft({ mobile: phone.trim() }); }}
                 placeholder={tr('selfRegistration.otp.phonePlaceholder')}
                 keyboardType="phone-pad"
                 autoCapitalize="none"
