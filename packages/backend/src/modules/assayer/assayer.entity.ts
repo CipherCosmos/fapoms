@@ -279,6 +279,23 @@ export class AssayerEntity extends BaseEntity {
   aadhaarFingerprint: string | null;
 
   /**
+   * What this person agreed to when they registered, and which wording of it.
+   *
+   * Submitting an application is refused without the declaration, and promotion then copied
+   * thirteen fields onto the new record with neither of these among them, because there was
+   * nowhere here to put them. The one artefact with a compliance life of its own lived only on a
+   * row whose purpose ends at approval.
+   *
+   * Null for everybody promoted before 2026-09-13, and for everybody entered at the desk: a
+   * consent nobody recorded must read as absent rather than be invented.
+   */
+  @Column({ name: 'consent_accepted_at', type: 'timestamptz', nullable: true })
+  consentAcceptedAt: Date | null;
+
+  @Column({ name: 'consent_version', type: 'varchar', length: 20, nullable: true })
+  consentVersion: string | null;
+
+  /**
    * The bank, plainly. Not derivable from the IFSC without a lookup table we do not have, and
    * the roster records it for 98% of people, so it is a column rather than a join.
    */

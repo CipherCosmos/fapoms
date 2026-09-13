@@ -83,16 +83,18 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
 
   /** Read only so the reviewer sees the number HR typed beside the one the candidate confirmed. */
   const interviews = { findOne: jest.fn(async () => ({ mobile: '9822014455' })) };
+  /** Written to only for the consent carry-over — see the service's own note on why. */
+  const assayers = { update: jest.fn(async () => ({ affected: 1 })) };
 
   const service = new RegistrationApplicationService(
-    applications as any, applicationDocuments as any, interviews as any,
+    applications as any, applicationDocuments as any, interviews as any, assayers as any,
     assayerService as any, rosterRecords as any,
     auditService as any, notificationDispatch as any, emailProvider as any,
     cache as any, settings as any, storage as any,
   );
 
   return {
-    service, application, applications, applicationDocuments, interviews, assayerService, rosterRecords,
+    service, application, applications, applicationDocuments, interviews, assayers, assayerService, rosterRecords,
     auditService, notificationDispatch, emailProvider, cache, settings, storage, cacheData,
   };
 }
@@ -886,5 +888,41 @@ describe('the identifiers a candidate gives can be matched against the roster', 
 
   it('has nothing to say about a blank, so empty columns do not all match each other', () => {
     expect(fieldFingerprint('')).toBeNull();
+  });
+});
+
+/**
+ * What a candidate agreed to has to survive becoming an employee.
+ *
+ * Submitting is refused without the declaration, and promotion then copied thirteen fields onto
+ * the new record with neither the acceptance nor its version among them, because `assayers` had
+ * nowhere to put them. The one artefact with a compliance life of its own lived only on a row
+ * whose purpose ends at approval.
+ */
+describe('consent follows the person onto the roster', () => {
+  const accepted = (at: Date | null, version: string | null) => ({
+    id: 'app-c', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
+    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+    consentAcceptedAt: at, consentVersion: version,
+  });
+
+  it('writes the acceptance and the wording it was given as', async () => {
+    const when = new Date('2026-09-13T06:00:00.000Z');
+    const ctx = makeService({ application: accepted(when, 'v1') });
+
+    await ctx.service.approve('app-c', 'hr-1', ['ADMIN']);
+
+    expect(ctx.assayers.update).toHaveBeenCalledWith('assayer-1', {
+      consentAcceptedAt: when, consentVersion: 'v1',
+    });
+  });
+
+  /** A consent nobody recorded must read as absent, not be invented at the boundary. */
+  it('writes nothing when there is no consent on the application', async () => {
+    const ctx = makeService({ application: accepted(null, null) });
+
+    await ctx.service.approve('app-c', 'hr-1', ['ADMIN']);
+
+    expect(ctx.assayers.update).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,12 @@ export interface Assayer {
   alternatePhone: string | null;
   /** AUTO | APP | PHONE. Read by dispatch; until 2026-09-13 no screen could set it. */
   preferredContactChannel: 'AUTO' | 'APP' | 'PHONE' | null;
+  /**
+   * What this person agreed to when they registered, and which wording of it. Null for everybody
+   * entered at the desk and for everybody promoted before the consent was carried across.
+   */
+  consentAcceptedAt: string | null;
+  consentVersion: string | null;
   address: string;
   state: string;
   district: string;

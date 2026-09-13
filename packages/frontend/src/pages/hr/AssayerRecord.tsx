@@ -1108,6 +1108,12 @@ export const AssayerRecord: React.FC<{
                   ['Emergency phone', a.emergencyContactPhone, 'emergencyContactPhone'],
                   ['Emergency relation', a.emergencyContactRelation, 'emergencyContactRelation'],
                   ['Reach them first by', CONTACT_CHANNEL_LABELS[a.preferredContactChannel ?? 'AUTO'], 'preferredContactChannel'],
+                  /* Read-only, deliberately. It records what somebody agreed to and when; editing
+                     it would be rewriting the agreement. Blank means no consent is on file, which
+                     is the truth for everybody entered at the desk. */
+                  ['Declaration accepted', a.consentAcceptedAt
+                    ? `${fmtWhen(a.consentAcceptedAt)}${a.consentVersion ? ` (${a.consentVersion})` : ''}`
+                    : null],
                 ]} />
 
                 <FactGroup

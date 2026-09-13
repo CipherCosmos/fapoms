@@ -187,6 +187,13 @@ export class RegistrationApplicationService {
     /** Read only to show the reviewer the number HR typed beside the one the candidate confirmed. */
     @InjectRepository(AssayerInterviewEntity)
     private readonly interviews: Repository<AssayerInterviewEntity>,
+    /**
+     * Written to for exactly one thing: carrying the candidate's consent onto the record they
+     * become. It does not go through `AssayerService.update` because consent is not an editable
+     * field — correcting it later would be rewriting what somebody agreed to.
+     */
+    @InjectRepository(AssayerEntity)
+    private readonly assayers: Repository<AssayerEntity>,
     private readonly assayerService: AssayerService,
     private readonly rosterRecords: RosterRecordsService,
     private readonly auditService: AuditService,
@@ -958,6 +965,22 @@ export class RegistrationApplicationService {
     // duplicate checks, opens the record at INVITED. It does not touch documents or the
     // photograph write-through; that is the explicit re-homing loop just below.
     const assayer = await this.assayerService.create(createDto, actorUserId, application.organizationId ?? organizationId, actorRoles);
+
+    /**
+     * The declaration follows the person.
+     *
+     * Submitting is refused without it, and it was then left behind on a row whose purpose ends at
+     * approval — so the one artefact with a compliance life of its own did not survive the
+     * boundary. Written directly rather than through `update()` because it is not something a
+     * human may edit: it records what this candidate agreed to and when, and correcting it later
+     * would be rewriting the agreement.
+     */
+    if (application.consentAcceptedAt) {
+      await this.assayers.update(assayer.id, {
+        consentAcceptedAt: application.consentAcceptedAt,
+        consentVersion: application.consentVersion ?? null,
+      } as never);
+    }
 
     for (const doc of documents) {
       for (const key of doc.filePaths ?? []) {
