@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams, Link } from 'react-router-dom';
 import {
-  Users, MapPin, ClipboardList, Wallet, AlertTriangle,
+  Users, MapPin, ClipboardList, Wallet, AlertTriangle, UserCheck, FileCheck2,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
@@ -9,6 +9,7 @@ import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { PageHeader } from '../../components/ui';
 import { useImportIssues } from './useImportIssues';
+import { usePendingApplicationCount } from './applications/usePendingApplications';
 import { fmtWhen } from './hr-ui';
 import { LEGACY_TABS, LEGACY_PATHS, resolveHrDestination } from './hr-destinations';
 import { LoadFailure } from '../../components/LoadFailure';
@@ -83,8 +84,8 @@ export function useHr(): HrContext {
 const PAGES: readonly {
   to: string; end?: boolean; label: string; icon: React.ElementType;
   tone: 'count' | 'alert';
-  badge: (d: HrWorkforceOverview, openIssues: number | null) => number | null;
-  hint: (d: HrWorkforceOverview, openIssues: number | null) => string;
+  badge: (d: HrWorkforceOverview, openIssues: number | null, pendingApplications: number | null) => number | null;
+  hint: (d: HrWorkforceOverview, openIssues: number | null, pendingApplications: number | null) => string;
 }[] = [
   { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count', hint: () => 'Everything that needs attention today, in one list' },
   {
@@ -106,6 +107,30 @@ const PAGES: readonly {
     The badge is null, not 0, while the count is unknown — loading, or refused to a role that
     cannot read the queue — so a tab never shows "0" for a question it has not asked.
   */
+  /*
+    RECRUITMENT, INSIDE THE SECTION IT BELONGS TO.
+
+    These two were rows in the sidebar beside Workforce, on the grounds that each is a focused
+    single-task screen with a header of its own. The cost was three sidebar rows for one subject,
+    two of them highlighting at once, and a breadcrumb that already called both of them
+    "Workforce" — so the two chromes disagreed about where the user was standing.
+
+    Applications earns an alert badge by the same rule the review queue does: the number is work
+    that is cleared from this screen and nowhere else. Interviews does not — recording one is
+    something HR initiates, not a queue that fills up on its own.
+  */
+  { to: '/hr/interviews', label: 'Interviews', icon: UserCheck, badge: () => null, tone: 'count', hint: () => 'The gate before a candidate can register — a pass sends them their link' },
+  {
+    to: '/hr/applications', label: 'Applications', icon: FileCheck2, tone: 'alert',
+    badge: (_d, _i, pending) => pending,
+    hint: (_d, _i, pending) => (
+      pending === null
+        ? 'Candidates who have filled in their own registration and are waiting on a decision'
+        : pending === 0
+          ? 'Nobody is waiting — every application has been decided'
+          : `${pending} ${pending === 1 ? 'candidate is' : 'candidates are'} waiting on a decision`
+    ),
+  },
   {
     to: '/hr/issues', label: 'Review queue', icon: AlertTriangle, tone: 'alert',
     badge: (_d: HrWorkforceOverview, openIssues: number | null) => openIssues,
@@ -141,6 +166,7 @@ export const HrLayout: React.FC = () => {
   */
   const issues = useImportIssues();
   const openIssues = issues.loading || issues.failed ? null : issues.openCount;
+  const pendingApplications = usePendingApplicationCount();
 
   // Links to ?tab=compliance are in notification payloads and people's bookmarks; forward them
   // to the page that concern now lives on rather than dropping them on the overview.
@@ -256,13 +282,13 @@ export const HrLayout: React.FC = () => {
       >
         {PAGES.map((p) => {
           const Icon = p.icon;
-          const badge = p.badge(d, openIssues);
+          const badge = p.badge(d, openIssues, pendingApplications);
           /*
            * A bare red number beside a tab name is a puzzle: "Paperwork 34" says a quantity but
            * not of what, and not whether 34 is a workload or a warning. The hint spells the
            * number out in a sentence on hover, in the same words the destination screen uses.
            */
-          const hint = p.hint(d, openIssues);
+          const hint = p.hint(d, openIssues, pendingApplications);
           // Red means "there is something here for you to do", never "this number is large" —
           // see the badge rule above.
           const alarming = p.tone === 'alert' && badge !== null && badge > 0;

@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { UserCheck } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { InterviewOutcome } from '@fapoms/shared';
 
@@ -8,7 +7,7 @@ import { userMessage } from '../../../services/errors';
 import { queryKeys } from '../../../hooks/queryKeys';
 import { loadFailed } from '../../../queryClient';
 import { LoadFailure } from '../../../components/LoadFailure';
-import { PageHeader, AlertBanner, DataTable, StatusBadge, EmptyState } from '../../../components/ui';
+import { AlertBanner, DataTable, StatusBadge, EmptyState } from '../../../components/ui';
 import type { Column } from '../../../components/ui';
 import { getSemanticTokens } from '../../../config/status-registry';
 import { Section, Field, fieldInput, fmtWhen, InviteLinkBox } from '../hr-ui';
@@ -166,14 +165,9 @@ export const AssayerInterviewsPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: '1200px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <PageHeader
-        icon={<UserCheck size={20} />}
-        title="Interviews"
-        // "nothing else is needed here" was not always true — when the email does not go out, a
-        // resend from Applications is exactly what is needed — and the banner below now says so.
-        subtitle="HR's own gate before a candidate can self-register. A pass emails them a registration link; anyone whose link does not arrive is picked up under Applications → Not started."
-      />
+    /* A tab inside the Workforce section, under that section's header — see the Applications page
+       for the same note. The subtitle now lives on the tab's hover hint. */
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
       {notice && (
         <AlertBanner type={notice.tone === 'ok' ? 'success' : 'error'} onClose={() => { setNotice(null); setInviteLink(null); }}>

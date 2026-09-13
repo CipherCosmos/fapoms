@@ -17,7 +17,7 @@ import {
   Building2,
   Receipt,
   UserCog, Inbox, MessageSquare, BellRing, SlidersHorizontal,
-  ScrollText, AlertTriangle, UserCheck, FileCheck2 } from 'lucide-react';
+  ScrollText, AlertTriangle } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { permissionKeysFrom } from '../hooks/useCurrentRoles';
@@ -84,12 +84,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Clients', path: '/clients', icon: Building2 },
         { name: 'Billing', path: '/billing', icon: Receipt },
         { name: 'Branches', path: '/branches', icon: GitMerge },
-        { name: 'Workforce', path: '/hr', icon: UserCog },
-        // Appraiser Recruitment: the interview gate ahead of self-registration, and the review
-        // queue for applications it spawns. Both sit beside Workforce rather than inside it,
-        // mirroring `/hr/register`'s own placement — see App.tsx's routing comment.
-        { name: 'Interviews', path: '/hr/interviews', icon: UserCheck },
-        { name: 'Applications', path: '/hr/applications', icon: FileCheck2 },
+        /*
+          One row for one subject.
+
+          Interviews and Applications were rows of their own here, beside Workforce, because each
+          draws its own page header. Three rows for one subject is what the owner saw — and two of
+          them highlighted at once, because `/hr/interviews` starts with `/hr/`. The breadcrumb had
+          already called both of them "Workforce", so the two chromes disagreed about where you
+          were. They are tabs inside the section now; the URLs did not change.
+
+          `activePaths` keeps this row lit while you are on any of them, which is what the row has
+          effectively been doing all along by prefix.
+        */
+        {
+          name: 'Workforce',
+          path: '/hr',
+          icon: UserCog,
+          activePaths: ['/hr', '/hr/roster', '/hr/pay', '/hr/where', '/hr/issues', '/hr/interviews', '/hr/applications'],
+        },
         { name: 'Branch Paperwork', path: '/documents', icon: Files },
         { name: 'Audit Data Entry', path: '/data-entry', icon: Inbox },
       ],

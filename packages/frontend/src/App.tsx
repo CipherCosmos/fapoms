@@ -503,15 +503,6 @@ export const App: React.FC = () => {
           */}
           <Route path="/hr/register/:assayerId" element={<ResumeRegistrationRedirect />} />
           {/*
-            Appraiser Recruitment's two HR-facing screens. Siblings of `/hr/register` above, for
-            the same reason — each is a focused, single-task destination with its own header, not
-            a tab inside `HrLayout`'s roster/pay/where strip. `route-permissions.ts` carries both
-            as their own literal entries, mirroring ADMIN/OPERATIONS on the backend controllers
-            exactly (`assayer-interview.controller.ts`, `hr-applications.controller.ts`).
-          */}
-          <Route path="/hr/interviews" element={<AssayerInterviewsPage />} />
-          <Route path="/hr/applications" element={<HrApplicationsPage />} />
-          {/*
             HR is a section, not a page. It briefly had eleven URLs, three of which badged off the
             same number — Records, Compliance and Documents all pointed at "this person's file is
             incomplete" — so closely related concerns are now merged into one destination each with
@@ -535,6 +526,18 @@ export const App: React.FC = () => {
             */}
             <Route path="issues" element={<HrIssuesPage />} />
             <Route path="where" element={<HrWherePeopleArePage />} />
+
+            {/*
+              Recruitment, inside the section it belongs to.
+
+              These were siblings of Workforce in the sidebar on the grounds that each is a focused
+              single-task screen with its own header. The cost was three rows for one subject, two
+              of them lighting up at once, and a breadcrumb that already called both of them
+              "Workforce" — the two chromes disagreed about where the user was. The URLs are
+              unchanged: a notification deep-links to `/hr/applications`.
+            */}
+            <Route path="interviews" element={<AssayerInterviewsPage />} />
+            <Route path="applications" element={<HrApplicationsPage />} />
 
             {/* Retired URLs, from one list — see hr-destinations.ts. This used to be a
                 hand-maintained copy with a comment asking the next person to keep the two in

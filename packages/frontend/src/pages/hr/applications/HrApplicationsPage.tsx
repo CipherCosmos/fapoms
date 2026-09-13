@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { FileCheck2 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApplicationStatus } from '@fapoms/shared';
 
@@ -7,7 +6,7 @@ import { api } from '../../../services/api';
 import { queryKeys } from '../../../hooks/queryKeys';
 import { loadFailed } from '../../../queryClient';
 import { LoadFailure } from '../../../components/LoadFailure';
-import { PageHeader, AlertBanner, DataTable, StatusBadge, EmptyState } from '../../../components/ui';
+import { AlertBanner, DataTable, StatusBadge, EmptyState } from '../../../components/ui';
 import type { Column } from '../../../components/ui';
 import { humanizeStatus } from '../../../config/status-registry';
 import { ViewChips, useViewParam, fmtWhen } from '../hr-ui';
@@ -166,12 +165,14 @@ export const HrApplicationsPage: React.FC = () => {
   const activeFilter = STATUS_FILTERS.find((f) => f.key === status)!;
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: '1300px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <PageHeader
-        icon={<FileCheck2 size={20} />}
-        title="Applications"
-        subtitle="Self-registration submissions awaiting HR action — a separate intake from the HR-desk registration wizard, which never produces one of these."
-      />
+    /*
+      No header of its own any more.
+
+      This is a tab inside the Workforce section now, under that section's header — two stacked
+      page headers is what kept it out of the section in the first place. The sentence that lived
+      here has moved to the tab's hover hint, where the rest of the section's explanations live.
+    */
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
       {notice && (
         <AlertBanner type={notice.tone === 'ok' ? 'success' : 'error'} onClose={() => setNotice(null)}>
