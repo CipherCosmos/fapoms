@@ -97,6 +97,13 @@ jobs:
       - name: Build frontend
         run: npm run build:frontend
 
+      # Dev and prod describe the same application in two compose files nothing keeps in sync.
+      # LiveKit shipped in dev and was never added to prod, caught only because main.ts happens
+      # to check for it and skip it — a comment noticing the gap, not something that would catch
+      # the next one.
+      - name: Dev and prod compose stacks agree, apart from their known differences
+        run: npm run verify:compose-parity
+
   # ───────────────────────────────────────────────────────────────────────────────────────────
   # The half `verify` cannot do, because it has no database.
   #
