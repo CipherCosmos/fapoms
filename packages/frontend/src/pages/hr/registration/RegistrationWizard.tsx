@@ -7,26 +7,19 @@ import {
 import { AlertBanner, Select, StatusBadge, PageHeader, useToast, useConfirm } from '../../../components/ui';
 import { PinCoordinateControl } from '../../../components/PinCoordinateControl';
 import { useWorkforceVocabulary } from '../../../hooks/useWorkforceVocabulary';
-import { api } from '../../../services/api';
-import { userMessage } from '../../../services/errors';
-import { useCurrentRoles, canManageAssayers } from '../../../hooks/useCurrentRoles';
 import {
   renderFormField, resolvePincode, addressConflict, resolveIfsc, useHrOwnerOptions,
   type FieldDef, type IfscInfo, type DuplicateMatch,
 } from '../AssayerForms';
-import { isSensitiveKey } from '../assayer-shared';
-import { SensitiveValue } from '../SensitiveValue';
 import {
   REGISTRATION_FIELDS, RATE_FIELDS, REGISTRATION_STEPS, REGISTRATION_STEP_KEYS,
-  STEP_FIELDS, activationGaps, firstIncompleteStep, isPlannableForSomeone, validateStep,
+  STEP_FIELDS, isPlannableForSomeone, stepOfField, validateStep,
   mappedFieldsFromError, type RegistrationStepKey,
 } from './steps';
-import {
-  useDossier, useRegistration, type DossierEmpanelment, type DossierReference,
-} from './useRegistration';
+import { useRegistration } from './useRegistration';
 import { useDuplicateCheck, type DuplicateCheckKey } from './useDuplicateCheck';
-import { DocumentsStep } from './DocumentsStep';
-import { ClientsStep } from './ClientsStep';
+import { ApplicationDocumentsStep } from './ApplicationDocumentsStep';
+import { ClientsStep, type DraftStanding } from './ClientsStep';
 import { relationshipOptions } from '../reference-vocabulary';
 import { Page } from '../../../components/ui/Page';
 
@@ -48,10 +41,6 @@ const useIsNarrow = (max = 880): boolean => {
   }, [max]);
   return narrow;
 };
-
-/** Steps whose Continue button actually writes to the record — the other three (documents, clients,
- * review) file through their own endpoints as they go and have nothing of their own to commit. */
-const SAVES_TO_RECORD: readonly RegistrationStepKey[] = ['person', 'address', 'identity', 'people'];
 
 /** The three boxes this step checks against the roster as the clerk types them. */
 const DUPLICATE_CHECK_FIELDS: readonly DuplicateCheckKey[] = ['phone', 'panNumber', 'aadhaarNumber'];
@@ -223,41 +212,40 @@ const StepRail: React.FC<{
 /**
  * People who can vouch for this person, added one at a time against the real record.
  *
- * Kept as its own immediate action rather than folded into the step's save, because a reference
- * is a row of its own (`POST /assayers/:id/reference`) and a clerk adding three of them needs to
- * see each land. Nobody has rung them yet — that is a separate, attested act on the record — and
- * the copy says so, because "reference added" reading as "reference checked" is the whole risk.
+ * Held with the application rather than written as its own row, because there is no person to
+ * hang a row on yet: `applyExtendedProfile` replays them through `rosterRecords.saveReference` at
+ * approval, which is the same call this used to make directly. Nobody has rung them either way —
+ * that is a separate, attested act on the record — and the copy says so, because "reference added"
+ * reading as "reference checked" is the whole risk.
  */
+export interface DraftReference {
+  fullName: string;
+  relationship?: string;
+  phone?: string;
+}
+
 const ReferencesBlock: React.FC<{
-  assayerId: string | null;
-  references: DossierReference[];
-  onChanged: () => void;
-}> = ({ assayerId, references, onChanged }) => {
+  references: DraftReference[];
+  onChange: (next: DraftReference[]) => void;
+}> = ({ references, onChange }) => {
   const [draft, setDraft] = useState({ fullName: '', relationship: '', phone: '' });
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  const saving = false;
 
-  const add = async () => {
-    if (!assayerId || !draft.fullName.trim()) {
+  const add = () => {
+    if (!draft.fullName.trim()) {
       setError('A reference needs at least a name.');
       return;
     }
-    setSaving(true);
     setError(null);
-    try {
-      await api.request(`/assayers/${assayerId}/reference`, {
-        method: 'POST',
-        body: JSON.stringify({
-          fullName: draft.fullName.trim(),
-          relationship: draft.relationship || undefined,
-          phone: draft.phone.trim() || undefined,
-        }),
-      });
-      toast({ type: 'success', title: 'Reference added', message: `${draft.fullName.trim()} is on file. Nobody has rung them yet.` });
-      setDraft({ fullName: '', relationship: '', phone: '' });
-      onChanged();
-    } catch (e) { setError(userMessage(e)); } finally { setSaving(false); }
+    onChange([...references, {
+      fullName: draft.fullName.trim(),
+      relationship: draft.relationship || undefined,
+      phone: draft.phone.trim() || undefined,
+    }]);
+    toast({ type: 'success', title: 'Reference added', message: `${draft.fullName.trim()} is on file. Nobody has rung them yet.` });
+    setDraft({ fullName: '', relationship: '', phone: '' });
   };
 
   const inputStyle: React.CSSProperties = {
@@ -277,15 +265,15 @@ const ReferencesBlock: React.FC<{
       </div>
       {references.length > 0 && (
         <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {references.map((r) => (
-            <li key={r.id} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {references.map((r, i) => (
+            <li key={`${r.fullName}-${i}`} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
               <Phone size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} aria-hidden />
               <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{r.fullName}</span>
               {r.relationship && <span>· {r.relationship}</span>}
               {r.phone && <span>· {r.phone}</span>}
-              <span style={{ color: r.checkedAt ? 'var(--success)' : 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
-                {r.checkedAt ? '· spoken to' : '· not rung yet'}
-              </span>
+              {/* Nobody can have been rung yet: this person does not exist to be a reference FOR
+                  until the application is approved. */}
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>· not rung yet</span>
             </li>
           ))}
         </ul>
@@ -322,7 +310,7 @@ const ReferencesBlock: React.FC<{
         <button
           type="button"
           onClick={() => void add()}
-          disabled={saving || !assayerId}
+          disabled={saving}
           className="btn btn-secondary"
           style={{ fontSize: 'var(--text-xs)', padding: '9px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto' }}
         >
@@ -336,18 +324,22 @@ const ReferencesBlock: React.FC<{
 
 /** The last page: what is on file, what is not, and what each blank one actually costs. */
 const ReviewStep: React.FC<{
-  record: Parameters<typeof activationGaps>[0];
+  name: string;
+  /**
+   * The server's own gap list for this application — `missingRegistrationFields` over the merged
+   * view of its columns and its extended profile.
+   *
+   * It used to be recomputed here from the assayer record this form had already created. There is
+   * no record now, and asking the application is better anyway: the same list HR sees on the
+   * review screen, so the desk and the reviewer cannot disagree about what is outstanding.
+   */
+  gaps: Array<{ key: string; label: string; blocks: string }>;
   scannedCount: number;
   requirementCount: number;
-  standings: DossierEmpanelment[];
+  standings: DraftStanding[];
   onGo: (step: RegistrationStepKey) => void;
-}> = ({ record, scannedCount, requirementCount, standings, onGo }) => {
-  const gaps = activationGaps(record);
-  // The record's own authored truth, not a rebuild from the retired first/last pair — see the
-  // India-first naming note on `FULL_NAME_FIELD` in AssayerForms.tsx. `displayName` is what the
-  // server stores verbatim from whatever `fullName` a save sent, so it is the one place on this
-  // page that always matches the card, single-token names and Tamil initials included.
-  const name = (record?.displayName || '').trim();
+}> = ({ name, gaps: rawGaps, scannedCount, requirementCount, standings, onGo }) => {
+  const gaps = rawGaps.map((g) => ({ ...g, why: g.blocks, step: stepOfField(g.key) }));
   const plannable = isPlannableForSomeone(standings);
 
   return (
@@ -357,13 +349,18 @@ const ReviewStep: React.FC<{
         borderColor: 'var(--success)',
       }}>
         <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '7px' }}>
-          <Check size={15} /> {name || 'This person'} is on the roster
+          {/*
+            Not "is on the roster". They are not, and that claim is what made the rest of the
+            pipeline look optional: the form announced a hire it had performed itself, three
+            approvals ahead of anybody deciding to make one.
+          */}
+          <Check size={15} /> {name || 'This person'}'s application is filled in
         </div>
         {/*
           * Named once, in the exact words the desk is meant to trust it in.
           *
           * Everywhere above this line "the name" is whatever reads best in a sentence — "Ramesh
-          * Iyer is on the roster" — which is right for a headline and wrong for a check: nothing
+          * Iyer's application is filled in" — right for a headline and wrong for a check: nothing
           * on this page, until now, said in so many words that what was typed IS what the bank
           * and TDS filings will be checked against. One labelled row, once, is that confirmation.
           */}
@@ -376,8 +373,14 @@ const ReviewStep: React.FC<{
           </div>
         )}
         <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginTop: '6px' }}>
-          Their code is <strong style={{ fontFamily: 'var(--font-mono, monospace)' }}>{record?.assayerCode || '—'}</strong>.
-          {' '}They are waiting to be taken through onboarding on their record, where the stage is moved by hand.
+          {/*
+            No code to print, and that is the honest part. A code is allocated when the record is
+            created, which happens when somebody approves this — so a code here would be a number
+            for a person who does not exist yet. This page used to print one, because the wizard
+            had already made them.
+          */}
+          Nothing is on the roster yet. Send them their link so they can confirm their number and
+          accept the declaration, then this comes to HR as an application to approve.
         </div>
       </div>
 
@@ -405,7 +408,8 @@ const ReviewStep: React.FC<{
         </div>
         <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           {plannable
-            ? `Accepted by ${standings.filter((s) => s.client).map((s) => s.client!.name).join(', ') || 'a client'}.`
+            ? `${standings.length} client ${standings.length === 1 ? 'standing' : 'standings'} recorded, `
+              + 'which are filed against them when the application is approved.'
             : `${name || 'This person'} cannot be given work for any client until a client standing is set. `
               + 'No bank is ever offered somebody they have not accepted, so until then they will '
               + 'not appear on any planning screen however complete the rest of this record is.'}
@@ -513,18 +517,31 @@ export const RegistrationWizard: React.FC<{
   onClose: () => void;
   /** Called once the clerk finishes, so the roster behind can pick the new person up. */
   onCreated: () => void;
-  /** Reopen an interrupted registration on the record it already created. */
-  resumeAssayerId?: string;
-}> = ({ onClose, onCreated, resumeAssayerId }) => {
-  const reg = useRegistration(resumeAssayerId);
+  /**
+   * The application being filled in. Always present: this form no longer creates anything — an
+   * application exists because somebody passed an interview, and this is the desk typing into it
+   * on the candidate's behalf.
+   */
+  applicationId: string;
+}> = ({ onClose, onCreated, applicationId }) => {
+  const reg = useRegistration(applicationId);
   const navigate = useNavigate();
   const narrow = useIsNarrow();
   const { confirm, confirmDialog } = useConfirm();
   // The same pair the `sensitive/:field` route admits, so the reveal control is offered only to
   // somebody whose click can succeed. This flow is already gated on the roster, but a control that
   // hands out a KYC identifier should ask the question itself rather than inherit the answer.
-  const canManage = canManageAssayers(useCurrentRoles());
-  const { dossier, dossierError, reloadDossier } = useDossier(reg.assayerId);
+  /**
+   * The standings typed so far, held on the application until approval files them. Local state
+   * mirrored from the server's copy, because the clients step now edits a list rather than
+   * writing a row per click — see `ClientsStep`.
+   */
+  const [standings, setStandings] = useState<DraftStanding[]>([]);
+  const [references, setReferences] = useState<DraftReference[]>([]);
+  useEffect(() => {
+    setStandings((reg.application?.extendedProfile?.empanelments ?? []) as DraftStanding[]);
+    setReferences((reg.application?.extendedProfile?.references ?? []) as unknown as DraftReference[]);
+  }, [reg.application]);
   const [step, setStep] = useStepParam<RegistrationStepKey>(REGISTRATION_STEP_KEYS, 'person');
   // Loaded only on the step that shows `hrOwnerName` — see `useHrOwnerOptions`.
   const hrOwnerOpts = useHrOwnerOptions(step === 'people');
@@ -537,7 +554,7 @@ export const RegistrationWizard: React.FC<{
   const { skills, languages, certifications } = useWorkforceVocabulary();
   const vocabulary = { skills, languages, certifications };
   const { toast } = useToast();
-  const dup = useDuplicateCheck(reg.assayerId);
+  const dup = useDuplicateCheck(null);
 
   const stepIndex = REGISTRATION_STEP_KEYS.indexOf(step);
   const [furthest, setFurthest] = useState(0);
@@ -597,12 +614,16 @@ export const RegistrationWizard: React.FC<{
   const [jumped, setJumped] = useState(false);
   const [params] = useSearchParams();
   useEffect(() => {
-    if (jumped || !resumeAssayerId || !reg.record || params.get('step')) return;
+    if (jumped || !reg.application || params.get('step')) return;
     setJumped(true);
-    setStep(firstIncompleteStep(reg.record));
+    // The gap list the server computes for this application, mapped to the step that can close
+    // the first one — the same `stepOfField` the error banner's "Go to field" links use.
+    const firstGap = reg.gaps[0];
+    const target = firstGap ? stepOfField(firstGap.key) : null;
+    if (target) setStep(target);
     // `setStep` writes the query string; including it would re-run this on its own effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jumped, resumeAssayerId, reg.record]);
+  }, [jumped, reg.application, reg.gaps]);
 
   const formSetter = (next: Record<string, string>) => reg.merge(next);
 
@@ -699,24 +720,19 @@ export const RegistrationWizard: React.FC<{
    * beside it, and only turns back into a box once it has been uncovered. A field with nothing on
    * file is an ordinary box — there is nothing to protect and nothing to reveal.
    */
-  const renderIdentity = (field: FieldDef) => {
-    const key = field.key;
-    const stored = (reg.record as Record<string, unknown> | null)?.[key];
-    if (!isSensitiveKey(key) || !reg.assayerId || !stored) return renderOne(field);
-    return (
-      <div key={key}>
-        <div style={{ ...blockTitleStyle, fontSize: 'var(--text-xs)', marginBottom: '4px' }}>{field.label}</div>
-        <SensitiveValue
-          assayerId={reg.assayerId}
-          fieldKey={key}
-          masked={String(stored)}
-          canReveal={canManage}
-          onRevealed={(full) => reg.reveal(key, full)}
-          renderRevealed={() => renderOne(field)}
-        />
-      </div>
-    );
-  };
+  /*
+    There is nothing to unmask here any more.
+
+    This used to render a masked value with an audited reveal beside it, because the boxes were
+    reading from an `assayers` row where PAN, Aadhaar and the bank account are encrypted and come
+    back as `••••••234F`. An application is not that row: it holds what was typed, unencrypted,
+    until promotion writes it through `AssayerService.update` — which is where the encryption, the
+    masking and the reveal audit all live.
+
+    So the box is an ordinary box, showing what the desk or the candidate entered. The protection
+    starts when the person does.
+  */
+  const renderIdentity = (field: FieldDef) => renderOne(field);
 
   /**
    * Leave this step, saving what moved.
@@ -731,31 +747,39 @@ export const RegistrationWizard: React.FC<{
     const problems = validateStep(step, reg.form);
     if (problems.length > 0) { setStepProblems(problems); return false; }
     setStepProblems([]);
-    // The three steps that own no box on the record. Papers, client standings and the summary all
-    // write through routes of their own as they go, so there is nothing here left to commit.
-    if (step === 'documents' || step === 'clients' || step === 'review') return true;
+    // Papers write through their own route as they go, and the summary owns nothing. `clients`
+    // used to be on this list for the same reason — it wrote a row per click — and is not any
+    // more: the standings it holds are part of this step's own save.
+    if (step === 'documents' || step === 'review') return true;
     // A state the postal directory places in another state is the one address answer that cannot
     // be saved as typed; the district disagreement below it is normal and saves fine.
     if (step === 'address' && addrNote?.blocking) return false;
     /**
      * Nothing to file yet. The rail is unlocked end to end (see `StepRail`), so a clerk can reach
-     * "ID and bank" or "Contacts and pay" before the record exists at all — there is a real record
-     * ID to write to for none of it until step one's own commit creates one. Treated as a harmless
-     * no-op rather than attempting `reg.commit()`, which would either send a create with most of
-     * the form still blank or, worse, one missing the name and state the server insists on and
-     * this step's own boxes cannot supply. The step's inline note says so; the footer's Continue
-     * is additionally disabled here so nothing invites a click that does nothing.
+     * "ID and bank" or "Contacts and pay" before the record existed at all, because the record was
+     * created by step one. There is no such moment now: the application exists before this form
+     * opens — an interview PASS made it — so every step has somewhere to save to from the first
+     * click, and the half of this function that handled "not yet" is gone with the condition.
+     *
+     * The two lists ride with the step that owns them: standings with `clients`, references with
+     * `people`. They are sent on every save rather than only when they change, because they are
+     * replaced wholesale on the application and a diff over an array is a bigger promise than it
+     * is worth here.
      */
-    if (step !== 'person' && !reg.assayerId) return true;
-    return reg.commit();
+    return reg.commit({
+      ...(step === 'clients' ? { empanelments: standings } : {}),
+      ...(step === 'people' ? { references: references as unknown as Array<Record<string, unknown>> } : {}),
+    });
   };
 
   /** Would a save actually do anything right now, on the step being left? */
   const canSaveCurrentStep = (): boolean => {
-    if (step === 'documents' || step === 'clients' || step === 'review') return false; // nothing of their own to commit
+    // Documents write through their own route as they go; the review page has nothing of its own.
+    // `clients` DOES have something now — the standings it holds are sent with this step's save.
+    if (step === 'documents' || step === 'review') return false;
     if (step === 'address' && addrNote?.blocking) return false; // an unresolved state/pincode conflict
     if (step === 'person') return validateStep('person', reg.form).length === 0; // needs a name and a state
-    return Boolean(reg.assayerId); // every later step needs the record step one creates
+    return true; // the application already exists; every step has somewhere to write
   };
 
   /**
@@ -802,26 +826,31 @@ export const RegistrationWizard: React.FC<{
   const finish = async () => {
     if (!(await leaveStep())) return;
     const who = (reg.form.fullName || '').trim() || 'This person';
-    const plannable = isPlannableForSomeone(dossier?.empanelments ?? []);
+    /*
+      Nobody is registered, and saying so is the point.
+
+      This used to announce "Registered" and hand the clerk a person on the roster, which is
+      precisely what made the rest of the pipeline look optional. What has happened is that a
+      candidate's application has been filled in: they still have to confirm their own number and
+      accept the declaration through their link, and HR still has to approve it. Two of those three
+      are somebody else's to do, so the message names the one the clerk can do next.
+    */
     toast({
-      type: plannable ? 'success' : 'warning',
-      title: plannable ? 'Registered' : 'Registered, but not yet workable',
-      message: plannable
-        ? `${who} is on the roster. Move them through onboarding from their record.`
-        : `${who} is on the roster, but cannot be given work for any client until a client standing is set on their record.`,
+      type: 'success',
+      title: 'Saved',
+      message: `${who}'s application is filled in. Send them their link so they can confirm their `
+        + 'number and accept the declaration — then it comes to HR to approve.',
     });
     onCreated();
   };
 
   const scannedCount = useMemo(
-    () => (dossier?.onboarding ?? []).filter((d) => d.filePaths.length > 0).length,
-    [dossier],
+    () => reg.documents.filter((d) => d.filePaths.length > 0).length,
+    [reg.documents],
   );
 
   const busy = reg.busy || stepBusy;
   const current = REGISTRATION_STEPS[stepIndex];
-  /** Continue on this step would try to file boxes against a record that does not exist yet. */
-  const cannotSaveYet = step !== 'person' && !reg.assayerId && SAVES_TO_RECORD.includes(step);
   const typedName = (reg.form.fullName || '').trim();
 
   /**
@@ -880,12 +909,8 @@ export const RegistrationWizard: React.FC<{
         </button>
         <PageHeader
           icon={<User size={20} />}
-          title="Register an assayer"
-          subtitle={
-            resumeAssayerId
-              ? `Continuing ${typedName || 'their'} registration — pick up wherever it stopped.`
-              : 'Complete from the desk, start to finish. Nothing here needs the person to have a phone, an account, or to be in the room.'
-          }
+          title={`Filling in ${typedName || 'their'} registration`}
+          subtitle="Typed at the desk on the candidate's behalf. They still confirm their own number and accept the declaration through their link, and HR still approves it — nothing here puts anybody on the roster." 
         />
       </div>
 
@@ -933,20 +958,6 @@ export const RegistrationWizard: React.FC<{
           )}
         </AlertBanner>
       )}
-      {/*
-        The rail is unlocked, so this step can be looked at long before the record that would hold
-        it exists. Said plainly rather than left for the disabled Continue button below to explain
-        on its own — a greyed-out button with no reason attached reads as something broken.
-      */}
-      {cannotSaveYet && (
-        <div style={{ ...cardish, background: 'var(--bg-surface-2)' }}>
-          <div style={blockTitleStyle}>Saving</div>
-          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-            The person creates their record — save it before this page can hold anything.
-          </div>
-        </div>
-      )}
-
       {reg.loading ? (
         <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Opening their record…</div>
       ) : step === 'person' ? (
@@ -999,40 +1010,35 @@ export const RegistrationWizard: React.FC<{
               the distance check passes everybody, so somebody four states away looks near enough.
               Find their home on the map, right-click it, and paste what it gives you.
             </div>
-            {reg.assayerId ? (
-              <>
-                <PinCoordinateControl target="assayer" id={reg.assayerId} onPinned={() => void reg.refresh()} />
-                {/*
-                  * A geocoded coordinate is not a pin, and saying so matters.
-                  *
-                  * Creating the record geocodes the address, so this line is never empty — a person
-                  * entered with nothing but a state comes back holding that state's centroid. An
-                  * earlier version of this copy read "Pinned at 10.850500, 76.271100 — this will
-                  * not be overwritten", which is the promise `geo_source = 'manual'` carries and
-                  * this is not: it is a guess accurate to the state, it WILL be replaced by the
-                  * next re-geocode, and dressed up as a pin it stops anybody placing the real one.
-                  */}
-                {(() => {
-                  const pinned = reg.record?.geoSource === 'manual';
-                  const at = reg.record?.latitude
-                    ? `${Number(reg.record.latitude).toFixed(6)}, ${Number(reg.record.longitude).toFixed(6)}`
-                    : null;
-                  return (
-                    <div style={{ fontSize: 'var(--text-xs)', color: pinned ? 'var(--success)' : 'var(--text-muted)', marginTop: '8px' }}>
-                      {pinned
-                        ? `Pinned by hand at ${at}. No later import or re-geocode will overwrite it.`
-                        : at
-                          ? `The only location on file is ${at}, worked out from the address — so it is the town, not their door. Pin the exact spot if you know it.`
-                          : 'No location on file at all. Until one is pinned, the distance check passes everybody, so this person looks near enough to every branch.'}
-                    </div>
-                  );
-                })()}
-              </>
-            ) : (
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                Available once their record is saved.
-              </div>
-            )}
+            {/*
+              Collected, not pinned.
+
+              There is no assayer to pin — `/geo/precision/assayer/:id/pin` needs a record, and one
+              does not exist until this application is approved. But `latitude` and `longitude` are
+              on the registration allow-list precisely so an application can carry them, and
+              promotion applies them through the same guarded update, so the coordinate is worth
+              taking now while somebody knows it. `onPicked` hands it back instead of writing it.
+            */}
+            <PinCoordinateControl
+              target="assayer"
+              id={reg.applicationId}
+              onPicked={(latitude, longitude) => {
+                reg.merge({ latitude: String(latitude), longitude: String(longitude) });
+                toast({ type: 'success', title: 'Location taken', message: 'It is filed with them when the application is approved.' });
+              }}
+            />
+            {(() => {
+              const at = reg.form.latitude && reg.form.longitude
+                ? `${Number(reg.form.latitude).toFixed(6)}, ${Number(reg.form.longitude).toFixed(6)}`
+                : null;
+              return (
+                <div style={{ fontSize: 'var(--text-xs)', color: at ? 'var(--success)' : 'var(--text-muted)', marginTop: '8px' }}>
+                  {at
+                    ? `Their exact spot is ${at}. It is filed against them when this is approved, and no later re-geocode will overwrite it.`
+                    : 'No exact location yet. Their address is geocoded when they are approved, which reaches the town rather than the door — and until a real one is on file the distance check passes everybody, so this person looks near enough to every branch.'}
+                </div>
+              );
+            })()}
           </div>
         </div>
       ) : step === 'identity' ? (
@@ -1051,11 +1057,11 @@ export const RegistrationWizard: React.FC<{
           />
         </div>
       ) : step === 'documents' ? (
-        <DocumentsStep
-          assayerId={reg.assayerId}
-          dossier={dossier}
-          dossierError={dossierError}
-          onChanged={() => { reloadDossier(); void reg.refresh(); }}
+        <ApplicationDocumentsStep
+          applicationId={reg.applicationId}
+          requested={reg.documentsRequested}
+          documents={reg.documents}
+          onChanged={() => { void reg.refresh(); }}
           onBusy={setStepBusy}
         />
       ) : step === 'people' ? (
@@ -1066,15 +1072,11 @@ export const RegistrationWizard: React.FC<{
             keys={['emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation']}
             render={renderOne}
           />
-          <ReferencesBlock
-            assayerId={reg.assayerId}
-            references={dossier?.references ?? []}
-            onChanged={reloadDossier}
-          />
+          <ReferencesBlock references={references} onChange={setReferences} />
           <Block
-            title="How much work they can take"
-            note="Leave blank if there is no limit. These are what stop the planner offering somebody more work than they agreed to."
-            keys={['experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload']}
+            title="What they have done before"
+            note="Their experience, where they are working now, and what they are good at. All of it travels onto their record when they are approved."
+            keys={['experienceYears', 'currentEmployer', 'expertise', 'availability']}
             render={renderOne}
           />
           <Block
@@ -1083,13 +1085,23 @@ export const RegistrationWizard: React.FC<{
             keys={RATE_FIELDS.map((f) => f.key)}
             render={renderOne}
           />
-          <Block
-            title="Who looks after them here"
-            note="Optional. Who in HR is their contact, and any reference your own office knows them by."
-            keys={['hrOwnerName', 'employeeCode']}
-            render={renderOne}
-          />
-          <Block title="Anything else" note="Notes about this person, for whoever opens their record next." keys={['notes']} render={renderOne} />
+          {/*
+            Where the employment terms went.
+
+            A joining date, an engagement type, a workload ceiling, a reporting line and a region
+            are not things a candidate answers — they are what the company decides when it hires
+            somebody. They were asked for here, a week before anybody had decided, and they are
+            asked for at APPROVAL now, on the screen where somebody with the authority to hire is
+            looking at the person. A step that simply lost five boxes reads as five things nobody
+            collects any more.
+          */}
+          <div style={{ ...cardish, background: 'var(--bg-surface-2)' }}>
+            <div style={blockTitleStyle}>Joining date, workload and reporting line</div>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+              Set when this application is approved, not here — they are the company's decisions
+              rather than the candidate's answers, and the approval screen asks for all of them.
+            </div>
+          </div>
 
           {/*
             * Said here because this is where the boxes used to be.
@@ -1112,18 +1124,14 @@ export const RegistrationWizard: React.FC<{
           </div>
         </div>
       ) : step === 'clients' ? (
-        <ClientsStep
-          assayerId={reg.assayerId}
-          dossier={dossier}
-          onChanged={reloadDossier}
-          onBusy={setStepBusy}
-        />
+        <ClientsStep standings={standings} onChange={setStandings} />
       ) : (
         <ReviewStep
-          record={reg.record}
+          name={(reg.form.fullName || '').trim()}
+          gaps={reg.gaps}
           scannedCount={scannedCount}
-          requirementCount={dossier?.onboarding.length ?? 0}
-          standings={dossier?.empanelments ?? []}
+          requirementCount={reg.documentsRequested.length}
+          standings={standings}
           onGo={(k) => void goTo(k)}
         />
       )}
@@ -1168,12 +1176,11 @@ export const RegistrationWizard: React.FC<{
             <button
               type="button"
               onClick={() => void next()}
-              disabled={busy || cannotSaveYet}
-              title={cannotSaveYet ? 'Save their name and state on the first page first — the rest is filed against their record.' : undefined}
+              disabled={busy}
               className="btn btn-primary"
               style={{ padding: '9px 20px', fontSize: 'var(--text-sm)', display: 'inline-flex', alignItems: 'center', gap: '7px' }}
             >
-              {busy ? 'Saving…' : step === 'person' && !reg.assayerId ? 'Save and continue' : 'Continue'}
+              {busy ? 'Saving…' : 'Continue'}
               <ChevronRight size={15} aria-hidden />
             </button>
           )}

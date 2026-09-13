@@ -1,28 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { todayDateKey } from '@fapoms/shared';
+import { REGISTRATION_RECORD_FIELD_KEYS } from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { fieldErrorKeys, userMessage } from '../../../services/errors';
 import { stringifyList } from '../AssayerForms';
-import { isSensitiveKey, type Assayer } from '../assayer-shared';
 import { REGISTRATION_FIELDS, RATE_KEYS, type RegistrationStepKey } from './steps';
-import { buildCreateBody, buildUpdatePlan, ratePayload, ratesChanged } from './persist';
+import { buildApplicationPatch, ratePayload, ratesChanged } from './persist';
 
 /**
- * The registration's state: one form, one record, and the rule that the two stay in step.
+ * The registration's state: one form, one application, and the rule that the two stay in step.
  *
- * There is no draft store. Everything the clerk types is written to the person's own row as they
- * move between steps, which is what makes an interrupted registration resumable — the half-filled
- * record IS the draft, it is on the roster, and the same wizard reopened on it shows exactly what
- * is there. The alternative, a local draft, loses the work when the tab closes and produces a
- * second, invisible idea of who has been registered.
+ * **What this writes to changed.** Every step used to write to a live `assayers` row, created
+ * after step one — so an interrupted registration left a half-made employee on the roster, and the
+ * whole interview → application → review pipeline could be walked past by anybody who pressed "Add
+ * assayer". It writes to the candidate's APPLICATION now: the same row they fill in through their
+ * own link, reviewed and approved once, promoted to a person exactly once.
  *
- * `saved` is what the server is believed to hold. Every commit diffs against it and sends only
- * what moved, then updates it from the response — see `buildUpdatePlan` for why sending the whole
- * form each time would let two people editing one person silently overwrite each other.
+ * The desk is the second typist, not a second pipeline. The candidate still confirms their own
+ * number, still accepts the declaration and still presses Submit; what this saves them is the
+ * typing, for the case where they are at the desk or have sent their papers in.
+ *
+ * There is still no draft store — the application IS the draft, it is on the server, and the same
+ * wizard reopened on it shows exactly what is there. `saved` is what the server is believed to
+ * hold; every commit diffs against it and sends only what moved, which matters more here than it
+ * did against the record: the candidate may be typing into the same row at the same time.
  */
 
 /** The phone columns store `+91XXXXXXXXXX`; the boxes show ten digits under a printed `+91`. */
 const TEL_KEYS = ['phone', 'alternatePhone', 'emergencyContactPhone'];
+
+const RECORD_KEYS = new Set<string>(REGISTRATION_RECORD_FIELD_KEYS as readonly string[]);
 
 const dateBox = (value: unknown): string => {
   if (!value) return '';
@@ -30,48 +36,73 @@ const dateBox = (value: unknown): string => {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
 };
 
+/** One candidate's application, as `GET /hr/applications/:id` returns it. */
+export interface ApplicationRow {
+  id: string;
+  status: string;
+  fullName: string | null;
+  mobile: string;
+  email: string | null;
+  dateOfBirth: string | null;
+  gender: string | null;
+  address: string | null;
+  state: string | null;
+  city: string | null;
+  pincode: string | null;
+  experienceYears: number | null;
+  currentEmployer: string | null;
+  expertise: string | null;
+  availability: string | null;
+  employmentCategory: string | null;
+  consentAcceptedAt: string | null;
+  /** Set the first time the candidate opens their link — see `tokenConsumedAt` on the entity. */
+  tokenConsumedAt: string | null;
+  extendedProfile: {
+    fields?: Record<string, unknown>;
+    commercial?: Record<string, unknown>;
+    references?: Array<Record<string, unknown>>;
+    empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+  } | null;
+}
+
+export interface ApplicationView {
+  application: ApplicationRow;
+  documents: Array<{ requirement: string; filePaths: string[] }>;
+  /** What is still missing, judged against the record this will become. */
+  gaps: Array<{ key: string; label: string; blocks: string }>;
+  /** Which scans this candidate is asked for, given the category they chose. */
+  documentsRequested: string[];
+  /** The number HR typed at the interview, when it differs from the one on the application. */
+  invitedMobile: string | null;
+}
+
 /**
- * A record as the form's boxes.
+ * An application as the form's boxes.
+ *
+ * Two sources, one rule: a key on the registration allow-list lives under `extendedProfile.fields`;
+ * everything else is a column on the application itself. The same split the server applies on the
+ * way in, read back.
  *
  * The phone strip is the part worth naming: without it a resumed registration shows
  * `+919876543210` sitting behind the `+91` the field itself prints, so the box reads
- * `+91 +919876543210` and any save normalises it into a different number. Stripping on the way in
- * and re-adding on the way out (`buildAssayerEditBody` does the latter) keeps the round trip
- * lossless, which is what makes the dirty diff able to tell "untouched" from "changed".
+ * `+91 +919876543210` and any save normalises it into a different number.
+ *
+ * Identity numbers are NOT blanked here, and that is a real difference from the record page. An
+ * application stores them as typed — the masking and the audited reveal belong to `assayers`,
+ * where they are encrypted — so the desk sees what it entered and a resumed form round-trips. The
+ * value is the same one the candidate's own form shows them.
  */
-export function snapshotRecord(record: Partial<Assayer>): Record<string, string> {
+export function snapshotApplication(view: ApplicationView): Record<string, string> {
+  const { application } = view;
+  const fields = application.extendedProfile?.fields ?? {};
   const form: Record<string, string> = {};
+
   for (const field of REGISTRATION_FIELDS) {
-    const raw = (record as Record<string, unknown>)[field.key];
-    /**
-     * `fullName` is not a column — `displayName` is what it seeds from.
-     *
-     * The box the clerk types into and the field the record actually stores are two different
-     * names on purpose: `fullName` is what a save SENDS, `displayName` is what the server stores
-     * it as and hands back. Falling through to the generic `raw === record.fullName` read below
-     * would open every resumed registration on an empty box, because no such column exists to
-     * read — the person's real name would look unset on a record that has one.
-     */
-    if (field.key === 'fullName') { form.fullName = String(record.displayName ?? ''); continue; }
-    /**
-     * A KYC identifier never comes back into a box from the record.
-     *
-     * PAN, Aadhaar and bank account arrive from the server masked (`••••••234F`), and a resumed
-     * registration used to drop whatever the record held straight into the input. One corrected
-     * digit on top of a mask saves a mask, destroying a real identifier while leaving something
-     * that looks plausible on every screen afterwards.
-     *
-     * Blank here, and blank on every later re-read, so the box's contents are only ever what
-     * somebody deliberately put there — either typed from the card, or seeded by an audited
-     * reveal on the identity step. Whether one is on file is shown there, masked, beside the box.
-     */
-    if (isSensitiveKey(field.key)) { form[field.key] = ''; continue; }
+    const raw = RECORD_KEYS.has(field.key)
+      ? fields[field.key]
+      : (application as unknown as Record<string, unknown>)[field.key];
+
     if (field.type === 'date') { form[field.key] = dateBox(raw); continue; }
-    if (field.key === 'certifications') {
-      const list = Array.isArray(raw) ? (raw as { name: string }[]).map((c) => c?.name).filter(Boolean) : [];
-      form[field.key] = stringifyList(list as string[]);
-      continue;
-    }
     if (field.vocab || field.regions) {
       form[field.key] = stringifyList(Array.isArray(raw) ? (raw as unknown[]).map(String) : []);
       continue;
@@ -83,34 +114,33 @@ export function snapshotRecord(record: Partial<Assayer>): Record<string, string>
     }
     form[field.key] = raw === null || raw === undefined ? '' : String(raw);
   }
-  const hours = record.workingHours ?? null;
-  form.workingHoursStart = hours?.start ?? '';
-  form.workingHoursEnd = hours?.end ?? '';
-  // Rates are not on the record — they are a dated profile behind their own endpoint — so they
-  // start empty on a resume rather than pretending the boxes show what is on file.
-  for (const key of RATE_KEYS) form[key] = '';
+
+  // Rates are a group of their own under `extendedProfile`, applied at approval by
+  // `applyExtendedProfile`. They round-trip now, where against the record they could not: they
+  // lived behind a separate dated-profile endpoint the wizard never read back.
+  const commercial = application.extendedProfile?.commercial ?? {};
+  for (const key of RATE_KEYS) {
+    const value = (commercial as Record<string, unknown>)[key];
+    form[key] = value === null || value === undefined ? '' : String(value);
+  }
   return form;
 }
 
-/**
- * What a brand-new registration opens with.
- *
- * Deliberately three values and no more. This form used to open pre-filled with Delhi, Central
- * Delhi, New Delhi, "Gold Testing" and five years of experience — correct for one hire in a
- * national roster and wrong for the rest, and wrong in the quietest way, because a pre-filled box
- * reads as already answered. What survives is only what is either true by construction (today is
- * the day this intake is happening) or a genuine majority default that is visible in the box and
- * one click from being changed.
- */
-export const blankRegistrationForm = (): Record<string, string> => ({
-  employmentType: 'FULL_TIME',
-  joiningDate: todayDateKey(),
-});
+/** The two lists the wizard holds itself, sent with the step that owns them. */
+export interface StaffExtras {
+  empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+  references?: Array<Record<string, unknown>>;
+}
 
 export interface RegistrationState {
   form: Record<string, string>;
-  record: Assayer | null;
-  assayerId: string | null;
+  application: ApplicationRow | null;
+  applicationId: string;
+  /** The scans on file, and the ones this candidate is asked for. */
+  documents: Array<{ requirement: string; filePaths: string[] }>;
+  documentsRequested: string[];
+  /** What is still missing, as the review screen and the record both count it. */
+  gaps: Array<{ key: string; label: string; blocks: string }>;
   busy: boolean;
   /** A save that failed, in the server's own words. Cleared when the clerk edits anything. */
   error: string | null;
@@ -119,7 +149,7 @@ export interface RegistrationState {
    * Empty for everything else, which is what the banner's fallback path is for.
    */
   errorFields: readonly string[];
-  /** Set when a resumed record could not be loaded — the flow must not pretend it started fresh. */
+  /** Set when the application could not be loaded — the flow must not pretend it started fresh. */
   loadError: string | null;
   loading: boolean;
 }
@@ -127,26 +157,29 @@ export interface RegistrationState {
 export interface Registration extends RegistrationState {
   set: (key: string, value: string) => void;
   merge: (values: Record<string, string>) => void;
-  /** A KYC identifier uncovered on purpose — fills the box without counting as an edit. */
-  reveal: (key: string, full: string) => void;
-  /** Persists whatever moved. `false` means stay on this step; `error` says why. */
-  commit: () => Promise<boolean>;
-  /** Re-reads the record — after a map pin, which is written by an endpoint of its own. */
+  /**
+   * Persists whatever moved. `false` means stay on this step; `error` says why.
+   *
+   * `extras` carries the two groups the wizard holds as lists rather than as form boxes — the
+   * client standings and the references. They are sent with whichever step is being left, because
+   * an application holds them under `extendedProfile` and `approve()` files them at promotion.
+   */
+  commit: (extras?: StaffExtras) => Promise<boolean>;
+  /** Re-reads the application — after a document upload, which writes through its own route. */
   refresh: () => Promise<void>;
   dismissError: () => void;
   /**
-   * Would any of these boxes be lost by leaving now? The page's "← Back to People" link asks this
-   * of the CURRENT step's own fields before it confirms — the same "differs from last saved"
-   * test `commit` itself runs, exposed so the page does not have to reach into `saved` directly.
+   * Would any of these boxes be lost by leaving now? The page's "← Back" link asks this of the
+   * CURRENT step's own fields before it confirms — the same "differs from last saved" test
+   * `commit` itself runs, exposed so the page does not have to reach into `saved` directly.
    */
   isDirty: (keys: readonly string[]) => boolean;
 }
 
-export function useRegistration(resumeAssayerId?: string): Registration {
-  const [form, setForm] = useState<Record<string, string>>(blankRegistrationForm);
+export function useRegistration(applicationId: string): Registration {
+  const [form, setForm] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<Record<string, string>>(() => ({}));
-  const [record, setRecord] = useState<Assayer | null>(null);
-  const [assayerId, setAssayerId] = useState<string | null>(resumeAssayerId ?? null);
+  const [view, setView] = useState<ApplicationView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
@@ -158,102 +191,52 @@ export function useRegistration(resumeAssayerId?: string): Registration {
    */
   const [errorFields, setErrorFields] = useState<readonly string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(Boolean(resumeAssayerId));
+  const [loading, setLoading] = useState(true);
 
   // Read by `commit`, which is called from event handlers that would otherwise close over the
-  // render in which the button was drawn — the create request in particular runs long enough for
-  // a keystroke to land while it is in flight.
-  const latest = useRef({ form, saved, record, assayerId });
-  latest.current = { form, saved, record, assayerId };
+  // render in which the button was drawn.
+  const latest = useRef({ form, saved });
+  latest.current = { form, saved };
 
   /**
    * Take the server's answer as the truth, without throwing away typing it has not seen.
    *
-   * A refresh happens for reasons that have nothing to do with the boxes on screen: the map pin
-   * writes coordinates through `/geo/precision/...`, and entering a PAN or Aadhaar number against
-   * a *document* writes it onto the person (`NUMBER_LIVES_ON_THE_PERSON` in the backend). Simply
-   * overwriting the form each time would discard whatever the clerk had typed ahead on a later
-   * step; simply keeping the form would let the next save PUT a stale PAN back over the one the
-   * documents step had just written. So a box that differs from the last saved value is local work
-   * and wins; every other box takes the server's value.
+   * A refresh happens for reasons that have nothing to do with the boxes on screen — a document
+   * upload writes through its own route, and the candidate may be filling the same application in
+   * from their phone while the desk types. So a box that differs from the last saved value is
+   * local work and wins; every other box takes the server's value, which is how a field the
+   * candidate has just answered appears here rather than being overwritten by a stale blank.
    */
-  const adopt = useCallback((fresh: Assayer) => {
-    const snap = snapshotRecord(fresh);
+  const adopt = useCallback((fresh: ApplicationView) => {
+    const snap = snapshotApplication(fresh);
     const previouslySaved = latest.current.saved;
-    /**
-     * The very first answer from the server needs the opposite rule, because "local work" cannot
-     * be detected yet.
-     *
-     * The test below is "does this box differ from the last saved value?", and before the first
-     * save there IS no last saved value — every box differs from nothing. So the step-one defaults
-     * the form opens with (today's joining date, the employment and engagement types) counted as
-     * unsaved typing and were kept over the server's answer, even though the create had just sent
-     * them and the server had just stored, and possibly normalised, them.
-     *
-     * `joiningDate` made that visible. The box holds `2026-09-03`; the record comes back as
-     * `2026-09-03T00:00:00.000Z`. Kept apart, the two never compared equal again, so the field was
-     * dirty forever and every later step re-sent it — which is precisely the cross-clerk overwrite
-     * the diff exists to prevent, performed by the diff itself.
-     *
-     * On the first adoption the whole form was just submitted, so there is nothing to protect and
-     * the server's answer is authoritative for every box.
-     */
     const noBaselineYet = Object.keys(previouslySaved).length === 0;
-    setRecord(fresh);
-    setAssayerId(fresh.id);
+    setView(fresh);
     setSaved(snap);
     setForm((current) => {
       const merged = { ...snap };
+      if (noBaselineYet) return merged;
       for (const key of Object.keys(current)) {
-        /**
-         * An identity number is the one thing local work does NOT win.
-         *
-         * Every other box keeps what the clerk typed, because a refresh happens for reasons that
-         * have nothing to do with the boxes on screen. A PAN or Aadhaar is different: leaving one
-         * sitting in form state after it has been written means the value is carried around the
-         * remaining steps and re-sent by each of them, and the whole point of masking is that it
-         * is not held anywhere it does not have to be. Every step commits before it is left, so
-         * there is no in-progress typing here for this to lose.
-         */
-        if (isSensitiveKey(key)) continue;
-        // Rates never come back from this endpoint — they are a profile behind their own route —
-        // so a snapshot would blank them every time any other step saved.
-        // Rates are kept regardless: they are a profile behind their own route and never come
-        // back from this endpoint, so the snapshot would blank them on every other step's save.
-        if (RATE_KEYS.includes(key)) {
-          merged[key] = current[key];
-          continue;
-        }
-        if (!noBaselineYet && current[key] !== (previouslySaved[key] ?? '')) {
-          merged[key] = current[key];
-        }
+        if (current[key] !== (previouslySaved[key] ?? '')) merged[key] = current[key];
       }
       return merged;
     });
   }, []);
 
-  /**
-   * A number uncovered by a deliberate, audited reveal, seeded into the box AND the baseline.
-   *
-   * Both, or the act of looking at somebody's PAN would register as a change to it and the next
-   * save would re-write the column it had just revealed. The same rule the record page's
-   * `revealSensitive` follows.
-   */
-  const reveal = useCallback((key: string, full: string) => {
-    setForm((f) => ({ ...f, [key]: full }));
-    setSaved((s) => ({ ...s, [key]: full }));
-  }, []);
+  const load = useCallback(async () => {
+    const fresh = await api.request<ApplicationView>(`/hr/applications/${applicationId}`);
+    adopt(fresh);
+  }, [applicationId, adopt]);
 
   useEffect(() => {
-    if (!resumeAssayerId) return undefined;
     let alive = true;
     setLoading(true);
-    api.request<Assayer>(`/assayers/${resumeAssayerId}`)
+    api.request<ApplicationView>(`/hr/applications/${applicationId}`)
       .then((fresh) => { if (alive) { adopt(fresh); setLoadError(null); } })
       .catch((e) => { if (alive) setLoadError(userMessage(e)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [resumeAssayerId, adopt]);
+  }, [applicationId, adopt]);
 
   /** Record a failure: its sentence and the boxes it named, always together. */
   const fail = useCallback((message: string, cause?: unknown) => {
@@ -277,65 +260,47 @@ export function useRegistration(resumeAssayerId?: string): Registration {
   }, [clearError]);
 
   const refresh = useCallback(async () => {
-    const id = latest.current.assayerId;
-    if (!id) return;
     try {
-      const fresh = await api.request<Assayer>(`/assayers/${id}`);
-      adopt(fresh);
+      await load();
     } catch (e) { fail(userMessage(e), e); }
-  }, [adopt, fail]);
+  }, [load, fail]);
 
-  const commit = useCallback(async (): Promise<boolean> => {
-    const { form: f, saved: s, record: r, assayerId: id } = latest.current;
+  /**
+   * One request per step, carrying what moved.
+   *
+   * The rates used to be a second, separate call to `POST /assayers/:id/commercial` fired after
+   * the record save had succeeded — so a failure there left a real person on the roster with no
+   * rates, behind a message that named neither what had been created nor what had not. They ride
+   * in the same body now, because an application holds them: `approve()` applies
+   * `extendedProfile.commercial` through the same guarded service, and until the desk could send
+   * one, nothing ever did.
+   */
+  const commit = useCallback(async (extras?: StaffExtras): Promise<boolean> => {
+    const { form: f, saved: s } = latest.current;
     setBusy(true);
     clearError();
     try {
-      if (!id) {
-        const created = await api.request<Assayer>('/assayers', {
-          method: 'POST',
-          body: JSON.stringify(buildCreateBody(REGISTRATION_FIELDS, f)),
-        });
-        adopt(created);
-        return true;
-      }
+      const { body } = buildApplicationPatch(REGISTRATION_FIELDS, f, s);
+      const rates = ratesChanged(f, s) ? ratePayload(f) : null;
+      const lists = {
+        ...(extras?.empanelments ? { empanelments: extras.empanelments } : {}),
+        ...(extras?.references ? { references: extras.references } : {}),
+      };
+      if (!body && !rates && Object.keys(lists).length === 0) return true;
 
-      const plan = buildUpdatePlan(REGISTRATION_FIELDS, f, s, r ?? { workingHours: null, certifications: null });
-      if (plan.problems.length > 0) { fail(plan.problems.join(' ')); return false; }
-      if (plan.body) {
-        const updated = await api.request<Assayer>(`/assayers/${id}`, {
-          method: 'PUT', body: JSON.stringify(plan.body),
-        });
-        adopt(updated);
-      }
-
-      /**
-       * The pay card, filed in the same breath as the record — and reported separately when it
-       * fails.
-       *
-       * The old create form fired this as a second, unwatched request after `POST /assayers`
-       * succeeded. A failure there left a real person on the roster with no rates behind a
-       * "Could not create assayer" toast that named neither what had been created nor what had
-       * not, and the clerk's only visible option was to try the whole enrolment again. Here the
-       * record is already saved when this runs, the failure says so in as many words, the typed
-       * rates are still in their boxes, and the step does not advance.
-       */
-      if (ratesChanged(f, s)) {
-        const rates = ratePayload(f);
-        if (rates) {
-          try {
-            await api.request(`/assayers/${id}/commercial`, { method: 'POST', body: JSON.stringify(rates) });
-          } catch (e) {
-            fail(`Their details were saved, but the pay rates were not: ${userMessage(e)} `
-              + 'The rates are still in the boxes below — try again, or move on and set them later.', e);
-            return false;
-          }
-        }
-        setSaved((prev) => {
-          const next = { ...prev };
-          for (const key of RATE_KEYS) next[key] = f[key] ?? '';
-          return next;
-        });
-      }
+      const patch = { ...(body ?? {}), ...(rates ? { commercial: rates } : {}), ...lists };
+      const updated = await api.request<ApplicationRow>(`/hr/applications/${applicationId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      // The PATCH answers with the row alone; the documents and the gap list come from the read.
+      adopt({
+        application: updated,
+        documents: latest.current ? (view?.documents ?? []) : [],
+        gaps: view?.gaps ?? [],
+        documentsRequested: view?.documentsRequested ?? [],
+        invitedMobile: view?.invitedMobile ?? null,
+      });
       return true;
     } catch (e) {
       fail(userMessage(e), e);
@@ -343,7 +308,7 @@ export function useRegistration(resumeAssayerId?: string): Registration {
     } finally {
       setBusy(false);
     }
-  }, [adopt, clearError, fail]);
+  }, [applicationId, adopt, clearError, fail, view]);
 
   const isDirty = useCallback((keys: readonly string[]): boolean => {
     const { form: f, saved: s } = latest.current;
@@ -351,108 +316,24 @@ export function useRegistration(resumeAssayerId?: string): Registration {
   }, []);
 
   return {
-    form, record, assayerId, busy, error, errorFields, loadError, loading,
-    set, merge, reveal, commit, refresh, dismissError: clearError, isDirty,
+    form,
+    application: view?.application ?? null,
+    applicationId,
+    documents: view?.documents ?? [],
+    documentsRequested: view?.documentsRequested ?? [],
+    gaps: view?.gaps ?? [],
+    busy,
+    error,
+    errorFields,
+    loadError,
+    loading,
+    set,
+    merge,
+    commit,
+    refresh,
+    dismissError: clearError,
+    isDirty,
   };
-}
-
-/** One row of `GET /assayers/:id/dossier`'s `onboarding[]` — the full 21-item requirement list. */
-export interface DossierDocument {
-  requirement: string;
-  label: string;
-  identity: boolean;
-  id: string | null;
-  softCopyReceived: boolean | null;
-  hardCopyReceived: boolean | null;
-  documentNumber: string | null;
-  expiryDate: string | null;
-  verificationStatus: string | null;
-  filePaths: string[];
-  /**
-   * What the card itself says, as typed by whoever last held it.
-   *
-   * Unmasked, unlike `documentNumber` beside it: the number is masked because the screen only
-   * needs enough of it to tell one card from another, while the name is the thing being compared
-   * — four characters of it would defeat the point of having written it down.
-   */
-  holderName?: string | null;
-  holderDateOfBirth?: string | null;
-  holderGender?: string | null;
-  holderGuardianName?: string | null;
-  holderAddress?: string | null;
-  /** Which fields this document prints, so the form asks for those and no others. */
-  prints?: {
-    name: boolean; dateOfBirth: boolean; gender: boolean; guardianName: boolean; address: boolean;
-  } | null;
-  nameMatchGrade?: string | null;
-  nameMatchNote?: string | null;
-  rejectionReason?: string | null;
-}
-
-export interface DossierReference {
-  id: string;
-  fullName: string;
-  relationship: string | null;
-  phone: string | null;
-  checkedAt: string | null;
-}
-
-/**
- * One client's standing, as `GET /assayers/:id/dossier` returns it.
- *
- * `client` is null only when the row outlived the client it names, which the import can produce;
- * the screens fall back to the id rather than dropping the row, because a standing whose client
- * cannot be resolved is still a standing that governs planning.
- */
-export interface DossierEmpanelment {
-  id: string;
-  clientId: string;
-  status: string;
-  statusReason: string | null;
-  client: { id: string; name: string; clientCode?: string | null } | null;
-  /**
-   * The revision this standing was read at, sent straight back as `expectedVersion` when it is
-   * changed. The server refuses a change to an existing standing that does not carry it, because
-   * a writer that cannot say what it read cannot be told its decision was overwritten — which is
-   * exactly what used to happen, with a 200 on the way out. See `empanelment-version.ts`.
-   */
-  version?: number;
-}
-
-export interface Dossier {
-  onboarding: DossierDocument[];
-  references: DossierReference[];
-  /**
-   * Absent on older responses and on any test double that predates the clients step, so every
-   * reader defaults it rather than indexing into undefined — the dossier is fetched once and
-   * shared by three steps, and one of them crashing takes the whole wizard with it.
-   */
-  empanelments?: DossierEmpanelment[];
-}
-
-/**
- * The paperwork and the referees, in one request.
- *
- * `GET /assayers/:id/dossier` synthesises the whole requirement list server-side whether or not
- * any document row exists, so a person with nothing on file shows twenty-one outstanding items
- * rather than an empty list that reads as "nothing needed". Fetched once for the wizard and
- * shared by the documents step and the references block, because they are two views of one answer.
- */
-export function useDossier(assayerId: string | null) {
-  const [data, setData] = useState<Dossier | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (!assayerId) { setData(null); return undefined; }
-    let alive = true;
-    api.request<Dossier>(`/assayers/${assayerId}/dossier`)
-      .then((d) => { if (alive) { setData(d); setError(null); } })
-      .catch((e) => { if (alive) setError(userMessage(e)); });
-    return () => { alive = false; };
-  }, [assayerId, tick]);
-
-  return { dossier: data, dossierError: error, reloadDossier: () => setTick((t) => t + 1) };
 }
 
 export type { RegistrationStepKey };

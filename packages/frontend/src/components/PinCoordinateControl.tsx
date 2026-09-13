@@ -20,11 +20,24 @@ import { userMessage } from '../services/errors';
  * accepting it, so the classic transposed-lat/lng mistake is caught here rather than by whoever
  * reads the map three weeks later.
  */
+/**
+ * `onPicked` is for a subject that has no row to pin yet.
+ *
+ * The registration wizard is the case: it fills in a candidate's APPLICATION, and there is no
+ * assayer to POST `/geo/precision/assayer/:id/pin` against until somebody approves it. The
+ * coordinate is still worth collecting — `latitude` and `longitude` are on the registration
+ * allow-list precisely so an application can carry them, and promotion applies them — so the
+ * control hands the pair back instead of writing it, and the caller puts it wherever it belongs.
+ *
+ * Given `onPicked`, nothing is sent from here at all.
+ */
 export const PinCoordinateControl: React.FC<{
   target: 'branch' | 'assayer';
   id: string;
   onPinned?: () => void;
-}> = ({ target, id, onPinned }) => {
+  /** Take the coordinate instead of pinning it. See the note above. */
+  onPicked?: (latitude: number, longitude: number) => void;
+}> = ({ target, id, onPinned, onPicked }) => {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
   const [note, setNote] = useState('');
@@ -42,6 +55,13 @@ export const PinCoordinateControl: React.FC<{
     setSaving(true);
     setError(null);
     try {
+      if (onPicked) {
+        onPicked(parseFloat(match[1]), parseFloat(match[2]));
+        setOpen(false);
+        setValue('');
+        setNote('');
+        return;
+      }
       await api.request(`/geo/precision/${target}/${id}/pin`, {
         method: 'POST',
         body: JSON.stringify({

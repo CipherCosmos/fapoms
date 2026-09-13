@@ -233,6 +233,19 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
   },
   {
     /**
+     * The desk filling in a candidate's own application.
+     *
+     * Mirrors `/hr/applications` rather than `/hr/register`'s old reasoning: the page calls
+     * `PATCH /hr/applications/:id`, which is on `HrApplicationsController` and gated
+     * `@Roles(ADMIN, OPERATIONS)` with no permission fallback — so a custom role holding
+     * `ASSAYER:EDIT` would be hard-denied by `RolesGuard` before the permission is read, and
+     * naming it here would open a page whose own API refuses exactly the role this table let in.
+     */
+    path: '/hr/register/application/:applicationId',
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+  },
+  {
+    /**
      * Appraiser Recruitment's interview gate — HR's own screen for recording an interview
      * outcome before a candidate is invited to self-register. Mirrors
      * `@Roles(ADMIN, OPERATIONS)` on `AssayerInterviewController` exactly.

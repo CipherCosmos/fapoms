@@ -5,7 +5,14 @@ import { AlertBanner, Select, useConfirm, useToast } from '../../../components/u
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
 import { STANDING_CHOICES } from './steps';
-import type { Dossier, DossierEmpanelment } from './useRegistration';
+
+/** One client's standing as an application carries it — no row, no id, no version yet. */
+export interface DraftStanding {
+  clientId: string;
+  status: string;
+  statusReason?: string;
+}
+
 
 /**
  * Which banks will take this person — the question the enrolment never asked.
@@ -95,9 +102,9 @@ const useClients = () => {
  */
 const ClientRow: React.FC<{
   client: Client;
-  standing: DossierEmpanelment | undefined;
+  standing: DraftStanding | undefined;
   disabled: boolean;
-  onSet: (clientId: string, status: string, reason: string) => Promise<void>;
+  onSet: (clientId: string, status: string, reason: string) => void;
 }> = ({ client, standing, disabled, onSet }) => {
   const chosen = STANDING_CHOICES.find((c) => c.value === standing?.status);
   const [reason, setReason] = useState(standing?.statusReason ?? '');
@@ -166,11 +173,14 @@ const ClientRow: React.FC<{
 };
 
 export const ClientsStep: React.FC<{
-  assayerId: string | null;
-  dossier: Dossier | null;
-  onChanged: () => void;
-  onBusy: (busy: boolean) => void;
-}> = ({ assayerId, dossier, onChanged, onBusy }) => {
+  /**
+   * The standings typed so far, held on the application under `extendedProfile.empanelments` and
+   * applied at approval by `applyExtendedProfile` through the same guarded `setEmpanelment` the
+   * record page uses.
+   */
+  standings: DraftStanding[];
+  onChange: (next: DraftStanding[]) => void;
+}> = ({ standings: draft, onChange }) => {
   const { clients, clientsFailed } = useClients();
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -186,43 +196,36 @@ export const ClientsStep: React.FC<{
   const [bulkBusy, setBulkBusy] = useState(false);
 
   const standings = useMemo(() => {
-    const byClient = new Map<string, DossierEmpanelment>();
-    for (const e of dossier?.empanelments ?? []) byClient.set(e.clientId, e);
+    const byClient = new Map<string, DraftStanding>();
+    for (const e of draft) byClient.set(e.clientId, e);
     return byClient;
-  }, [dossier]);
+  }, [draft]);
 
   /**
-   * Written the moment it is chosen, like a reference and unlike every field on the other steps.
+   * Held, not written.
    *
-   * Those are columns on one row and travel together in the step's own save; this is a row of its
-   * own against another table, and a clerk setting three banks needs to see each one land rather
-   * than discover on the last page that one of the three never went.
+   * This used to `PUT /assayers/:id/empanelment/:clientId` the moment a standing was chosen, which
+   * it could, because the wizard had already put a live person on the roster. It has not: there is
+   * no assayer and no empanelment row until somebody approves the application, so a standing is
+   * one more thing the application carries and `applyExtendedProfile` files at promotion.
+   *
+   * `expectedVersion` went with it, and is not missed — it exists to refuse a change to a standing
+   * somebody else has since decided, and there is no earlier decision to overwrite on a row that
+   * does not exist yet.
    */
-  const setStanding = async (clientId: string, status: string, reason: string) => {
-    if (!assayerId || !status) return;
-    onBusy(true);
+  const setStanding = (clientId: string, status: string, reason: string) => {
+    if (!status) return;
     setError(null);
-    try {
-      // `expectedVersion` is the revision this screen is looking at. Absent only when there is no
-      // standing yet, which is the one case with no earlier decision to overwrite; present, the
-      // server refuses the write if somebody else has decided since — see `empanelment-version.ts`.
-      await api.request(`/assayers/${assayerId}/empanelment/${clientId}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          status,
-          statusReason: reason.trim() || undefined,
-          expectedVersion: standings.get(clientId)?.version,
-        }),
-      });
-      const name = clients?.find((c) => c.id === clientId)?.name ?? 'this client';
-      const choice = STANDING_CHOICES.find((c) => c.value === status);
-      toast({
-        type: 'success',
-        title: `${name} recorded`,
-        message: choice?.consequence ?? 'Their standing with this client is saved.',
-      });
-      onChanged();
-    } catch (e) { setError(userMessage(e)); } finally { onBusy(false); }
+    const next = draft.filter((e) => e.clientId !== clientId);
+    next.push({ clientId, status, statusReason: reason.trim() || undefined });
+    onChange(next);
+    const name = clients?.find((c) => c.id === clientId)?.name ?? 'this client';
+    const choice = STANDING_CHOICES.find((c) => c.value === status);
+    toast({
+      type: 'success',
+      title: `${name} recorded`,
+      message: choice?.consequence ?? 'Their standing with this client is saved with the application.',
+    });
   };
 
   const rows = useMemo(() => {
@@ -259,7 +262,7 @@ export const ClientsStep: React.FC<{
    * the clerk asked for all of them at once.
    */
   const applyToAllUnset = async () => {
-    if (!assayerId || unset.length === 0 || bulkBusy) return;
+    if (unset.length === 0 || bulkBusy) return;
     const choice = STANDING_CHOICES.find((c) => c.value === bulkStatus) ?? STANDING_CHOICES[0];
     const ok = await confirm({
       title: `Mark all ${unset.length} remaining as “${choice.label}”?`,
@@ -270,44 +273,21 @@ export const ClientsStep: React.FC<{
     });
     if (!ok) return;
     setBulkBusy(true);
-    onBusy(true);
     setError(null);
-    let saved = 0;
-    try {
-      for (const client of unset) {
-        try {
-          await api.request(`/assayers/${assayerId}/empanelment/${client.id}`, {
-            method: 'PUT',
-            body: JSON.stringify({ status: choice.value }),
-          });
-          saved += 1;
-        } catch (e) {
-          setError((prev) => prev
-            ? `${prev} ${client.name}: ${userMessage(e)}`
-            : `${client.name}: ${userMessage(e)}`);
-        }
-      }
-      if (saved > 0) {
-        toast({
-          type: 'success',
-          title: `${choice.label} — ${saved} client${saved === 1 ? '' : 's'}`,
-          message: choice.consequence,
-        });
-      }
-      onChanged();
-    } finally {
-      setBulkBusy(false);
-      onBusy(false);
-    }
+    // No per-row request and therefore no per-row failure: these are entries on one list that the
+    // step's own save sends in a single body. What used to be a loop of two dozen writes, any of
+    // which could fail on its own, is now one.
+    onChange([
+      ...draft,
+      ...unset.map((client) => ({ clientId: client.id, status: choice.value as string })),
+    ]);
+    toast({
+      type: 'success',
+      title: `${choice.label} — ${unset.length} client${unset.length === 1 ? '' : 's'}`,
+      message: choice.consequence,
+    });
+    setBulkBusy(false);
   };
-
-  if (!assayerId) {
-    return (
-      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
-        Available once their record is saved.
-      </div>
-    );
-  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>

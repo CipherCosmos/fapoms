@@ -1,8 +1,9 @@
 import {
-  EmpanelmentStatus, INDIAN_STATES, missingAssayerRecordFields, standingAllowsPlanning,
+  EmpanelmentStatus, EMPLOYMENT_TERM_FIELD_KEYS, INDIAN_STATES, missingAssayerRecordFields,
+  standingAllowsPlanning,
 } from '@fapoms/shared';
 import type { FieldDef } from '../AssayerForms';
-import { ASSAYER_CODE_FIELD, EDIT_FIELDS } from '../AssayerForms';
+import { EDIT_FIELDS } from '../AssayerForms';
 import { blocksPhrase, type Assayer } from '../assayer-shared';
 
 /**
@@ -54,7 +55,7 @@ export const REGISTRATION_STEPS: readonly RegistrationStep[] = [
   {
     key: 'person',
     title: 'The person',
-    caption: 'Who they are. Saving this page creates their record.',
+    caption: 'Who they are, and whether they work as a freelancer or a proprietor.',
   },
   {
     key: 'address',
@@ -64,17 +65,17 @@ export const REGISTRATION_STEPS: readonly RegistrationStep[] = [
   {
     key: 'identity',
     title: 'ID and bank',
-    caption: 'The numbers off their cards and passbook. Nothing here is needed to save the record.',
+    caption: 'The numbers off their cards and passbook. None of it has to be filled in now.',
   },
   {
     key: 'documents',
     title: 'Papers and scans',
-    caption: 'Scan or photograph each paper they brought in, and type the number written on it.',
+    caption: 'Scan or photograph each paper they brought in. Checking them against the originals happens after they are approved.',
   },
   {
     key: 'people',
     title: 'Contacts and pay',
-    caption: 'Who to call if something happens, who vouches for them, and what they are paid.',
+    caption: 'Who to call if something happens, who vouches for them, what they have done before, and what they are paid.',
   },
   {
     key: 'clients',
@@ -84,7 +85,7 @@ export const REGISTRATION_STEPS: readonly RegistrationStep[] = [
   {
     key: 'review',
     title: 'Check and finish',
-    caption: 'What is on file, and what is still missing. Nothing here has to be full to finish.',
+    caption: 'What is on file, and what is still missing. Nothing here has to be full — they confirm and submit it themselves.',
   },
 ];
 
@@ -156,11 +157,94 @@ const THEIRS_TO_MAINTAIN = [
   'preferredRegions', 'workingHoursStart', 'workingHoursEnd',
 ];
 
-const OUT_OF_REGISTRATION = new Set([...NOT_AT_ADMISSION, ...NEVER_KEPT, ...THEIRS_TO_MAINTAIN]);
+/**
+ * What an application cannot hold, and therefore what this form stopped asking for.
+ *
+ * The wizard used to write a live roster row, so it could ask for anything the record has. It
+ * writes an application now — the same row the candidate fills in through their own link — and an
+ * application carries its own columns plus the registration allow-list, and nothing else.
+ *
+ * Two shapes of exclusion, and the difference matters:
+ *
+ *   - **Employment TERMS**, all of `EMPLOYMENT_TERM_FIELD_KEYS`. These are not candidate answers
+ *     and never were: a joining date is an employment decision, a workload ceiling is a scheduling
+ *     policy, a region is an org chart. They are asked for at APPROVAL, where somebody with the
+ *     authority to hire is looking at the person — which is also where they were already being
+ *     collected. Nothing is lost by not asking a clerk to guess them a week earlier.
+ *   - **Facts that do not exist yet.** `assayerCode` is minted when the record is created, so
+ *     there is nothing to type. `vstsCode`, `employeeCode` and `notes` have no application
+ *     equivalent; all three stay on the record page, where an imported value can still be read
+ *     and corrected.
+ *
+ * `registration-fields-are-holdable.spec.ts` is what keeps this honest: every key below has to be
+ * an application column, on the registration allow-list, or deliberately named here.
+ */
+const OUT_OF_APPLICATION = [
+  ...EMPLOYMENT_TERM_FIELD_KEYS,
+  'assayerCode', 'vstsCode', 'employeeCode', 'notes',
+  /*
+    Not an application field, and it was never a wizard field either: it sat in this list and no
+    step drew it, so it could not be set here any more than anywhere else. It belongs to the
+    record page, where it IS drawn. Found by the holdability guard, which is what that guard is
+    for — a definition no step renders is a question nobody can answer.
+  */
+  'preferredContactChannel',
+];
 
-/** Every record field the flow can write, defined once, in the record's own vocabulary. */
+const OUT_OF_REGISTRATION = new Set([
+  ...NOT_AT_ADMISSION, ...NEVER_KEPT, ...THEIRS_TO_MAINTAIN, ...OUT_OF_APPLICATION,
+]);
+
+/**
+ * Freelancer or proprietor — the one box the candidate's form has always had and this one never
+ * did.
+ *
+ * It decides which documents are asked for (`documentsRequestedFor`), and `submit()` refuses
+ * without it. A desk-filled application missing this could be typed in full and then not be
+ * submittable by the candidate at all, with nothing on either screen saying why.
+ */
+/**
+ * The four boxes an application has and the assayer record does not.
+ *
+ * `gender`, `currentEmployer`, `expertise` and `availability` are the spec's Module 3 — Personal
+ * and Professional Details — and they are columns on `assayer_applications`. The candidate's own
+ * form has asked for all four since it was built; this one could not, because it drew its boxes
+ * from the RECORD's field list and the record has no equivalent. `approve()` carries gender and
+ * the current employer onto the new person and folds expertise and availability into their notes.
+ *
+ * Defined here rather than added to `EDIT_FIELDS`, because the record page should not grow four
+ * boxes it has nowhere to store.
+ */
+const APPLICATION_ONLY_FIELDS: FieldDef[] = [
+  {
+    key: 'gender',
+    label: 'Gender',
+    options: [
+      { value: 'MALE', label: 'Male' },
+      { value: 'FEMALE', label: 'Female' },
+      { value: 'OTHER', label: 'Other' },
+    ],
+  },
+  { key: 'currentEmployer', label: 'Current employer', placeholder: 'Where they work now, if anywhere' },
+  { key: 'expertise', label: 'What they are good at', full: true, placeholder: 'Gold purity testing, hallmarking, diamond grading…' },
+  { key: 'availability', label: 'When they can work', placeholder: 'Weekdays, alternate Saturdays…' },
+];
+
+const EMPLOYMENT_CATEGORY_FIELD: FieldDef = {
+  key: 'employmentCategory',
+  label: 'Freelancer or proprietor',
+  required: true,
+  options: [
+    { value: 'FREELANCER', label: 'Freelancer' },
+    { value: 'PROPRIETOR', label: 'Proprietor (has their own shop)' },
+  ],
+  hint: 'This decides which documents they are asked to upload.',
+};
+
+/** Every field the flow can write, defined once, in the record's own vocabulary. */
 export const REGISTRATION_FIELDS: FieldDef[] = [
-  ASSAYER_CODE_FIELD,
+  EMPLOYMENT_CATEGORY_FIELD,
+  ...APPLICATION_ONLY_FIELDS,
   ...EDIT_FIELDS.filter((f) => !OUT_OF_REGISTRATION.has(f.key)).map((f) => OVERRIDES[f.key] ?? f),
 ];
 
@@ -186,21 +270,19 @@ export const RATE_KEYS: readonly string[] = RATE_FIELDS.map((f) => f.key);
 /** Which boxes appear on which step. Order within a step is the order they are drawn in. */
 export const STEP_FIELDS: Record<RegistrationStepKey, readonly string[]> = {
   person: [
-    'fullName', 'assayerCode', 'dateOfBirth', 'qualification',
+    'fullName', 'dateOfBirth', 'gender', 'qualification',
     'phone', 'alternatePhone', 'email',
-    'state', 'engagementType', 'employmentType', 'joiningDate',
+    'state', 'employmentCategory',
   ],
   // `state` appears here as well as on step 1 and that is deliberate: the pincode lookup on this
   // step writes it, and a box that changes under you on a page you cannot see is how the old form
   // filed people into the wrong region. One form key, shown wherever its value is being decided.
-  address: ['address', 'pincode', 'city', 'district', 'state', 'region'],
-  identity: ['panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName', 'vstsCode'],
+  address: ['address', 'pincode', 'city', 'district', 'state'],
+  identity: ['panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName'],
   documents: [],
   people: [
     'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
-    'experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload',
-    'hrOwnerName', 'employeeCode',
-    'notes',
+    'experienceYears', 'currentEmployer', 'expertise', 'availability',
   ],
   // Client standing is a row in `assayer_client_empanelments`, not a column on the person, so it
   // has no entry here — the step writes it through `PUT /assayers/:id/empanelment/:clientId`.

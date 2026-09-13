@@ -59,13 +59,39 @@ describe('what a step may refuse', () => {
 
 describe('the fields a registration offers', () => {
   it.each([
-    'dateOfBirth', 'qualification', 'aadhaarNumber', 'vstsCode', 'bankName',
+    'dateOfBirth', 'qualification', 'aadhaarNumber', 'bankName',
     'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
-    'hrOwnerName', 'engagementType', 'experienceYears',
-    'maxDailyWorkload', 'maxWeeklyWorkload',
+    'experienceYears',
+    // The four the application has and the record does not — the spec's Personal and Professional
+    // Details, which the candidate's own form has always asked for and this one could not.
+    'gender', 'currentEmployer', 'expertise', 'availability',
+    // And the one that decides which documents they are asked for. `submit()` refuses without it.
+    'employmentCategory',
   ])('offers %s, which the old create form had no box for at all', (key) => {
     expect(REGISTRATION_FIELDS.some((f) => f.key === key) || keysOnSomeStep.has(key)).toBe(true);
     expect(keysOnSomeStep.has(key)).toBe(true);
+  });
+
+  /**
+   * What moved, and where it went.
+   *
+   * This form writes an application now, not a roster row. An employment term is not a candidate
+   * answer — a joining date is an employment decision, a workload ceiling is a scheduling policy,
+   * a reporting line is an org chart — so all of them are asked for at APPROVAL instead, where
+   * somebody with the authority to hire is looking at the person. `assayerCode` is minted when the
+   * record is created, so there was never anything to type; `vstsCode`, `employeeCode` and `notes`
+   * have no application equivalent and stay on the record page.
+   *
+   * Every one of these used to be on this form, so they are named rather than merely absent: a
+   * question that quietly stops being asked is indistinguishable from one nobody thought of.
+   */
+  it.each([
+    'joiningDate', 'employmentType', 'engagementType', 'region', 'hrOwnerName',
+    'maxDailyWorkload', 'maxWeeklyWorkload',
+    'assayerCode', 'vstsCode', 'employeeCode', 'notes',
+  ])('no longer asks for %s — an application cannot hold it', (key) => {
+    expect(REGISTRATION_FIELDS.some((f) => f.key === key)).toBe(false);
+    expect(keysOnSomeStep.has(key)).toBe(false);
   });
 
   it.each(['exitDate', 'terminationDate', 'unavailableReason', 'performanceRating'])(

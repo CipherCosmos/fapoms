@@ -10,38 +10,81 @@ jest.mock('../../../services/api', () => ({ api: { request: jest.fn() } }));
 const mockRequest = api.request as jest.Mock;
 
 /**
- * The desk-only registration, walked end to end.
+ * The desk filling in a candidate's application, walked end to end.
  *
  * The requirement these tests exist for is a sentence from the owner: *every assayer doesn't have
  * a smartphone, so HR should be able to register them end to end from their side.* So the central
  * case below drives a person with no mobile number, no email address and no account from an empty
  * form to the finish, and asserts that nothing along the way asked for a device.
  *
- * The rest pin the failures the screen this replaces actually had: a "fast" path that demanded a
- * phone the API treats as optional, a second unwatched request that stranded a rate-less record
- * behind a toast saying the create had failed, and a form that sent every field back on every save.
+ * **What changed under them.** This form used to write a live `assayers` row, created by step one,
+ * which is how a half-finished registration became a half-finished employee and how anybody could
+ * walk past the interview → application → review pipeline entirely. It writes the candidate's
+ * APPLICATION now — the same row they fill in through their own link — so the assertions that used
+ * to count `POST /assayers` calls count `PATCH /hr/applications/:id` bodies instead, and the ones
+ * about a record that does not exist yet are gone with the condition: the application exists
+ * before this form opens.
  */
-
-const REQUIREMENTS = [
-  { requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true, id: null, softCopyReceived: null, hardCopyReceived: null, documentNumber: null, expiryDate: null, verificationStatus: null, filePaths: [] },
-  { requirement: 'JOINING_FORM', label: 'Joining form', identity: false, id: null, softCopyReceived: null, hardCopyReceived: null, documentNumber: null, expiryDate: null, verificationStatus: null, filePaths: [] },
-];
 
 const CLIENTS = [
   { id: 'cli-1', name: 'ICICI Bank' },
   { id: 'cli-2', name: 'AU Small Finance' },
 ];
 
-const CREATED = {
-  id: 'asr-1', assayerCode: 'WIZ-0001', firstName: 'Ramesh', lastName: 'Iyer', displayName: 'Ramesh Iyer',
-  state: 'Kerala', phone: null, email: null, address: '', city: '', district: '', pincode: null,
-  latitude: null, longitude: null, panNumber: null, aadhaarNumber: null, bankAccountNumber: null,
-  ifscCode: null, joiningDate: '2026-09-02', emergencyContactPhone: null, workingHours: null,
-  certifications: null, employmentType: 'FULL_TIME',
+const APP_ID = 'app-1';
+
+/** The application row, as `PATCH` answers with it. */
+const APPLICATION = {
+  id: APP_ID,
+  status: 'DRAFT',
+  // Blank, the way a freshly invited application is: an interview PASS fills in whatever the
+  // candidate's name was given as and nothing else, and the desk types the rest.
+  fullName: null,
+  mobile: '9822014455',
+  email: null,
+  dateOfBirth: null,
+  gender: null,
+  address: '',
+  state: null,
+  city: '',
+  pincode: null,
+  experienceYears: null,
+  currentEmployer: null,
+  expertise: null,
+  availability: null,
+  employmentCategory: null,
+  consentAcceptedAt: null,
+  tokenConsumedAt: null,
+  extendedProfile: null,
+};
+
+/** What `GET /hr/applications/:id` returns — the row, its scans, its gaps and what is asked for. */
+const VIEW = {
+  application: APPLICATION,
+  documents: [],
+  gaps: [],
+  documentsRequested: ['PHOTOGRAPH', 'PAN_CARD'],
+  invitedMobile: null,
 };
 
 /** A tiny router over the endpoints the wizard actually touches. */
 const wireApi = (overrides: Record<string, unknown> = {}) => {
+  /*
+    The application's profile as the server would hold it, mutated by each PATCH. A mock that
+    answered with only what the last request sent would wipe a standing the read had supplied,
+    which the real `updateStaffDraft` does not do — it merges into the row and saves it.
+  */
+  const seeded = (overrides[`GET /hr/applications/${APP_ID}`] as { application?: Record<string, unknown> })?.application;
+  let profile: Record<string, unknown> = {
+    ...((seeded?.extendedProfile as Record<string, unknown>) ?? {}),
+  };
+  /*
+    And the columns, for the same reason: the wizard's dirty diff is "differs from the last saved
+    value", so a mock that answered every PATCH with the same blank row would leave every box
+    permanently dirty and re-send the whole form on every step — which is the exact overwrite the
+    diff exists to prevent, performed by the test double.
+  */
+  let columns: Record<string, unknown> = { ...(seeded ?? APPLICATION) };
   mockRequest.mockImplementation((url: string, opts?: RequestInit) => {
     const method = (opts?.method ?? 'GET').toUpperCase();
     for (const [key, value] of Object.entries(overrides)) {
@@ -51,19 +94,41 @@ const wireApi = (overrides: Record<string, unknown> = {}) => {
     }
     if (url.includes('workforce-attribute/vocabulary')) return Promise.resolve({ skills: [], certifications: [], languages: [] });
     if (url.startsWith('/clients')) return Promise.resolve({ items: CLIENTS });
-    if (url.includes('/dossier')) return Promise.resolve({ onboarding: REQUIREMENTS, references: [], empanelments: [] });
-    if (method === 'POST' && url === '/assayers') return Promise.resolve({ ...CREATED });
-    if (method === 'PUT' && url.startsWith('/assayers/')) return Promise.resolve({ ...CREATED });
-    if (method === 'GET' && /^\/assayers\/[^/]+$/.test(url)) return Promise.resolve({ ...CREATED });
-    if (url.startsWith('/assayers?')) return Promise.resolve({ success: true, data: [], meta: { pagination: { total: 0 } } });
+    if (method === 'GET' && url.startsWith(`/hr/applications/${APP_ID}`)) {
+      return Promise.resolve({ ...VIEW, application: { ...columns, extendedProfile: profile } });
+    }
+    if (method === 'PATCH' && url === `/hr/applications/${APP_ID}`) {
+      /*
+        Echoes the lists back, because the real route does: `updateStaffDraft` saves and returns
+        the row, `extendedProfile` included. A mock that answered with a bare application would
+        have the wizard's own `useEffect` reset the standings it had just sent — which is a thing
+        the screen would genuinely do if the server ever stopped echoing, so it is worth the
+        fixture being accurate rather than convenient.
+      */
+      const sent = JSON.parse(String(opts?.body ?? '{}'));
+      const { record, empanelments, references, commercial, ...rest } = sent;
+      profile = {
+        ...profile,
+        ...(empanelments ? { empanelments } : {}),
+        ...(references ? { references } : {}),
+        ...(commercial ? { commercial } : {}),
+        ...(record ? { fields: { ...(profile.fields as object ?? {}), ...record } } : {}),
+      };
+      columns = { ...columns, ...rest };
+      return Promise.resolve({ ...columns, extendedProfile: profile });
+    }
+    if (method === 'POST' && url.startsWith(`/hr/applications/${APP_ID}/documents`)) return Promise.resolve({ id: 'doc-1' });
+    if (url.startsWith('/assayers?') || url.startsWith('/assayers/identifier-check')) {
+      return Promise.resolve({ matches: [] });
+    }
     return Promise.resolve({ success: true, data: [] });
   });
 };
 
 /**
- * Rendered inside `act` because the wizard fires three fetches on mount — the roster's skill
- * vocabulary, the dossier, and (when resuming) the record itself. Without it every test prints a
- * wall of "not wrapped in act" warnings for state that settled correctly.
+ * Rendered inside `act` because the wizard fires two fetches on mount — the roster's skill
+ * vocabulary and the application itself. Without it every test prints a wall of "not wrapped in
+ * act" warnings for state that settled correctly.
  */
 const mount = async (
   props: Partial<React.ComponentProps<typeof RegistrationWizard>> = {},
@@ -74,7 +139,7 @@ const mount = async (
     render(
       <MemoryRouter>
         <ToastProvider>
-          <RegistrationWizard onClose={jest.fn()} onCreated={jest.fn()} {...props} />
+          <RegistrationWizard applicationId={APP_ID} onClose={jest.fn()} onCreated={jest.fn()} {...props} />
           {extra}
         </ToastProvider>
       </MemoryRouter>,
@@ -104,6 +169,12 @@ const click = async (name: RegExp | string) => {
 
 const bodyOf = (call: unknown[]) => JSON.parse(String((call[1] as RequestInit).body));
 
+/** The body of the last desk save, which is where the standings and references now travel. */
+const lastPatch = (): Record<string, unknown> => {
+  const patches = callsTo('PATCH', (u) => u === `/hr/applications/${APP_ID}`);
+  return patches.length === 0 ? {} : bodyOf(patches[patches.length - 1]);
+};
+
 const callsTo = (method: string, matcher: (url: string) => boolean) =>
   mockRequest.mock.calls.filter(
     (c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === method && matcher(String(c[0])),
@@ -114,7 +185,7 @@ beforeEach(() => { mockRequest.mockReset(); wireApi(); });
 describe('page one', () => {
   it('refuses to save without the two the API itself requires, and names them', async () => {
     await mount();
-    await click(/Save and continue/);
+    await click(/Continue/);
 
     expect(await screen.findByText(
       /needs their full name — exactly as printed on their Aadhaar or PAN and the state they work in/i,
@@ -145,31 +216,31 @@ describe('page one', () => {
     const phoneLabel = document.querySelector(`label[for="${phoneInput.id}"]`) as HTMLElement;
     expect(within(phoneLabel).getByText(/needed — blocks/i)).toHaveStyle({ color: 'var(--text-muted)' });
 
-    await click(/Save and continue/); // blocked on name/state, but also marks "an advance was tried"
+    await click(/Continue/); // blocked on name/state, but also marks "an advance was tried"
     expect(within(phoneLabel).getByText(/needed — blocks/i)).toHaveStyle({ color: 'var(--danger)' });
   });
 });
 
 describe('a person with no phone, no email and no device', () => {
-  it('is created from page one and driven to the finish without ever being asked for one', async () => {
+  it('is filled in from page one and driven to the finish without ever being asked for one', async () => {
     const onCreated = jest.fn();
     await mount({ onCreated });
 
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
 
-    const created = callsTo('POST', (u) => u === '/assayers');
-    expect(created).toHaveLength(1);
-    const body = bodyOf(created[0]);
-    // The India-first naming fix: one authored `fullName`, verbatim — never a rebuilt
-    // first/last pair, which the server now derives itself and which this payload must not
-    // pre-empt it on.
-    expect(body).toMatchObject({ fullName: 'Ramesh Iyer', state: 'Kerala' });
-    expect(body).not.toHaveProperty('firstName');
-    expect(body).not.toHaveProperty('lastName');
-    expect(body).not.toHaveProperty('phone');
-    expect(body).not.toHaveProperty('email');
+    // Nothing is created. The application already exists — an interview PASS made it — and this
+    // is the desk typing into it.
+    expect(callsTo('POST', (u) => u === '/assayers')).toHaveLength(0);
+    // The India-first naming fix: one authored `fullName`, verbatim — never a rebuilt first/last
+    // pair, which the server derives itself and which this payload must not pre-empt it on.
+    expect(lastPatch()).toMatchObject({ fullName: 'Ramesh Iyer', state: 'Kerala' });
+    expect(lastPatch()).not.toHaveProperty('firstName');
+    expect(lastPatch()).not.toHaveProperty('lastName');
+    // `phone` is on the registration allow-list and rides under `record`; the application's own
+    // `mobile` column belongs to the candidate, who confirms it with their code.
+    expect(lastPatch()).not.toHaveProperty('mobile');
 
     // Address → ID → papers → contacts and pay → who they can work for → review, with nothing
     // typed on any of them.
@@ -180,7 +251,7 @@ describe('a person with no phone, no email and no device', () => {
     await click(/^Continue/);
     await click(/^Continue/);
 
-    expect(await screen.findByText(/is on the roster/i)).toBeInTheDocument();
+    expect(await screen.findByText(/application is filled in/i)).toBeInTheDocument();
     expect(screen.getByText(/They do not need a phone or the app/i)).toBeInTheDocument();
     await click(/Finish/);
     expect(onCreated).toHaveBeenCalled();
@@ -202,7 +273,7 @@ describe('which banks will take them', () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/Who they can work for/);
     await screen.findByText('ICICI Bank');
   };
@@ -215,13 +286,23 @@ describe('which banks will take them', () => {
       .toHaveLength(2);
   });
 
-  it('records a standing against the client the moment it is chosen', async () => {
+  /**
+   * Held, not written.
+   *
+   * This used to `PUT /assayers/:id/empanelment/:clientId` the moment a standing was chosen, which
+   * it could, because step one had already put a live person on the roster. There is no assayer
+   * and no empanelment row until somebody approves the application, so a standing is one more
+   * thing the application carries and `applyExtendedProfile` files at promotion.
+   */
+  it('records a standing against the client, and sends it with the step', async () => {
     await openClients();
     await choose(/Standing with ICICI Bank/, 'Accepted — they are on this client’s panel');
+    expect(callsTo('PUT', (u) => u.includes('empanelment'))).toHaveLength(0);
 
-    const puts = callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1');
-    expect(puts).toHaveLength(1);
-    expect(bodyOf(puts[0])).toEqual({ status: 'ACTIVE' });
+    await click(/Continue/);
+    await waitFor(() => {
+      expect(lastPatch().empanelments).toEqual([{ clientId: 'cli-1', status: 'ACTIVE' }]);
+    });
   });
 
   it('does not let a clerk file the standing that ends an empanelment', async () => {
@@ -238,13 +319,12 @@ describe('which banks will take them', () => {
     // A standing that means "no" is the one whose reason somebody will need months later, and the
     // vetting screen is where the answer would otherwise have to be reconstructed from memory.
     wireApi({
-      'GET /assayers/asr-1/dossier': {
-        onboarding: REQUIREMENTS,
-        references: [],
-        empanelments: [{
-          id: 'emp-1', clientId: 'cli-1', status: 'NOT_RECOMMENDED', statusReason: null,
-          client: { id: 'cli-1', name: 'ICICI Bank' },
-        }],
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: {
+          ...APPLICATION,
+          extendedProfile: { empanelments: [{ clientId: 'cli-1', status: 'NOT_RECOMMENDED' }] },
+        },
       },
     });
     await openClients();
@@ -258,7 +338,7 @@ describe('which banks will take them', () => {
     await mount({ onCreated });
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/Check and finish/);
     await click(/Finish/);
     expect(onCreated).toHaveBeenCalled();
@@ -268,33 +348,36 @@ describe('which banks will take them', () => {
     await openClients();
     await click(/Apply to all 2 remaining/);
     await click(/Mark all 2/);
+    await click(/Continue/);
 
+    // One body, not a loop of writes any of which could fail on its own.
     await waitFor(() => {
-      expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1')).toHaveLength(1);
-      expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-2')).toHaveLength(1);
+      expect(lastPatch().empanelments).toEqual([
+        { clientId: 'cli-1', status: 'ACTIVE' },
+        { clientId: 'cli-2', status: 'ACTIVE' },
+      ]);
     });
-    expect(bodyOf(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1')[0]))
-      .toEqual({ status: 'ACTIVE' });
   });
 
   it('leaves clients that already carry a standing — including a refusal — exactly as they are', async () => {
     await openClients({
-      'GET /assayers/asr-1/dossier': {
-        onboarding: REQUIREMENTS,
-        references: [],
-        empanelments: [{
-          id: 'emp-1', clientId: 'cli-1', status: 'NOT_RECOMMENDED', statusReason: null,
-          client: { id: 'cli-1', name: 'ICICI Bank' },
-        }],
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: {
+          ...APPLICATION,
+          extendedProfile: { empanelments: [{ clientId: 'cli-1', status: 'NOT_RECOMMENDED' }] },
+        },
       },
     });
     await click(/Apply to all 1 remaining/);
     await click(/Mark all 1/);
+    await click(/Continue/);
 
     await waitFor(() => {
-      expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-2')).toHaveLength(1);
+      const sent = lastPatch().empanelments as Array<{ clientId: string; status: string }>;
+      expect(sent).toContainEqual({ clientId: 'cli-1', status: 'NOT_RECOMMENDED' });
+      expect(sent).toContainEqual({ clientId: 'cli-2', status: 'ACTIVE' });
     });
-    expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1')).toHaveLength(0);
   });
 });
 
@@ -312,16 +395,24 @@ describe('references', () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/Contacts and pay/);
 
     type(/Name of the person who can vouch for them/, 'Auntie Rosa');
     await choose(/How the reference knows this person/i, 'Friend');
     await click(/Add this person/);
 
-    const posts = callsTo('POST', (u) => u === '/assayers/asr-1/reference');
-    expect(posts).toHaveLength(1);
-    expect(bodyOf(posts[0])).toMatchObject({ fullName: 'Auntie Rosa', relationship: 'Friend' });
+    /*
+      Held with the application, not written as a row of its own — there is no person to be a
+      reference FOR until somebody approves it. `applyExtendedProfile` replays them through
+      `rosterRecords.saveReference` at promotion, which is the same call this used to make here.
+    */
+    expect(callsTo('POST', (u) => u.includes('/reference'))).toHaveLength(0);
+    await click(/^Continue/);
+    await waitFor(() => {
+      expect(lastPatch().references)
+        .toEqual([expect.objectContaining({ fullName: 'Auntie Rosa', relationship: 'Friend' })]);
+    });
   });
 });
 
@@ -330,7 +421,7 @@ describe('saving as you go', () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/^Continue/); // address → ID and bank
   };
 
@@ -339,46 +430,73 @@ describe('saving as you go', () => {
     type(/^PAN Number/, 'ABCDE1234F');
     await click(/^Continue/);
 
-    const puts = callsTo('PUT', (u) => u === '/assayers/asr-1');
-    expect(puts).toHaveLength(1);
-    // Everything else the create already stored must NOT be rewritten: two clerks working on one
-    // person otherwise overwrite each other and both saves return 200.
-    expect(bodyOf(puts[0])).toEqual({ panNumber: 'ABCDE1234F' });
+    const patches = callsTo('PATCH', (u) => u === `/hr/applications/${APP_ID}`);
+    // Everything else already stored must NOT be rewritten. It matters more here than it did
+    // against a record: the candidate may be filling the same application in from their phone
+    // while the desk types, and `extended_profile` is one jsonb column written whole.
+    expect(bodyOf(patches[patches.length - 1])).toEqual({ record: { panNumber: 'ABCDE1234F' } });
   });
 
   it('sends nothing at all for a step the clerk only looked at', async () => {
     await startAtIdentity();
+    const before = callsTo('PATCH', (u) => u === `/hr/applications/${APP_ID}`).length;
     await click(/^Continue/);
-    expect(callsTo('PUT', (u) => u === '/assayers/asr-1')).toHaveLength(0);
+    expect(callsTo('PATCH', (u) => u === `/hr/applications/${APP_ID}`)).toHaveLength(before);
   });
 
-  it('offers the map pin as soon as the record exists, which is why the record is made first', async () => {
+  it('offers the map pin immediately, because there is nothing to wait for', async () => {
+    // It used to say "as soon as the record exists, which is why the record is made first" — that
+    // WAS the reason step one created a roster row, and the pin was hidden until it had. There is
+    // nothing to wait for now: the coordinate is collected onto the application, with nothing typed
+    // on page one, and applied when it is approved.
     await mount();
-    type(/^Full name/, 'Ramesh Iyer');
-    await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Where they live/);
     expect(await screen.findByRole('button', { name: /Pin the exact location/i })).toBeInTheDocument();
   });
 });
 
+/**
+ * The pay rates used to be a second, separate request fired after the record save had succeeded —
+ * `POST /assayers/:id/commercial` — so a failure there left a real person on the roster with no
+ * rates behind a message that named neither what had been created nor what had not.
+ *
+ * They ride in the same body now, because an application holds them: `approve()` applies
+ * `extendedProfile.commercial` through the same guarded service, and until the desk could send
+ * one, nothing in the product ever had. There is no second request left to fail on its own.
+ */
 describe('the pay rates, which used to be a second unwatched request', () => {
-  it('keeps the record, says the rates failed, and does not move on', async () => {
+  const openPay = async () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
-    await click(/^Continue/); // address → ID and bank
-    await click(/^Continue/); // → papers and scans
-    await click(/^Continue/); // → contacts and pay
+    await click(/Continue/);
+    await click(/Contacts and pay/);
+  };
 
-    wireApi({ 'POST /assayers/asr-1/commercial': new Error('Rate card rejected') });
+  it('rides in the same body as the rest of the step', async () => {
+    await openPay();
     type(/^Fee per audit/, '1500');
     await click(/^Continue/);
 
-    // The old form fired this after a successful create and reported "Could not create assayer",
-    // which named neither what had been saved nor what had not.
-    expect(await screen.findByText(/Their details were saved, but the pay rates were not/i)).toBeInTheDocument();
-    expect(screen.getByText(/still in the boxes below/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(lastPatch().commercial).toMatchObject({ baseFee: 1500, currency: 'INR' });
+    });
+    expect(callsTo('POST', (u) => u.includes('/commercial'))).toHaveLength(0);
+  });
+
+  it('files nothing when no rate was agreed, rather than a profile of zeroes', async () => {
+    await openPay();
+    await click(/^Continue/);
+    expect(lastPatch().commercial).toBeUndefined();
+  });
+
+  it('keeps the typed rates on screen and does not move on when the save fails', async () => {
+    await openPay();
+    wireApi({ [`PATCH /hr/applications/${APP_ID}`]: new Error('Rate card rejected') });
+    type(/^Fee per audit/, '1500');
+    await click(/^Continue/);
+
+    expect(await screen.findByText(/Rate card rejected/i)).toBeInTheDocument();
     expect(screen.getByDisplayValue('1500')).toBeInTheDocument();
   });
 });
@@ -388,17 +506,20 @@ describe('the papers step', () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/^Continue/);
     await click(/^Continue/);
-    await screen.findByText('Aadhaar — front');
+    await screen.findByText('Photograph');
   };
 
-  it('lists every requirement the server knows about, not only rows already on file', async () => {
+  it('asks for exactly what the server says this candidate needs', async () => {
+    // The list is `documentsRequested`, which depends on whether they are a freelancer or a
+    // proprietor — the spec's two document sets. Not rebuilt here, so the desk is asked for the
+    // same things the candidate's own form asks for.
     await openDocuments();
-    expect(screen.getByText('Aadhaar — front')).toBeInTheDocument();
-    expect(screen.getByText('Joining form')).toBeInTheDocument();
-    expect(screen.getAllByText(/Nothing scanned yet/)).toHaveLength(2);
+    expect(screen.getByText('Photograph')).toBeInTheDocument();
+    expect(screen.getByText('PAN card')).toBeInTheDocument();
+    expect(screen.getAllByText(/Not yet attached/)).toHaveLength(2);
   });
 
   it('takes both sides of a card in one pick, and files them one at a time', async () => {
@@ -412,49 +533,31 @@ describe('the papers step', () => {
       });
     });
 
-    // Sequential on purpose: `attachFile` appends to `filePaths` with a read-modify-write, so two
-    // in flight at once means the second replaces the first and one side of the card disappears.
+    // Sequential on purpose: the route appends to `filePaths` with a read-modify-write, so two in
+    // flight at once means the second replaces the first and one side of the card disappears.
     await waitFor(() => {
-      expect(callsTo('POST', (u) => u === '/assayers/asr-1/document/AADHAAR_FRONT/file')).toHaveLength(2);
+      expect(callsTo('POST', (u) => u === `/hr/applications/${APP_ID}/documents/PHOTOGRAPH`)).toHaveLength(2);
     });
   });
 
-  it('says why a scan with no number on it can never be verified', async () => {
+  /**
+   * Said plainly rather than enforced. Only the photograph is refused at approval — it is what the
+   * ID card prints, and a field identity card with no face on it is not one — and everything else
+   * travels with the person as a gap to chase. A step that refused to advance would stop a
+   * candidate being registered because their electricity bill is at home.
+   */
+  it('says what is still outstanding without blocking on it', async () => {
     await openDocuments();
-    expect(screen.getByText(/Without a number nobody can confirm this document against the original/i))
-      .toBeInTheDocument();
-    // The check is not offered until there is something to check: `verifyDocument` refuses a
-    // document with no number, so a button here would exist only to produce that refusal.
-    expect(screen.queryByRole('button', { name: /I have checked this against the original/i })).toBeNull();
+    expect(screen.getByText(/2 of 2 still to come/i)).toBeInTheDocument();
+    expect(screen.getByText(/except the photograph, which approval refuses without/i)).toBeInTheDocument();
   });
 
-  it('checks an Aadhaar against the original in the same pass, once it has a number and a scan', async () => {
-    // Only possible since `verifyDocument` learned to read the number off the PERSON: it used to
-    // look at the document row, where a PAN's or an Aadhaar's number is always NULL, so pressing
-    // verify on the three documents a bank actually asks for always answered "there is no document
-    // number on this record" — with the number visible on the same screen.
-    wireApi({
-      'GET /assayers/asr-1/dossier': {
-        onboarding: [{ ...REQUIREMENTS[0], id: 'doc-1', documentNumber: '234567890124', filePaths: ['uploads/a.png'] }],
-        references: [],
-      },
-    });
-    await mount();
-    type(/^Full name/, 'Ramesh Iyer');
-    await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
-    await click(/^Continue/);
-    await click(/^Continue/);
-
-    await click(/I have checked this against the original/i);
-    // Attested, so it asks first — a verification nobody performed is worse than none at all.
-    await click(/Yes, I checked it/i);
-
-    await waitFor(() => {
-      expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(1);
-    });
-    expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
-      .toEqual({ verdict: 'VERIFIED' });
+  it('says where checking a document against the original happens', async () => {
+    // It happens on the record, after approval, because that is the only place with somewhere to
+    // put a verdict — an application document is a requirement and its file paths, nothing else.
+    await openDocuments();
+    expect(screen.getByText(/Checking a document against the original happens on their record/i))
+      .toBeInTheDocument();
   });
 
   /**
@@ -473,7 +576,7 @@ describe('the papers step', () => {
       await act(async () => { fireEvent.change(picker, { target: { files: [huge] } }); });
 
       expect(await screen.findByText(/over the 50 MB limit/i)).toBeInTheDocument();
-      expect(callsTo('POST', (u) => u.includes('/document/AADHAAR_FRONT/file'))).toHaveLength(0);
+      expect(callsTo('POST', (u) => u.includes('/documents/PHOTOGRAPH'))).toHaveLength(0);
     });
 
     it('refuses a file of the wrong kind, in the same words the server refuses it with', async () => {
@@ -484,7 +587,7 @@ describe('the papers step', () => {
       await act(async () => { fireEvent.change(picker, { target: { files: [spreadsheet] } }); });
 
       expect(await screen.findByText(/PDF or an image \(JPEG\/PNG\/WebP\/HEIC\/TIFF\/BMP\/GIF\)/i)).toBeInTheDocument();
-      expect(callsTo('POST', (u) => u.includes('/document/AADHAAR_FRONT/file'))).toHaveLength(0);
+      expect(callsTo('POST', (u) => u.includes('/documents/PHOTOGRAPH'))).toHaveLength(0);
     });
 
     it('never refuses a blank declared type, which is what phones send for an ordinary HEIC photo', async () => {
@@ -495,7 +598,7 @@ describe('the papers step', () => {
       await act(async () => { fireEvent.change(picker, { target: { files: [noType] } }); });
 
       await waitFor(() => {
-        expect(callsTo('POST', (u) => u === '/assayers/asr-1/document/AADHAAR_FRONT/file')).toHaveLength(1);
+        expect(callsTo('POST', (u) => u === `/hr/applications/${APP_ID}/documents/PHOTOGRAPH`)).toHaveLength(1);
       });
     });
 
@@ -507,45 +610,61 @@ describe('the papers step', () => {
   });
 });
 
-describe('resuming an interrupted registration', () => {
-  it('opens on the record, fills the boxes from it, and lands on the first thing missing', async () => {
+/**
+ * Reopening an application somebody started.
+ *
+ * It used to be a separate mode — `/hr/register` for a new person and `/hr/register/:assayerId` to
+ * resume one already begun — and the resume half existed because step one had created a roster
+ * row. There is only resume now: the application exists before this form opens, so every visit is
+ * a continuation of something.
+ */
+describe('reopening an application', () => {
+  it('fills the boxes from what is on file, and lands on the first thing missing', async () => {
     wireApi({
-      'GET /assayers/asr-9': {
-        ...CREATED, id: 'asr-9', assayerCode: 'WIZ-0009',
-        phone: '+919876543210', address: '12 MG Road', latitude: 10.1, longitude: 76.2,
-        emergencyContactPhone: '+919876543211',
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: {
+          ...APPLICATION,
+          fullName: 'Ramesh Iyer', state: 'Kerala', address: '12 MG Road',
+          extendedProfile: { fields: { phone: '9876543210' } },
+        },
+        // The server's own gap list, which is what decides where this opens — the same list HR
+        // sees on the review screen, rather than a second opinion computed here.
+        gaps: [{ key: 'panNumber', label: 'PAN', blocks: 'tax deduction' }],
       },
     });
-    await mount({ resumeAssayerId: 'asr-9' });
+    await mount();
 
-    // Straight to ID and bank — the PAN, account and IFSC are what is still blank.
+    // Straight to ID and bank — the PAN is what the server says is missing first.
     expect(await screen.findByText(/Where their money goes/i)).toBeInTheDocument();
     // Exact name: "Back to People" (the page header's own link) also matches a loose /Back/.
     await click(/^Back$/);
-    // The address it already holds is shown, not an empty form: a resumed registration that makes
-    // you re-type what is on file is a resumed registration nobody uses.
+    // The address it already holds is shown, not an empty form: reopening something that makes you
+    // re-type what is on file is a form nobody uses.
     expect(await screen.findByDisplayValue('12 MG Road')).toBeInTheDocument();
   });
 
-  it('says so plainly when the record cannot be opened, instead of starting a second one', async () => {
-    wireApi({ 'GET /assayers/asr-9': new Error('Network is down') });
-    await mount({ resumeAssayerId: 'asr-9' });
+  it('says so plainly when the application cannot be opened, instead of starting a second one', async () => {
+    wireApi({ [`GET /hr/applications/${APP_ID}`]: new Error('Network is down') });
+    await mount();
     expect(await screen.findByText(/That registration could not be opened/i)).toBeInTheDocument();
   });
 
   /**
-   * The India-first naming fix's own round trip: `fullName` is not a column, so a resume has to
-   * seed the box from `displayName` — the server's authored, stored truth — rather than rebuild
-   * it from the retired `firstName`/`lastName` pair, which a name like this one (three initials,
-   * no surname) cannot pass through without losing a word.
+   * The India-first naming fix's own round trip. `fullName` is the application's own column now —
+   * it was `displayName` on the record, which is a different word for the same authored truth —
+   * and either way it is read verbatim rather than rebuilt from the retired `firstName`/`lastName`
+   * pair, which a name like this one (three initials, no surname) cannot pass through without
+   * losing a word.
    */
-  it('seeds the full-name box from the record\'s displayName on a resume', async () => {
+  it('seeds the full-name box from what is stored, initials and all', async () => {
     wireApi({
-      'GET /assayers/asr-9': { ...CREATED, id: 'asr-9', assayerCode: 'WIZ-0009', displayName: 'A K Venkatesan' },
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: { ...APPLICATION, fullName: 'A K Venkatesan' },
+      },
     });
-    await mount({ resumeAssayerId: 'asr-9' });
-    // Phone (among others) is still blank on this record, so `firstIncompleteStep` lands the
-    // wizard on "The person" directly — no navigation needed to see the seeded box.
+    await mount();
     expect(await screen.findByDisplayValue('A K Venkatesan')).toBeInTheDocument();
   });
 });
@@ -556,7 +675,7 @@ describe('the last page', () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/Check and finish/);
   };
 
@@ -585,16 +704,18 @@ describe('the last page', () => {
 
   it('stops saying it once one client has accepted them', async () => {
     await openReview({
-      'GET /assayers/asr-1/dossier': {
-        onboarding: REQUIREMENTS,
-        references: [],
-        empanelments: [{
-          id: 'emp-1', clientId: 'cli-1', status: 'ACTIVE', statusReason: null,
-          client: { id: 'cli-1', name: 'ICICI Bank' },
-        }],
+      [`GET /hr/applications/${APP_ID}`]: {
+        ...VIEW,
+        application: {
+          ...APPLICATION,
+          extendedProfile: { empanelments: [{ clientId: 'cli-1', status: 'ACTIVE' }] },
+        },
       },
     });
-    expect(await screen.findByText(/Accepted by ICICI Bank/i)).toBeInTheDocument();
+    // Counted rather than named: the standings are on the application, and the client names come
+    // from a separate list this page does not load. What matters is that it stops claiming nobody
+    // can give them work.
+    expect(await screen.findByText(/1 client standing recorded/i)).toBeInTheDocument();
     expect(screen.queryByText(/cannot be given work for any client/i)).toBeNull();
   });
 });
@@ -616,33 +737,37 @@ describe('the progress rail', () => {
    * until the record existed. Looking at one now costs nothing; what still waits on the record is
    * SAVING it — see the next test.
    */
-  it('opens any step on a click, with nothing typed and no record yet', async () => {
+  /**
+   * Every step works from the first click now, and the three cases that used to prove otherwise
+   * are gone with the reason for them.
+   *
+   * The rail has always been unlocked, so a clerk could reach "ID and bank" or "Who they can work
+   * for" before step one had created the record they wrote to — and those steps had to say so,
+   * and Continue had to be disabled, and the client and papers steps had to render "available once
+   * their record is saved". None of that survives: the application exists before this form opens,
+   * so there is nowhere left in the flow with nothing to write to.
+   */
+  it('opens any step on a click, with nothing typed, and every one of them works', async () => {
     await mount();
     await click(/ID and bank/);
     expect(await screen.findByText(/Their identity numbers/i)).toBeInTheDocument();
 
     await click(/Who they can work for/);
-    expect(await screen.findByText(/Available once their record is saved/i)).toBeInTheDocument();
+    expect(await screen.findByText('ICICI Bank')).toBeInTheDocument();
 
     await click(/Papers and scans/);
-    expect(await screen.findByText(/Their record has not been created yet/i)).toBeInTheDocument();
+    expect(await screen.findByText('Photograph')).toBeInTheDocument();
+
+    // Nothing typed, nothing saved, and the footer still offers to move on.
+    expect(screen.getByRole('button', { name: /^Continue/ })).not.toBeDisabled();
   });
 
-  it('says why, and disables Continue, on a step that would try to save before the record exists', async () => {
-    await mount();
-    await click(/Contacts and pay/);
-
-    expect(await screen.findByText(/The person creates their record — save it before this page can hold anything/i))
-      .toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Continue/ })).toBeDisabled();
-  });
-
-  it('lets a step be jumped to directly once the record is saved, and keeps the step in ?step=', async () => {
+  it('lets a step be jumped to directly, and keeps the step in ?step=', async () => {
     const StepProbe: React.FC = () => <span data-testid="step-param">{useSearchParams()[0].get('step')}</span>;
     await mount({}, <StepProbe />);
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
 
     await click(/Contacts and pay/);
     expect(await screen.findByText(/If something happens while they are out/i)).toBeInTheDocument();
@@ -651,169 +776,21 @@ describe('the progress rail', () => {
   });
 });
 
-/**
- * A review that can only agree is not a review.
- *
- * Both screens hard-coded `verdict: 'VERIFIED'`, so a photograph too dark to read had no outcome
- * except being left alone forever — and the person who sent it was told nothing and waited.
- */
-describe('the papers step — sending a scan back', () => {
-  const AADHAAR_FRONT = {
-    requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true,
-    id: 'doc-1', softCopyReceived: true, hardCopyReceived: null,
-    documentNumber: '234567890124', expiryDate: null, verificationStatus: null,
-    filePaths: ['uploads/a.png'],
-    prints: { name: true, dateOfBirth: true, gender: true, guardianName: false, address: false },
-  };
+/*
+  The verdict half of the papers step is gone with the component that drew it.
 
-  const reachPapers = async () => {
-    await mount();
-    type(/^Full name/, 'Ramesh Iyer');
-    await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
-    await click(/^Continue/);
-    await click(/^Continue/);
-  };
+  `DocumentsStep` was the wizard's own copy of the vetting tab's document machinery — document
+  numbers, holder-name matching, verify and send-back — and none of it applies to an application,
+  whose document row is `{applicationId, requirement, filePaths}` and nothing else by design. All
+  of it still exists, and is still tested, on the record's vetting tab, which is where a verdict
+  has somewhere to live. What the desk does before somebody is approved is attach a scan.
 
-  it('asks only for the details this card actually prints', async () => {
-    // An Aadhaar's address is on the BACK, so the front must not ask for one.
-    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    await reachPapers();
+  Deleted here rather than skipped: these cases asserted against a component this path no longer
+  renders, and a suite that keeps them green against a screen nobody opens is worse than one that
+  says plainly where the behaviour went.
+*/
 
-    expect(screen.getByLabelText(/Name exactly as printed/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Date of birth on the card/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Address as printed/i)).not.toBeInTheDocument();
-  });
 
-  it('sends what the reviewer read off the card with the verdict', async () => {
-    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    await reachPapers();
-
-    type(/Name exactly as printed/i, 'Ramesh Iyer');
-    await click(/I have checked this against the original/i);
-    await click(/Yes, I checked it/i);
-
-    await waitFor(() => {
-      expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(1);
-    });
-    expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
-      .toMatchObject({ verdict: 'VERIFIED', holderName: 'Ramesh Iyer' });
-  });
-
-  /**
-   * Both `window.prompt` call sites (the reason picker here, the name-mismatch override below)
-   * are a proper `Modal` form now — see `RejectDocumentModal`/`NameMismatchModal` in
-   * DocumentsStep.tsx. `window.prompt` is not mocked anywhere in this describe block any more:
-   * a leftover mock would hide a regression back to it just as effectively as removing the assertion.
-   */
-  it('sends a scan back with a reason, which is what reaches their phone', async () => {
-    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    await reachPapers();
-
-    await click(/Send it back/i);
-    expect(await screen.findByText(/Why is Aadhaar — front being sent back/i)).toBeInTheDocument();
-    await choose(/Why this document is being sent back/i, 'Too blurred or dark to read');
-    await click(/Yes, send it back/i);
-
-    await waitFor(() => {
-      expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(1);
-    });
-    expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
-      .toEqual({ verdict: 'REJECTED', rejectionReason: 'ILLEGIBLE' });
-  });
-
-  it('also sends a free-text note, kept on the record and never shown to the appraiser', async () => {
-    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    await reachPapers();
-
-    await click(/Send it back/i);
-    await choose(/Why this document is being sent back/i, 'This is a different document');
-    type(/Note \(optional/i, 'Brought a driving licence by mistake.');
-    await click(/Yes, send it back/i);
-
-    await waitFor(() => {
-      expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
-        .toEqual({ verdict: 'REJECTED', rejectionReason: 'WRONG_DOCUMENT', remarks: 'Brought a driving licence by mistake.' });
-    });
-  });
-
-  it('the confirm button stays disabled until a reason is actually chosen', async () => {
-    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    await reachPapers();
-
-    await click(/Send it back/i);
-    expect(screen.getByRole('button', { name: /Yes, send it back/i })).toBeDisabled();
-  });
-
-  it('sends nothing when the reviewer cancels out of the reason dialog', async () => {
-    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    await reachPapers();
-
-    await click(/Send it back/i);
-    await click(/^Cancel$/);
-
-    expect(screen.queryByText(/Why is Aadhaar — front being sent back/i)).not.toBeInTheDocument();
-    expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(0);
-  });
-
-  /**
-   * The other `window.prompt` this step used to have: accepting a name that does not match the
-   * record. `NameMismatchModal` keeps the prompt's own wording ("If it is the same person, say
-   * why:") and its ten-character floor, now as a real dialog with the reason for the floor visible
-   * instead of a silently-discarded short answer.
-   */
-  it('offers a modal, not a native prompt, when a checked name disagrees with the record', async () => {
-    wireApi({
-      'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] },
-      'POST /assayers/document/doc-1/verify': new Error('The name “Ramesh Iyer” does not match the name on the record, “Suresh Iyer”.'),
-    });
-    await reachPapers();
-
-    type(/Name exactly as printed/i, 'Ramesh Iyer');
-    await click(/I have checked this against the original/i);
-    await click(/Yes, I checked it/i);
-
-    expect(await screen.findByText(/does not match the name on the record/i)).toBeInTheDocument();
-    expect(screen.getByText(/If it is the same person, say why:/i)).toBeInTheDocument();
-    // The floor is stated, not silently enforced — a short answer is refused with a reason.
-    expect(screen.getByRole('button', { name: /Verify anyway/i })).toBeDisabled();
-  });
-
-  it('retries with the reviewer\'s note once it clears the ten-character floor', async () => {
-    let attempt = 0;
-    mockRequest.mockImplementation((url: string, opts?: RequestInit) => {
-      const method = (opts?.method ?? 'GET').toUpperCase();
-      if (method === 'POST' && url === '/assayers/document/doc-1/verify') {
-        attempt += 1;
-        return attempt === 1
-          ? Promise.reject(new Error('The name does not match the name on the record.'))
-          : Promise.resolve({ success: true });
-      }
-      if (url.includes('workforce-attribute/vocabulary')) return Promise.resolve({ skills: [], certifications: [], languages: [] });
-      if (url.startsWith('/clients')) return Promise.resolve({ items: CLIENTS });
-      if (url.includes('/dossier')) return Promise.resolve({ onboarding: [AADHAAR_FRONT], references: [] });
-      if (method === 'POST' && url === '/assayers') return Promise.resolve({ ...CREATED });
-      if (method === 'PUT' && url.startsWith('/assayers/')) return Promise.resolve({ ...CREATED });
-      if (method === 'GET' && /^\/assayers\/[^/]+$/.test(url)) return Promise.resolve({ ...CREATED });
-      return Promise.resolve({ success: true, data: [] });
-    });
-    await reachPapers();
-
-    type(/Name exactly as printed/i, 'Ramesh Iyer');
-    await click(/I have checked this against the original/i);
-    await click(/Yes, I checked it/i);
-    await screen.findByText(/If it is the same person, say why:/i);
-
-    type(/If it is the same person, say why/i, 'Maiden name on the card.');
-    await click(/Verify anyway/i);
-
-    await waitFor(() => {
-      const retried = callsTo('POST', (u) => u === '/assayers/document/doc-1/verify');
-      expect(retried).toHaveLength(2);
-      expect(bodyOf(retried[1])).toMatchObject({ nameMismatchNote: 'Maiden name on the card.' });
-    });
-  });
-});
 
 /**
  * Tidying up what was pasted, on the way out of the box — never on the way in, so a clerk mid
@@ -825,7 +802,7 @@ describe('normalising what was pasted, on blur', () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/ID and bank/);
 
     const panBox = await screen.findByLabelText(/^PAN Number/);
@@ -865,7 +842,7 @@ describe('a format failure looks like an error once the box has been left, not b
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/ID and bank/);
     return (await screen.findByLabelText(/^PAN Number/)) as HTMLInputElement;
   };
@@ -945,8 +922,10 @@ describe('the duplicate check', () => {
     fireEvent.blur(phoneBox);
     await screen.findByText(/Already on the roster:/i);
 
-    await click(/Save and continue/);
-    expect(callsTo('POST', (u) => u === '/assayers')).toHaveLength(1);
+    await click(/Continue/);
+    // The duplicate card is a warning, not a gate: two people genuinely share a number often
+    // enough — a shared family handset, a shop line — that refusing would block real registrations.
+    expect(callsTo('PATCH', (u) => u === `/hr/applications/${APP_ID}`)).toHaveLength(1);
   });
 
   it('"This is a different person" dismisses the card for that value', async () => {
@@ -998,7 +977,7 @@ describe('bankName locks once the IFSC code resolves it', () => {
     await mount();
     type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
-    await click(/Save and continue/);
+    await click(/Continue/);
     await click(/ID and bank/);
   };
 

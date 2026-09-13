@@ -487,7 +487,18 @@ export const App: React.FC = () => {
             import above. `route-permissions.ts` carries both paths as their own literal entries,
             mirroring canCreateAssayers() rather than `/hr`'s own view-only gate.
           */}
-          <Route path="/hr/register" element={<RegistrationPage />} />
+          {/*
+            `/hr/register` with nothing after it is gone. It opened the wizard with no subject, so
+            step one had to create one — a live roster row, before any interview, application or
+            review — and it was what the roster's "Add assayer" button opened. Adding somebody
+            starts on the candidate screen; this path lands there rather than 404ing a bookmark.
+          */}
+          <Route path="/hr/register" element={<Navigate to="/hr/interviews" replace />} />
+          {/*
+            Three segments, so React Router ranks this above the two-segment `:assayerId` below it.
+            The desk filling in a candidate's own application — see `RegistrationPage`.
+          */}
+          <Route path="/hr/register/application/:applicationId" element={<RegistrationPage />} />
           {/*
             `/hr/register/:assayerId` is gone. It opened the seven-step wizard on a person who
             already existed — a second editor for a record `/hr/roster/:assayerId` edits, showing a

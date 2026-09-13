@@ -7,7 +7,7 @@ import {
 
 import { api } from '../../services/api';
 import { Select, useConfirm, useToast, AlertBanner, SkeletonList, DataTable, StatusBadge } from '../../components/ui';
-import { RejectDocumentModal } from './registration/DocumentsStep';
+import { RejectDocumentModal } from './RejectDocumentModal';
 import {
   label, Empty, Section, Notice, Lede, LinkButton, RowActions, Field, fieldInput, Editor,
 } from './hr-ui';

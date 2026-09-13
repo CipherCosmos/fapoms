@@ -12,7 +12,7 @@ import { humanizeStatus } from '../../../config/status-registry';
 import { ViewChips, useViewParam, fmtWhen } from '../hr-ui';
 import { ApplicationDetailDrawer } from './ApplicationDetailDrawer';
 import { Page } from '../../../components/ui/Page';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 /**
  * HR's review queue for self-registration applications — the Appraiser Recruitment spec's
@@ -173,6 +173,35 @@ export const HrApplicationsPage: React.FC = () => {
       key: 'status',
       header: 'Status',
       render: (r) => <StatusBadge domain="applicationStatus" status={r.status} />,
+    },
+    {
+      key: 'desk',
+      header: '',
+      /*
+        The way in for the second typist.
+
+        A candidate who cannot use a form — no smartphone, no email, sitting at the desk with their
+        papers — would otherwise sit in "Not started" forever. The desk can fill it in for them;
+        they still confirm their own number and accept the declaration through their link, and this
+        is still the same application HR approves.
+
+        Offered only while it is still being filled in. Once they submit, what is under review
+        stops changing — "approve what you read" would not be true otherwise — and `requestMoreInfo`
+        is the way to reopen it.
+      */
+      render: (r) => (
+        r.status === ApplicationStatus.DRAFT || r.status === ApplicationStatus.AWAITING_INFO
+          ? (
+            <Link
+              to={`/hr/register/application/${r.id}`}
+              onClick={(e) => e.stopPropagation()}
+              style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', fontWeight: 600, whiteSpace: 'nowrap' }}
+            >
+              Fill this in for them
+            </Link>
+          )
+          : null
+      ),
     },
     {
       // `createdAt` is when the invite was raised, which is not the same as when it was submitted

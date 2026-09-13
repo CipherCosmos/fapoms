@@ -1,29 +1,34 @@
 import React from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { RegistrationWizard } from './RegistrationWizard';
 
 /**
- * The route this whole flow lives at now: `/hr/register` for a brand new person, `/hr/register/
- * :assayerId` to resume one already begun. The owner's own words were "improve the modal too",
- * and the modal itself was the thing standing in the way — cramped at a fixed 820px, its rail
- * wrapped onto a second line past six steps, and every one of them past the first was locked out
- * until a save nobody could see the point of yet.
+ * The route this flow lives at: `/hr/register/application/:applicationId`.
  *
- * Everything that used to make the modal a modal — the fixed width, the Escape-to-close, the
- * portal — is gone; what is left is `RegistrationWizard`, unchanged in what it knows how to do,
- * now drawing a page's worth of room instead of a dialog's. This file is deliberately thin: it
- * only turns the URL into the two props the wizard has always taken.
+ * It used to be `/hr/register` for a brand new person, and that was the hole. A seven-step form
+ * with nothing behind it had to create something to write to, so step one did — a live row on the
+ * roster, before any interview, any application or any review. It was also what the roster's "Add
+ * assayer" button opened, which made the bypass the path everybody found and the rest of the
+ * pipeline look optional.
+ *
+ * There is no "new" any more. A candidate's application exists because somebody passed their
+ * interview; this page is the desk typing into it on their behalf, and the URL names which one.
+ *
+ * Deliberately thin: it only turns the URL into the props the wizard takes.
  */
 export const RegistrationPage: React.FC = () => {
-  const { assayerId } = useParams<{ assayerId: string }>();
+  const { applicationId } = useParams<{ applicationId: string }>();
   const navigate = useNavigate();
+
+  // No application named, nothing to fill in. The candidate screen is where somebody is added.
+  if (!applicationId) return <Navigate to="/hr/interviews" replace />;
 
   return (
     <RegistrationWizard
-      key={assayerId ?? 'new'}
-      resumeAssayerId={assayerId}
-      onClose={() => navigate('/hr/roster')}
-      onCreated={() => navigate('/hr/roster')}
+      key={applicationId}
+      applicationId={applicationId}
+      onClose={() => navigate('/hr/applications')}
+      onCreated={() => navigate('/hr/applications')}
     />
   );
 };
