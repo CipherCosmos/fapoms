@@ -68,7 +68,7 @@
       "<rootDir>/../jest.setup.ts"
     ],
     "moduleNameMapper": {
-      "^@fapoms/shared$": "<rootDir>/../../shared/dist/cjs/index.js",
+      "^@fapoms/shared$": "<rootDir>/../../shared/src/index.ts",
       "\\.(css|less|scss)$": "<rootDir>/../jest.style-stub.js"
     }
   }
