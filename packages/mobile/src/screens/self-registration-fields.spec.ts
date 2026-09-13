@@ -1,0 +1,43 @@
+import { CRITICAL_ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
+import { RECORD_FIELD_KEYS } from './self-registration-fields';
+import { en } from '../i18n/locales/en';
+
+/** Facts the application stores as its own columns, asked for higher up the same form. */
+const APPLICATION_OWN_COLUMNS = ['phone', 'email', 'dateOfBirth', 'address', 'city', 'state', 'pincode'];
+
+/**
+ * Decided by the desk at approval, not declared by an applicant: a joining date is an employment
+ * decision, and the map pin is geocoded from the address rather than typed by somebody who does
+ * not know their own latitude. Named so the exemption is a decision, not an oversight.
+ */
+const DESK_DECIDES = ['joiningDate', 'latitude'];
+
+describe('the phone asks for everything the record calls critical', () => {
+  it.each(CRITICAL_ASSAYER_RECORD_FIELDS.map((f) => [f.key, f.label, f.blocks]))(
+    '%s (%s) is asked for, or %s is blocked for everybody who registers from a phone',
+    (key) => {
+      const asked = (RECORD_FIELD_KEYS as readonly string[]).includes(key as string)
+        || APPLICATION_OWN_COLUMNS.includes(key as string)
+        || DESK_DECIDES.includes(key as string);
+      expect(asked).toBe(true);
+    },
+  );
+
+  it('asks the same nine the web form does — one registration, two surfaces', () => {
+    expect([...RECORD_FIELD_KEYS]).toEqual([
+      'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
+      'qualification', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+    ]);
+  });
+
+  it('has a label for every box, so none of them renders as a raw key', () => {
+    const form = en.selfRegistration.form as Record<string, string>;
+    for (const label of [
+      'pan', 'aadhaar', 'bankAccountNumber', 'ifsc', 'bankName', 'qualification',
+      'emergencyName', 'emergencyPhone', 'emergencyRelation',
+    ]) {
+      expect(typeof form[label]).toBe('string');
+      expect(form[label].length).toBeGreaterThan(0);
+    }
+  });
+});

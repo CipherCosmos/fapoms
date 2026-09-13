@@ -18,6 +18,7 @@ import {
   type RegistrationDocument,
   type DraftPatch,
 } from '../services/self-registration.service';
+import { RECORD_FIELD_KEYS } from './self-registration-fields';
 
 /**
  * Appraiser Recruitment self-registration — the ONE way into this flow from a phone that has
@@ -276,6 +277,12 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   // is the source of truth for the form — each save round-trips a field but does not pull the
   // whole draft back, so a slow response can never overwrite what the candidate is mid-typing.
   const [draft, setDraft] = useState<DraftPatch>({});
+  /**
+   * The record-shaped half of the form, kept beside the draft because it travels under `record`
+   * rather than as application columns. Same keys the web form and the desk use, filtered
+   * server-side by the one shared allow-list.
+   */
+  const [recordDraft, setRecordDraft] = useState<Record<string, string>>({});
   const draftSeeded = useRef(false);
   const [savingDraft, setSavingDraft] = useState(false);
 
@@ -319,6 +326,10 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
         availability: data.application.availability ?? '',
         employmentCategory: data.application.employmentCategory ?? undefined,
       });
+      const fields = data.application.extendedProfile?.fields ?? {};
+      setRecordDraft(
+        Object.fromEntries(RECORD_FIELD_KEYS.map((k) => [k, String(fields[k] ?? '')])),
+      );
       setPhone(data.application.mobile ?? '');
     }
   }, []);
@@ -466,6 +477,20 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
    */
   const commitField = <K extends keyof DraftPatch>(key: K) => () => {
     void persistDraft({ [key]: draft[key] } as DraftPatch);
+  };
+
+  const updateRecordField = (key: string, value: string) => {
+    setRecordDraft((prev) => ({ ...prev, [key]: value }));
+  };
+
+  /**
+   * One field, on blur — the same rule the application columns follow. A wide snapshot would send
+   * boxes the candidate has not finished typing, and the server checks PAN, IFSC and Aadhaar.
+   */
+  const commitRecordField = (key: string) => () => {
+    const value = recordDraft[key];
+    if (value === undefined) return;
+    void persistDraft({ record: { [key]: value } } as DraftPatch);
   };
 
   const handleGenderChange = (gender: string) => {
@@ -845,6 +870,98 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 onBlur={commitField('availability')}
                 placeholder={tr('selfRegistration.form.availabilityPlaceholder')}
                 autoCapitalize="sentences"
+              />
+
+              {/*
+                Identity, pay and next-of-kin — the half this form never asked for.
+
+                It collected a photograph of the PAN card and never the number on it, so somebody
+                who registered from their phone reached the roster with nothing to deduct tax
+                against, no account to be paid into, and nobody to call if something happened to
+                them at a branch. The scan proves the number; it is not the number.
+
+                Blank is allowed. Nothing here refuses an approval — the desk chases what is
+                missing on the record, and each gap names what it stops.
+              */}
+              <View style={{ gap: t.space.sm, marginTop: t.space.md }}>
+                <AppText variant="overline" tone="faint">{tr('selfRegistration.form.identityTitle')}</AppText>
+                <AppText variant="caption" tone="faint">{tr('selfRegistration.form.identityHint')}</AppText>
+              </View>
+              <LabeledInput
+                label={tr('selfRegistration.form.pan')}
+                value={recordDraft.panNumber ?? ''}
+                onChangeText={(v) => updateRecordField('panNumber', v.toUpperCase())}
+                onBlur={commitRecordField('panNumber')}
+                placeholder={tr('selfRegistration.form.panPlaceholder')}
+                autoCapitalize="characters"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.aadhaar')}
+                value={recordDraft.aadhaarNumber ?? ''}
+                onChangeText={(v) => updateRecordField('aadhaarNumber', v)}
+                onBlur={commitRecordField('aadhaarNumber')}
+                placeholder={tr('selfRegistration.form.aadhaarPlaceholder')}
+                keyboardType="numeric"
+                autoCapitalize="none"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.bankAccountNumber')}
+                value={recordDraft.bankAccountNumber ?? ''}
+                onChangeText={(v) => updateRecordField('bankAccountNumber', v)}
+                onBlur={commitRecordField('bankAccountNumber')}
+                keyboardType="numeric"
+                autoCapitalize="none"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.ifsc')}
+                value={recordDraft.ifscCode ?? ''}
+                onChangeText={(v) => updateRecordField('ifscCode', v.toUpperCase())}
+                onBlur={commitRecordField('ifscCode')}
+                placeholder={tr('selfRegistration.form.ifscPlaceholder')}
+                autoCapitalize="characters"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.bankName')}
+                value={recordDraft.bankName ?? ''}
+                onChangeText={(v) => updateRecordField('bankName', v)}
+                onBlur={commitRecordField('bankName')}
+                autoCapitalize="words"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.qualification')}
+                value={recordDraft.qualification ?? ''}
+                onChangeText={(v) => updateRecordField('qualification', v)}
+                onBlur={commitRecordField('qualification')}
+                placeholder={tr('selfRegistration.form.qualificationPlaceholder')}
+                autoCapitalize="sentences"
+              />
+
+              <View style={{ gap: t.space.sm, marginTop: t.space.md }}>
+                <AppText variant="overline" tone="faint">{tr('selfRegistration.form.emergencyTitle')}</AppText>
+                <AppText variant="caption" tone="faint">{tr('selfRegistration.form.emergencyHint')}</AppText>
+              </View>
+              <LabeledInput
+                label={tr('selfRegistration.form.emergencyName')}
+                value={recordDraft.emergencyContactName ?? ''}
+                onChangeText={(v) => updateRecordField('emergencyContactName', v)}
+                onBlur={commitRecordField('emergencyContactName')}
+                autoCapitalize="words"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.emergencyPhone')}
+                value={recordDraft.emergencyContactPhone ?? ''}
+                onChangeText={(v) => updateRecordField('emergencyContactPhone', v)}
+                onBlur={commitRecordField('emergencyContactPhone')}
+                keyboardType="phone-pad"
+                autoCapitalize="none"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.emergencyRelation')}
+                value={recordDraft.emergencyContactRelation ?? ''}
+                onChangeText={(v) => updateRecordField('emergencyContactRelation', v)}
+                onBlur={commitRecordField('emergencyContactRelation')}
+                placeholder={tr('selfRegistration.form.emergencyRelationPlaceholder')}
+                autoCapitalize="words"
               />
 
               <View style={{ gap: t.space.sm }}>

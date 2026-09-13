@@ -297,6 +297,31 @@ export const en = {
       dateOfBirth: 'DATE OF BIRTH',
       dateOfBirthPlaceholder: 'YYYY-MM-DD',
       dateOfBirthHint: 'Format: YYYY-MM-DD, for example 1990-04-21.',
+      /*
+        Identity, pay and next-of-kin.
+
+        The form asked for a photograph of the PAN card and never for the number on it, so every
+        person who registered from a phone reached the roster with no PAN to deduct tax against,
+        no account to be paid into, and nobody to call if something happened to them at a branch.
+      */
+      identityTitle: 'IDENTITY AND PAYMENT',
+      identityHint: 'We need these to pay you and to deduct tax correctly.',
+      pan: 'PAN',
+      panPlaceholder: 'ABCDE1234F',
+      aadhaar: 'AADHAAR',
+      aadhaarPlaceholder: '12 digits',
+      bankAccountNumber: 'BANK ACCOUNT NUMBER',
+      ifsc: 'IFSC',
+      ifscPlaceholder: 'SBIN0001234',
+      bankName: 'BANK NAME',
+      qualification: 'QUALIFICATION',
+      qualificationPlaceholder: 'Certificate or degree',
+      emergencyTitle: 'EMERGENCY CONTACT',
+      emergencyHint: 'Somebody we can reach if something happens while you are at a branch.',
+      emergencyName: 'NAME',
+      emergencyPhone: 'PHONE',
+      emergencyRelation: 'RELATIONSHIP',
+      emergencyRelationPlaceholder: 'Spouse, parent, sibling…',
       gender: 'GENDER',
       genderMale: 'Male',
       genderFemale: 'Female',

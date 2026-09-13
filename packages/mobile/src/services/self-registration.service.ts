@@ -35,6 +35,11 @@ export interface RegistrationApplication {
   consentAcceptedAt: string | null;
   status: ApplicationStatus;
   reviewNotes: string | null;
+  /**
+   * The rest of the person, keyed by the assayer record's own field names — identity numbers,
+   * bank details, emergency contact, qualification. Same shape the web form and the desk use.
+   */
+  extendedProfile: { fields?: Record<string, string | number | null> } | null;
 }
 
 export interface RegistrationDocument {
@@ -64,6 +69,15 @@ export interface DraftPatch {
   expertise?: string;
   availability?: string;
   employmentCategory?: EmploymentCategory;
+  /**
+   * Record-shaped answers, filtered server-side against the one shared allow-list.
+   *
+   * The phone asked for none of these, so anybody who registered from it arrived on the roster
+   * with no PAN to deduct tax against, no account to pay into and nobody to call — while having
+   * dutifully photographed the PAN card. See `REGISTRATION_RECORD_FIELD_KEYS` in the shared
+   * package for what the server will keep.
+   */
+  record?: Record<string, string | number>;
 }
 
 export type SelfRegResult<T> = { success: true; data: T } | { success: false; error: string };
