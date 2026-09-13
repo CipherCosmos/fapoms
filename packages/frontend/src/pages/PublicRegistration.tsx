@@ -107,7 +107,37 @@ interface FormState {
   expertise: string;
   availability: string;
   employmentCategory: EmploymentCategory | '';
+  /**
+   * The half the candidate's form never asked for.
+   *
+   * A person approved without these reached the roster unable to be paid (no account, no IFSC),
+   * unreachable in an emergency, and with no PAN to deduct tax against — while the form had
+   * cheerfully collected a photograph of the PAN card. The scan proves the number; it is not the
+   * number, and nothing downstream can read it.
+   */
+  panNumber: string;
+  aadhaarNumber: string;
+  bankAccountNumber: string;
+  ifscCode: string;
+  bankName: string;
+  qualification: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  emergencyContactRelation: string;
 }
+
+/**
+ * The record-shaped half of the form, by the record's own field names.
+ *
+ * Exported for `PublicRegistration.spec.ts`, which fails if this stops covering a field the record
+ * dictionary calls critical — the guard against the candidate form quietly collecting less than
+ * the person needs, which is exactly how it came to ask for a photograph of a PAN card and never
+ * for the number.
+ */
+export const RECORD_KEYS = [
+  'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
+  'qualification', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+] as const;
 
 const seedForm = (app: RegistrationApplication): FormState => ({
   fullName: app.fullName ?? '',
@@ -122,6 +152,9 @@ const seedForm = (app: RegistrationApplication): FormState => ({
   expertise: app.expertise ?? '',
   availability: app.availability ?? '',
   employmentCategory: app.employmentCategory ?? '',
+  ...Object.fromEntries(
+    RECORD_KEYS.map((k) => [k, String(app.extendedProfile?.fields?.[k] ?? '')]),
+  ) as Pick<FormState, typeof RECORD_KEYS[number]>,
 });
 
 /** Only the fields actually filled in — an empty box means "unchanged", never "clear this". */
@@ -141,6 +174,15 @@ const buildDraftPatch = (f: FormState): UpdateRegistrationDraftInput => {
   if (f.expertise.trim()) patch.expertise = f.expertise.trim();
   if (f.availability.trim()) patch.availability = f.availability.trim();
   if (f.employmentCategory) patch.employmentCategory = f.employmentCategory;
+
+  // Sent whenever the box holds anything — including a blank, which is how a candidate corrects a
+  // number they mistyped. The server filters the keys and checks PAN, IFSC and Aadhaar.
+  const record: Record<string, string> = {};
+  for (const key of RECORD_KEYS) {
+    const value = f[key];
+    if (value !== undefined && value.trim() !== '') record[key] = value.trim();
+  }
+  if (Object.keys(record).length > 0) patch.record = record;
   return patch;
 };
 
@@ -624,6 +666,110 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               <div>
                 <label htmlFor="reg-availability" style={LABEL_STYLE}>Availability</label>
                 <input id="reg-availability" value={form.availability} onChange={(e) => updateField('availability', e.target.value)} onBlur={handleFieldBlur} style={INPUT_STYLE} />
+              </div>
+
+              {/*
+                Identity, pay and next-of-kin.
+
+                These are not extras. Without the PAN there is no TDS deduction and no statutory
+                filing; without the account and IFSC there is no payout at all; without a reachable
+                contact there is no duty of care for somebody sent alone to a branch. The form used
+                to ask for a photograph of the PAN card and never for the number on it, so every
+                person who registered here arrived on the roster unable to be paid.
+
+                Asked here rather than left to HR because the candidate is the one holding the
+                documents. Anything left blank is chased on the record afterwards — an approval is
+                not refused over it.
+              */}
+              <div style={SECTION_TITLE_STYLE}>Identity and payment</div>
+              <div style={SECTION_NOTE_STYLE}>
+                We need these to pay you and to deduct tax correctly. They are stored encrypted and
+                shown masked.
+              </div>
+              <div style={FIELD_GRID_STYLE}>
+                <div>
+                  <label htmlFor="reg-pan" style={LABEL_STYLE}>PAN</label>
+                  <input
+                    id="reg-pan" value={form.panNumber} placeholder="ABCDE1234F"
+                    onChange={(e) => updateField('panNumber', e.target.value.toUpperCase())}
+                    onBlur={handleFieldBlur} autoCapitalize="characters" style={INPUT_STYLE}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="reg-aadhaar" style={LABEL_STYLE}>Aadhaar</label>
+                  <input
+                    id="reg-aadhaar" value={form.aadhaarNumber} inputMode="numeric" placeholder="12 digits"
+                    onChange={(e) => updateField('aadhaarNumber', e.target.value)}
+                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                  />
+                </div>
+              </div>
+              <div style={FIELD_GRID_STYLE}>
+                <div>
+                  <label htmlFor="reg-bank-account" style={LABEL_STYLE}>Bank account number</label>
+                  <input
+                    id="reg-bank-account" value={form.bankAccountNumber} inputMode="numeric"
+                    onChange={(e) => updateField('bankAccountNumber', e.target.value)}
+                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="reg-ifsc" style={LABEL_STYLE}>IFSC</label>
+                  <input
+                    id="reg-ifsc" value={form.ifscCode} placeholder="SBIN0001234"
+                    onChange={(e) => updateField('ifscCode', e.target.value.toUpperCase())}
+                    onBlur={handleFieldBlur} autoCapitalize="characters" style={INPUT_STYLE}
+                  />
+                </div>
+              </div>
+              <div style={FIELD_GRID_STYLE}>
+                <div>
+                  <label htmlFor="reg-bank-name" style={LABEL_STYLE}>Bank name</label>
+                  <input
+                    id="reg-bank-name" value={form.bankName}
+                    onChange={(e) => updateField('bankName', e.target.value)}
+                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="reg-qualification" style={LABEL_STYLE}>Qualification</label>
+                  <input
+                    id="reg-qualification" value={form.qualification} placeholder="Certificate or degree"
+                    onChange={(e) => updateField('qualification', e.target.value)}
+                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                  />
+                </div>
+              </div>
+
+              <div style={SECTION_TITLE_STYLE}>Emergency contact</div>
+              <div style={SECTION_NOTE_STYLE}>
+                Somebody we can reach if something happens while you are out at a branch.
+              </div>
+              <div style={FIELD_GRID_STYLE}>
+                <div>
+                  <label htmlFor="reg-ec-name" style={LABEL_STYLE}>Name</label>
+                  <input
+                    id="reg-ec-name" value={form.emergencyContactName}
+                    onChange={(e) => updateField('emergencyContactName', e.target.value)}
+                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="reg-ec-phone" style={LABEL_STYLE}>Phone</label>
+                  <input
+                    id="reg-ec-phone" value={form.emergencyContactPhone} inputMode="tel"
+                    onChange={(e) => updateField('emergencyContactPhone', e.target.value)}
+                    onBlur={handleFieldBlur} style={INPUT_STYLE}
+                  />
+                </div>
+              </div>
+              <div>
+                <label htmlFor="reg-ec-relation" style={LABEL_STYLE}>Relationship</label>
+                <input
+                  id="reg-ec-relation" value={form.emergencyContactRelation} placeholder="Spouse, parent, sibling…"
+                  onChange={(e) => updateField('emergencyContactRelation', e.target.value)}
+                  onBlur={handleFieldBlur} style={INPUT_STYLE}
+                />
               </div>
 
               <div>

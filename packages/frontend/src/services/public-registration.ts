@@ -41,6 +41,13 @@ export interface RegistrationApplication {
   consentVersion: string | null;
   status: ApplicationStatus;
   reviewNotes: string | null;
+  /**
+   * Everything the person will need once they are on the roster — identity numbers, bank details,
+   * emergency contact, qualification — keyed by the assayer record's own field names under
+   * `fields`. One shape for the candidate's form and the desk's, because a registration that
+   * collected less than the record needs is how somebody reached the roster unable to be paid.
+   */
+  extendedProfile: { fields?: Record<string, string | number | null> } | null;
 }
 
 export interface RegistrationApplicationDocument {
@@ -70,6 +77,8 @@ export interface UpdateRegistrationDraftInput {
   expertise?: string;
   availability?: string;
   employmentCategory?: EmploymentCategory;
+  /** Record-shaped answers. Filtered server-side against the one shared allow-list. */
+  record?: Record<string, string | number>;
 }
 
 const basePath = (token: string) => `/api/v1/public/registration/${encodeURIComponent(token)}`;

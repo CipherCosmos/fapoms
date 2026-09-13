@@ -1,0 +1,43 @@
+import { CRITICAL_ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
+import { RECORD_KEYS } from './PublicRegistration';
+
+/**
+ * The application's own columns. A critical field is collected either by one of these or by a box
+ * in the record-shaped half of the candidate form — and if it is collected by neither, somebody
+ * approved through this page reaches the roster unable to be paid, assigned or reached.
+ */
+const APPLICATION_OWN_COLUMNS = ['phone', 'email', 'dateOfBirth', 'address', 'city', 'state', 'pincode'];
+
+/**
+ * `joiningDate` and `latitude` are deliberately not asked of the candidate.
+ *
+ * A joining date is an employment decision the desk makes at approval, not something an applicant
+ * declares. The map pin is geocoded from the address they gave, and asking somebody for their own
+ * latitude is asking for a number they do not have. Both are named here rather than silently
+ * excluded, so the exemption is a decision on the record rather than an oversight.
+ */
+const DESK_DECIDES = ['joiningDate', 'latitude'];
+
+describe('the candidate form asks for everything the record calls critical', () => {
+  it.each(CRITICAL_ASSAYER_RECORD_FIELDS.map((f) => [f.key, f.label, f.blocks]))(
+    '%s (%s) is asked for, or %s is blocked for everybody who registers here',
+    (key) => {
+      const asked = (RECORD_KEYS as readonly string[]).includes(key as string)
+        || APPLICATION_OWN_COLUMNS.includes(key as string)
+        || DESK_DECIDES.includes(key as string);
+      expect(asked).toBe(true);
+    },
+  );
+
+  it('asks for the numbers, not only the scans', () => {
+    expect(RECORD_KEYS).toEqual(expect.arrayContaining([
+      'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode',
+    ]));
+  });
+
+  it('asks who to call if something happens at a branch', () => {
+    expect(RECORD_KEYS).toEqual(expect.arrayContaining([
+      'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+    ]));
+  });
+});
