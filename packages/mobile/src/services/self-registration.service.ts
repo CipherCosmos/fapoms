@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import type { EmploymentCategory } from '@fapoms/shared';
+import { ApplicationStatus, type EmploymentCategory } from '@fapoms/shared';
 import { getApiBaseUrl } from './api.service';
 
 /**
@@ -13,8 +13,6 @@ import { getApiBaseUrl } from './api.service';
  * request that must stand on the token alone. See `public-registration.controller.ts` on the
  * backend for the routes this mirrors — no `@Roles`/`JwtAuthGuard` there either.
  */
-
-export type ApplicationStatus = 'DRAFT' | 'PENDING_VALIDATION' | 'AWAITING_INFO' | 'REJECTED' | 'APPROVED';
 
 export interface RegistrationApplication {
   id: string;
