@@ -937,6 +937,21 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 autoCapitalize="characters"
               />
               <LabeledInput
+                label={tr('selfRegistration.form.alternatePhone')}
+                value={recordDraft.alternatePhone ?? ''}
+                onChangeText={(v) => updateRecordField('alternatePhone', v)}
+                onBlur={commitRecordField('alternatePhone')}
+                keyboardType="phone-pad"
+                autoCapitalize="none"
+              />
+              <LabeledInput
+                label={tr('selfRegistration.form.district')}
+                value={recordDraft.district ?? ''}
+                onChangeText={(v) => updateRecordField('district', v)}
+                onBlur={commitRecordField('district')}
+                autoCapitalize="words"
+              />
+              <LabeledInput
                 label={tr('selfRegistration.form.bankName')}
                 value={recordDraft.bankName ?? ''}
                 onChangeText={(v) => updateRecordField('bankName', v)}

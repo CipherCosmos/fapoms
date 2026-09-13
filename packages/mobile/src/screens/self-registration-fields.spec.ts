@@ -31,10 +31,16 @@ describe('the phone asks for everything the record calls critical', () => {
     },
   );
 
-  it('asks the same nine the web form does — one registration, two surfaces', () => {
+  /**
+   * The two surfaces ask for the same things, and the spec says so as a list rather than a count —
+   * a count passes while one form quietly asks for something the other does not, which is how the
+   * web form came to have no email box while the phone form did.
+   */
+  it('asks exactly what the web form asks — one registration, two surfaces', () => {
     expect([...RECORD_FIELD_KEYS]).toEqual([
       'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
       'qualification', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+      'alternatePhone', 'district',
     ]);
   });
 

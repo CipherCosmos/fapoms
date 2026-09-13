@@ -9,6 +9,10 @@
 export const RECORD_FIELD_KEYS = [
   'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
   'qualification', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+  // A second number, and the district the address sits in. `district` is NOT NULL on the record
+  // and defaults to an empty string when nobody supplies it, so every remote registrant landed
+  // with a blank one; `alternatePhone` matters because `phone` is critical and often the only one.
+  'alternatePhone', 'district',
 ] as const;
 
 export type RecordFieldKey = typeof RECORD_FIELD_KEYS[number];

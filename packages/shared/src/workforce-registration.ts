@@ -42,8 +42,13 @@ export const REGISTRATION_RECORD_FIELD_KEYS = [
   // Competence. Terms are NOT here — see `EMPLOYMENT_TERM_FIELD_KEYS`: a candidate must not be
   // able to set their own joining date, employment type or region by putting one in their form.
   'qualification', 'experienceYears',
-  // Where they are and what they can take on.
-  'latitude', 'longitude', 'district', 'preferredRegions', 'languages', 'skills',
+  // Where they are.
+  //
+  // `preferredRegions`, `languages` and `skills` are deliberately NOT here. They are the assayer's
+  // own to maintain from their profile once they have an account — the same decision the desk
+  // wizard records as THEIRS_TO_MAINTAIN — and a key on this list that no form asks for is the
+  // dead definition this file exists to prevent.
+  'latitude', 'longitude', 'district',
 ] as const;
 
 export type RegistrationRecordFieldKey = typeof REGISTRATION_RECORD_FIELD_KEYS[number];

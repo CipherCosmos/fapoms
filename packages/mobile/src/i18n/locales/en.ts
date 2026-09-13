@@ -313,6 +313,8 @@ export const en = {
       bankAccountNumber: 'BANK ACCOUNT NUMBER',
       ifsc: 'IFSC',
       ifscPlaceholder: 'SBIN0001234',
+      alternatePhone: 'ANOTHER NUMBER WE CAN TRY',
+      district: 'DISTRICT',
       bankName: 'BANK NAME',
       qualification: 'QUALIFICATION',
       qualificationPlaceholder: 'Certificate or degree',

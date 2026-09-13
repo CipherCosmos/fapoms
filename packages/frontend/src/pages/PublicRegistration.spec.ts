@@ -33,6 +33,14 @@ describe('the candidate form asks for everything the record calls critical', () 
     },
   );
 
+  it('asks the same record fields the phone form does — one registration, two surfaces', () => {
+    expect([...RECORD_KEYS]).toEqual([
+      'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
+      'qualification', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+      'alternatePhone', 'district',
+    ]);
+  });
+
   it('asks for the numbers, not only the scans', () => {
     expect(RECORD_KEYS).toEqual(expect.arrayContaining([
       'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode',

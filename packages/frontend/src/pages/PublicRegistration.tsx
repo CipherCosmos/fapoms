@@ -115,6 +115,10 @@ interface FormState {
    * cheerfully collected a photograph of the PAN card. The scan proves the number; it is not the
    * number, and nothing downstream can read it.
    */
+  /** The application's own column, asked for on the phone form and — until now — not on this one. */
+  email: string;
+  alternatePhone: string;
+  district: string;
   panNumber: string;
   aadhaarNumber: string;
   bankAccountNumber: string;
@@ -137,10 +141,15 @@ interface FormState {
 export const RECORD_KEYS = [
   'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
   'qualification', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+  // A second number, and the district the address sits in. `district` is NOT NULL on the record
+  // and defaults to an empty string when nobody supplies it, so every remote registrant landed
+  // with a blank one; `alternatePhone` matters because `phone` is critical and often the only one.
+  'alternatePhone', 'district',
 ] as const;
 
 const seedForm = (app: RegistrationApplication): FormState => ({
   fullName: app.fullName ?? '',
+  email: app.email ?? '',
   dateOfBirth: app.dateOfBirth ? app.dateOfBirth.slice(0, 10) : '',
   gender: app.gender ?? '',
   address: app.address ?? '',
@@ -650,6 +659,16 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   />
                 </div>
                 <div>
+                  {/* The phone form has always asked for this; this one did not, so the same
+                      registration produced a different person depending on the device. */}
+                  <label htmlFor="reg-email" style={LABEL_STYLE}>Email</label>
+                  <input
+                    id="reg-email" value={form.email} type="email" autoCapitalize="none"
+                    onChange={(e) => updateField('email', e.target.value)}
+                    onBlur={commitField('email')} style={INPUT_STYLE}
+                  />
+                </div>
+                <div>
                   <label htmlFor="reg-gender" style={LABEL_STYLE}>Gender</label>
                   <Select
                     value={form.gender}
@@ -682,6 +701,14 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 <div>
                   <label htmlFor="reg-city" style={LABEL_STYLE}>City</label>
                   <input id="reg-city" value={form.city} onChange={(e) => updateField('city', e.target.value)} onBlur={commitField('city')} style={INPUT_STYLE} />
+                </div>
+                <div>
+                  <label htmlFor="reg-district" style={LABEL_STYLE}>District</label>
+                  <input
+                    id="reg-district" value={form.district}
+                    onChange={(e) => updateField('district', e.target.value)}
+                    onBlur={commitField('district')} style={INPUT_STYLE}
+                  />
                 </div>
                 <div>
                   <label htmlFor="reg-pincode" style={LABEL_STYLE}>Pincode</label>
@@ -766,6 +793,14 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 </div>
               </div>
               <div style={FIELD_GRID_STYLE}>
+                <div>
+                  <label htmlFor="reg-alt-phone" style={LABEL_STYLE}>Another number we can try</label>
+                  <input
+                    id="reg-alt-phone" value={form.alternatePhone} inputMode="tel"
+                    onChange={(e) => updateField('alternatePhone', e.target.value)}
+                    onBlur={commitField('alternatePhone')} style={INPUT_STYLE}
+                  />
+                </div>
                 <div>
                   <label htmlFor="reg-bank-name" style={LABEL_STYLE}>Bank name</label>
                   <input
