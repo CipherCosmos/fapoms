@@ -839,6 +839,14 @@ export const hi: PartialCatalogue<typeof en> = {
     travel: 'सफ़र %{amount}',
     // TDS keeps its English name — see the note at the top of this file.
     tds: 'TDS -%{amount}',
+    chipTdsWithheld: 'TDS काटा गया (धारा %{section})',
+    invoiceLabel: 'बिल %{number}',
+    invoiceStatus: {
+      invited: 'आपको भेजा गया',
+      submitted: 'भेज दिया',
+      approved: 'मंज़ूर',
+      cancelled: 'रद्द',
+    },
     paymentsTitle: 'मिल चुके भुगतान',
     paymentsSummary: 'आपको अब तक क्या मिल चुका है',
     claimsTitle: 'खर्च के दावे',
@@ -850,6 +858,7 @@ export const hi: PartialCatalogue<typeof en> = {
       pending: 'मंज़ूरी बाक़ी',
       rejected: 'नामंज़ूर',
     },
+    claimReviewNote: 'वजह: %{reason}',
     completedTitle: 'पूरे किए ऑडिट',
     completedSummary: 'आपके ख़त्म किए काम',
     completedEmptyTitle: 'अभी कोई कमाई नहीं',

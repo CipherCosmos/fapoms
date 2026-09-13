@@ -1074,6 +1074,17 @@ export const en = {
     base: 'Base %{amount}',
     travel: 'Travel %{amount}',
     tds: 'TDS -%{amount}',
+    /** The lifetime TDS-withheld chip, next to Earned/Paid/Pending — the web statement's
+     *  equivalent (`AssayerStatementPage.tsx`) already shows this; the app previously did not. */
+    chipTdsWithheld: 'TDS withheld (u/s %{section})',
+    /** Which assayer invoice a payable rides, shown next to its own row. */
+    invoiceLabel: 'Invoice %{number}',
+    invoiceStatus: {
+      invited: 'Sent to you',
+      submitted: 'Submitted',
+      approved: 'Approved',
+      cancelled: 'Cancelled',
+    },
     paymentsTitle: 'Payments received',
     paymentsSummary: 'What has already been paid to you',
     claimsTitle: 'Expense claims',
@@ -1084,6 +1095,8 @@ export const en = {
       pending: 'Awaiting approval',
       rejected: 'Rejected',
     },
+    /** The desk's reason, shown on a rejected claim — silently missing from this app before. */
+    claimReviewNote: 'Reason: %{reason}',
     completedTitle: 'Completed audits',
     completedSummary: 'Your finished jobs',
     completedEmptyTitle: 'No earnings yet',

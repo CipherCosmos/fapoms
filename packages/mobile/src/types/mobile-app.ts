@@ -1,5 +1,9 @@
 import { ValidationQueryStatus } from '@fapoms/shared';
-import type { AssayerStatementInvoicingBlock } from '@fapoms/shared';
+import type {
+  AssayerStatement as SharedAssayerStatement,
+  AssayerStatementPayable as SharedAssayerStatementPayable,
+  AssayerStatementPayment as SharedAssayerStatementPayment,
+} from '@fapoms/shared';
 
 export interface CustomerRecord {
   id: string;
@@ -44,6 +48,14 @@ export interface AssayerExpense {
   receiptUrl?: string;
   /** Set when the claim is read back from `/expenses/mine`; absent on locally-built rows. */
   createdAt?: string;
+  /**
+   * The desk's reason for rejecting (or, less often, approving) this claim — required by the
+   * backend on rejection (`expense.service.ts` throws without one). Silently dropped by this
+   * app's mapping until now, even though the frontend's equivalent
+   * (`AssignmentDetailDrawer.tsx`) already shows it: an assayer whose reimbursement was rejected
+   * had no way, anywhere in this app, to learn why.
+   */
+  reviewNotes?: string | null;
 }
 
 /**
@@ -52,63 +64,18 @@ export interface AssayerExpense {
  * These are the figures finance works from. The earnings screen previously derived its own
  * totals by summing agreed fees off the loaded assignments, which could not see TDS, part
  * payments, or anything on hold — so the app and the desk disagreed about what was owed.
+ *
+ * All three used to be hand-declared here, independently of the backend response they describe —
+ * and the hand-declared `totals` silently had no `tdsWithheld` field at all, nor did the payable
+ * row carry `invoiceNumber`/`invoiceStatus`, even though the backend always sends both and the
+ * staff-facing web statement already displays them. Aliased onto the shared, canonical shape now
+ * (`packages/shared/src/assayer-invoicing.ts`) so a field the backend adds only has to be typed
+ * once, and mapping code that forgets to copy a field becomes a type error here instead of a
+ * silent gap an assayer discovers by comparing notes with the desk.
  */
-export interface AssayerPayable {
-  id: string;
-  payableNumber: string;
-  status: string;
-  /** A held payout is not being paid yet, and the statement says why. */
-  onHold?: boolean;
-  holdReason?: string | null;
-  assignmentId?: string;
-  /** Set when this payout reimburses an expense claim rather than paying an audit fee. */
-  expenseId?: string | null;
-  baseAmount: number;
-  travelAmount: number;
-  tdsAmount: number;
-  totalAmount: number;
-  paidAmount: number;
-  outstanding: number;
-  createdAt: string;
-  /**
-   * True on rows whose money was already visible under the pre-invoicing rules — earnings that
-   * predate the invite → submit → approve gate. Badged in the app so a reader understands why
-   * these rows carry amounts without ever having ridden an invoice. Absent while the server's
-   * `billing.assayerInvoicingEnabled` flag is off (the statement then has today's full shape).
-   */
-  preInvoicingEra?: boolean;
-}
-
-export interface AssayerPayment {
-  id: string;
-  paymentReference: string;
-  method: string;
-  amount: number;
-  paidDate: string;
-  balanceAfter: number | null;
-  notes?: string;
-}
-
-export interface AssayerStatement {
-  totals: {
-    earned: number;
-    paid: number;
-    outstanding: number;
-    awaitingApproval: number;
-    onHoldOrDisputed: number;
-    payableCount: number;
-  };
-  payables: AssayerPayable[];
-  payments: AssayerPayment[];
-  /**
-   * The counts-only invoicing block of the GATED statement (shape from `@fapoms/shared`):
-   * how many completed audits await invoicing, and the active invitation if one exists —
-   * deliberately with no amounts, because money first becomes visible on the invitation
-   * itself. Absent while the server's `billing.assayerInvoicingEnabled` flag is off, which is
-   * how this app tells the gated world from the legacy one (see `deriveEarningsGateState`).
-   */
-  invoicing?: AssayerStatementInvoicingBlock;
-}
+export type AssayerPayable = SharedAssayerStatementPayable;
+export type AssayerPayment = SharedAssayerStatementPayment;
+export type AssayerStatement = SharedAssayerStatement;
 
 /** Claim totals from `/expenses/mine/summary`, in rupees. */
 export interface ExpenseSummary {

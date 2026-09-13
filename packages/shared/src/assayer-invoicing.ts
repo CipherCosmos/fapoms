@@ -90,3 +90,82 @@ export interface AssayerStatementInvoicingBlock {
   /** The active (INVITED | SUBMITTED) invitation, or null when there is none. */
   invitation: { id: string; status: AssayerInvoiceStatus; lineCount: number } | null;
 }
+
+/**
+ * The full `GET /billing-engine/assayers/:assayerId/statement` response — one canonical shape for
+ * both the staff (ungated) and assayer (gated) audiences, rather than each client hand-declaring
+ * its own partial mirror.
+ *
+ * Before this type existed, mobile's own hand-rolled copy silently dropped `totals.tdsWithheld`,
+ * `tdsSection`, and every payable's `invoiceNumber`/`invoiceStatus` — fields the backend always
+ * computes and sends, and that the staff-facing web statement already reads and displays. An
+ * assayer's own statement showed less about their own money than the desk's view of the same
+ * record. A client that hand-maps a response instead of importing the real shape can drop a field
+ * silently, with no compile error, the moment the backend adds one — importing this type instead
+ * turns that into a type error at the call site.
+ */
+export interface AssayerStatementTotals {
+  earned: number;
+  paid: number;
+  outstanding: number;
+  awaitingApproval: number;
+  onHoldOrDisputed: number;
+  /** Withheld under `tdsSection` below. Absent from no response — the backend always computes it. */
+  tdsWithheld: number;
+  payableCount: number;
+}
+
+export interface AssayerStatementPayable {
+  id: string;
+  payableNumber: string;
+  status: string;
+  onHold: boolean;
+  holdReason: string | null;
+  assignmentId: string | null;
+  expenseId: string | null;
+  baseAmount: number;
+  travelAmount: number;
+  tdsAmount: number;
+  totalAmount: number;
+  paidAmount: number;
+  outstanding: number;
+  createdAt: string;
+  /** Which assayer invoice this row rides, if any — null means never invited. */
+  invoiceNumber: string | null;
+  invoiceStatus: AssayerInvoiceStatus | null;
+  /**
+   * Earned before the invoicing gate existed — visible under the old rules, never re-billed.
+   * Present only on the gated (assayer-audience) statement's rows.
+   */
+  preInvoicingEra?: boolean;
+}
+
+export interface AssayerStatementPayment {
+  id: string;
+  paymentReference: string | null;
+  method: string;
+  amount: number;
+  paidDate: string | null;
+  /**
+   * Absent on the gated (assayer-audience) statement: a running balance over ALL payables would
+   * leak the sum of whichever ones the gate is withholding, so those rows omit the field entirely
+   * rather than send a number that lies by counting hidden money.
+   */
+  balanceAfter?: number | null;
+  notes: string | null;
+}
+
+export interface AssayerStatement {
+  assayerId: string;
+  assayerName: string | null;
+  assayerCode: string | null;
+  /** Decrypted for finance; null when the assayer has no PAN on file. */
+  pan: string | null;
+  /** The Income-tax section the withholding is quoted under, from settings (e.g. 194J). */
+  tdsSection: string;
+  totals: AssayerStatementTotals;
+  payables: AssayerStatementPayable[];
+  payments: AssayerStatementPayment[];
+  /** Present only once the server's `billing.assayerInvoicingEnabled` flag is on. */
+  invoicing?: AssayerStatementInvoicingBlock;
+}

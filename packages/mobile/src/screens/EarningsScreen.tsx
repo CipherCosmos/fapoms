@@ -1,6 +1,6 @@
 import React from 'react';
 import { View } from 'react-native';
-import { AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fapoms/shared';
+import { AssayerInvoiceStatus, AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import type { AssayerInvoiceInvitation } from '@fapoms/shared';
 import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 
@@ -63,6 +63,15 @@ const PAYABLE_STATE: Record<AssayerPayableStatus, { labelKey: TranslationKey; to
   [AssayerPayableStatus.APPROVED]: { labelKey: 'earnings.payableStatus.approved', tone: 'info' },
   [AssayerPayableStatus.PAID]: { labelKey: 'earnings.payableStatus.paid', tone: 'success' },
   [AssayerPayableStatus.VOIDED]: { labelKey: 'earnings.payableStatus.voided', tone: 'neutral' },
+};
+
+/** Which assayer invoice a payable rides — the same labels the staff-facing statement carries
+ *  on every row, silently dropped from this screen's mapping until now. */
+const INVOICE_STATE: Record<AssayerInvoiceStatus, { labelKey: TranslationKey; tone: Tone }> = {
+  [AssayerInvoiceStatus.INVITED]: { labelKey: 'earnings.invoiceStatus.invited', tone: 'info' },
+  [AssayerInvoiceStatus.SUBMITTED]: { labelKey: 'earnings.invoiceStatus.submitted', tone: 'warning' },
+  [AssayerInvoiceStatus.APPROVED]: { labelKey: 'earnings.invoiceStatus.approved', tone: 'success' },
+  [AssayerInvoiceStatus.CANCELLED]: { labelKey: 'earnings.invoiceStatus.cancelled', tone: 'neutral' },
 };
 
 /** A rejected claim read as "pending" before — the same neutral grey as awaiting approval. */
@@ -153,6 +162,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   const awaiting = t0?.awaitingApproval ?? 0;
   const lifetime = t0?.earned ?? 0;
   const onHold = t0?.onHoldOrDisputed ?? 0;
+  const tdsWithheld = t0?.tdsWithheld ?? 0;
   /** What each completed audit was actually booked at, by assignment. */
   const bookedByAssignment = new Map<string, number>(
     (statement?.payables ?? [])
@@ -205,6 +215,16 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
               <MoneyChip icon="hourglass-outline" label={tr('earnings.chipPending')} value={money(awaiting)} iconColor={t.colors.warning} />
               {onHold > 0 && (
                 <MoneyChip icon="pause-circle-outline" label={tr('earnings.payableStatus.onHold')} value={money(onHold)} iconColor={t.colors.danger} />
+              )}
+              {/* Was computed by the backend and shown on the desk's own view of this same
+                  statement, but silently dropped by this screen's mapping until now. */}
+              {tdsWithheld > 0 && statement?.tdsSection && (
+                <MoneyChip
+                  icon="receipt-outline"
+                  label={tr('earnings.chipTdsWithheld', { section: statement.tdsSection })}
+                  value={money(tdsWithheld)}
+                  iconColor={t.colors.textMuted}
+                />
               )}
             </View>
           </>
@@ -335,6 +355,13 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                         {p.onHold && p.holdReason ? (
                           <AppText variant="caption" tone="muted" numberOfLines={2}>{p.holdReason}</AppText>
                         ) : null}
+                        {/* Which invoice this payout rides, if any — same labels the staff-facing
+                            statement already shows for this exact row. */}
+                        {p.invoiceNumber && (
+                          <AppText variant="caption" tone="faint" numberOfLines={1}>
+                            {tr('earnings.invoiceLabel', { number: p.invoiceNumber })}
+                          </AppText>
+                        )}
                       </View>
                       <View style={{ alignItems: 'flex-end', gap: 4 }}>
                         <Badge label={state.label} tone={state.tone} dot />
@@ -343,6 +370,12 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                             amounts without ever having ridden an invoice. */}
                         {p.preInvoicingEra === true && (
                           <Badge label={tr('earnings.preInvoicingBadge')} tone="neutral" />
+                        )}
+                        {p.invoiceNumber && p.invoiceStatus && INVOICE_STATE[p.invoiceStatus] && (
+                          <Badge
+                            label={tr(INVOICE_STATE[p.invoiceStatus].labelKey)}
+                            tone={INVOICE_STATE[p.invoiceStatus].tone}
+                          />
                         )}
                         {p.outstanding > 0 && p.outstanding !== p.totalAmount && (
                           <AppText variant="caption" tone="muted">{tr('earnings.outstanding', { amount: money(p.outstanding) })}</AppText>
@@ -422,6 +455,14 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                     {exp.branchName ? ` · ${exp.branchName}` : ''}
                     {exp.createdAt ? ` · ${pastDay(exp.createdAt)}` : ''}
                   </AppText>
+                  {/* Silently missing before: the desk's own reason a rejected claim needed one
+                      (the backend requires it), invisible anywhere in this app until now — an
+                      assayer had no way to learn why their reimbursement was refused. */}
+                  {exp.status === 'REJECTED' && exp.reviewNotes && (
+                    <AppText variant="caption" tone="muted" numberOfLines={2}>
+                      {tr('earnings.claimReviewNote', { reason: exp.reviewNotes })}
+                    </AppText>
+                  )}
                 </View>
                 <Badge
                   label={CLAIM_LABEL[exp.status] ? tr(CLAIM_LABEL[exp.status]) : String(exp.status)}

@@ -19,6 +19,7 @@ import {
   normaliseServerUrl,
 } from './server-config';
 import { cleanWorkforceVocabulary, type WorkforceVocabulary } from './workforce-vocabulary';
+import { mapAssayerStatementResponse } from './assayer-statement-mapping';
 
 /** One row of the per-category notification preference set returned by the API. */
 export interface NotificationPreference {
@@ -1364,63 +1365,9 @@ export class MobileApiService {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.success || !data.data) throw this.unavailable('Statement');
 
-      const d = data.data;
-      const num = (v: any) => Number(v) || 0;
-      return {
-        totals: {
-          earned: num(d.totals?.earned),
-          paid: num(d.totals?.paid),
-          outstanding: num(d.totals?.outstanding),
-          awaitingApproval: num(d.totals?.awaitingApproval),
-          onHoldOrDisputed: num(d.totals?.onHoldOrDisputed),
-          payableCount: num(d.totals?.payableCount),
-        },
-        payables: (d.payables || []).map((p: any) => ({
-          id: p.id,
-          payableNumber: p.payableNumber,
-          status: p.status,
-          onHold: !!p.onHold,
-          holdReason: p.holdReason ?? null,
-          assignmentId: p.assignmentId,
-          expenseId: p.expenseId ?? null,
-          baseAmount: num(p.baseAmount),
-          travelAmount: num(p.travelAmount),
-          tdsAmount: num(p.tdsAmount),
-          totalAmount: num(p.totalAmount),
-          paidAmount: num(p.paidAmount),
-          outstanding: num(p.outstanding),
-          createdAt: p.createdAt,
-          // Grandfathered rows — visible under the pre-invoicing rules, badged as such.
-          preInvoicingEra: p.preInvoicingEra === true,
-        })),
-        payments: (d.payments || []).map((pm: any) => ({
-          id: pm.id,
-          paymentReference: pm.paymentReference,
-          method: pm.method,
-          amount: num(pm.amount),
-          paidDate: pm.paidDate,
-          // The gated statement omits balanceAfter entirely (a running balance over rows the
-          // reader cannot see would leak the hidden ones' sum); map its absence to null.
-          balanceAfter: pm.balanceAfter == null ? null : num(pm.balanceAfter),
-          notes: pm.notes,
-        })),
-        // Present only once billing.assayerInvoicingEnabled is on server-side; its absence is
-        // how the earnings screen knows to render the legacy (ungated) world.
-        ...(d.invoicing
-          ? {
-              invoicing: {
-                awaitingInvoiceCount: num(d.invoicing.awaitingInvoiceCount),
-                invitation: d.invoicing.invitation
-                  ? {
-                      id: d.invoicing.invitation.id,
-                      status: d.invoicing.invitation.status,
-                      lineCount: num(d.invoicing.invitation.lineCount),
-                    }
-                  : null,
-              },
-            }
-          : {}),
-      };
+      // Mapping lives in its own file — see assayer-statement-mapping.ts's header comment for why
+      // (testability under this package's current jest config, which cannot load this file at all).
+      return mapAssayerStatementResponse(data.data);
     } catch (err) {
       // `null` meant "no statement"; a dropped connection is not that.
       throw err instanceof Error && err.name === 'ServerUnavailableError' ? err : this.unavailable('Statement', err);
@@ -1610,6 +1557,9 @@ export class MobileApiService {
         status: e.status,
         receiptUrl: e.receiptUrl,
         createdAt: e.createdAt,
+        // Dropped silently before — the rejection (or approval) reason the desk left, which the
+        // frontend's AssignmentDetailDrawer.tsx already shows for this same claim.
+        reviewNotes: e.reviewNotes ?? null,
       }));
     } catch (err) {
       // Unreachable is not "no claims": throw, and let the screen keep what it last knew.
@@ -2355,12 +2305,19 @@ export class MobileApiService {
     }
   }
 
-  static async getNotifications(): Promise<AppNotification[]> {
+  /**
+   * `unreadCount` is the server's own count over the WHOLE inbox — not derived from `items`,
+   * which is only the fetched page. The caller used to recompute it client-side by filtering
+   * `items` for `!isRead`, which silently undercounted the badge whenever an assayer had more
+   * unread notifications than fit in one page: the same `meta.unreadCount` this endpoint already
+   * sends, which the web frontend already reads directly (`api.ts`'s `getNotificationPage`).
+   */
+  static async getNotifications(): Promise<{ items: AppNotification[]; unreadCount: number }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications`);
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success) {
-        return (data.data || []).map((n: any) => ({
+        const items = (data.data || []).map((n: any) => ({
           id: n.id,
           title: n.title,
           message: n.message,
@@ -2372,6 +2329,7 @@ export class MobileApiService {
           // words in an operator-editable title. See AppNotification.type.
           type: n.type ?? undefined,
         }));
+        return { items, unreadCount: Number(data.meta?.unreadCount) || 0 };
       }
       throw this.unavailable('Notifications');
     } catch (err) {

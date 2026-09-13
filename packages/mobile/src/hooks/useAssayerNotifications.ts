@@ -73,9 +73,12 @@ export function useAssayerNotifications(options: {
 
   const load = useCallback(async () => {
     try {
-      const items = await MobileApiService.getNotifications();
+      // `unreadCount` comes from the server, over the whole inbox — not derived from `items`,
+      // which is only this fetched page. Recomputing it locally by filtering `items` undercounted
+      // the badge for any assayer with more unread notifications than fit in one page.
+      const { items, unreadCount } = await MobileApiService.getNotifications();
       setNotifications(items);
-      setUnreadCount(items.filter((n) => !n.isRead).length);
+      setUnreadCount(unreadCount);
 
       /**
        * The first poll of a session only records what is already there.
