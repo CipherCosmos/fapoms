@@ -152,10 +152,10 @@ export const ExecutiveMap: React.FC = () => {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 14 }}>
         <div>
-          <h2 style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--font-display)', display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+          <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, fontFamily: 'var(--font-display)', display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
             <ShieldAlert size={22} style={{ color: 'var(--accent-primary)' }} /> Executive Command Center
           </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '4px 0 0' }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', margin: '4px 0 0' }}>
             Where the work is, where the people are, and where those two don’t line up.
           </p>
         </div>
@@ -167,19 +167,19 @@ export const ExecutiveMap: React.FC = () => {
           />
           {updatedAt && (
             <span style={{
-              fontSize: 11.5, fontWeight: 600, color: 'var(--text-muted)',
+              fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-muted)',
               padding: '5px 11px', borderRadius: 'var(--radius-full)',
               background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)',
             }}>
               {isFetching ? 'Updating…' : `As of ${updatedAt}`}
             </span>
           )}
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
           {/* The command-centre sheet covers every branch in scope — slow enough that the
               button looked dead and got clicked twice. */}
-          <button onClick={handleExport} disabled={exporting} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--success)' }}>
+          <button onClick={handleExport} disabled={exporting} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--success)' }}>
             <FileSpreadsheet size={14} /> {exporting ? 'Preparing…' : 'Export'}
           </button>
         </div>
@@ -197,7 +197,7 @@ export const ExecutiveMap: React.FC = () => {
       {loadFailed(commandCentre) ? (
         <LoadFailure loads={[{ label: 'the command centre', query: commandCentre }]} />
       ) : isPending ? (
-        <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading geographic intelligence…</div>
+        <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading geographic intelligence…</div>
       ) : null}
 
       {data && t && (
@@ -225,11 +225,11 @@ export const ExecutiveMap: React.FC = () => {
             <Lens active={lens === 'UNASSIGNED'} onClick={() => setLens('UNASSIGNED')} label="Unassigned" count={t.unassignedBranches} color="var(--warning)" />
             {selectedState && (
               <button onClick={() => setSelectedState(null)}
-                style={{ marginLeft: 4, padding: '6px 11px', fontSize: 11.5, fontWeight: 600, background: 'rgba(216,174,71,0.12)', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+                style={{ marginLeft: 4, padding: '6px 11px', fontSize: 'var(--text-2xs)', fontWeight: 600, background: 'rgba(216,174,71,0.12)', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
                 {selectedState} ✕
               </button>
             )}
-            <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--text-muted)' }}>
+            <span style={{ marginLeft: 'auto', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               showing {visibleBranches.length} of {data.meta?.branchPoints.total ?? data.branchPoints.length} branches
               {data.meta?.branchPoints.truncated && (
                 /* The map carries the most decision-relevant pins first — unreachable, then
@@ -258,8 +258,8 @@ export const ExecutiveMap: React.FC = () => {
               {selected ? (
                 <>
                   <div>
-                    <div style={{ fontSize: 15, fontWeight: 700 }}>{selected.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>{selected.name}</div>
+                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                       {selected.solId ?? '—'} · {selected.district}, {selected.state}
                     </div>
                   </div>
@@ -274,17 +274,17 @@ export const ExecutiveMap: React.FC = () => {
                   <Row label={`Assayers within ${data.serviceableRadiusKm}km`} value={String(selected.assayersInRange)}
                        color={selected.assayersInRange === 0 ? 'var(--danger)' : undefined} />
                   {selected.isolated && (
-                    <div style={{ fontSize: 11.5, color: 'var(--danger)', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-sm)', padding: 9, lineHeight: 1.45 }}>
+                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-sm)', padding: 9, lineHeight: 1.45 }}>
                       No assayer lives within serviceable range. This branch needs travel-and-stay costing, a partner, or a local hire — it cannot be scheduled normally.
                     </div>
                   )}
                   <button onClick={() => navigate(`/planning?projectId=${selected.projectId}&branchId=${selected.projectBranchId}`)} className="btn btn-secondary"
-                    style={{ marginTop: 'auto', fontSize: 12 }}>
+                    style={{ marginTop: 'auto', fontSize: 'var(--text-xs)' }}>
                     Open in Planning
                   </button>
                 </>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center', gap: 10, fontSize: 12 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center', gap: 10, fontSize: 'var(--text-xs)' }}>
                   <MapPin size={26} style={{ opacity: 0.35 }} />
                   <div>Select a branch on the map to see its workload and how far its nearest assayer is.</div>
                 </div>
@@ -304,9 +304,9 @@ export const ExecutiveMap: React.FC = () => {
               <SectionLabel>Where to add assayers</SectionLabel>
               <div className="glass-card" style={{ padding: 14 }}>
                 {data.coverageGaps.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: 'var(--success)' }}>Every branch has an assayer within {data.serviceableRadiusKm}km.</div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>Every branch has an assayer within {data.serviceableRadiusKm}km.</div>
                 ) : data.coverageGaps.map((g) => (
-                  <div key={g.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', fontSize: 12, borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
+                  <div key={g.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', fontSize: 'var(--text-xs)', borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
                     <span>
                       <strong>{g.name}</strong>
                       <span style={{ color: 'var(--text-muted)' }}> · {g.district}, {g.state} · {g.packets} pkt</span>
@@ -323,19 +323,19 @@ export const ExecutiveMap: React.FC = () => {
               <SectionLabel>Spare capacity</SectionLabel>
               <div className="glass-card" style={{ padding: 14 }}>
                 {data.idleAssayers.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Every assayer has open work.</div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Every assayer has open work.</div>
                 ) : (
                   <>
-                    <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.45 }}>
+                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.45 }}>
                       {data.idleAssayers.length} assayer(s) with no open assignment. Those sitting in a balanced or
                       under-utilised territory are the ones worth moving to the gaps on the left.
                     </div>
                     {data.idleAssayers.slice(0, 12).map((a) => {
                       const p = POSTURE[(a.territoryPosture as keyof typeof POSTURE)] ?? null;
                       return (
-                        <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '4px 0', fontSize: 12, flexWrap: 'wrap' }}>
+                        <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '4px 0', fontSize: 'var(--text-xs)', flexWrap: 'wrap' }}>
                           <span>{a.name} <span style={{ color: 'var(--text-muted)' }}>· {a.state}</span></span>
-                          {p && <span style={{ fontSize: 10.5, fontWeight: 700, color: p.color }}>{p.label}</span>}
+                          {p && <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, color: p.color }}>{p.label}</span>}
                         </div>
                       );
                     })}
@@ -352,32 +352,32 @@ export const ExecutiveMap: React.FC = () => {
 
 const Kpi: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?: string; color: string }> = ({ icon, label, value, sub, color }) => (
   <div className="glass-card" style={{ padding: '13px 15px', borderLeft: `3px solid ${color}` }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 700 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-3xs)', textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 700 }}>
       <span style={{ color }}>{icon}</span>{label}
     </div>
-    <div style={{ fontSize: 20, fontWeight: 800, marginTop: 5, fontFamily: 'var(--font-display)' }}>{value}</div>
-    {sub && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
+    <div style={{ fontSize: 'var(--text-xl)', fontWeight: 800, marginTop: 5, fontFamily: 'var(--font-display)' }}>{value}</div>
+    {sub && <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
   </div>
 );
 
 const Lens: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string }> = ({ active, onClick, label, count, color }) => (
   <button onClick={onClick} style={{
-    padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+    padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
     background: active ? `${color}22` : 'transparent', color: active ? color : 'var(--text-secondary)',
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,
   }}>
     {label}
-    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--bg-page)' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 10.5, fontWeight: 700 }}>{count}</span>
+    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--bg-page)' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 'var(--text-3xs)', fontWeight: 700 }}>{count}</span>
   </button>
 );
 
 const Row: React.FC<{ label: string; value: string; color?: string }> = ({ label, value, color }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', borderBottom: '1px dashed var(--border-color)' }}>
-    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{label}</span>
-    <span style={{ fontSize: 12, fontWeight: 600, color: color ?? 'var(--text-primary)', textAlign: 'right' }}>{value}</span>
+    <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: color ?? 'var(--text-primary)', textAlign: 'right' }}>{value}</span>
   </div>
 );
 
 const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)', marginBottom: 9 }}>{children}</div>
+  <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)', marginBottom: 9 }}>{children}</div>
 );

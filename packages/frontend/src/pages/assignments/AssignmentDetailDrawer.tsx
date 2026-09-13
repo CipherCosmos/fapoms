@@ -143,8 +143,8 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
         }}>
           <MessageSquare size={28} style={{ color: 'var(--accent-primary)', opacity: 0.7 }} />
         </div>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '14px', fontWeight: 600 }}>No Assignment Selected</p>
-        <p style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '4px', maxWidth: '260px' }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-base)', fontWeight: 600 }}>No Assignment Selected</p>
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginTop: '4px', maxWidth: '260px' }}>
           Select an assignment row from the table to review its details, timeline, and post comments.
         </p>
       </div>
@@ -224,10 +224,10 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       const upper = part.toUpperCase();
       const color = keywordMap[upper];
       if (color) {
-        return <span key={i} style={{ display: 'inline-block', padding: '0 5px', borderRadius: '3px', fontSize: '11px', fontWeight: 700, background: color + '20', color, letterSpacing: '0.2px' }}>{part}</span>;
+        return <span key={i} style={{ display: 'inline-block', padding: '0 5px', borderRadius: '3px', fontSize: 'var(--text-2xs)', fontWeight: 700, background: color + '20', color, letterSpacing: '0.2px' }}>{part}</span>;
       }
       if (/^₹[\d,]+(\.\d+)?$/.test(part)) {
-        return <span key={i} style={{ display: 'inline-block', padding: '0 5px', borderRadius: '3px', fontSize: '11px', fontWeight: 700, background: 'var(--warning)' + '20', color: 'var(--warning)' }}>{part}</span>;
+        return <span key={i} style={{ display: 'inline-block', padding: '0 5px', borderRadius: '3px', fontSize: 'var(--text-2xs)', fontWeight: 700, background: 'var(--warning)' + '20', color: 'var(--warning)' }}>{part}</span>;
       }
       return part;
     });
@@ -243,8 +243,8 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.5px' }}>DETAILS PANEL</span>
-            <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '1px 0' }}>{assignment.assignmentNumber}</h4>
+            <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.5px' }}>DETAILS PANEL</span>
+            <h4 style={{ fontSize: 'var(--text-base)', fontWeight: 700, margin: '1px 0' }}>{assignment.assignmentNumber}</h4>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {/* 1. Branch Workflow Status */}
@@ -301,7 +301,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                   disabled={actionBusy}
                   className="btn btn-primary"
                   style={{
-                    padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: '13px',
+                    padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-sm)',
                     fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)',
                   }}
                 >
@@ -319,7 +319,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                   disabled={actionBusy}
                   className="btn btn-primary"
                   style={{
-                    padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: '13px',
+                    padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-sm)',
                     fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)',
                   }}
                 >
@@ -330,7 +330,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 <button
                   onClick={() => navigate(planningLinkFor(assignment))}
                   className="btn btn-primary"
-                  style={{ padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: '13px', fontWeight: 700 }}
+                  style={{ padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-sm)', fontWeight: 700 }}
                 >
                   🔄 Reassign Branch →
                 </button>
@@ -340,7 +340,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                   onClick={() => setShowMoreActions(v => !v)}
                   disabled={actionBusy}
                   className="btn btn-secondary"
-                  style={{ padding: '8px 12px', minHeight: 'var(--touch-target-min)', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 'auto' }}
+                  style={{ padding: '8px 12px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 'auto' }}
                   aria-expanded={showMoreActions}
                 >
                   More {showMoreActions ? '▲' : '▼'}
@@ -350,22 +350,22 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
             {showMoreActions && (
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', padding: '8px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-primary)', border: '1px solid var(--border-hair)' }}>
                 {canAcceptOffer && (
-                  <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: '12px', fontWeight: 700, color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
+                  <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
                     ✕ Reject Offer
                   </button>
                 )}
                 {canCancel && (
-                  <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                  <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)' }}>
                     🚫 Cancel Assignment
                   </button>
                 )}
                 {canReassign && (canAcceptOffer || canComplete) && (
-                  <button onClick={() => navigate(planningLinkFor(assignment))} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: '12px', fontWeight: 700 }}>
+                  <button onClick={() => navigate(planningLinkFor(assignment))} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700 }}>
                     🔄 Reassign Branch →
                   </button>
                 )}
                 {canEscalate && (
-                  <button onClick={() => setActionMode('ESCALATE')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: '12px', fontWeight: 700, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
+                  <button onClick={() => setActionMode('ESCALATE')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
                     ⚠ Escalate
                   </button>
                 )}
@@ -380,7 +380,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 value={actionReason}
                 onChange={(e) => setActionReason(e.target.value)}
                 placeholder={actionMode === 'REJECT' ? 'Reason for rejecting...' : actionMode === 'CANCEL' ? 'Reason for cancelling...' : 'Reason for escalating (what went wrong?)...'}
-                style={{ flex: 1, padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '11.5px' }}
+                style={{ flex: 1, padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-2xs)' }}
               />
               <button
                 onClick={() => actionMode === 'ESCALATE'
@@ -388,18 +388,18 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                   : onTransition(actionMode === 'REJECT' ? 'REJECTED' : 'CANCELLED', actionReason || undefined)}
                 disabled={actionBusy || ((actionMode === 'REJECT' || actionMode === 'CANCEL') && !actionReason.trim())}
                 className="btn btn-primary"
-                style={{ padding: '5px 10px', fontSize: '11px', background: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)', borderColor: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)' }}
+                style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)', background: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)', borderColor: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)' }}
               >
                 Confirm
               </button>
-              <button onClick={resetActionState} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11px' }}>
+              <button onClick={resetActionState} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}>
                 Cancel
               </button>
             </div>
           )}
 
           {actionError && (
-            <div style={{ fontSize: '11px', color: 'var(--danger)' }}>{actionError}</div>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)' }}>{actionError}</div>
           )}
         </div>
       )}
@@ -407,8 +407,8 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       {/* Details Grid */}
       <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', borderBottom: '1px solid var(--border-color)' }}>
         <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)' }}>
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Assayer</span>
-          <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
+          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Assayer</span>
+          <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
             {assignment.assayerId ? (
               <Link
                 to={`/hr/roster/${encodeURIComponent(assignment.assayerId)}`}
@@ -424,26 +424,26 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
           </p>
         </div>
         <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)' }}>
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Fee</span>
-          <p style={{ fontSize: '14px', fontWeight: 800, margin: '1px 0', color: 'var(--warning)' }}>
+          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Fee</span>
+          <p style={{ fontSize: 'var(--text-base)', fontWeight: 800, margin: '1px 0', color: 'var(--warning)' }}>
             {assignmentFee(assignment)}
           </p>
         </div>
         <div style={{ background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-active-bg)', gridColumn: 'span 2' }}>
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Branch / Project</span>
-          <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
+          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Branch / Project</span>
+          <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
             {assignment.projectBranch?.branch?.name}
             {assignment.projectBranch?.branch?.state && (
               <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> — {assignment.projectBranch.branch.state}</span>
             )}
           </p>
-          <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: '1px 0 0' }}>{assignment.project?.name}</p>
+          <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', margin: '1px 0 0' }}>{assignment.project?.name}</p>
         </div>
         <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <Calendar size={13} style={{ color: 'var(--accent)' }} />
           <div>
-            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Scheduled</span>
-            <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>{assignment.scheduledDate ? new Date(assignment.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unscheduled'}</p>
+            <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Scheduled</span>
+            <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>{assignment.scheduledDate ? new Date(assignment.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unscheduled'}</p>
           </div>
         </div>
         {/*
@@ -457,8 +457,8 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
         */}
         {attendance.arrival && (
           <div style={{ background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-active-bg)', gridColumn: 'span 2' }}>
-            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Attendance on site</span>
-            <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
+            <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Attendance on site</span>
+            <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
               Checked in {formatAttendanceMoment(attendance.arrival)}
               {assignment.checkInDistanceMeters != null && (
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · {assignment.checkInDistanceMeters < 1000 ? `${assignment.checkInDistanceMeters} m` : `${(assignment.checkInDistanceMeters / 1000).toFixed(1)} km`} from the branch</span>
@@ -469,7 +469,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
             </p>
             {attendance.departure ? (
               <>
-                <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
+                <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
                   Checked out {formatAttendanceMoment(attendance.departure)}
                   {assignment.checkOutDistanceMeters != null && (
                     <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · {assignment.checkOutDistanceMeters < 1000 ? `${assignment.checkOutDistanceMeters} m` : `${(assignment.checkOutDistanceMeters / 1000).toFixed(1)} km`} from the branch</span>
@@ -478,16 +478,16 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                     <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — phone accuracy ±{assignment.checkOutAccuracyMeters} m</span>
                   )}
                 </p>
-                <p style={{ fontSize: '12px', fontWeight: 800, margin: '3px 0 1px', color: 'var(--success)' }}>
+                <p style={{ fontSize: 'var(--text-xs)', fontWeight: 800, margin: '3px 0 1px', color: 'var(--success)' }}>
                   {attendance.durationLabel} on site
                 </p>
               </>
             ) : (
               <div style={{ marginTop: '4px', padding: '6px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', border: '1px solid var(--warning)' }}>
-                <p style={{ fontSize: '11.5px', fontWeight: 700, margin: 0, color: 'var(--warning)' }}>
+                <p style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, margin: 0, color: 'var(--warning)' }}>
                   No check-out recorded — time on site unknown
                 </p>
-                <p style={{ fontSize: '10.5px', margin: '2px 0 0', color: 'var(--text-secondary)' }}>
+                <p style={{ fontSize: 'var(--text-3xs)', margin: '2px 0 0', color: 'var(--text-secondary)' }}>
                   {attendance.gapReason
                     ? `Closed without a departure. Reason given: “${attendance.gapReason}”`
                     : assignment.status === 'COMPLETED'
@@ -501,7 +501,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 <a
                   href={`https://www.google.com/maps?q=${assignment.checkInLatitude},${assignment.checkInLongitude}`}
                   target="_blank" rel="noreferrer"
-                  style={{ fontSize: '10.5px', color: 'var(--accent)', textDecoration: 'none' }}
+                  style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent)', textDecoration: 'none' }}
                 >
                   Arrival on map ↗
                 </a>
@@ -510,7 +510,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 <a
                   href={`https://www.google.com/maps?q=${assignment.checkOutLatitude},${assignment.checkOutLongitude}`}
                   target="_blank" rel="noreferrer"
-                  style={{ fontSize: '10.5px', color: 'var(--accent)', textDecoration: 'none' }}
+                  style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent)', textDecoration: 'none' }}
                 >
                   Departure on map ↗
                 </a>
@@ -525,11 +525,11 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
         */}
         {!attendance.arrival && assignment.status === 'COMPLETED' && (
           <div style={{ background: 'var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--warning)', gridColumn: 'span 2' }}>
-            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Attendance on site</span>
-            <p style={{ fontSize: '11.5px', fontWeight: 700, margin: '1px 0', color: 'var(--warning)' }}>
+            <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Attendance on site</span>
+            <p style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, margin: '1px 0', color: 'var(--warning)' }}>
               No check-in recorded — this audit was closed without attendance evidence
             </p>
-            <p style={{ fontSize: '10.5px', margin: '2px 0 0', color: 'var(--text-secondary)' }}>
+            <p style={{ fontSize: 'var(--text-3xs)', margin: '2px 0 0', color: 'var(--text-secondary)' }}>
               {attendance.gapReason
                 ? `Reason given: “${attendance.gapReason}”`
                 : 'No reason was recorded against this completion.'}
@@ -539,10 +539,10 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
         <div style={{ background: 'var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid var(--status-pending-bg)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <ExternalLink size={13} style={{ color: 'var(--warning)' }} />
           <div>
-            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Quick Links</span>
+            <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Quick Links</span>
             <div style={{ display: 'flex', gap: '4px', marginTop: '1px' }}>
-              <button onClick={() => navigate(planningLinkFor(assignment))} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Planning</button>
-              <button onClick={() => navigate(`/scheduling?assignmentId=${assignment.id}`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: '9px', background: 'var(--border-hair)' }}>Schedule</button>
+              <button onClick={() => navigate(planningLinkFor(assignment))} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Planning</button>
+              <button onClick={() => navigate(`/scheduling?assignmentId=${assignment.id}`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Schedule</button>
             </div>
           </div>
         </div>
@@ -554,7 +554,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       {/* Expense claims */}
       {expenses.length > 0 && (
         <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.3px' }}>
+          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.3px' }}>
             EXPENSE CLAIMS ({expenses.length})
           </span>
           {expenses.map((e: any) => {
@@ -566,20 +566,20 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)',
                 borderRadius: 'var(--radius-sm)', padding: '7px 9px',
               }}>
-                <span style={{ fontSize: '12px', fontWeight: 700 }}>₹{Number(e.amount).toLocaleString()}</span>
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{anyStatusLabel(e.category)}</span>
-                {e.description && <span style={{ fontSize: '10px', color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{e.description}</span>}
-                <span style={{ fontSize: '9px', fontWeight: 700, color: tone }}>{anyStatusLabel(e.status)}</span>
+                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700 }}>₹{Number(e.amount).toLocaleString()}</span>
+                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>{anyStatusLabel(e.category)}</span>
+                {e.description && <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{e.description}</span>}
+                <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, color: tone }}>{anyStatusLabel(e.status)}</span>
                 {pending && canActOnAssignments && (
                   <span style={{ display: 'flex', gap: '4px' }}>
                     <button onClick={() => reviewExpense(e.id, true)} disabled={reviewingExpenseId === e.id}
-                      className="btn btn-primary" style={{ padding: '2px 8px', fontSize: '9.5px' }}>Approve</button>
+                      className="btn btn-primary" style={{ padding: '2px 8px', fontSize: 'var(--text-3xs)' }}>Approve</button>
                     <button onClick={() => reviewExpense(e.id, false)} disabled={reviewingExpenseId === e.id}
-                      className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '9.5px', color: 'var(--danger)' }}>Reject</button>
+                      className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 'var(--text-3xs)', color: 'var(--danger)' }}>Reject</button>
                   </span>
                 )}
                 {!pending && e.reviewNotes && (
-                  <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', width: '100%' }}>Note: {e.reviewNotes}</span>
+                  <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', width: '100%' }}>Note: {e.reviewNotes}</span>
                 )}
               </div>
             );
@@ -590,11 +590,11 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       {/* Timeline Section */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px 16px', overflow: 'hidden' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px', letterSpacing: '0.3px' }}>
+          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px', letterSpacing: '0.3px' }}>
             <Clock size={12} style={{ color: 'var(--accent-primary)' }} /> CHRONOLOGICAL TIMELINE
           </span>
           {timeline.length > 0 && (
-            <span style={{ fontSize: '9px', color: 'var(--text-muted)', background: 'var(--bg-tertiary)', padding: '1px 6px', borderRadius: 'var(--radius-full)' }}>
+            <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', background: 'var(--bg-tertiary)', padding: '1px 6px', borderRadius: 'var(--radius-full)' }}>
               {timeline.length} event{timeline.length !== 1 ? 's' : ''}
             </span>
           )}
@@ -606,24 +606,24 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
         {loadFailed(timelineQuery) ? (
           <LoadFailure loads={[{ label: "this assignment's timeline", query: timelineQuery }]} />
         ) : isLoadingTimeline ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '32px', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '32px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
             <div style={{ width: '14px', height: '14px', border: '2px solid var(--border-color)', borderTop: '2px solid var(--accent-primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
             Loading timeline...
           </div>
         ) : (
           <div style={{ maxHeight: '300px', overflowY: 'auto', paddingRight: '4px', flex: 1 }}>
             {timeline.length === 0 ? (
-              <div style={{ padding: '28px', color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+              <div style={{ padding: '28px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
                 <Clock size={22} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
                 <p style={{ fontWeight: 600, marginBottom: '2px' }}>No timeline events yet</p>
-                <p style={{ fontSize: '12px' }}>Events will appear here as the assignment progresses.</p>
+                <p style={{ fontSize: 'var(--text-xs)' }}>Events will appear here as the assignment progresses.</p>
               </div>
             ) : (
               groupByDate(timeline).map((group) => (
                 <div key={group.date}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '12px 0 8px' }}>
                     <div style={{
-                      fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)',
+                      fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--text-muted)',
                       background: 'var(--bg-tertiary)', padding: '2px 10px',
                       borderRadius: 'var(--radius-full)', letterSpacing: '0.3px',
                     }}>
@@ -659,7 +659,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                             border: `1px solid ${accent.border}`,
                             borderRadius: 'var(--radius-sm)',
                             padding: '8px 10px',
-                            fontSize: '12px',
+                            fontSize: 'var(--text-xs)',
                             transition: 'all 0.2s ease',
                             cursor: 'default',
                           }}>
@@ -667,23 +667,23 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <span style={{
                                   display: 'inline-block', padding: '1px 6px',
-                                  fontSize: '9px', fontWeight: 700, letterSpacing: '0.3px',
+                                  fontSize: 'var(--text-3xs)', fontWeight: 700, letterSpacing: '0.3px',
                                   borderRadius: 'var(--radius-full)',
                                   background: accent.color + '20',
                                   color: accent.color,
                                 }}>
                                   {activityEventLabel(evt.type)}
                                 </span>
-                                <span style={{ color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 500 }}>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-2xs)', fontWeight: 500 }}>
                                   {evt.user}
                                 </span>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{formatEventTime(evt.timestamp)}</span>
-                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', opacity: 0.6 }}>{formatRelativeTime(evt.timestamp)}</span>
+                                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{formatEventTime(evt.timestamp)}</span>
+                                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', opacity: 0.6 }}>{formatRelativeTime(evt.timestamp)}</span>
                               </div>
                             </div>
-                            <p style={{ color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5, paddingLeft: '2px', fontSize: '12px' }}>{highlightKeywords(evt.description)}</p>
+                            <p style={{ color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5, paddingLeft: '2px', fontSize: 'var(--text-xs)' }}>{highlightKeywords(evt.description)}</p>
                           </div>
                         </div>
                       );
@@ -718,7 +718,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
             borderRadius: 'var(--radius-sm)',
             color: 'var(--text-primary)',
             outline: 'none',
-            fontSize: '12px',
+            fontSize: 'var(--text-xs)',
           }}
         />
         <button

@@ -167,7 +167,7 @@ export const AssayerRemarks: React.FC<{
   const remarks = query.data?.remarks ?? [];
   const summary = query.data?.summary;
   const submittable = rating !== null && text.trim().length > 0 && text.trim().length <= 1000 && !create.isPending;
-  const fs = compact ? '11.5px' : '12.5px';
+  const fs = compact ? 'var(--text-2xs)' : 'var(--text-xs)';
   const inputStyle: React.CSSProperties = {
     padding: compact ? '6px 9px' : '8px 11px', fontSize: fs, borderRadius: '7px',
     background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)',
@@ -184,7 +184,7 @@ export const AssayerRemarks: React.FC<{
             <strong>{summary.count}</strong> rated remark{summary.count === 1 ? '' : 's'} in the last year ·
             {' '}recency-weighted average{' '}
             <strong style={{ color: ratingTone(summary.weightedMean).fg }}>{fmtSignedMean(summary.weightedMean)}</strong>
-            <span title="How the engine folds remarks in: score = 50 + 25 × weighted mean, so −2 across the board is 0 and +2 is 100. Worth 6% of a recommendation — enough to settle a close call, never enough to remove anyone." style={{ marginLeft: '6px', color: 'var(--text-muted)', cursor: 'help', fontSize: '10.5px' }}>
+            <span title="How the engine folds remarks in: score = 50 + 25 × weighted mean, so −2 across the board is 0 and +2 is 100. Worth 6% of a recommendation — enough to settle a close call, never enough to remove anyone." style={{ marginLeft: '6px', color: 'var(--text-muted)', cursor: 'help', fontSize: 'var(--text-3xs)' }}>
               (scores {Math.round(50 + 25 * (summary.weightedMean ?? 0))}/100 in planning)
             </span>
           </span>
@@ -198,14 +198,14 @@ export const AssayerRemarks: React.FC<{
       {canWrite && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: compact ? '10px' : '14px', padding: compact ? '8px' : '10px', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Rating</span>
+            <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Rating</span>
             {RATINGS.map((r) => {
               const on = rating === r.value;
               const tone = ratingTone(r.value);
               return (
                 <button key={r.value} type="button" title={r.hint} onClick={() => setRating(r.value)}
                   style={{
-                    fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '6px', cursor: 'pointer',
+                    fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '3px 9px', borderRadius: '6px', cursor: 'pointer',
                     background: on ? tone.bg : 'transparent', color: on ? tone.fg : 'var(--text-secondary)',
                     border: `1px solid ${on ? tone.fg : 'var(--border-color)'}`,
                   }}>
@@ -226,14 +226,14 @@ export const AssayerRemarks: React.FC<{
               onKeyDown={(e) => { if (e.key === 'Enter' && submittable) create.mutate(); }}
               placeholder={rating === null ? 'Pick a rating, then say what you saw…' : 'What did you see? Be specific — this is read before the next offer.'}
               style={{ ...inputStyle, flex: 1 }} />
-            <button type="button" onClick={() => create.mutate()} disabled={!submittable} className="btn btn-primary" style={{ fontSize: '12px', padding: compact ? '6px 10px' : '8px 12px' }}>
+            <button type="button" onClick={() => create.mutate()} disabled={!submittable} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: compact ? '6px 10px' : '8px 12px' }}>
               <Send size={12} />
             </button>
           </div>
-          {err && <div style={{ fontSize: '11px', color: 'var(--danger)' }}>{err}</div>}
+          {err && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)' }}>{err}</div>}
         </div>
       )}
-      {!canWrite && err && <div style={{ fontSize: '11px', color: 'var(--danger)', marginBottom: '8px' }}>{err}</div>}
+      {!canWrite && err && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', marginBottom: '8px' }}>{err}</div>}
 
       {query.isError ? (
         <div style={{ fontSize: fs, color: 'var(--danger)' }}>{userMessage(query.error)}</div>
@@ -246,12 +246,12 @@ export const AssayerRemarks: React.FC<{
             const mine = !!userId && r.authorId === userId;
             return (
               <div key={r.id} style={{ padding: compact ? '7px 0' : '10px 0', borderBottom: '1px solid var(--border-hair)', display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                <span title={r.rating == null ? 'Unrated note' : `Rating ${fmtSignedMean(r.rating)}`} style={{ flexShrink: 0, minWidth: '30px', textAlign: 'center', fontSize: '11px', fontWeight: 700, padding: '2px 6px', borderRadius: '6px', background: tone.bg, color: tone.fg }}>
+                <span title={r.rating == null ? 'Unrated note' : `Rating ${fmtSignedMean(r.rating)}`} style={{ flexShrink: 0, minWidth: '30px', textAlign: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '2px 6px', borderRadius: '6px', background: tone.bg, color: tone.fg }}>
                   {r.rating == null ? '·' : fmtSignedMean(r.rating).replace('.0', '')}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: fs, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{r.content}</div>
-                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                  <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
                     <span style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.02em' }}>{r.category}</span>
                     {' · '}{r.authorName} <span style={{ fontStyle: 'italic' }}>({authorRoleLabel(r.authorRole)})</span>
                     {' · '}{fmtWhen(r.createdAt)}

@@ -50,7 +50,7 @@ interface Attribute {
 const daysUntil = (iso?: string | null): number | null => daysUntilExpiry(iso ?? null);
 
 /** The date box that sits in a row rather than on a form — narrower, same skin. */
-const inlineDate: React.CSSProperties = { ...fieldInput, width: 'auto', padding: '4px 7px', fontSize: '12px' };
+const inlineDate: React.CSSProperties = { ...fieldInput, width: 'auto', padding: '4px 7px', fontSize: 'var(--text-xs)' };
 
 export const AssayerSkillsPanel: React.FC<{
   assayerId: string;
@@ -224,7 +224,7 @@ export const AssayerSkillsPanel: React.FC<{
         <LinkButton
           icon={<Plus size={12} />}
           onClick={() => setDraft({ type: 'CERTIFICATION', name: '', expiryDate: '' })}
-          style={{ fontSize: '12.5px', paddingBottom: '12px' }}
+          style={{ fontSize: 'var(--text-xs)', paddingBottom: '12px' }}
         >
           Add a skill, language or certificate
         </LinkButton>
@@ -285,13 +285,13 @@ export const AssayerSkillsPanel: React.FC<{
         const tone = days === null ? 'var(--text-muted)'
           : days < 0 ? 'var(--danger)' : days <= 30 ? 'var(--warning)' : 'var(--text-muted)';
         return (
-          <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-hair)', fontSize: '12.5px' }}>
+          <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-hair)', fontSize: 'var(--text-xs)' }}>
             <span style={{ minWidth: 0 }}>
               <strong>{w.name}</strong>
               <span style={{ ...label, marginLeft: '6px' }}>{attributeTypeLabel(w.type)}</span>
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '10px', whiteSpace: 'nowrap' }}>
-              <span style={{ color: tone, fontSize: '12px' }}>
+              <span style={{ color: tone, fontSize: 'var(--text-xs)' }}>
                 {w.level ?? ''}
                 {w.expiryDate && (days !== null && days < 0
                   ? ` · expired ${fmtDate(w.expiryDate)}`

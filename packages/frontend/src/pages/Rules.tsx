@@ -284,7 +284,7 @@ export const RulesSection: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: 0, maxWidth: '62ch', lineHeight: 1.55 }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', margin: 0, maxWidth: '62ch', lineHeight: 1.55 }}>
           A rule can require a skill or a certificate, keep work out of a state, or cap how many
           open assignments someone may hold. Rules apply to everyone unless you point one at a
           single client or branch.
@@ -293,11 +293,11 @@ export const RulesSection: React.FC = () => {
       </div>
 
       {err && (
-        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '13px' }}>{err}</div>
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>{err}</div>
       )}
 
       {misconfiguredCount > 0 && (
-        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', color: 'var(--warning)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', color: 'var(--warning)', fontSize: 'var(--text-sm)', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <AlertTriangle size={15} /> {misconfiguredCount} rule(s) are missing the field their type actually needs — they are silently doing nothing. Flagged below with ⚠.
         </div>
       )}
@@ -308,7 +308,7 @@ export const RulesSection: React.FC = () => {
         is indistinguishable from one that does not exist unless this says otherwise.
       */}
       {branchShortfall && (
-        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'flex-start', lineHeight: 1.55 }}>
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', display: 'flex', gap: '8px', alignItems: 'flex-start', lineHeight: 1.55 }}>
           <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
           <span>
             Only {branchShortfall.shown.toLocaleString('en-IN')} of the{' '}
@@ -329,7 +329,7 @@ export const RulesSection: React.FC = () => {
         <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search rules..." style={{ maxWidth: '320px' }} />
         <FilterSelect value={typeFilter} onChange={setTypeFilter} options={[{ value: 'ALL', label: 'All types' }, ...RULE_TYPES.map((t) => ({ value: t.value, label: t.label }))]} />
         {/* Not "0 rules" when the count is only the size of a list that never arrived. */}
-        {loadError == null && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{filtered.length} rules</span>}
+        {loadError == null && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{filtered.length} rules</span>}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(340px, 100%), 1fr))', gap: '16px' }}>
@@ -359,7 +359,7 @@ export const RulesSection: React.FC = () => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {misconfigured && <span title="Missing the field this rule type needs — currently doing nothing">⚠️</span>}
                     <Shield size={18} style={{ color: 'var(--accent-primary)' }} />
-                    <span style={{ fontWeight: 600, fontSize: '15px' }}>{rule.name}</span>
+                    <span style={{ fontWeight: 600, fontSize: 'var(--text-md)' }}>{rule.name}</span>
                   </div>
                   {canManage && (
                     <div style={{ display: 'flex', gap: '6px' }}>
@@ -375,7 +375,7 @@ export const RulesSection: React.FC = () => {
                     <StatusBadge label={actionTypeLabel(rule.actions.type)} bg="var(--status-pending-bg)" color="var(--warning)" />
                   )}
                 </div>
-                <div style={{ padding: '12px', background: 'rgba(0,0,0,0.15)', borderRadius: 'var(--radius-md)', fontSize: '12.5px', color: misconfigured ? 'var(--warning)' : 'var(--text-secondary)' }}>
+                <div style={{ padding: '12px', background: 'rgba(0,0,0,0.15)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)', color: misconfigured ? 'var(--warning)' : 'var(--text-secondary)' }}>
                   {conditionSummary(rule)}
                 </div>
               </div>
@@ -388,10 +388,10 @@ export const RulesSection: React.FC = () => {
         <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Business Rule' : 'Create Business Rule'} width="540px" asForm onSubmit={handleSubmit}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', width: '100%' }}>
-              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 600 }}>
+              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
                 Cancel
               </button>
-              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 20px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 20px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
                 {submitting ? 'Saving Rule...' : '✓ Save Rule'}
               </button>
             </div>
@@ -439,7 +439,7 @@ export const RulesSection: React.FC = () => {
                 onChange={(v) => setForm({ ...form, ruleType: v })}
                 options={RULE_TYPES.filter((t) => t.creatable).map((t) => ({ value: t.value, label: t.label }))}
               />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', gap: '5px', alignItems: 'flex-start' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', gap: '5px', alignItems: 'flex-start' }}>
                 <Info size={11} style={{ marginTop: '2px', flexShrink: 0 }} /> {ruleTypeMeta(form.ruleType)?.hint}
               </div>
             </Field>
@@ -493,7 +493,7 @@ export const RulesSection: React.FC = () => {
                   onChange={(next) => setForm({ ...form, restrictedStates: next })}
                   searchPlaceholder="Search states…"
                 />
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
                   {form.restrictedStates.length === 0 ? 'None selected yet — the rule will do nothing until at least one state is chosen.' : `${form.restrictedStates.length} selected.`}
                 </div>
               </Field>
@@ -519,11 +519,11 @@ export const RulesSection: React.FC = () => {
   );
 };
 
-const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' };
+const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)', boxSizing: 'border-box' };
 
 const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div>
-    <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{label}</label>
+    <label style={{ display: 'block', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '4px' }}>{label}</label>
     {children}
   </div>
 );

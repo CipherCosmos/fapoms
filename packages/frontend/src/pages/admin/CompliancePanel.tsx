@@ -41,7 +41,7 @@ const ClockBadge: React.FC<{ name: string; clock: IncidentClock; doneWord?: stri
         : `${clock.hoursRemaining}h left`;
   const Icon = clock.satisfied ? CheckCircle2 : (clock.overdue || noFixedDeadline) ? AlertTriangle : Clock;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: tone,
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-2xs)', fontWeight: 700, color: tone,
       background: `color-mix(in srgb, ${tone} 12%, transparent)`, padding: '3px 9px', borderRadius: 'var(--radius-full)' }}>
       <Icon size={12} /> {name}: {text}
     </span>
@@ -50,8 +50,8 @@ const ClockBadge: React.FC<{ name: string; clock: IncidentClock; doneWord?: stri
 
 const HealthTile: React.FC<{ label: string; value: number; bad?: boolean }> = ({ label, value, bad }) => (
   <div className="glass-card" style={{ padding: '12px 16px', minWidth: 130 }}>
-    <div style={{ fontSize: 24, fontWeight: 800, fontFamily: 'var(--font-display)', color: bad && value > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>{value}</div>
-    <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>{label}</div>
+    <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, fontFamily: 'var(--font-display)', color: bad && value > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>{value}</div>
+    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>{label}</div>
   </div>
 );
 
@@ -118,7 +118,7 @@ export const CompliancePanel: React.FC = () => {
         {(['INCIDENTS', 'RIGHTS'] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)}
             className={`btn ${tab === t ? 'btn-primary' : 'btn-ghost'}`}
-            style={{ padding: '8px 16px', fontSize: 13, borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}>
+            style={{ padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}>
             {t === 'INCIDENTS' ? 'Security incidents' : 'Data-principal requests (DPDP)'}
           </button>
         ))}
@@ -137,7 +137,7 @@ export const CompliancePanel: React.FC = () => {
 
       {canWrite && showForm && (
         <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {raise.isError && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{userMessage(raise.error)}</div>}
+          {raise.isError && <div style={{ color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>{userMessage(raise.error)}</div>}
           <input placeholder="What happened? (short title)" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
             style={inputStyle} />
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -147,7 +147,7 @@ export const CompliancePanel: React.FC = () => {
             <select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })} style={inputStyle}>
               {INCIDENT_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={form.personalDataInvolved} onChange={(e) => setForm({ ...form, personalDataInvolved: e.target.checked })} />
               Personal data involved (starts the DPDP Board's 72h report clock, and the without-delay duty to notify affected people)
             </label>
@@ -166,11 +166,11 @@ export const CompliancePanel: React.FC = () => {
       {incidentsFailed ? (
         <LoadFailure loads={[{ label: 'the incident register', query: incidents }]} />
       ) : incidents.isLoading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading incidents…</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading incidents…</div>
       ) : rows.length === 0 ? (
         <div className="glass-card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
           <CheckCircle2 size={26} style={{ opacity: 0.4 }} />
-          <div style={{ fontSize: 13, marginTop: 8 }}>No security incidents on record.</div>
+          <div style={{ fontSize: 'var(--text-sm)', marginTop: 8 }}>No security incidents on record.</div>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -179,13 +179,13 @@ export const CompliancePanel: React.FC = () => {
             return (
               <div key={inc.id} className="glass-card" style={{ padding: 16, opacity: resolved ? 0.7 : 1 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>
+                  <div style={{ fontSize: 'var(--text-base)', fontWeight: 700 }}>
                     {inc.title}
-                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>
+                    <span style={{ marginLeft: 8, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
                       {inc.severity} · {inc.category.replace(/_/g, ' ')} · {inc.status}
                     </span>
                   </div>
-                  <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>detected {fmt(inc.detectedAt)}</span>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>detected {fmt(inc.detectedAt)}</span>
                 </div>
 
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -193,7 +193,7 @@ export const CompliancePanel: React.FC = () => {
                   <ClockBadge name="DPDP Board" clock={inc.clocks.dpdpBoard} />
                   <ClockBadge name="Notify people" clock={inc.clocks.dpdpPrincipals} doneWord="notified" />
                   {inc.personalDataInvolved && (
-                    <span style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                       <Link2 size={11} /> personal data{inc.affectedDataPrincipals ? ` · ${inc.affectedDataPrincipals} people` : ''}
                     </span>
                   )}
@@ -264,7 +264,7 @@ const RightsRequestsSection: React.FC = () => {
       )}
       {canWrite && show && (
         <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {log.isError && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{userMessage(log.error)}</div>}
+          {log.isError && <div style={{ color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>{userMessage(log.error)}</div>}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <select value={form.requestType} onChange={(e) => setForm({ ...form, requestType: e.target.value })} style={inputStyle}>
               {RIGHTS_REQUEST_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -283,9 +283,9 @@ const RightsRequestsSection: React.FC = () => {
       {loadFailed(requests) ? (
         <LoadFailure loads={[{ label: 'the rights requests', query: requests }]} />
       ) : isLoading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading requests…</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading requests…</div>
       ) : rows.length === 0 ? (
-        <div className="glass-card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+        <div className="glass-card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
           No data-principal requests on record.
         </div>
       ) : rows.map((r) => {
@@ -293,16 +293,16 @@ const RightsRequestsSection: React.FC = () => {
         return (
           <div key={r.id} className="glass-card" style={{ padding: 16, opacity: terminal ? 0.7 : 1 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'baseline' }}>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>
+              <div style={{ fontSize: 'var(--text-base)', fontWeight: 700 }}>
                 {r.requestType}
-                <span style={{ marginLeft: 8, fontSize: 11.5, color: 'var(--text-muted)', fontWeight: 600 }}>
+                <span style={{ marginLeft: 8, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
                   {r.subjectRef || 'subject not identified'} · {r.status}
                 </span>
               </div>
               <SlaBadge sla={r.sla} />
             </div>
-            {r.details && <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>{r.details}</div>}
-            {r.legalHoldApplied && <div style={{ fontSize: 11.5, color: 'var(--warning)', fontWeight: 700, marginTop: 6 }}>Legal-retention hold applied — data kept per retention duty</div>}
+            {r.details && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: 6 }}>{r.details}</div>}
+            {r.legalHoldApplied && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', fontWeight: 700, marginTop: 6 }}>Legal-retention hold applied — data kept per retention duty</div>}
             {!terminal && canWrite && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                 {r.status === 'RECEIVED' && (
@@ -332,7 +332,7 @@ const SlaBadge: React.FC<{ sla: SlaClock }> = ({ sla }) => {
   const text = sla.satisfied ? 'answered' : sla.overdue ? 'OVERDUE' : `${sla.daysRemaining}d left`;
   const Icon = sla.satisfied ? CheckCircle2 : sla.overdue ? AlertTriangle : Clock;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: tone,
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-2xs)', fontWeight: 700, color: tone,
       background: `color-mix(in srgb, ${tone} 12%, transparent)`, padding: '3px 9px', borderRadius: 'var(--radius-full)' }}>
       <Icon size={12} /> SLA: {text}
     </span>
@@ -341,8 +341,8 @@ const SlaBadge: React.FC<{ sla: SlaClock }> = ({ sla }) => {
 
 const inputStyle: React.CSSProperties = {
   padding: '9px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: 13, outline: 'none',
+  borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)', outline: 'none',
 };
-const smallBtn: React.CSSProperties = { fontSize: 12, padding: '5px 11px' };
+const smallBtn: React.CSSProperties = { fontSize: 'var(--text-xs)', padding: '5px 11px' };
 
 export default CompliancePanel;

@@ -440,7 +440,7 @@ export const Documents: React.FC = () => {
       {successMsg && <AlertBanner type="success" message={successMsg} onClose={() => setSuccessMsg(null)} />}
 
       {overviewLoading && !overview ? (
-        <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading document control…</div>
+        <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading document control…</div>
       ) : !overview && overviewError != null ? (
         /*
          * A failed first load used to fall through to the bare `: null` this ternary ended on —
@@ -469,18 +469,18 @@ export const Documents: React.FC = () => {
           <DocumentModelLegend />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             {canCustomerMaster && (
-              <button onClick={() => setView('daily')} className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+              <button onClick={() => setView('daily')} className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                 Daily Run
               </button>
             )}
-            <button onClick={() => setView('branch')} className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+            <button onClick={() => setView('branch')} className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
               By Branch
             </button>
-            <button onClick={() => setView('flat')} className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+            <button onClick={() => setView('flat')} className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
               All Files
             </button>
             {canCustomerMaster && (
-              <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+              <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                 Customer Master
               </button>
             )}

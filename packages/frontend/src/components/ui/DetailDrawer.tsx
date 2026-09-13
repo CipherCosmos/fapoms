@@ -107,8 +107,8 @@ export const DetailDrawer: React.FC<{
           }}
         >
           <div style={{ minWidth: 0 }}>
-            <div id={titleId} style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{subtitle}</div>}
+            <div id={titleId} style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2 }}>{subtitle}</div>}
           </div>
           <button
             onClick={onClose}

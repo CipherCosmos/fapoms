@@ -182,8 +182,8 @@ export const HrLayout: React.FC = () => {
   if (isLoading) {
     return (
       <div style={{ padding: '20px 24px', maxWidth: '1500px', margin: '0 auto' }}>
-        <h1 style={{ fontSize: '22px', fontWeight: 700, margin: 0 }}>Workforce</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '10px' }}>
+        <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>Workforce</h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', marginTop: '10px' }}>
           Getting the latest figures for everyone on the roster…
         </p>
       </div>
@@ -228,7 +228,7 @@ export const HrLayout: React.FC = () => {
         */
         subtitle={`${d.headcount.active} active · ${d.headcount.onboarding} onboarding · ${d.headcount.exited} exited · figures as of ${fmtWhen(d.generatedAt)}`}
         actions={
-          <Link to="/hr/roster" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', textDecoration: 'none' }}>
+          <Link to="/hr/roster" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}>
             <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}
           </Link>
         }
@@ -248,7 +248,7 @@ export const HrLayout: React.FC = () => {
             title="Your account is confined to these regions on every operations desk, and this workforce view is scoped the same way — the figures above describe only these regions, not the whole roster."
             style={{
               display: 'inline-flex', alignItems: 'center', gap: '5px',
-              fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '999px',
+              fontSize: 'var(--text-xs)', fontWeight: 600, padding: '4px 10px', borderRadius: '999px',
               background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
               color: 'var(--text-secondary)',
             }}
@@ -300,7 +300,7 @@ export const HrLayout: React.FC = () => {
               end={'end' in p ? p.end : false}
               style={({ isActive }) => ({
                 display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '9px 14px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+                padding: '9px 14px', fontSize: 'var(--text-sm)', fontWeight: 600, cursor: 'pointer',
                 textDecoration: 'none',
                 // Without these the strip stops being a strip: flex items shrink by default, so
                 // narrow widths squeezed the tabs into each other and wrapped their labels onto
@@ -313,7 +313,7 @@ export const HrLayout: React.FC = () => {
               <Icon size={14} /> {p.label}
               {badge !== null && (
                 <span style={{
-                  fontSize: '12px', fontWeight: 700, padding: '1px 6px', borderRadius: '9px',
+                  fontSize: 'var(--text-xs)', fontWeight: 700, padding: '1px 6px', borderRadius: '9px',
                   background: alarming ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
                   color: alarming ? 'var(--danger)' : 'var(--text-muted)',
                 }}>{badge}</span>

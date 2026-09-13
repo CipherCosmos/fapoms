@@ -162,7 +162,7 @@ export const CustomerMasterVersions: React.FC = () => {
   const columns: Column<CustomerMasterVersion>[] = [
     { key: 'version', header: 'Version', render: (v) => <span style={{ fontWeight: 600 }}>#{v.versionNumber}</span> },
     { key: 'auditDate', header: 'Audit date', render: (v) => (v.auditDate ? new Date(v.auditDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—') },
-    { key: 'file', header: 'File', render: (v) => <span style={{ fontSize: 12 }}>{v.fileName}</span> },
+    { key: 'file', header: 'File', render: (v) => <span style={{ fontSize: 'var(--text-xs)' }}>{v.fileName}</span> },
     { key: 'rows', header: 'Rows', align: 'right', sortValue: (v) => v.totalRows, render: (v) => v.totalRows.toLocaleString('en-IN') },
     {
       key: 'accounts',
@@ -177,7 +177,7 @@ export const CustomerMasterVersions: React.FC = () => {
           : `${v.uniqueAccounts.toLocaleString('en-IN')} different accounts, none repeated.`}>
           {v.uniqueAccounts.toLocaleString('en-IN')}
           {v.duplicateAccounts > 0 && (
-            <span style={{ color: 'var(--warning, #d97706)', fontSize: 11 }}> · {v.duplicateAccounts.toLocaleString('en-IN')} repeated</span>
+            <span style={{ color: 'var(--warning, #d97706)', fontSize: 'var(--text-2xs)' }}> · {v.duplicateAccounts.toLocaleString('en-IN')} repeated</span>
           )}
         </span>
       ),
@@ -228,7 +228,7 @@ export const CustomerMasterVersions: React.FC = () => {
           // The picker below chose a project the header has fixed differently. The request carries
           // the header's — it is the ceiling — so say which one is on screen rather than letting
           // the two controls contradict each other in silence.
-          <div style={{ flexBasis: '100%', padding: '6px 10px', marginBottom: 8, fontSize: 11.5, fontWeight: 600, borderRadius: 6, color: 'var(--text-warning, #92400e)', background: 'var(--bg-warning-subtle, #fef3c7)' }}>
+          <div style={{ flexBasis: '100%', padding: '6px 10px', marginBottom: 8, fontSize: 'var(--text-2xs)', fontWeight: 600, borderRadius: 6, color: 'var(--status-warning-fg)', background: 'var(--status-warning-bg)' }}>
             Showing the project from your scope filter; the selection here disagrees with it.
           </div>
         )}
@@ -246,7 +246,7 @@ export const CustomerMasterVersions: React.FC = () => {
       </div>
 
       {!canApprove && (
-        <p style={{ margin: '0 0 12px', fontSize: 12.5, color: 'var(--text-muted)' }}>
+        <p style={{ margin: '0 0 12px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           You have read-only access — approval is limited to administrators and operations managers.
         </p>
       )}
@@ -276,7 +276,7 @@ export const CustomerMasterVersions: React.FC = () => {
             <button type="button" disabled={recordsPage <= 1 || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage - 1)} style={btnStyle('var(--text-muted)')}>
               Previous
             </button>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Page {recordsPage} of {totalRecordPages}</span>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Page {recordsPage} of {totalRecordPages}</span>
             <button type="button" disabled={recordsPage >= totalRecordPages || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage + 1)} style={btnStyle('var(--text-muted)')}>
               Next
             </button>
@@ -289,7 +289,7 @@ export const CustomerMasterVersions: React.FC = () => {
 
 function btnStyle(color: string): React.CSSProperties {
   return {
-    display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', fontSize: 12.5, fontWeight: 600,
+    display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', fontSize: 'var(--text-xs)', fontWeight: 600,
     color, background: 'transparent', border: `1px solid ${color}`, borderRadius: 8, cursor: 'pointer',
   };
 }

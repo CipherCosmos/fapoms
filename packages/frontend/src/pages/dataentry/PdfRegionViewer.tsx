@@ -215,7 +215,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
       }}>
         <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
           className="btn btn-secondary" style={btn}><ChevronLeft size={14} /></button>
-        <span style={{ fontSize: '12px', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
           <input
             type="number" value={page} min={1} max={pages || 1}
             onChange={(e) => {
@@ -223,7 +223,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
               if (n >= 1 && n <= pages) setPage(n);
             }}
             style={{
-              width: '46px', padding: '3px 5px', fontSize: '12px', textAlign: 'center',
+              width: '46px', padding: '3px 5px', fontSize: 'var(--text-xs)', textAlign: 'center',
               background: 'var(--bg-input)', color: 'inherit',
               border: '1px solid var(--border-color)', borderRadius: '5px',
             }}
@@ -235,14 +235,14 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
         <span style={{ width: '1px', height: '18px', background: 'var(--border-color)' }} />
 
         <button onClick={() => setScale((s) => Math.max(0.5, +(s - 0.2).toFixed(2)))} className="btn btn-secondary" style={btn}><ZoomOut size={14} /></button>
-        <span style={{ fontSize: '11.5px', minWidth: '38px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+        <span style={{ fontSize: 'var(--text-2xs)', minWidth: '38px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
         <button onClick={() => setScale((s) => Math.min(3, +(s + 0.2).toFixed(2)))} className="btn btn-secondary" style={btn}><ZoomIn size={14} /></button>
 
         {!viewOnly && (
           <button
             onClick={() => { setMarking((m) => !m); setDrag(null); }}
             className={marking ? 'btn btn-primary' : 'btn btn-secondary'}
-            style={{ ...btn, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px' }}
+            style={{ ...btn, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-2xs)' }}
           >
             {marking ? <><X size={13} /> Cancel</> : <><Crop size={13} /> Mark an area</>}
           </button>
@@ -250,18 +250,18 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
       </div>
 
       {!viewOnly && marking && (
-        <div style={{ padding: '6px 10px', fontSize: '11.5px', background: 'var(--status-active-bg)', color: 'var(--accent)' }}>
+        <div style={{ padding: '6px 10px', fontSize: 'var(--text-2xs)', background: 'var(--status-active-bg)', color: 'var(--accent)' }}>
           Drag a box around the detail you want to ask about — the assayer sees this same spot marked on the PDF.
         </div>
       )}
 
       <div ref={wrapRef} style={{ flex: 1, overflow: 'auto', background: 'var(--bg-page)', padding: '14px', minHeight: 0 }}>
         {loading && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
             <Loader2 size={15} className="spin" /> Loading document…
           </div>
         )}
-        {error && <div style={{ color: 'var(--danger)', fontSize: '13px' }}>{error}</div>}
+        {error && <div style={{ color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>{error}</div>}
         <div
           style={{ position: 'relative', display: 'inline-block', cursor: marking ? 'crosshair' : 'default' }}
           onMouseDown={onMouseDown}
@@ -283,6 +283,6 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
   );
 };
 
-const btn: React.CSSProperties = { padding: '4px 8px', fontSize: '12px' };
+const btn: React.CSSProperties = { padding: '4px 8px', fontSize: 'var(--text-xs)' };
 
 export default PdfRegionViewer;

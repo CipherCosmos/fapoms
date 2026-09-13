@@ -43,7 +43,7 @@ export const RecordGaps: React.FC<{ a: RosterPerson }> = ({ a }) => {
     return (
       <span
         title={`Missing: ${missing.join(', ')}`}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--text-muted)' }}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}
       >
         {counted(missing.length, 'gap')} · {isRecordedDeceased(a) ? 'no longer with us' : 'left'}
       </span>
@@ -51,7 +51,7 @@ export const RecordGaps: React.FC<{ a: RosterPerson }> = ({ a }) => {
   }
   if (missing.length === 0) {
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--success)', fontSize: '12px' }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--success)', fontSize: 'var(--text-xs)' }}>
         <CheckCircle2 size={12} /> Complete
       </span>
     );
@@ -60,7 +60,7 @@ export const RecordGaps: React.FC<{ a: RosterPerson }> = ({ a }) => {
     <span
       title={`Missing: ${missing.join(', ')}`}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600,
+        display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 600,
         color: blockers.length ? 'var(--danger)' : 'var(--warning)',
       }}
     >
@@ -175,7 +175,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
               render: (a) => (
                 <div>
                   <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                     {a.assayerCode} · {a.phone || 'No phone'}
                   </div>
                 </div>
@@ -195,7 +195,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
                       <div
                         title={title}
                         style={{
-                          fontSize: '11px',
+                          fontSize: 'var(--text-2xs)',
                           color: 'var(--text-muted)',
                           marginTop: '3px',
                           maxWidth: '180px',
@@ -227,7 +227,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
                     {attention.reason && (
                       <div
                         style={{
-                          fontSize: '11px',
+                          fontSize: 'var(--text-2xs)',
                           color: 'var(--text-muted)',
                           marginTop: '2px',
                           maxWidth: '180px',
@@ -254,7 +254,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
               header: 'Location',
               sortable: true,
               render: (a) => (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)' }}>
                   <MapPin size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
                   <span>{[a.city, a.state].filter(Boolean).join(', ') || '—'}</span>
                 </span>
@@ -267,13 +267,13 @@ export const RosterTable: React.FC<RosterTableProps> = ({
               render: (a) => {
                 const emp = (a as any).empanelment;
                 if (!emp || emp.clientCount === 0) {
-                  return <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>0 banks</span>;
+                  return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>0 banks</span>;
                 }
                 const isCleared = emp.plannableClients > 0;
                 return (
                   <span
                     style={{
-                      fontSize: '12px',
+                      fontSize: 'var(--text-xs)',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '4px',
@@ -292,7 +292,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
               header: 'Joined',
               sortable: true,
               render: (a) => (
-                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                   {fmtDate(a.joiningDate) || '—'}
                 </span>
               ),
@@ -352,10 +352,10 @@ export const RosterTable: React.FC<RosterTableProps> = ({
                     />
                   )}
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: '14px', color: 'var(--text-primary)' }}>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--text-base)', color: 'var(--text-primary)' }}>
                       {person.displayName}
                     </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                       {person.assayerCode}
                     </div>
                   </div>
@@ -366,11 +366,11 @@ export const RosterTable: React.FC<RosterTableProps> = ({
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
                 <StatusBadge domain="rosterAttention" status={attention.state} />
                 {emp && emp.clientCount > 0 && (
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                     {emp.plannableClients} / {emp.clientCount} banks
                   </span>
                 )}
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>
                   {[person.city, person.state].filter(Boolean).join(', ')}
                 </span>
               </div>
@@ -386,7 +386,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                   {person.phone || 'No phone'}
                 </span>
                 <RosterRowActions
@@ -410,7 +410,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
         <div
           style={{
             padding: '10px 14px',
-            fontSize: '12.5px',
+            fontSize: 'var(--text-xs)',
             color: 'var(--text-secondary)',
             borderTop: '1px solid var(--border-color)',
             display: 'flex',
@@ -429,7 +429,7 @@ export const RosterTable: React.FC<RosterTableProps> = ({
               type="button"
               onClick={onShowMore}
               className="btn btn-secondary"
-              style={{ padding: '5px 14px', fontSize: '12px' }}
+              style={{ padding: '5px 14px', fontSize: 'var(--text-xs)' }}
             >
               Show {Math.min(200, rows.length - visibleCount)} more
             </button>

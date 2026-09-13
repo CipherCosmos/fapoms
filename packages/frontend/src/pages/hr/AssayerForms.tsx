@@ -32,12 +32,12 @@ import { api } from '../../services/api';
 // 12px, not the 11px this was. Every field the registration flow draws goes through this label,
 // and the flow's audience is a desk clerk who may not read English comfortably; 11px captions
 // over 13px inputs is the size at which a hint stops being read at all.
-const labelStyle = { display: 'block', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
+const labelStyle = { display: 'block', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
 // `--bg-input`, not `--bg-page`: in the dark themes the two are literally the same colour, so a
 // plain text box drawn against the page was indistinguishable from the page itself — every
 // select, date and number box on this form (which already used `--bg-input` via the shared
 // Select/StyledInput primitives) stood out while every text box vanished into the background.
-const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
+const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: 'var(--text-sm)' };
 
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
 const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode']);
@@ -618,7 +618,7 @@ export interface FieldRenderExtras {
 /** The look of a plain text action — "Edit anyway", "Open their record", "This is a different person". */
 const linkBtnStyle: React.CSSProperties = {
   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-  color: 'var(--accent-primary)', fontWeight: 600, fontSize: '12px', textDecoration: 'underline',
+  color: 'var(--accent-primary)', fontWeight: 600, fontSize: 'var(--text-xs)', textDecoration: 'underline',
 };
 
 /** Trims and drops the spaces and dashes a clerk pastes from a printed card — nothing cleverer. */
@@ -799,7 +799,7 @@ const FieldRenderer: React.FC<{
         {blocking && (
           <span
             style={{
-              marginLeft: '6px', fontWeight: 600, fontSize: '12px',
+              marginLeft: '6px', fontWeight: 600, fontSize: 'var(--text-xs)',
               color: blockingUrgent ? 'var(--danger)' : 'var(--text-muted)',
               textTransform: 'none', letterSpacing: 0,
             }}
@@ -823,7 +823,7 @@ const FieldRenderer: React.FC<{
             aria-readonly="true"
             style={{ ...formFieldStyle, background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', cursor: 'default' }}
           />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', fontSize: '12px', color: 'var(--text-muted)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             <span>Filled in from the IFSC code.</span>
             <button type="button" onClick={() => setEditBankAnyway(true)} style={linkBtnStyle}>
               Edit anyway
@@ -856,14 +856,14 @@ const FieldRenderer: React.FC<{
                 aria-label={field.label}
               />
               {people?.failed && (
-                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginTop: '4px' }}>
                   {/* Named, not swallowed: without the list the field looks empty by choice. */}
                   Could not load the list of people. {people.failed}
                 </div>
               )}
               {/* A short list is worse than an empty one: it looks complete. Say what is not in it. */}
               {people?.incomplete && (
-                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginTop: '4px' }}>
                   Only {people.incomplete.shown} of the {people.incomplete.total} people on the
                   roster could be loaded, so {people.incomplete.total - people.incomplete.shown} are
                   not in this list. Reload the page to try again.
@@ -896,7 +896,7 @@ const FieldRenderer: React.FC<{
                 aria-label={field.label}
               />
               {hrOwners?.failed && (
-                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginTop: '4px' }}>
                   Could not load the staff list. {hrOwners.failed}
                 </div>
               )}
@@ -993,7 +993,7 @@ const FieldRenderer: React.FC<{
           rows={3} style={{ ...formFieldStyle, resize: 'vertical', minHeight: '60px', fontFamily: 'inherit' }} />
       ) : (
         <div style={{ position: 'relative' }}>
-          {isTel && <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>}
+          {isTel && <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', pointerEvents: 'none' }}>+91</span>}
           <input
             id={inputId}
             type={isTime ? 'time' : isTel ? 'tel' : isNum ? 'number' : field.type || 'text'}
@@ -1038,7 +1038,7 @@ const FieldRenderer: React.FC<{
       */}
       {captionText && (
         <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: '4px', fontSize: '12px', marginTop: '4px',
+          display: 'flex', alignItems: 'flex-start', gap: '4px', fontSize: 'var(--text-xs)', marginTop: '4px',
           color: showInvalid ? 'var(--danger)' : 'var(--text-muted)', fontWeight: showInvalid ? 600 : 400,
         }}>
           {showInvalid && <AlertCircle size={12} style={{ flexShrink: 0, marginTop: '1px' }} aria-hidden />}
@@ -1047,7 +1047,7 @@ const FieldRenderer: React.FC<{
       )}
       {/* What leaving the box just tidied up, said once rather than left for the clerk to notice on their own. */}
       {cleanedNote && (
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', fontStyle: 'italic' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '2px', fontStyle: 'italic' }}>
           {cleanedNote}
         </div>
       )}
@@ -1057,7 +1057,7 @@ const FieldRenderer: React.FC<{
         handled above (locked, with "Edit anyway") rather than here.
       */}
       {field.key === 'ifscCode' && ifscInfo && (
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
           {ifscInfo.bankName}
           {ifscInfo.branchName ? ` — ${ifscInfo.branchName}` : ''}
           {ifscInfo.city ? `, ${ifscInfo.city}` : ''}
@@ -1073,7 +1073,7 @@ const FieldRenderer: React.FC<{
         <div style={{
           marginTop: '6px', padding: '9px 11px', borderRadius: 'var(--radius-md)',
           background: 'var(--status-pending-bg)', border: '1px solid var(--warning)',
-          display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12.5px',
+          display: 'flex', flexDirection: 'column', gap: '8px', fontSize: 'var(--text-xs)',
         }}>
           {extras.duplicateMatches.map((m) => (
             <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>

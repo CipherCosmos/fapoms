@@ -118,7 +118,7 @@ export const LoadFailure: React.FC<{
           <button
             onClick={() => failed.forEach((l) => { void l.query.refetch(); })}
             className="btn btn-secondary"
-            style={{ padding: '3px 10px', fontSize: '11px' }}
+            style={{ padding: '3px 10px', fontSize: 'var(--text-2xs)' }}
           >
             Retry
           </button>

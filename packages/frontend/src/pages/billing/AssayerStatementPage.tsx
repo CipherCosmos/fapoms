@@ -77,8 +77,8 @@ export const AssayerStatementPage: React.FC = () => {
   return (
     <div style={{ padding: '20px 24px', maxWidth: 1200, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Assayer statement</h1>
-        <Link to="/billing?tab=payouts" style={{ fontSize: 12.5, color: 'var(--accent)', textDecoration: 'none' }}>← Back to Billing</Link>
+        <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>Assayer statement</h1>
+        <Link to="/billing?tab=payouts" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none' }}>← Back to Billing</Link>
       </div>
 
       <div style={{ ...card, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -86,7 +86,7 @@ export const AssayerStatementPage: React.FC = () => {
         <div style={{ position: 'relative' }}>
           <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find an assayer…"
-            style={{ padding: '7px 10px 7px 28px', fontSize: 12.5, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)', minWidth: 220 }} />
+            style={{ padding: '7px 10px 7px 28px', fontSize: 'var(--text-xs)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)', minWidth: 220 }} />
         </div>
         <Select
           value={assayerId}
@@ -99,13 +99,13 @@ export const AssayerStatementPage: React.FC = () => {
         {/* A picker that is quietly short of names is indistinguishable from one whose names have
             all been shown, so the difference is stated rather than left to be discovered. */}
         {rosterProblem && (
-          <div style={{ flexBasis: '100%', fontSize: 11.5, color: 'var(--warning)', lineHeight: 1.5 }}>
+          <div style={{ flexBasis: '100%', fontSize: 'var(--text-2xs)', color: 'var(--warning)', lineHeight: 1.5 }}>
             {rosterProblem}
           </div>
         )}
       </div>
 
-      {!assayerId && <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>Pick an assayer to see their statement.</div>}
+      {!assayerId && <div style={{ ...card, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Pick an assayer to see their statement.</div>}
       {/*
         `(statement.error as Error).message` printed whatever the throw carried — a bare
         "Request failed with status code 403", or the raw body of a 500 — to a finance manager
@@ -126,8 +126,8 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
   return (
     <>
       <div style={card}>
-        <div style={{ fontSize: 16, fontWeight: 700 }}>{data.assayerName ?? data.assayerId}</div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>{data.assayerName ?? data.assayerId}</div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           {data.assayerCode && <span>{data.assayerCode}</span>}
           {/* PAN and the TDS section, for the finance manager reconciling withholding against the
               payouts below. PAN is decrypted server-side; shown here only to billing staff. */}
@@ -183,7 +183,7 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
       )}
 
       {data.payables.length === 0 && data.payments.length === 0 && (
-        <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>No payouts or payments recorded for this assayer yet.</div>
+        <div style={{ ...card, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>No payouts or payments recorded for this assayer yet.</div>
       )}
     </>
   );
@@ -241,14 +241,14 @@ const fmtShort = (iso: string) => new Date(iso).toLocaleDateString('en-IN', { da
 
 const Stat: React.FC<{ label: string; value: string; tone?: string }> = ({ label, value, tone }) => (
   <div style={{ ...card, flex: '1 1 150px', minWidth: 0 }}>
-    <div style={{ fontSize: 22, fontWeight: 700, color: tone ?? 'var(--text-primary)', lineHeight: 1.1 }}>{value}</div>
-    <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700, marginTop: 6 }}>{label}</div>
+    <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: tone ?? 'var(--text-primary)', lineHeight: 1.1 }}>{value}</div>
+    <div style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700, marginTop: 6 }}>{label}</div>
   </div>
 );
 
 const SimpleTable: React.FC<{ head: string[]; rows: React.ReactNode[][] }> = ({ head, rows }) => (
   <div style={{ overflowX: 'auto' }}>
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-xs)' }}>
       <thead>
         <tr>{head.map((h, i) => <th key={h} style={{ ...label, textAlign: i === 0 ? 'left' : 'right', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' }}>{h}</th>)}</tr>
       </thead>
@@ -267,5 +267,5 @@ const card: React.CSSProperties = {
   background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md, 10px)', padding: 16,
 };
 const label: React.CSSProperties = {
-  fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700,
+  fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700,
 };

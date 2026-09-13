@@ -54,10 +54,10 @@ export const FeedbackProperties: React.FC<Props> = ({ thread, assignees, onChang
       </div>
 
       {/* Impact + SLA + context */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         <button onClick={vote} disabled={voting} title={thread.hasVoted ? 'Remove your vote' : 'I hit this too'} style={{
           display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', alignSelf: 'flex-start',
-          padding: '4px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 700,
+          padding: '4px 11px', borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 700,
           background: thread.hasVoted ? 'var(--accent-soft)' : 'var(--bg-surface-2)',
           color: thread.hasVoted ? 'var(--accent-primary)' : 'var(--text-secondary)',
           border: `1px solid ${thread.hasVoted ? 'var(--accent-primary)' : 'var(--border-color)'}`,
@@ -69,7 +69,7 @@ export const FeedbackProperties: React.FC<Props> = ({ thread, assignees, onChang
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><UserIcon size={13} /> {thread.reporterName}{thread.reporterRole ? ` · ${thread.reporterRole}` : ''}</span>
         {(route || thread.area) && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><MapPin size={13} /> {route ?? thread.area}</span>}
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Reported {fmtDay(thread.createdAt)}</span>
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Reported {fmtDay(thread.createdAt)}</span>
       </div>
 
       <div style={{ height: 1, background: 'var(--border-color)' }} />
@@ -127,8 +127,8 @@ export const FeedbackProperties: React.FC<Props> = ({ thread, assignees, onChang
             <CheckCircle2 size={14} /> Mark resolved
           </button>
         )}
-        {busy && <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'inline-flex', gap: '5px', alignItems: 'center' }}><Loader2 size={12} className="spin" /> Saving…</span>}
-        {err && <span style={{ fontSize: '12px', color: 'var(--danger)' }}>{err}</span>}
+        {busy && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'inline-flex', gap: '5px', alignItems: 'center' }}><Loader2 size={12} className="spin" /> Saving…</span>}
+        {err && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>{err}</span>}
       </div>
 
       {/* AI read */}
@@ -137,14 +137,14 @@ export const FeedbackProperties: React.FC<Props> = ({ thread, assignees, onChang
           <div style={{ height: 1, background: 'var(--border-color)' }} />
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', ...label, marginBottom: '7px' }}><Sparkles size={11} /> AI suggestion</div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
               {ai.suggestedCategory && <>Read as <b>{CATEGORY[ai.suggestedCategory].label}</b> · </>}
               {ai.suggestedSeverity && <><b>{SEVERITY[ai.suggestedSeverity].label}</b> · </>}
               {ai.confidence !== undefined && <>{Math.round((ai.confidence ?? 0) * 100)}% confident</>}
             </div>
             {(ai.keywords?.length ?? 0) > 0 && (
               <div style={{ marginTop: '7px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                {ai.keywords!.map((k) => <span key={k} style={{ fontSize: '10.5px', padding: '2px 7px', borderRadius: '5px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>{k}</span>)}
+                {ai.keywords!.map((k) => <span key={k} style={{ fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: '5px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>{k}</span>)}
               </div>
             )}
           </div>
@@ -159,8 +159,8 @@ export const FeedbackProperties: React.FC<Props> = ({ thread, assignees, onChang
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', ...label, color: 'var(--warning)', marginBottom: '7px' }}><Copy size={11} /> Possible duplicates</div>
             {thread.duplicateCandidates!.map((d) => (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                <button onClick={() => onOpenThread?.(d.id)} style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', color: 'var(--accent)', fontSize: '12px', cursor: 'pointer', padding: 0 }}>{d.title}</button>
-                <button onClick={() => patch(() => triageFeedback(thread.id, { duplicateOfId: d.id }))} disabled={busy} title="Mark this a duplicate of that (merges impact, closes this)" className="btn btn-secondary" style={{ fontSize: '10.5px', padding: '3px 7px' }}>Merge</button>
+                <button onClick={() => onOpenThread?.(d.id)} style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', color: 'var(--accent)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: 0 }}>{d.title}</button>
+                <button onClick={() => patch(() => triageFeedback(thread.id, { duplicateOfId: d.id }))} disabled={busy} title="Mark this a duplicate of that (merges impact, closes this)" className="btn btn-secondary" style={{ fontSize: 'var(--text-3xs)', padding: '3px 7px' }}>Merge</button>
               </div>
             ))}
           </div>

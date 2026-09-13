@@ -195,7 +195,7 @@ export const FeedbackLauncher: React.FC = () => {
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '5px 11px', borderRadius: 'var(--radius-full)',
           background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-          color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+          color: 'var(--text-secondary)', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
           whiteSpace: 'nowrap',
         }}
       >
@@ -217,7 +217,7 @@ export const FeedbackLauncher: React.FC = () => {
             boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', maxHeight: '90vh',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: '1px solid var(--border-color)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: 'var(--text-base)' }}>
                 <MessageSquarePlus size={16} style={{ color: 'var(--accent)' }} /> New support request
               </div>
               <button onClick={close} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={18} /></button>
@@ -226,8 +226,8 @@ export const FeedbackLauncher: React.FC = () => {
             {doneId ? (
               <div style={{ padding: '28px 20px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
                 <CheckCircle2 size={40} style={{ color: 'var(--success)' }} />
-                <div style={{ fontSize: '15px', fontWeight: 700 }}>Thanks — the product team has it.</div>
-                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', maxWidth: '320px' }}>
+                <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>Thanks — the product team has it.</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', maxWidth: '320px' }}>
                   {canOpenChannel
                     ? "You'll be notified when they reply. You can follow the conversation any time."
                     : "You'll get a notification here when the team replies — there is nothing else you need to do."}
@@ -242,7 +242,7 @@ export const FeedbackLauncher: React.FC = () => {
             ) : (
               <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
                 <div>
-                  <div style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>What kind of request is this?</div>
+                  <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>What kind of request is this?</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     <TypeChip active={category === ''} onClick={() => setCategory('')} label="Auto-detect" icon={<Sparkles size={12} />} />
                     {(Object.keys(CATEGORY) as FeedbackCategory[]).map((c) => (
@@ -252,20 +252,20 @@ export const FeedbackLauncher: React.FC = () => {
                 </div>
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                  <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>Title <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span></span>
+                  <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>Title <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span></span>
                   <input
                     value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200}
                     placeholder="Short summary"
-                    style={{ padding: '8px 10px', fontSize: '13px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
+                    style={{ padding: '8px 10px', fontSize: 'var(--text-sm)', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
                   />
                 </label>
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                  <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>Details</span>
+                  <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>Details</span>
                   <textarea
                     value={body} onChange={(e) => setBody(e.target.value)} rows={5} autoFocus
                     placeholder="What happened, or what would help? The more detail, the faster we can act."
-                    style={{ padding: '9px 11px', fontSize: '13px', borderRadius: '8px', resize: 'vertical', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none', lineHeight: 1.5 }}
+                    style={{ padding: '9px 11px', fontSize: 'var(--text-sm)', borderRadius: '8px', resize: 'vertical', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none', lineHeight: 1.5 }}
                   />
                 </label>
 
@@ -280,7 +280,7 @@ export const FeedbackLauncher: React.FC = () => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{
                     display: 'inline-flex', alignItems: 'center', gap: '6px', alignSelf: 'flex-start',
-                    padding: '6px 11px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+                    padding: '6px 11px', borderRadius: '8px', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
                     border: '1px dashed var(--border-color)', color: 'var(--text-secondary)',
                   }}>
                     <Paperclip size={13} />
@@ -303,12 +303,12 @@ export const FeedbackLauncher: React.FC = () => {
                           display: 'flex', flexDirection: 'column', gap: '4px',
                           padding: '5px 9px', borderRadius: '7px', background: 'var(--bg-surface-2)',
                         }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-xs)' }}>
                             {f.uploaded
                               ? <CheckCircle2 size={11} style={{ flexShrink: 0, color: 'var(--status-active)' }} />
                               : <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />}
                             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file.name}</span>
-                            <span style={{ color: 'var(--text-muted)', fontSize: '11px', flexShrink: 0 }}>{formatFileSize(f.file.size)}</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', flexShrink: 0 }}>{formatFileSize(f.file.size)}</span>
                             <button
                               type="button" aria-label={`Remove ${f.file.name}`}
                               onClick={() => removeFile(f)}
@@ -328,7 +328,7 @@ export const FeedbackLauncher: React.FC = () => {
                             </div>
                           )}
                           {f.error && (
-                            <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{f.error}</span>
+                            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)' }}>{f.error}</span>
                           )}
                         </div>
                       ))}
@@ -339,16 +339,16 @@ export const FeedbackLauncher: React.FC = () => {
                 {/* Similar open items — vote instead of duplicating. */}
                 {similar.length > 0 && (
                   <div style={{ borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', padding: '10px 12px' }}>
-                    <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: '8px' }}>
                       Already reported? Add your vote instead
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
                       {similar.map((s) => (
                         <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ flex: 1, fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
+                          <span style={{ flex: 1, fontSize: 'var(--text-xs)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
                           <button onClick={() => meToo(s.id)} style={{
                             display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0,
-                            padding: '3px 9px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                            padding: '3px 9px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 700, cursor: 'pointer',
                             background: s.hasVoted ? 'var(--accent-soft)' : 'var(--bg-card)',
                             color: s.hasVoted ? 'var(--accent-primary)' : 'var(--text-secondary)',
                             border: `1px solid ${s.hasVoted ? 'var(--accent-primary)' : 'var(--border-color)'}`,
@@ -360,13 +360,13 @@ export const FeedbackLauncher: React.FC = () => {
                     </div>
                   </div>
                 )}
-                {votedMsg && <div style={{ fontSize: '12px', color: 'var(--success)', display: 'flex', gap: '6px', alignItems: 'center' }}><CheckCircle2 size={13} /> {votedMsg}</div>}
+                {votedMsg && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'flex', gap: '6px', alignItems: 'center' }}><CheckCircle2 size={13} /> {votedMsg}</div>}
 
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                   We'll attach the page you're on ({areaFromPath(location.pathname)}) so the team can find it.
                 </div>
 
-                {err && <div style={{ fontSize: '12px', color: 'var(--danger)' }}>{err}</div>}
+                {err && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>{err}</div>}
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '2px' }}>
                   <button className="btn btn-secondary" onClick={close}>Cancel</button>
@@ -389,7 +389,7 @@ const TypeChip: React.FC<{ active: boolean; onClick: () => void; label: string; 
     onClick={onClick}
     style={{
       display: 'inline-flex', alignItems: 'center', gap: '5px',
-      padding: '5px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+      padding: '5px 10px', borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
       background: active ? (color ? `${color}22` : 'var(--accent-soft)') : 'var(--bg-primary)',
       color: active ? (color ?? 'var(--accent-primary)') : 'var(--text-secondary)',
       border: `1px solid ${active ? (color ?? 'var(--accent-primary)') : 'var(--border-color)'}`,

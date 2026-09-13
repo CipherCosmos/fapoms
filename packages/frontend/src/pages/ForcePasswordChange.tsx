@@ -80,7 +80,7 @@ export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout, role
     border: '1px solid var(--border-color)',
     borderRadius: 'var(--radius-sm)',
     color: 'var(--text-primary)',
-    fontSize: '13px',
+    fontSize: 'var(--text-sm)',
     outline: 'none',
   };
 
@@ -103,34 +103,34 @@ export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout, role
           background: 'var(--status-pending-bg)', borderRadius: 'var(--radius-sm)',
         }}>
           <ShieldAlert size={18} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} />
-          <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
             Your account is still using a password that was issued to you. Choose one only you
             know before continuing.
           </div>
         </div>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>CURRENT PASSWORD</span>
+          <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>CURRENT PASSWORD</span>
           <input type="password" value={currentPassword} autoComplete="current-password"
             onChange={(e) => setCurrentPassword(e.target.value)} style={field} />
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>NEW PASSWORD</span>
+          <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>NEW PASSWORD</span>
           <input type="password" value={newPassword} autoComplete="new-password"
             onChange={(e) => setNewPassword(e.target.value)} style={field} />
-          <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>At least {MIN_LENGTH} characters.</span>
+          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>At least {MIN_LENGTH} characters.</span>
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>CONFIRM NEW PASSWORD</span>
+          <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>CONFIRM NEW PASSWORD</span>
           <input type="password" value={confirmPassword} autoComplete="new-password"
             onChange={(e) => setConfirmPassword(e.target.value)} style={field} />
         </label>
 
         {error && (
           <div style={{
-            fontSize: '12px', color: 'var(--danger)', background: 'var(--status-cancelled-bg)',
+            fontSize: 'var(--text-xs)', color: 'var(--danger)', background: 'var(--status-cancelled-bg)',
             padding: '9px 11px', borderRadius: 'var(--radius-sm)',
           }}>{error}</div>
         )}

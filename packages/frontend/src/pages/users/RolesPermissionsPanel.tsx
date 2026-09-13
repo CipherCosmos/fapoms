@@ -37,13 +37,13 @@ interface RoleRow { id: string; name: string; displayName: string; description: 
 interface UserRow { id: string; roles: { id: string }[] }
 
 const label: React.CSSProperties = {
-  fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
+  fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 const input: React.CSSProperties = {
   width: '100%', padding: '9px', background: 'var(--bg-secondary)',
   border: '1px solid var(--border-color)', borderRadius: '6px',
-  color: 'var(--text-primary)', fontSize: '13px',
+  color: 'var(--text-primary)', fontSize: 'var(--text-sm)',
 };
 
 export const RolesPermissionsPanel: React.FC = () => {
@@ -264,12 +264,12 @@ export const RolesPermissionsPanel: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
       {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
-        <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, maxWidth: '68ch' }}>
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: 0, maxWidth: '68ch' }}>
           A role is a bundle of things a person is allowed to do. Open one to see or change it —
           changes reach everyone holding that role within seconds, without them signing out.
         </p>
         {canEdit && (
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', whiteSpace: 'nowrap' }}>
+          <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', whiteSpace: 'nowrap' }}>
             <Plus size={14} /> New Role
           </button>
         )}
@@ -287,7 +287,7 @@ export const RolesPermissionsPanel: React.FC = () => {
       )}
 
       {!canEdit && (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
           <Lock size={13} style={{ flexShrink: 0 }} />
           <span>You can review roles here. Changing them requires an Administrator role.</span>
         </div>
@@ -314,7 +314,7 @@ export const RolesPermissionsPanel: React.FC = () => {
               <Shield size={17} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '13.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
                   {role.displayName || roleLabel(role.name)}
                   {role.isSystem && (
                     <span title="Built-in role — its name is used by the system, so it cannot be renamed or removed" style={{ ...label, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
@@ -322,7 +322,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
                   {role.description
                     ? role.description
                     : `${grants} ${grants === 1 ? 'permission' : 'permissions'}`}
@@ -331,10 +331,10 @@ export const RolesPermissionsPanel: React.FC = () => {
 
               {/* Two numbers only: who holds it, and how much it grants. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
-                <span title={`${holders} staff hold this role`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                <span title={`${holders} staff hold this role`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                   <UsersIcon size={13} /> {holders}
                 </span>
-                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', minWidth: '54px', textAlign: 'right' }}>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', minWidth: '54px', textAlign: 'right' }}>
                   {grants}/{catalogue.length || '—'}
                 </span>
                 {canEdit && !role.isSystem && (
@@ -363,7 +363,7 @@ export const RolesPermissionsPanel: React.FC = () => {
           closeIcon={<X size={18} />}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 {draft.size} of {catalogue.length} permissions
                 {holderCount.get(openRole.id) ? ` · ${holderCount.get(openRole.id)} staff affected` : ''}
               </span>
@@ -382,11 +382,11 @@ export const RolesPermissionsPanel: React.FC = () => {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {openRole.description && (
-              <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>{openRole.description}</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{openRole.description}</div>
             )}
 
             {!canEdit && (
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
                 <Lock size={13} style={{ marginTop: 1, flexShrink: 0 }} />
                 <span>
                   Viewing only — changing what a role can do requires an Administrator role.
@@ -396,7 +396,7 @@ export const RolesPermissionsPanel: React.FC = () => {
 
             {/* Only said when it changes what the admin should expect. */}
             {canEdit && !openRole.isSystem && (
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
                 <Info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
                 <span>
                   This is a custom role. It grants the permissions ticked below, but the main
@@ -425,7 +425,7 @@ export const RolesPermissionsPanel: React.FC = () => {
               {loadFailed(permsQuery) ? (
                 <LoadFailure loads={[{ label: 'the permission catalogue', query: permsQuery }]} />
               ) : byArea.length === 0 ? (
-                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '16px 0', textAlign: 'center' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '16px 0', textAlign: 'center' }}>
                   Nothing matches “{filter}”.
                 </div>
               ) : byArea.map((area) => {
@@ -435,17 +435,17 @@ export const RolesPermissionsPanel: React.FC = () => {
                   <div key={area.key} style={{ border: '1px solid var(--border-color)', borderRadius: '9px', overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: 'var(--bg-surface-2)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '12.5px', fontWeight: 700 }}>{area.label}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{area.hint}</div>
+                        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700 }}>{area.label}</div>
+                        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{area.hint}</div>
                       </div>
-                      <span style={{ fontSize: '11.5px', color: area.granted ? 'var(--accent)' : 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: 'var(--text-2xs)', color: area.granted ? 'var(--accent)' : 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                         {area.granted}/{area.total}
                       </span>
                       {canEdit && (
                         <button
                           type="button"
                           onClick={() => toggleMany(areaPerms, !allOn)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap' }}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 'var(--text-2xs)', fontWeight: 600, whiteSpace: 'nowrap' }}
                         >
                           {allOn ? 'Clear' : 'Select all'}
                         </button>
@@ -455,7 +455,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                     <div style={{ padding: '4px 12px 10px' }}>
                       {area.resources.map(([resource, perms]) => (
                         <div key={resource} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '9px 0', borderBottom: '1px solid var(--border-hair)' }}>
-                          <div style={{ width: '150px', flexShrink: 0, fontSize: '12.5px', paddingTop: '3px' }}>
+                          <div style={{ width: '150px', flexShrink: 0, fontSize: 'var(--text-xs)', paddingTop: '3px' }}>
                             {resourceLabel(resource)}
                           </div>
                           <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -475,7 +475,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                                   })}
                                   style={{
                                     display: 'inline-flex', alignItems: 'center', gap: '5px',
-                                    padding: '4px 10px', borderRadius: '999px', fontSize: '11.5px',
+                                    padding: '4px 10px', borderRadius: '999px', fontSize: 'var(--text-2xs)',
                                     cursor: canEdit ? 'pointer' : 'default',
                                     border: `1px solid ${on ? 'var(--accent)' : 'var(--border-color)'}`,
                                     background: on ? 'rgba(216,174,71,0.14)' : 'transparent',
@@ -486,7 +486,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                                 >
                                   {actionLabel(p.action)}
                                   {qualifier && (
-                                    <span style={{ fontSize: '10px', opacity: 0.85, fontWeight: 500 }}>({qualifier})</span>
+                                    <span style={{ fontSize: 'var(--text-3xs)', opacity: 0.85, fontWeight: 500 }}>({qualifier})</span>
                                   )}
                                 </button>
                               );
@@ -530,7 +530,7 @@ export const RolesPermissionsPanel: React.FC = () => {
               <label style={{ ...label, display: 'block', marginBottom: '4px' }}>System reference</label>
               <input type="text" required placeholder="REGIONAL_AUDITOR" value={newName}
                 onChange={(e) => { setNewName(e.target.value); setNewNameEdited(true); }} style={input} />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
                 Saved in capitals. This cannot be changed afterwards.
               </div>
             </div>
@@ -539,7 +539,7 @@ export const RolesPermissionsPanel: React.FC = () => {
               <input type="text" placeholder="What this role is for" value={newDesc}
                 onChange={(e) => setNewDesc(e.target.value)} style={input} />
             </div>
-            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               You'll choose what it can do next.
             </div>
           </div>

@@ -48,8 +48,8 @@ const IncomingCallPopup: React.FC<{ state: CallState }> = ({ state }) => (
         <Phone size={18} />
       </span>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: '13.5px', fontWeight: 700 }}>{state.peerName ?? 'Incoming call'}</div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Incoming call · clarification</div>
+        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>{state.peerName ?? 'Incoming call'}</div>
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Incoming call · clarification</div>
       </div>
       <button
         onClick={() => callManager.toggleRingtoneMute()}
@@ -62,7 +62,7 @@ const IncomingCallPopup: React.FC<{ state: CallState }> = ({ state }) => (
 
     {state.queryText && (
       <div style={{
-        fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4,
+        fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.4,
         background: 'var(--bg-surface-2)', borderRadius: '8px', padding: '8px 10px',
         display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
       }}>
@@ -77,7 +77,7 @@ const IncomingCallPopup: React.FC<{ state: CallState }> = ({ state }) => (
         style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
           background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: '9px',
-          padding: '9px 0', fontWeight: 700, fontSize: '12.5px', cursor: 'pointer',
+          padding: '9px 0', fontWeight: 700, fontSize: 'var(--text-xs)', cursor: 'pointer',
         }}
       >
         <PhoneOff size={15} /> Decline
@@ -88,7 +88,7 @@ const IncomingCallPopup: React.FC<{ state: CallState }> = ({ state }) => (
         style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
           background: 'var(--success)', color: '#fff', border: 'none', borderRadius: '9px',
-          padding: '9px 0', fontWeight: 700, fontSize: '12.5px', cursor: 'pointer',
+          padding: '9px 0', fontWeight: 700, fontSize: 'var(--text-xs)', cursor: 'pointer',
         }}
       >
         <Phone size={15} /> Accept
@@ -112,10 +112,10 @@ const InCallBar: React.FC<{ state: CallState }> = ({ state }) => {
       </span>
 
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}>
+        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}>
           {state.peerName ?? 'Call'}
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
           {ringing ? 'Ringing…' : state.answeredAt ? <CallTimer since={state.answeredAt} /> : 'Connecting…'}
         </div>
       </div>
@@ -164,7 +164,7 @@ const CallErrorToast: React.FC<{ message: string }> = ({ message }) => {
       display: 'flex', alignItems: 'center', gap: '9px',
       background: 'var(--bg-surface)', border: '1px solid var(--danger)',
       borderRadius: '10px', boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
-      padding: '10px 14px', maxWidth: 'min(92vw, 480px)', fontSize: '12.5px',
+      padding: '10px 14px', maxWidth: 'min(92vw, 480px)', fontSize: 'var(--text-xs)',
     }}>
       <AlertTriangle size={15} style={{ color: 'var(--danger)', flexShrink: 0 }} />
       <span>{message}</span>

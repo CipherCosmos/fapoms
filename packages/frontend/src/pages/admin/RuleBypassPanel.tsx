@@ -211,14 +211,14 @@ export const RuleBypassPanel: React.FC = () => {
       <div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
           <div>
-            <span style={{ fontSize: '11.5px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)' }}>
+            <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)' }}>
               {title}
             </span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px' }}>{hint}</span>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>{hint}</span>
           </div>
           <button
             onClick={() => toggleGroup(items)}
-            style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
+            style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: 'var(--text-2xs)', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
           >
             {allOn ? 'Clear' : someOn ? 'Select rest' : 'Select all'}
           </button>
@@ -241,12 +241,12 @@ export const RuleBypassPanel: React.FC = () => {
                 style={{ marginTop: '3px' }}
               />
               <span style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ fontSize: '13px', fontWeight: 600 }}>{r.label}</span>
-                <span style={{ display: 'flex', alignItems: 'flex-start', gap: '5px', fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{r.label}</span>
+                <span style={{ display: 'flex', alignItems: 'flex-start', gap: '5px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
                   <Unlock size={12} style={{ flexShrink: 0, marginTop: '1.5px' }} />
                   {r.blocks}
                 </span>
-                <span style={{ display: 'flex', alignItems: 'flex-start', gap: '5px', fontSize: '11.5px', color: 'var(--warning)', marginTop: '2px' }}>
+                <span style={{ display: 'flex', alignItems: 'flex-start', gap: '5px', fontSize: 'var(--text-2xs)', color: 'var(--warning)', marginTop: '2px' }}>
                   <ShieldAlert size={12} style={{ flexShrink: 0, marginTop: '1.5px' }} />
                   {r.protects}
                 </span>
@@ -262,7 +262,7 @@ export const RuleBypassPanel: React.FC = () => {
     return (
       <div style={{ ...card, maxWidth: '620px', display: 'flex', gap: '11px', alignItems: 'flex-start' }}>
         <ShieldCheck size={18} style={{ color: 'var(--success)', flexShrink: 0, marginTop: '1px' }} />
-        <div style={{ fontSize: '13px', lineHeight: 1.6 }}>
+        <div style={{ fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
           <div style={{ fontWeight: 700, marginBottom: '4px' }}>This screen is for administrators only.</div>
           Suspending the platform's operational rules is limited to administrators, because it
           changes what every record created during the suspension can be trusted to prove.
@@ -286,10 +286,10 @@ export const RuleBypassPanel: React.FC = () => {
         <LoadFailure loads={[{ label: 'whether any rules are suspended right now', query: stateQuery }]} />
       ) : current.active ? (
         <div style={{ ...card, borderColor: 'var(--danger)', background: 'var(--status-cancelled-bg)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontWeight: 800, fontSize: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontWeight: 800, fontSize: 'var(--text-base)' }}>
             <AlertOctagon size={17} /> Rules are suspended right now
           </div>
-          <div style={{ fontSize: '13px', marginTop: '10px', lineHeight: 1.7 }}>
+          <div style={{ fontSize: 'var(--text-sm)', marginTop: '10px', lineHeight: 1.7 }}>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '4px' }}>
               <strong style={{ flexShrink: 0 }}>Suspended:</strong>
               {/* Human labels, not the raw rule keys ("CHECK_IN_GEOFENCE") the previous version
@@ -300,7 +300,7 @@ export const RuleBypassPanel: React.FC = () => {
                   key={r.rule}
                   title={r.protects}
                   style={{
-                    fontSize: '11px', fontWeight: 700, padding: '1px 8px', borderRadius: '10px',
+                    fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '1px 8px', borderRadius: '10px',
                     background: r.evidential ? 'rgba(0,0,0,0.12)' : 'var(--bg-surface-2)',
                     color: r.evidential ? 'var(--danger)' : 'var(--text-primary)',
                     border: r.evidential ? '1px solid var(--danger)' : '1px solid var(--border-color)',
@@ -347,22 +347,22 @@ export const RuleBypassPanel: React.FC = () => {
             }}
             disabled={disable.isPending}
             className="btn btn-primary"
-            style={{ marginTop: '12px', padding: '7px 14px', fontSize: '13px', fontWeight: 700 }}
+            style={{ marginTop: '12px', padding: '7px 14px', fontSize: 'var(--text-sm)', fontWeight: 700 }}
           >
             {disable.isPending ? 'Restoring…' : 'Restore all rules now'}
           </button>
         </div>
       ) : (
-        <div style={{ ...card, display: 'flex', alignItems: 'center', gap: '9px', color: 'var(--success)', fontWeight: 700, fontSize: '13.5px' }}>
+        <div style={{ ...card, display: 'flex', alignItems: 'center', gap: '9px', color: 'var(--success)', fontWeight: 700, fontSize: 'var(--text-sm)' }}>
           <ShieldCheck size={17} /> All rules are being enforced.
         </div>
       )}
 
       <div style={card} ref={ruleListRef}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 700 }}>Choose the rules to suspend</div>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>Choose the rules to suspend</div>
           {selected.size > 0 && (
-            <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--accent-primary)', background: 'var(--bg-surface-2)', padding: '2px 9px', borderRadius: '10px' }}>
+            <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--accent-primary)', background: 'var(--bg-surface-2)', padding: '2px 9px', borderRadius: '10px' }}>
               {selected.size} selected
             </span>
           )}
@@ -377,7 +377,7 @@ export const RuleBypassPanel: React.FC = () => {
         {loadFailed(catalogueQuery) ? (
           <LoadFailure loads={[{ label: 'the rule catalogue', query: catalogueQuery }]} />
         ) : catalogueLoading ? (
-          <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading the rule catalogue…</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '8px 0' }}>Loading the rule catalogue…</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             <RuleGroup
@@ -395,7 +395,7 @@ export const RuleBypassPanel: React.FC = () => {
       </div>
 
       <div style={card}>
-        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, marginBottom: '5px' }}>
+        <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, marginBottom: '5px' }}>
           Why (recorded against every record produced while these rules are off)
         </label>
         <input
@@ -408,7 +408,7 @@ export const RuleBypassPanel: React.FC = () => {
           // can be submitted.
           list="rule-bypass-reason-suggestions"
           style={{
-            width: '100%', padding: '8px 10px', fontSize: '13px', background: 'var(--bg-primary)',
+            width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)', background: 'var(--bg-primary)',
             border: `1px solid ${reason.length > 0 && !reasonOk ? 'var(--danger)' : 'var(--border-color)'}`,
             borderRadius: '6px', color: 'var(--text-primary)', outline: 'none',
           }}
@@ -418,11 +418,11 @@ export const RuleBypassPanel: React.FC = () => {
         </datalist>
         {/* Silent disabling told nobody WHY the button wouldn't click. This says so, and turns
             green the moment it stops being true. */}
-        <div style={{ fontSize: '11px', marginTop: '4px', color: reasonOk ? 'var(--success)' : 'var(--text-muted)' }}>
+        <div style={{ fontSize: 'var(--text-2xs)', marginTop: '4px', color: reasonOk ? 'var(--success)' : 'var(--text-muted)' }}>
           {reasonOk ? '✓ Good to go' : `${reason.trim().length}/10 characters minimum`}
         </div>
 
-        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, margin: '14px 0 6px' }}>
+        <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 700, margin: '14px 0 6px' }}>
           For how long (max {MAX_BYPASS_HOURS}h — it switches itself back on)
         </label>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -431,7 +431,7 @@ export const RuleBypassPanel: React.FC = () => {
               key={h}
               onClick={() => setHours(h)}
               style={{
-                padding: '5px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                padding: '5px 12px', borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 700, cursor: 'pointer',
                 border: `1px solid ${hours === h ? 'transparent' : 'var(--border-color)'}`,
                 background: hours === h ? 'var(--accent)' : 'transparent',
                 color: hours === h ? 'var(--on-accent)' : 'var(--text-secondary)',
@@ -440,27 +440,27 @@ export const RuleBypassPanel: React.FC = () => {
               {h}h
             </button>
           ))}
-          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', margin: '0 2px' }}>or</span>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '0 2px' }}>or</span>
           <input
             type="number" min={1} max={MAX_BYPASS_HOURS} value={hours}
             onChange={(e) => setHours(Math.min(MAX_BYPASS_HOURS, Math.max(1, Number(e.target.value) || 1)))}
             aria-label="Custom duration in hours"
-            style={{ width: '64px', padding: '6px 8px', fontSize: '12.5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none' }}
+            style={{ width: '64px', padding: '6px 8px', fontSize: 'var(--text-xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none' }}
           />
-          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>hours</span>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>hours</span>
         </div>
 
         {evidentialSelected.length > 0 && (
-          <div style={{ marginTop: '14px', padding: '10px 12px', borderRadius: '7px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '12.5px', lineHeight: 1.55 }}>
+          <div style={{ marginTop: '14px', padding: '10px 12px', borderRadius: '7px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: 'var(--text-xs)', lineHeight: 1.55 }}>
             <strong>{evidentialSelected.length} of these are audit-evidence controls.</strong> Any
             audit completed while they are suspended is a test record — the platform will mark it
             as one, and it should not be delivered to a client.
           </div>
         )}
 
-        {error && <div style={{ marginTop: '10px', fontSize: '12.5px', color: 'var(--danger)' }}>{error}</div>}
+        {error && <div style={{ marginTop: '10px', fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>{error}</div>}
         {guidance && (
-          <div style={{ marginTop: '10px', fontSize: '12.5px', color: 'var(--warning)', fontWeight: 600 }}>
+          <div style={{ marginTop: '10px', fontSize: 'var(--text-xs)', color: 'var(--warning)', fontWeight: 600 }}>
             {guidance}
           </div>
         )}
@@ -522,7 +522,7 @@ export const RuleBypassPanel: React.FC = () => {
           disabled={enable.isPending}
           className="btn btn-primary"
           style={{
-            marginTop: '14px', padding: '8px 16px', fontSize: '13px', fontWeight: 700,
+            marginTop: '14px', padding: '8px 16px', fontSize: 'var(--text-sm)', fontWeight: 700,
             opacity: selected.size === 0 || !reasonOk ? 0.7 : 1,
             cursor: enable.isPending ? 'default' : 'pointer',
           }}

@@ -23,9 +23,9 @@ export const SectionCard: React.FC<{
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: description ? '16px' : '14px' }}>
       {icon && <div style={{ color: 'var(--accent)', display: 'flex', marginTop: '1px' }}>{icon}</div>}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
+        <div style={{ fontSize: 'var(--text-base)', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
         {description && (
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '3px', lineHeight: 1.5 }}>
             {description}
           </div>
         )}
@@ -65,9 +65,9 @@ export const SettingRow: React.FC<{
     }}
   >
     <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
+      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
       {description && (
-        <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.55, maxWidth: '62ch' }}>
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.55, maxWidth: '62ch' }}>
           {description}
         </div>
       )}
@@ -77,7 +77,7 @@ export const SettingRow: React.FC<{
         <div style={{ flex: 1, minWidth: 0 }}>{control}</div>
         {aside}
       </div>
-      {footnote && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{footnote}</div>}
+      {footnote && <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>{footnote}</div>}
     </div>
   </div>
 );
@@ -145,7 +145,7 @@ export const Tabs = <T extends string>({
           background: 'transparent',
           border: 'none',
           cursor: 'pointer',
-          fontSize: '13px',
+          fontSize: 'var(--text-sm)',
           fontWeight: 700,
           color: active === t.key ? 'var(--text-primary)' : 'var(--text-muted)',
           borderBottom: active === t.key ? '2px solid var(--accent)' : '2px solid transparent',
@@ -156,7 +156,7 @@ export const Tabs = <T extends string>({
       >
         {t.label}
         {t.count !== undefined && (
-          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>{t.count}</span>
+          <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--text-muted)' }}>{t.count}</span>
         )}
       </button>
     ))}
@@ -211,6 +211,6 @@ export const controlStyle: React.CSSProperties = {
   border: '1px solid var(--border-color)',
   borderRadius: '6px',
   color: 'var(--text-primary)',
-  fontSize: '13px',
+  fontSize: 'var(--text-sm)',
   boxSizing: 'border-box',
 };

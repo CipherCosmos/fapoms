@@ -202,7 +202,7 @@ export const ThreadPanel: React.FC<Props> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{
-            fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '12px',
+            fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '3px 8px', borderRadius: '12px',
             background: resolved ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
             color: resolved ? 'var(--success)' : 'var(--warning)',
             display: 'inline-flex', alignItems: 'center', gap: '4px',
@@ -223,7 +223,7 @@ export const ThreadPanel: React.FC<Props> = ({
             className="btn btn-secondary"
             title={callBusy ? 'A call is already in progress' : 'Call assayer'}
             style={{
-              fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px',
+              fontSize: 'var(--text-2xs)', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px',
               fontWeight: 600, opacity: callBusy ? 0.55 : 1, cursor: callBusy ? 'not-allowed' : 'pointer',
             }}>
             <Phone size={12} /> Call assayer
@@ -231,13 +231,13 @@ export const ThreadPanel: React.FC<Props> = ({
         )}
         {!resolved ? (
           <button onClick={resolve} disabled={busy} className="btn btn-secondary"
-            style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
+            style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
             {busy ? <Loader2 size={12} className="spin" /> : <CheckCircle2 size={12} />} Mark Resolved
           </button>
         ) : (
           <button onClick={reopen} disabled={busy} className="btn btn-secondary"
             title="Return this clarification to the assayer and continue the thread"
-            style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
+            style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
             {busy ? <Loader2 size={12} className="spin" /> : <RotateCcw size={12} />} Reopen
           </button>
         )}
@@ -247,7 +247,7 @@ export const ThreadPanel: React.FC<Props> = ({
       {/* Messages Feed */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', minHeight: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {messages === null && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '12.5px', padding: '20px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', padding: '20px 0' }}>
             <Loader2 size={15} className="spin" /> Loading message history…
           </div>
         )}
@@ -258,11 +258,11 @@ export const ThreadPanel: React.FC<Props> = ({
           <div style={{
             padding: '24px 16px', textAlign: 'center', borderRadius: '10px',
             background: 'var(--bg-surface-2)', border: '1px border-dashed var(--border-color)',
-            color: 'var(--text-muted)', fontSize: '12.5px',
+            color: 'var(--text-muted)', fontSize: 'var(--text-xs)',
           }}>
             <MessageSquare size={24} style={{ opacity: 0.3, marginBottom: '8px' }} />
             <div>Nothing has been said on this question yet.</div>
-            <div style={{ fontSize: '11.5px', marginTop: '4px' }}>
+            <div style={{ fontSize: 'var(--text-2xs)', marginTop: '4px' }}>
               Mark an area on the PDF or type below to send your query to the field assayer.
             </div>
           </div>
@@ -274,10 +274,10 @@ export const ThreadPanel: React.FC<Props> = ({
             <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isStaff ? 'flex-end' : 'flex-start' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px',
-                fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 600,
+                fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600,
               }}>
                 <span style={{
-                  padding: '1px 5px', borderRadius: '4px', fontSize: '9.5px', fontWeight: 700,
+                  padding: '1px 5px', borderRadius: '4px', fontSize: 'var(--text-3xs)', fontWeight: 700,
                   background: isStaff ? 'rgba(59, 130, 246, 0.15)' : 'rgba(168, 85, 247, 0.15)',
                   color: isStaff ? '#3b82f6' : '#a855f7',
                 }}>
@@ -289,7 +289,7 @@ export const ThreadPanel: React.FC<Props> = ({
               </div>
 
               <div style={{
-                maxWidth: '85%', padding: '10px 14px', borderRadius: '12px', fontSize: '13px', lineHeight: 1.45,
+                maxWidth: '85%', padding: '10px 14px', borderRadius: '12px', fontSize: 'var(--text-sm)', lineHeight: 1.45,
                 background: isStaff ? 'var(--accent)' : 'var(--bg-surface-2)',
                 color: isStaff ? '#ffffff' : 'inherit',
                 border: isStaff ? 'none' : '1px solid var(--border-color)',
@@ -306,7 +306,7 @@ export const ThreadPanel: React.FC<Props> = ({
                       padding: '4px 8px', borderRadius: '6px', cursor: 'pointer',
                       background: isStaff ? 'rgba(255,255,255,0.2)' : 'rgba(234,179,8,0.15)',
                       color: isStaff ? '#ffffff' : 'var(--warning)',
-                      border: 'none', fontSize: '11px', fontWeight: 700,
+                      border: 'none', fontSize: 'var(--text-2xs)', fontWeight: 700,
                     }}>
                     <CornerUpLeft size={12} /> Jump to Page {m.pageNumber}
                   </button>
@@ -338,7 +338,7 @@ export const ThreadPanel: React.FC<Props> = ({
                   // url does not, and falls back to unlinked text rather than running in-origin.
                   const href = safeHttpUrl(signed[a.url] ?? a.url);
                   const chipStyle = {
-                    display: 'inline-flex' as const, alignItems: 'center' as const, gap: '5px', fontSize: '11.5px',
+                    display: 'inline-flex' as const, alignItems: 'center' as const, gap: '5px', fontSize: 'var(--text-2xs)',
                     marginTop: '8px', padding: '4px 8px', borderRadius: '6px',
                     background: isStaff ? 'rgba(255,255,255,0.2)' : 'var(--bg-surface)',
                     color: isStaff ? '#ffffff' : 'var(--accent)', textDecoration: 'none',
@@ -361,13 +361,13 @@ export const ThreadPanel: React.FC<Props> = ({
       </div>
 
       {err && (
-        <div style={{ padding: '7px 13px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ padding: '7px 13px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center' }}>
           <AlertTriangle size={12} /> {err}
         </div>
       )}
 
       {resolved ? (
-        <div style={{ padding: '11px 13px', borderTop: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--success)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ padding: '11px 13px', borderTop: '1px solid var(--border-color)', fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'flex', gap: '6px', alignItems: 'center' }}>
           <CheckCircle2 size={14} /> Resolved.
         </div>
       ) : (
@@ -383,7 +383,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 width: '42px', height: '42px', borderRadius: '4px', flexShrink: 0,
                 border: '2px solid var(--warning)', background: 'var(--status-pending-bg)',
               }} />
-              <div style={{ fontSize: '11px', flex: 1 }}>
+              <div style={{ fontSize: 'var(--text-2xs)', flex: 1 }}>
                 Marked area on page {pending.pageNumber}
                 <div style={{ color: 'var(--text-muted)' }}>the assayer sees this spot on the PDF</div>
               </div>
@@ -411,7 +411,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 placeholder="What is wrong with this area?"
                 list="region-flag-suggestions"
                 style={{
-                  flex: 1, padding: '8px 10px', fontSize: '12.5px', borderRadius: '8px',
+                  flex: 1, padding: '8px 10px', fontSize: 'var(--text-xs)', borderRadius: '8px',
                   background: 'var(--bg-input)', color: 'inherit',
                   border: '1px solid var(--border-color)', outline: 'none',
                 }}
@@ -424,7 +424,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 placeholder="Ask the assayer…"
                 rows={2}
                 style={{
-                  flex: 1, resize: 'none', padding: '8px 10px', fontSize: '12.5px', borderRadius: '8px',
+                  flex: 1, resize: 'none', padding: '8px 10px', fontSize: 'var(--text-xs)', borderRadius: '8px',
                   background: 'var(--bg-input)', color: 'inherit',
                   border: '1px solid var(--border-color)', outline: 'none',
                 }}

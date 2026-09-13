@@ -74,17 +74,17 @@ export const DonutChart: React.FC<{
         }}>
           {hoveredSeg ? (
             <>
-              <div style={{ fontSize: 17, fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>
+              <div style={{ fontSize: 'var(--text-lg)', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>
                 {hoveredSeg.formattedValue ?? hoveredSeg.value.toLocaleString('en-IN')}
               </div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.3 }}>{hoveredSeg.label}</div>
+              <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.3 }}>{hoveredSeg.label}</div>
             </>
           ) : (
             <>
-              <div style={{ fontSize: 17, fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>
+              <div style={{ fontSize: 'var(--text-lg)', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>
                 {centerValue}
               </div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.3 }}>{centerLabel}</div>
+              <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.3 }}>{centerLabel}</div>
             </>
           )}
         </div>
@@ -102,11 +102,11 @@ export const DonutChart: React.FC<{
               style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: s.onClick ? 'pointer' : 'default' }}
             >
               <span style={{ width: 9, height: 9, borderRadius: 2, background: s.color, flexShrink: 0 }} />
-              <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{s.label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{s.label}</span>
+              <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-primary)' }}>
                 {s.formattedValue ?? s.value.toLocaleString('en-IN')}
               </span>
-              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>({pct}%)</span>
+              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>({pct}%)</span>
             </div>
           );
         })}

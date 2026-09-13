@@ -272,11 +272,11 @@ export const AssayerRoster: React.FC<{
       message: (
         <>
           Each person receives new credentials delivered by email and SMS according to their record.
-          <div style={{ marginTop: '8px', fontSize: '12px' }}>
+          <div style={{ marginTop: '8px', fontSize: 'var(--text-xs)' }}>
             {names.join(', ')}
             {selectedRows.length > names.length && ` and ${selectedRows.length - names.length} more`}
           </div>
-          {hiddenNote && <div style={{ marginTop: '6px', fontSize: '12px' }}>{hiddenNote}</div>}
+          {hiddenNote && <div style={{ marginTop: '6px', fontSize: 'var(--text-xs)' }}>{hiddenNote}</div>}
         </>
       ),
       confirmLabel: `Issue access to ${selectedRows.length}`,
@@ -408,7 +408,7 @@ export const AssayerRoster: React.FC<{
             This will add <strong>{dry.created.toLocaleString('en-IN')}</strong> and update{' '}
             <strong>{dry.updated.toLocaleString('en-IN')}</strong> appraisers.
             {dry.skipped > 0 && (
-              <div style={{ marginTop: '6px', fontSize: '12px' }}>
+              <div style={{ marginTop: '6px', fontSize: 'var(--text-xs)' }}>
                 {dry.skipped} row(s) without appraiser code will be skipped.
               </div>
             )}
@@ -462,7 +462,7 @@ export const AssayerRoster: React.FC<{
             setNotice(null);
             setNoticeExpanded(false);
           }}
-          style={{ alignItems: 'flex-start', fontSize: '13px' }}
+          style={{ alignItems: 'flex-start', fontSize: 'var(--text-sm)' }}
         >
           <span style={{ fontWeight: (notice.details ?? []).length ? 600 : 400 }}>
             {notice.text}
@@ -472,7 +472,7 @@ export const AssayerRoster: React.FC<{
               style={{
                 margin: '6px 0 0',
                 paddingLeft: '18px',
-                fontSize: '12.5px',
+                fontSize: 'var(--text-xs)',
                 lineHeight: 1.5,
               }}
             >
@@ -491,7 +491,7 @@ export const AssayerRoster: React.FC<{
                 border: 'none',
                 color: 'inherit',
                 cursor: 'pointer',
-                fontSize: '12px',
+                fontSize: 'var(--text-xs)',
                 fontWeight: 700,
                 textDecoration: 'underline',
                 padding: 0,
@@ -656,13 +656,13 @@ export const AssayerRoster: React.FC<{
             type="button"
             onClick={() => setShowImport(false)}
             className="btn btn-secondary"
-            style={{ fontSize: '12px', padding: '8px 14px' }}
+            style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}
           >
             Close
           </button>
         }
       >
-        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
           Bring in a client's appraiser workbook. Every import is rehearsed first and shows what it
           would change before anything is written.
         </div>
@@ -671,7 +671,7 @@ export const AssayerRoster: React.FC<{
             display: 'flex',
             alignItems: 'flex-start',
             gap: '8px',
-            fontSize: '13px',
+            fontSize: 'var(--text-sm)',
             color: 'var(--text-secondary)',
             cursor: 'pointer',
             lineHeight: 1.45,
@@ -686,7 +686,7 @@ export const AssayerRoster: React.FC<{
           />
           <span>
             Sheet wins conflicts
-            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '12px' }}>
+            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
               Off: a disagreeing value is left alone and filed for review. On: the sheet replaces it.
             </span>
           </span>

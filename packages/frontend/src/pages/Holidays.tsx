@@ -241,10 +241,10 @@ export const Holidays: React.FC = () => {
             <>
               {/* Most of a year's calendar is last year's calendar with new dates. Retyping
                   forty holidays each January is where the typos and the omissions came from. */}
-              <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+              <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                 <CopyPlus size={14} /> Copy from {yearFilter - 1}
               </button>
-              <button onClick={() => handleOpenCreate()} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+              <button onClick={() => handleOpenCreate()} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                 <Plus size={14} /> Add Holiday
               </button>
             </>
@@ -260,7 +260,7 @@ export const Holidays: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <button onClick={() => setMonthCursor((c) => new Date(c.getFullYear(), c.getMonth() - 1, 1))}
               className="btn btn-secondary" style={{ padding: '6px 10px' }}><ChevronLeft size={14} /></button>
-            <div style={{ fontSize: '16px', fontWeight: 700 }}>{MONTH_NAMES[monthCursor.getMonth()]} {monthCursor.getFullYear()}</div>
+            <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>{MONTH_NAMES[monthCursor.getMonth()]} {monthCursor.getFullYear()}</div>
             <button onClick={() => setMonthCursor((c) => new Date(c.getFullYear(), c.getMonth() + 1, 1))}
               className="btn btn-secondary" style={{ padding: '6px 10px' }}><ChevronRight size={14} /></button>
           </div>
@@ -275,7 +275,7 @@ export const Holidays: React.FC = () => {
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '4px' }}>
                 {WEEKDAY_LABELS.map((w) => (
-                  <div key={w} style={{ textAlign: 'center', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', padding: '4px 0' }}>{w}</div>
+                  <div key={w} style={{ textAlign: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', padding: '4px 0' }}>{w}</div>
                 ))}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
@@ -296,19 +296,19 @@ export const Holidays: React.FC = () => {
                         display: 'flex', flexDirection: 'column', gap: '3px',
                       }}
                     >
-                      <div style={{ fontSize: '11px', fontWeight: isToday ? 800 : 600, color: isToday ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>{d.getDate()}</div>
+                      <div style={{ fontSize: 'var(--text-2xs)', fontWeight: isToday ? 800 : 600, color: isToday ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>{d.getDate()}</div>
                       {regs.slice(0, 2).map((h) => (
                         <div key={h.id} title={h.name} style={{
-                          fontSize: '9.5px', padding: '1px 4px', borderRadius: '3px', overflow: 'hidden',
+                          fontSize: 'var(--text-3xs)', padding: '1px 4px', borderRadius: '3px', overflow: 'hidden',
                           whiteSpace: 'nowrap', textOverflow: 'ellipsis',
                           background: TYPE_TONE[h.type]?.bg ?? 'var(--border-hair)', color: TYPE_TONE[h.type]?.color ?? 'var(--text-primary)',
                         }}>
                           {h.name}
                         </div>
                       ))}
-                      {regs.length > 2 && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>+{regs.length - 2} more</div>}
+                      {regs.length > 2 && <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>+{regs.length - 2} more</div>}
                       {!regs.length && auto && (
-                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }} title={`${auto} — automatic bank holiday`}>{auto}</div>
+                        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }} title={`${auto} — automatic bank holiday`}>{auto}</div>
                       )}
                     </div>
                   );
@@ -317,7 +317,7 @@ export const Holidays: React.FC = () => {
             </>
           )}
 
-          <div style={{ display: 'flex', gap: '14px', marginTop: '14px', fontSize: '11px', color: 'var(--text-muted)', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '14px', marginTop: '14px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', alignItems: 'center', flexWrap: 'wrap' }}>
             <Info size={12} />
             <span>Every Sunday and the 2nd/4th Saturday are bank holidays automatically — not shown in the list below because nothing needs to be registered for them.</span>
           </div>
@@ -335,7 +335,7 @@ export const Holidays: React.FC = () => {
               {/* An empty year is exactly the moment the copy is wanted, so offer it here
                   rather than making the user find the button in the toolbar. */}
               {canManage && (
-                <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+                <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                   <CopyPlus size={14} /> Copy {yearFilter - 1}'s holidays into {yearFilter}
                 </button>
               )}
@@ -344,7 +344,7 @@ export const Holidays: React.FC = () => {
             <div style={{ overflowX: 'auto' }}>
             <table className="table" style={{ width: '100%', minWidth: '640px', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', fontSize: '12px' }}>
+                <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                   <th style={{ padding: '10px' }}>Date</th>
                   <th style={{ padding: '10px' }}>Holiday Name</th>
                   <th style={{ padding: '10px' }}>Type</th>
@@ -357,7 +357,7 @@ export const Holidays: React.FC = () => {
                 {[...holidays].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map((h: Holiday) => {
                   const matchedClient = clients.find((c: any) => c.id === h.clientId);
                   return (
-                    <tr key={h.id} style={{ borderBottom: '1px solid var(--border-hair)', fontSize: '13px' }}>
+                    <tr key={h.id} style={{ borderBottom: '1px solid var(--border-hair)', fontSize: 'var(--text-sm)' }}>
                       <td style={{ padding: '12px 10px', fontWeight: 600, color: 'var(--accent)' }}>
                         {new Date(h.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                       </td>
@@ -365,7 +365,7 @@ export const Holidays: React.FC = () => {
                       <td style={{ padding: '12px 10px' }}>
                         <StatusBadge label={h.type} bg={(TYPE_TONE[h.type] ?? TYPE_TONE.STATE).bg} color={(TYPE_TONE[h.type] ?? TYPE_TONE.STATE).color} />
                       </td>
-                      <td style={{ padding: '12px 10px', fontSize: '12px' }}>
+                      <td style={{ padding: '12px 10px', fontSize: 'var(--text-xs)' }}>
                         {!h.clientId ? <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>🌐 All Clients</span> : <span style={{ color: 'var(--warning)', fontWeight: 600 }}>🏦 {matchedClient?.name || 'Specific Client'}</span>}
                       </td>
                       <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>
@@ -415,7 +415,7 @@ export const Holidays: React.FC = () => {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Client Scope (Optional)</label>
+              <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Client Scope (Optional)</label>
               <Select
                 value={clientId}
                 onChange={setClientId}
@@ -428,19 +428,19 @@ export const Holidays: React.FC = () => {
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Title</label>
+              <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Title</label>
               <input type="text" required placeholder="e.g. Maharashtra Day" value={name} onChange={(e) => setName(e.target.value)}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
-                <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Date</label>
+                <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Holiday Date</label>
                 <input type="date" required value={date} onChange={(e) => setDate(e.target.value)}
-                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </div>
               <div>
-                <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Category Type</label>
+                <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Category Type</label>
                 <Select
                   value={type}
                   onChange={(v) => setType(v as Holiday['type'])}
@@ -452,29 +452,29 @@ export const Holidays: React.FC = () => {
 
             {type === 'STATE' && (
               <div>
-                <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
+                <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
                   Applicable States <span style={{ fontWeight: 400 }}>(at least one — matching ignores case, so branch data spelled differently still matches)</span>
                 </label>
                 <input
                   type="text" placeholder="Search states…" value={stateSearch} onChange={(e) => setStateSearch(e.target.value)}
-                  style={{ width: '100%', padding: '7px 9px', marginBottom: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '12px' }}
+                  style={{ width: '100%', padding: '7px 9px', marginBottom: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-xs)' }}
                 />
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '150px', overflowY: 'auto', padding: '8px', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                   {filteredStateOptions.map((st) => {
                     const isSelected = selectedStates.includes(st.value);
                     return (
                       <button type="button" key={st.value} onClick={() => toggleState(st.value)}
-                        style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '11px', border: 'none', cursor: 'pointer', backgroundColor: isSelected ? 'var(--accent)' : 'var(--bg-tertiary)', color: isSelected ? 'var(--on-accent)' : 'var(--text-primary)' }}>
+                        style={{ padding: '4px 8px', borderRadius: '4px', fontSize: 'var(--text-2xs)', border: 'none', cursor: 'pointer', backgroundColor: isSelected ? 'var(--accent)' : 'var(--bg-tertiary)', color: isSelected ? 'var(--on-accent)' : 'var(--text-primary)' }}>
                         {isSelected ? `✓ ${st.label}` : st.label}
                       </button>
                     );
                   })}
-                  {filteredStateOptions.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No match.</span>}
+                  {filteredStateOptions.length === 0 && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>No match.</span>}
                 </div>
               </div>
             )}
             {type !== 'STATE' && (
-              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 {type === 'NATIONAL' ? 'Applies across all states.' : 'Bank holiday — applies wherever this client audits, across all states.'}
               </div>
             )}
@@ -628,7 +628,7 @@ const CopyLastYearModal: React.FC<{
       footer={
         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', alignItems: 'center', marginTop: '10px' }}>
           {progress && (
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginRight: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginRight: 'auto', fontVariantNumeric: 'tabular-nums' }}>
               Creating {progress.done} of {progress.total}…
             </span>
           )}
@@ -640,7 +640,7 @@ const CopyLastYearModal: React.FC<{
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
           Nothing is created until you press the button below. Each holiday is copied to the same
           calendar day of {targetYear} — check the weekday, since holidays that follow the lunar
           calendar move from year to year and will need editing afterwards.
@@ -656,20 +656,20 @@ const CopyLastYearModal: React.FC<{
             }]}
           />
         ) : source === null ? (
-          <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Reading {sourceYear}…</div>
+          <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Reading {sourceYear}…</div>
         ) : rows.length === 0 ? (
-          <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
             Nothing registered for {sourceYear} in this client scope, so there is nothing to bring forward.
           </div>
         ) : (
           <>
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', fontSize: '12px' }}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', fontSize: 'var(--text-xs)' }}>
               <button type="button" disabled={!!progress}
                 onClick={() => setChosen(new Set(copyable.map((r) => r.source.id)))}
-                className="btn btn-secondary" style={{ fontSize: '11px', padding: '5px 10px' }}>Select all</button>
+                className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px' }}>Select all</button>
               <button type="button" disabled={!!progress}
                 onClick={() => setChosen(new Set())}
-                className="btn btn-secondary" style={{ fontSize: '11px', padding: '5px 10px' }}>Select none</button>
+                className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px' }}>Select none</button>
               <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
                 {selected.length} of {copyable.length} selected
                 {rows.length - copyable.length > 0 && ` · ${rows.length - copyable.length} already registered for ${targetYear}`}
@@ -682,7 +682,7 @@ const CopyLastYearModal: React.FC<{
                 return (
                   <label key={r.source.id}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', fontSize: '12.5px',
+                      display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', fontSize: 'var(--text-xs)',
                       borderBottom: '1px solid var(--border-hair)',
                       cursor: r.exists || progress ? 'default' : 'pointer',
                       opacity: r.exists ? 0.55 : 1,
@@ -695,7 +695,7 @@ const CopyLastYearModal: React.FC<{
                     <span style={{ color: 'var(--accent)', fontWeight: 600, whiteSpace: 'nowrap', minWidth: '150px', textAlign: 'right' }}>
                       {r.newDate.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                     </span>
-                    {r.exists && <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>already registered</span>}
+                    {r.exists && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>already registered</span>}
                   </label>
                 );
               })}

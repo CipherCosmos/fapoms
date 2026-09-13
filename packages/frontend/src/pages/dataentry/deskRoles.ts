@@ -35,7 +35,7 @@ export const deskCard: React.CSSProperties = {
   borderRadius: '10px', padding: '14px',
 };
 export const deskLabel: React.CSSProperties = {
-  fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
+  fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 

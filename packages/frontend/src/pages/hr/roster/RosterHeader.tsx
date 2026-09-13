@@ -53,7 +53,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
       */}
       <div>
         {filteredCount !== totalCount ? (
-          <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
+          <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
             Showing <strong style={{ color: 'var(--text-primary)' }}>{filteredCount.toLocaleString('en-IN')}</strong>
             {' '}of {totalCount.toLocaleString('en-IN')}
           </p>
@@ -65,7 +65,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
           type="button"
           onClick={onToggleFilters}
           className={`btn ${showFilters ? 'btn-primary' : 'btn-secondary'}`}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '7px 12px' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '7px 12px' }}
         >
           <SlidersHorizontal size={14} />
           <span>Filters</span>
@@ -75,7 +75,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
                 marginLeft: '4px',
                 background: showFilters ? 'rgba(255,255,255,0.25)' : 'var(--accent)',
                 color: '#fff',
-                fontSize: '11px',
+                fontSize: 'var(--text-2xs)',
                 padding: '1px 6px',
                 borderRadius: '10px',
                 fontWeight: 700,
@@ -119,7 +119,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
               type="button"
               onClick={onOpenImport}
               className="btn btn-secondary"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '7px 12px' }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '7px 12px' }}
             >
               <Upload size={14} />
               <span>Import</span>
@@ -129,7 +129,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
               type="button"
               onClick={() => navigate('/hr/register')}
               className="btn btn-primary"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '7px 14px' }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-sm)', padding: '7px 14px' }}
             >
               <Plus size={15} />
               <span>Add assayer</span>

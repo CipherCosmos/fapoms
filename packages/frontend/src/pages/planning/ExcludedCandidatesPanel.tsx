@@ -159,7 +159,7 @@ export const ExcludedCandidatesPanel: React.FC<{
   return (
     <div style={{ marginTop: '10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface-2)' }}>
       <button onClick={() => setOpen(!open)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer' }}>
+        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer' }}>
         <span>
           {excluded.length} assayer{excluded.length > 1 ? 's' : ''} not eligible for this date
           {dateBound > 0 && (
@@ -185,29 +185,29 @@ export const ExcludedCandidatesPanel: React.FC<{
               <div key={e.assayerId} style={{ padding: '7px 0', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                       {e.displayName}
                       {badge && (
-                        <span style={{ fontSize: '9px', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: badge.bg, color: badge.color, letterSpacing: '0.03em' }}>
+                        <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: badge.bg, color: badge.color, letterSpacing: '0.03em' }}>
                           {badge.label}
                         </span>
                       )}
                       {e.distanceKm != null && (
                         <span
                           title={e.distanceSource === 'OSRM' ? 'Measured along the road network.' : 'Straight-line distance — the road is longer, typically by 11–56 %.'}
-                          style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 500 }}
+                          style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 500 }}
                         >
                           {formatRouteDistance(e.distanceKm, e.distanceSource ?? null)}
                         </span>
                       )}
                     </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                       {e.reason}
                       {isDate && e.nextAvailableDate && (
                         <span style={{ color: 'var(--success)', fontWeight: 600 }}> · free from {e.nextAvailableDate}</span>
                       )}
                     </div>
-                    {e.detail && <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '2px' }}>└─ {e.detail}</div>}
+                    {e.detail && <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--warning)', marginTop: '2px' }}>└─ {e.detail}</div>}
                   </div>
                   {/* No "assign anyway" for an unfinished onboarding. The other exclusions are
                       judgement calls an operator can reasonably overrule with a recorded reason;
@@ -219,7 +219,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                     <a
                       href={`/hr/roster?assayer=${e.assayerId}`}
                       className="btn btn-secondary"
-                      style={{ padding: '3px 8px', fontSize: '10px', whiteSpace: 'nowrap', flexShrink: 0, width: 'auto', textDecoration: 'none' }}
+                      style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', whiteSpace: 'nowrap', flexShrink: 0, width: 'auto', textDecoration: 'none' }}
                     >
                       Finish onboarding
                     </a>
@@ -231,7 +231,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                   {notOverridable && !isOnboarding && (
                     <span
                       title="Enforced regardless of reason. A platform admin can lift this client's minimum-distance rule in Platform Settings, for every branch at once."
-                      style={{ padding: '3px 8px', fontSize: '10px', whiteSpace: 'nowrap', flexShrink: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}
+                      style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', whiteSpace: 'nowrap', flexShrink: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}
                     >
                       Not overridable here
                     </span>
@@ -240,7 +240,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                     <button
                       onClick={() => startOverride(e)}
                       className="btn btn-secondary"
-                      style={{ padding: '3px 8px', fontSize: '10px', whiteSpace: 'nowrap', flexShrink: 0, width: 'auto', ...(isDate ? { color: 'var(--success)', borderColor: 'var(--status-active-bg)' } : {}) }}
+                      style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', whiteSpace: 'nowrap', flexShrink: 0, width: 'auto', ...(isDate ? { color: 'var(--success)', borderColor: 'var(--status-active-bg)' } : {}) }}
                     >
                       {isDate ? 'Assign another day' : 'Assign anyway'}
                     </button>
@@ -258,7 +258,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                         min={nextOfferableDay(new Set())}
                         onChange={(ev) => setDate(ev.target.value)}
                         aria-label="Date to assign the audit for"
-                        style={{ fontSize: '11px', padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
+                        style={{ fontSize: 'var(--text-2xs)', padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
                       />
                     )}
                     <input
@@ -275,24 +275,24 @@ export const ExcludedCandidatesPanel: React.FC<{
                       onFocus={(ev) => ev.target.select()}
                       onKeyDown={(ev) => { if (ev.key === 'Enter') void confirmOverride(e); if (ev.key === 'Escape') setOverrideFor(null); }}
                       placeholder={isDate ? 'Note (recorded)' : 'Reason for overriding this filter (recorded)'}
-                      style={{ flex: 1, minWidth: '160px', fontSize: '11px', padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
+                      style={{ flex: 1, minWidth: '160px', fontSize: 'var(--text-2xs)', padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
                     />
                     <button
                       onClick={() => confirmOverride(e)}
                       disabled={!reason.trim() || busy || (isDate && !date)}
                       className="btn btn-primary"
-                      style={{ padding: '4px 9px', fontSize: '10px', width: 'auto', opacity: !reason.trim() || busy || (isDate && !date) ? 0.6 : 1 }}
+                      style={{ padding: '4px 9px', fontSize: 'var(--text-3xs)', width: 'auto', opacity: !reason.trim() || busy || (isDate && !date) ? 0.6 : 1 }}
                     >
                       {busy ? 'Assigning…' : isDate ? `Offer for ${date || '…'}` : 'Confirm'}
                     </button>
-                    <button onClick={() => { setOverrideFor(null); setOverrideError(null); }} className="btn btn-secondary" style={{ padding: '4px 9px', fontSize: '10px', width: 'auto' }}>
+                    <button onClick={() => { setOverrideFor(null); setOverrideError(null); }} className="btn btn-secondary" style={{ padding: '4px 9px', fontSize: 'var(--text-3xs)', width: 'auto' }}>
                       Cancel
                     </button>
                   </div>
                 )}
                 {/* The refusal, next to the control that caused it — see `overrideError` above. */}
                 {overrideFor === e.assayerId && overrideError && (
-                  <div style={{ marginTop: '6px', padding: '5px 8px', fontSize: '10.5px', borderRadius: 'var(--radius-sm)', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                  <div style={{ marginTop: '6px', padding: '5px 8px', fontSize: 'var(--text-3xs)', borderRadius: 'var(--radius-sm)', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                     {overrideError}
                   </div>
                 )}

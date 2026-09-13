@@ -104,7 +104,7 @@ export const FallingBehind: React.FC = () => {
         subtitle="Everything past a deadline or its audit date, most overdue first. Nothing here drops off until it is dealt with."
         actions={<>
           {items.length > 0 && (
-            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--danger)' }}>
+            <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--danger)' }}>
               {counted(items.length, 'item')} to chase
             </span>
           )}
@@ -123,7 +123,7 @@ export const FallingBehind: React.FC = () => {
       ) : items.length === 0 ? (
         <div className="glass-card" style={{ padding: '48px', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <CheckCircle2 size={34} style={{ opacity: 0.6, marginBottom: 10, color: 'var(--success)' }} />
-          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>Nothing overdue — everything is on track.</div>
+          <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>Nothing overdue — everything is on track.</div>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -135,17 +135,17 @@ export const FallingBehind: React.FC = () => {
                 gap: '14px', flexWrap: 'wrap', borderLeft: '3px solid var(--danger)',
               }}>
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 'var(--text-base)', fontWeight: 800, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     {item.branchName || item.assignmentNumber}
                     {item.branchCity && <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>· {item.branchCity}</span>}
                     <span style={{
-                      fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px',
+                      fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px',
                       background: 'var(--status-cancelled-bg)', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: '4px',
                     }}>
                       <AlertTriangle size={10} /> {overdueText(item.daysOverdue)}
                     </span>
                   </div>
-                  <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     <span>{item.assignmentNumber}</span>
                     {item.projectName && <span>{item.projectName}</span>}
                     {item.clientName && <span>{item.clientName}</span>}
@@ -154,7 +154,7 @@ export const FallingBehind: React.FC = () => {
                       {item.assayerName ? <b style={{ color: 'var(--text-secondary)' }}>{item.assayerName}</b> : 'Unassigned'}
                     </span>
                   </div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginTop: '4px', fontWeight: 600 }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', marginTop: '4px', fontWeight: 600 }}>
                     {item.slaState}
                     {item.scheduledDate && item.nextAction === 'RESCHEDULE' && (
                       <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}> · was due {item.scheduledDate}</span>
@@ -162,7 +162,7 @@ export const FallingBehind: React.FC = () => {
                   </div>
                 </div>
                 <button onClick={() => goToAction(item)} className="btn btn-primary"
-                  style={{ padding: '6px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  style={{ padding: '6px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                   <ActionIcon size={13} /> {ACTION_LABEL[item.nextAction]}
                 </button>
               </div>

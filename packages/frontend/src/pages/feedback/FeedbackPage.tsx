@@ -50,7 +50,7 @@ const Stat: React.FC<{ n: number; label: string; tone?: string; onClick?: () => 
     borderColor: active ? 'var(--accent-primary)' : 'var(--border-color)',
     background: active ? 'var(--accent-soft)' : 'var(--bg-surface)',
   }}>
-    <div style={{ fontSize: '24px', fontWeight: 800, lineHeight: 1, color: tone ?? 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{n}</div>
+    <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, lineHeight: 1, color: tone ?? 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{n}</div>
     <div style={{ ...label, marginTop: '5px' }}>{l}</div>
   </button>
 );
@@ -64,18 +64,18 @@ const Row: React.FC<{ t: FeedbackThread; active: boolean; onClick: () => void }>
     borderRadius: '10px',
   }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
-      <span style={{ fontSize: '13px', fontWeight: 600, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.title}</span>
+      <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.title}</span>
       <Badge chip={STATUS[t.status]} />
     </div>
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '7px', flexWrap: 'wrap' }}>
       <Badge chip={CATEGORY[t.category]} />
       <Badge chip={SEVERITY[t.severity]} />
       {t.voteCount > 1 && (
-        <span title={`${t.voteCount} people affected`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)' }}>
+        <span title={`${t.voteCount} people affected`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--accent-primary)' }}>
           <Users size={11} /> {t.voteCount}
         </span>
       )}
-      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t.reporterName} · {fmtWhen(t.lastMessageAt)}</span>
+      <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{t.reporterName} · {fmtWhen(t.lastMessageAt)}</span>
     </div>
   </button>
 );
@@ -119,20 +119,20 @@ const ReporterView: React.FC<{ selectedId: string | null; setSelectedId: (id: st
     <div style={{ padding: '20px', maxWidth: '1100px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '16px', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>My support requests</h1>
-          <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: '4px 0 0' }}>Bugs, ideas and questions you've sent the product team.</p>
+          <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 800, margin: 0 }}>My support requests</h1>
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '4px 0 0' }}>Bugs, ideas and questions you've sent the product team.</p>
         </div>
         <FeedbackLauncher />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 380px) 1fr', gap: '14px', flex: 1, minHeight: 0 }} className="feedback-split">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', paddingRight: '2px' }}>
-          {items === null && <div style={{ color: 'var(--text-muted)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>}
+          {items === null && <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>}
           {items?.length === 0 && (
-            <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+            <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
               <MessageSquare size={26} style={{ opacity: 0.3, marginBottom: '8px' }} />
               <div>You haven't sent any support requests yet.</div>
-              <div style={{ fontSize: '11.5px', marginTop: '4px' }}>Use the Support button any time you hit a bug or have an idea.</div>
+              <div style={{ fontSize: 'var(--text-2xs)', marginTop: '4px' }}>Use the Support button any time you hit a bug or have an idea.</div>
             </div>
           )}
           {items?.map((t) => <Row key={t.id} t={t} active={t.id === selectedId} onClick={() => setSelectedId(t.id)} />)}
@@ -221,8 +221,8 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
   return (
     <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', minHeight: 0 }}>
       <div>
-        <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>Support desk</h1>
-        <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: '4px 0 0' }}>Everything users have reported — triage, respond, and track to resolution.</p>
+        <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 800, margin: 0 }}>Support desk</h1>
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '4px 0 0' }}>Everything users have reported — triage, respond, and track to resolution.</p>
       </div>
 
       {/* SLA breaches — the exception surface. Disappears when the desk is on time. */}
@@ -246,7 +246,7 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             {STATUS_TABS.map((t) => (
               <button key={t.key} onClick={() => setStatusTab(t.key)} style={{
-                padding: '4px 10px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
+                padding: '4px 10px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
                 background: statusTab === t.key ? 'var(--accent-primary)' : 'var(--bg-surface)',
                 color: statusTab === t.key ? 'var(--bg-primary)' : 'var(--text-secondary)',
                 border: '1px solid', borderColor: statusTab === t.key ? 'var(--accent-primary)' : 'var(--border-color)',
@@ -256,7 +256,7 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: '1 1 140px', padding: '4px 8px', borderRadius: '7px', background: 'var(--bg-input)', border: '1px solid var(--border-color)' }}>
               <Search size={13} style={{ color: 'var(--text-muted)' }} />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: '12px' }} />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 'var(--text-xs)' }} />
             </div>
             <Select
               compact
@@ -265,14 +265,14 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
               options={[{ value: '', label: 'All types' }, ...Object.values(FeedbackCategory).map((c) => ({ value: c, label: CATEGORY[c].label }))]}
             />
             <button onClick={() => setMineOnly(mineOnly === 'me' ? '' : 'me')} style={{
-              padding: '5px 10px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
+              padding: '5px 10px', borderRadius: '7px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
               background: mineOnly === 'me' ? 'var(--accent-soft)' : 'var(--bg-surface)',
               color: mineOnly === 'me' ? 'var(--accent-primary)' : 'var(--text-secondary)',
               border: '1px solid', borderColor: mineOnly === 'me' ? 'var(--accent-primary)' : 'var(--border-color)',
             }}>Mine</button>
             <button onClick={() => setSort(sort === 'impact' ? 'recent' : 'impact')} title="Sort by how many people are affected" style={{
               display: 'inline-flex', alignItems: 'center', gap: '4px',
-              padding: '5px 10px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
+              padding: '5px 10px', borderRadius: '7px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
               background: sort === 'impact' ? 'var(--accent-soft)' : 'var(--bg-surface)',
               color: sort === 'impact' ? 'var(--accent-primary)' : 'var(--text-secondary)',
               border: '1px solid', borderColor: sort === 'impact' ? 'var(--accent-primary)' : 'var(--border-color)',
@@ -281,8 +281,8 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
 
           {/* List */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flex: 1, minHeight: 0, paddingRight: '2px' }}>
-            {items === null && <div style={{ color: 'var(--text-muted)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>}
-            {items?.length === 0 && <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}><Inbox size={24} style={{ opacity: 0.3, marginBottom: '6px' }} /><div>
+            {items === null && <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>}
+            {items?.length === 0 && <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}><Inbox size={24} style={{ opacity: 0.3, marginBottom: '6px' }} /><div>
               {statusTab !== 'ALL' || category || severity || mineOnly || debounced
                 ? 'Nothing matches the filters you have picked. Clear them to see all support requests.'
                 : 'No support requests yet. Anyone in the company can report a bug, suggest an idea or raise a complaint from the app, and it arrives here for the product team to answer.'}
@@ -291,10 +291,10 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
           </div>
 
           {pages > 1 && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)' }}>
-              <button className="btn btn-secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} style={{ padding: '4px 10px', fontSize: '12px' }}>Prev</button>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+              <button className="btn btn-secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} style={{ padding: '4px 10px', fontSize: 'var(--text-xs)' }}>Prev</button>
               <span>Page {page} / {pages} · {total}</span>
-              <button className="btn btn-secondary" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} style={{ padding: '4px 10px', fontSize: '12px' }}>Next</button>
+              <button className="btn btn-secondary" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} style={{ padding: '4px 10px', fontSize: 'var(--text-xs)' }}>Next</button>
             </div>
           )}
         </div>
@@ -309,8 +309,8 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
             <>
               <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '14.5px', fontWeight: 700, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detail?.title ?? 'Loading…'}</div>
-                  {detail && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{detail.reporterName} · {CATEGORY[detail.category].label}</div>}
+                  <div style={{ fontSize: 'var(--text-base)', fontWeight: 700, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detail?.title ?? 'Loading…'}</div>
+                  {detail && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{detail.reporterName} · {CATEGORY[detail.category].label}</div>}
                 </div>
                 {detail && <Badge chip={STATUS[detail.status]} />}
               </div>
@@ -326,7 +326,7 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
           <div style={{ ...card, padding: 0, overflow: 'hidden', minHeight: 0 }}>
             {detail
               ? <FeedbackProperties thread={detail} assignees={assignees} onChanged={refreshAll} onOpenThread={setSelectedId} />
-              : <div style={{ padding: '20px', color: 'var(--text-muted)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={14} className="spin" /> Loading…</div>}
+              : <div style={{ padding: '20px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={14} className="spin" /> Loading…</div>}
           </div>
         )}
       </div>
@@ -346,7 +346,7 @@ const AttentionBanner: React.FC<{ attention: FeedbackAttention | null; onOpen: (
     <div style={{ borderRadius: '12px', border: '1px solid var(--danger)', background: 'rgba(239,68,68,0.07)', padding: '12px 14px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '10px' }}>
         <AlertTriangle size={15} style={{ color: 'var(--danger)' }} />
-        <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--danger)' }}>
+        <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--danger)' }}>
           Needs attention — {totalCount} past SLA
         </span>
       </div>
@@ -359,11 +359,11 @@ const AttentionBanner: React.FC<{ attention: FeedbackAttention | null; onOpen: (
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', width: '100%', textAlign: 'left',
                 background: 'none', border: 'none', cursor: 'pointer', padding: '3px 0', color: 'var(--text-primary)',
               }}>
-                <span style={{ fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>{it.ageHours}h <ArrowRight size={11} /></span>
+                <span style={{ fontSize: 'var(--text-xs)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
+                <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>{it.ageHours}h <ArrowRight size={11} /></span>
               </button>
             ))}
-            {b.items.length > 3 && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>+{b.items.length - 3} more</div>}
+            {b.items.length > 3 && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px' }}>+{b.items.length - 3} more</div>}
           </div>
         ))}
       </div>
@@ -377,9 +377,9 @@ const DigestPanel: React.FC<{ digest: FeedbackDigest | null; onOpen: (id: string
     <div style={{ padding: '18px', overflowY: 'auto', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
         <Sparkles size={16} style={{ color: 'var(--accent)' }} />
-        <h2 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>What's coming in</h2>
+        <h2 style={{ fontSize: 'var(--text-md)', fontWeight: 700, margin: 0 }}>What's coming in</h2>
       </div>
-      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 16px' }}>{digest.openCount} open items. Select one on the left to work it, or start with what's loudest.</p>
+      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '0 0 16px' }}>{digest.openCount} open items. Select one on the left to work it, or start with what's loudest.</p>
 
       {digest.criticalOpen.length > 0 && (
         <Section icon={<Flame size={13} style={{ color: '#ef4444' }} />} title="Critical, still open">
@@ -406,7 +406,7 @@ const DigestPanel: React.FC<{ digest: FeedbackDigest | null; onOpen: (id: string
       )}
 
       {digest.criticalOpen.length === 0 && digest.topThemes.length === 0 && digest.aging.length === 0 && (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>A clean desk — nothing loud, critical or aging.</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center', padding: '20px' }}>A clean desk — nothing loud, critical or aging.</div>
       )}
     </div>
   );
@@ -424,13 +424,13 @@ const LineItem: React.FC<{ left: string; right: string; onClick: () => void }> =
     display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', width: '100%', textAlign: 'left',
     padding: '8px 10px', borderRadius: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', cursor: 'pointer',
   }}>
-    <span style={{ fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{left}</span>
-    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{right}</span>
+    <span style={{ fontSize: 'var(--text-xs)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{left}</span>
+    <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{right}</span>
   </button>
 );
 
 const Empty: React.FC<{ icon: React.ReactNode; text: string }> = ({ icon, text }) => (
-  <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', color: 'var(--text-muted)', fontSize: '13px', padding: '20px', textAlign: 'center' }}>
+  <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', padding: '20px', textAlign: 'center' }}>
     <span style={{ opacity: 0.3 }}>{icon}</span>{text}
   </div>
 );

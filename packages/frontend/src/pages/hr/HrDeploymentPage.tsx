@@ -15,7 +15,7 @@ import { useHr } from './HrLayout';
 
 const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-    <div style={{ fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '86ch' }}>
+    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', maxWidth: '86ch' }}>
       Branches carry the work and assayers carry the capacity, so the gap between them is the
       hiring brief. Open a state to see its people on the roster.
     </div>
@@ -50,7 +50,7 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
               <Link
                 to={`/hr/roster?f_state=${encodeURIComponent(t.state)}`}
                 title={`See everyone living in ${t.state} on the roster`}
-                style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent)', whiteSpace: 'nowrap' }}
+                style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent)', whiteSpace: 'nowrap' }}
               >
                 See people →
               </Link>
@@ -67,7 +67,7 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
             header: 'Position',
             render: (t) => {
               const p = POSTURE[t.posture] ?? POSTURE.BALANCED;
-              return <span title={p.hint} style={{ fontSize: '12px', fontWeight: 700, color: p.fg }}>{p.label}</span>;
+              return <span title={p.hint} style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: p.fg }}>{p.label}</span>;
             },
           },
         ]}

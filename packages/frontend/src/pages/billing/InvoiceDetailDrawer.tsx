@@ -38,8 +38,8 @@ const REVERSE_PAYMENT_REASONS = [
 
 const Row: React.FC<{ label: string; value: React.ReactNode; strong?: boolean }> = ({ label, value, strong }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px dashed var(--border-color)' }}>
-    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{label}</span>
-    <span style={{ fontSize: 13, fontWeight: strong ? 700 : 600, color: strong ? 'var(--text-primary)' : undefined, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ fontSize: 'var(--text-sm)', fontWeight: strong ? 700 : 600, color: strong ? 'var(--text-primary)' : undefined, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
   </div>
 );
 
@@ -192,7 +192,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   return (
     <DetailDrawer
       open onClose={onClose} width={640}
-      title={<span><strong style={{ fontSize: 15 }}>{invoice.invoiceNumber}</strong> <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 6 }}>{invoice.clientName ?? ''}</span></span>}
+      title={<span><strong style={{ fontSize: 'var(--text-md)' }}>{invoice.invoiceNumber}</strong> <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginLeft: 6 }}>{invoice.clientName ?? ''}</span></span>}
       subtitle={<InvoiceStatusPill status={invoice.status} partPaid={partPaid} />}
       footer={canAct ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
@@ -217,7 +217,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
 
       {cancelOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
-          <div style={{ fontSize: 12.5 }}>Cancelling returns every line to <strong>Unbilled</strong> so the work can be invoiced again. Say why:</div>
+          <div style={{ fontSize: 'var(--text-xs)' }}>Cancelling returns every line to <strong>Unbilled</strong> so the work can be invoiced again. Say why:</div>
           <Select
             value={cancelPreset}
             onChange={setCancelPreset}
@@ -257,19 +257,19 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       )}
 
       <div>
-        <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>Amounts</h4>
+        <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>Amounts</h4>
         <Row label="Taxable (subtotal)" value={money(invoice.subtotal)} />
         <Row label="GST" value={`+${money(invoice.taxAmount)}`} />
         <Row label="TDS withheld by client" value={`−${money(invoice.tdsAmount)}`} />
         <Row label="Total" value={money(invoice.total)} strong />
         <Row label="Paid" value={money(invoice.paidAmount)} />
         <Row label="Outstanding" value={money(invoice.outstandingAmount)} strong />
-        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>Issued {fmtDate(invoice.issueDate)} · due {fmtDate(invoice.dueDate)}</div>
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 6 }}>Issued {fmtDate(invoice.issueDate)} · due {fmtDate(invoice.dueDate)}</div>
       </div>
 
       {invoice.entries && invoice.entries.length > 0 && (
         <div>
-          <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>Lines ({invoice.entries.length})</h4>
+          <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>Lines ({invoice.entries.length})</h4>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr><th style={th}>Assignment</th><th style={th}>Branch · Assayer</th><th style={th}>State</th><th style={{ ...th, textAlign: 'right' }}>Total</th><th style={{ ...th, textAlign: 'right' }}>Paid</th></tr></thead>
@@ -291,10 +291,10 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
 
       {invoice.payments && invoice.payments.length > 0 && (
         <div>
-          <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>Payments</h4>
+          <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>Payments</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {invoice.payments.map((p) => (
-              <div key={p.id} style={{ background: 'var(--bg-tertiary)', padding: 8, borderRadius: 'var(--radius-sm)', fontSize: 12 }}>
+              <div key={p.id} style={{ background: 'var(--bg-tertiary)', padding: 8, borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                   <div>
                     <div style={{ fontWeight: 600 }}>{p.paymentReference} · <span style={{ fontWeight: 700 }}>{money(p.amount)}</span></div>
@@ -305,7 +305,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
                       onClick={() => { setReversingId((cur) => (cur === p.id ? null : p.id)); setReversePreset(''); setReverseReason(''); }}
                       disabled={reverse.isPending}
                       title="Reverse this payment"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 11.5 }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 'var(--text-2xs)' }}
                     >
                       <Undo2 size={13} /> Reverse
                     </button>
@@ -317,7 +317,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
                     {/* Says what happens to the money, in the words finance uses, before the
                         reason field — not after it, where it would be read only by someone who
                         had already decided. */}
-                    <div style={{ fontSize: 12.5 }}>
+                    <div style={{ fontSize: 'var(--text-xs)' }}>
                       Reversing <strong>{money(p.amount)}</strong> ({p.paymentReference}) removes it from what this
                       invoice has been paid, so <strong>{invoice.invoiceNumber}</strong> will show that amount as
                       outstanding again and the client will be chased for it.
@@ -357,7 +357,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         </div>
       )}
 
-      {invoice.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{invoice.notes}</div>}
+      {invoice.notes && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>{invoice.notes}</div>}
 
       {confirmDialog}
     </DetailDrawer>

@@ -21,7 +21,7 @@ function ago(d: string): string {
 }
 
 const label: React.CSSProperties = {
-  fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
+  fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 
@@ -51,23 +51,23 @@ export const SessionsPanel: React.FC<{ userId?: string }> = ({ userId }) => {
   const sessions: SessionView[] = Array.isArray(data) ? data : [];
 
   if (isLoading) {
-    return <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>Loading sessions…</div>;
+    return <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', padding: '8px 0' }}>Loading sessions…</div>;
   }
   if (error) {
     return (
-      <div style={{ fontSize: 13, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 8 }}>
         <AlertCircle size={15} /> Could not load sessions. {userMessage(error)}
       </div>
     );
   }
   if (sessions.length === 0) {
-    return <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No sessions on record.</div>;
+    return <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>No sessions on record.</div>;
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {revoke.isError && (
-        <div style={{ fontSize: 12.5, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <AlertCircle size={14} /> Could not sign that device out. {userMessage(revoke.error)}
         </div>
       )}
@@ -92,20 +92,20 @@ export const SessionsPanel: React.FC<{ userId?: string }> = ({ userId }) => {
             </span>
 
             <div style={{ flex: 1, minWidth: 180 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 {s.device || s.browser || 'Unknown device'}
                 {s.current && (
-                  <span className="badge" style={{ fontSize: 10, background: 'color-mix(in srgb, var(--success) 16%, transparent)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'color-mix(in srgb, var(--success) 16%, transparent)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <ShieldCheck size={11} /> This device
                   </span>
                 )}
                 {!s.active && (
-                  <span className="badge" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                  <span className="badge" style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
                     {s.revokedAt ? 'Signed out' : 'Expired'}
                   </span>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 5, fontSize: 11.5, color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 5, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <MapPin size={11} /> {s.ipAddress || 'IP unknown'}
                 </span>
@@ -122,7 +122,7 @@ export const SessionsPanel: React.FC<{ userId?: string }> = ({ userId }) => {
                 onClick={() => revoke.mutate(s.id)}
                 disabled={revoke.isPending}
                 className="btn btn-secondary"
-                style={{ fontSize: 12, padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
+                style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
               >
                 <LogOut size={13} /> Sign out
               </button>

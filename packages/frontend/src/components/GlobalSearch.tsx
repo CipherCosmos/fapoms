@@ -46,18 +46,18 @@ export const GlobalSearch: React.FC = () => {
     if (!items.length) return null;
     return (
       <div key={type}>
-        <div style={{ padding: '6px 12px', fontSize: '10px', fontWeight: 700, color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid var(--border-hair)' }}>
+        <div style={{ padding: '6px 12px', fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid var(--border-hair)' }}>
           {title} ({items.length})
         </div>
         {items.map((item: any) => (
           <button type="button" key={item.id} onClick={() => handleSelect(type, item.id)}
             aria-label={`${title}: ${render(item)}`}
-            style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: '8px 12px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border-hair)', display: 'flex', alignItems: 'center', gap: '8px', color: 'inherit' }}
+            style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: '8px 12px', cursor: 'pointer', fontSize: 'var(--text-xs)', borderBottom: '1px solid var(--border-hair)', display: 'flex', alignItems: 'center', gap: '8px', color: 'inherit' }}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--status-pending-bg)')}
             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           >
             <span style={{ color: 'var(--text-primary)', fontWeight: 500, flex: 1 }}>{render(item)}</span>
-            <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{item.code || ''}</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-3xs)' }}>{item.code || ''}</span>
           </button>
         ))}
       </div>
@@ -76,15 +76,15 @@ export const GlobalSearch: React.FC = () => {
           onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
           onFocus={() => { if (results) setOpen(true); }}
           style={{
-            width: '100%', padding: '8px 12px 8px 32px', fontSize: '12px',
+            width: '100%', padding: '8px 12px 8px 32px', fontSize: 'var(--text-xs)',
             background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', outline: 'none',
           }}
         />
         {loading ? (
-          <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--text-muted)' }}>...</span>
+          <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>...</span>
         ) : !query && (
-          <span aria-hidden="true" style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '1px 5px', pointerEvents: 'none', opacity: 0.75 }}>{SHORTCUT_HINT}</span>
+          <span aria-hidden="true" style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '1px 5px', pointerEvents: 'none', opacity: 0.75 }}>{SHORTCUT_HINT}</span>
         )}
       </div>
 
@@ -96,12 +96,12 @@ export const GlobalSearch: React.FC = () => {
           boxShadow: '0 8px 32px rgba(0,0,0,0.6)', maxHeight: '440px', overflowY: 'auto',
         }}>
           {!results ? (
-            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>Type to search...</div>
+            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>Type to search...</div>
           ) : totalCount === 0 ? (
-            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>No results found for "{query}"</div>
+            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>No results found for "{query}"</div>
           ) : (
             <>
-              <div style={{ padding: '6px 12px', fontSize: '10px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-hair)' }}>
+              <div style={{ padding: '6px 12px', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-hair)' }}>
                 {totalCount} result{totalCount !== 1 ? 's' : ''} for "{query}"
               </div>
               {section('Branches', 'branches', results.branches, (i) => `${i.name} (${i.city}, ${i.state})`)}

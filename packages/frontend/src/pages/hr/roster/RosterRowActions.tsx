@@ -82,7 +82,7 @@ export const RosterRowActions: React.FC<RosterRowActionsProps> = ({
             }}
             style={{
               padding: '4px 6px',
-              fontSize: '11px',
+              fontSize: 'var(--text-2xs)',
               borderRadius: '4px',
               border: '1px solid var(--border-color)',
               background: 'var(--bg-page)',

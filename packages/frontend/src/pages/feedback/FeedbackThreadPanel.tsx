@@ -81,12 +81,12 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: 'var(--bg-surface)' }}>
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', minHeight: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {messages === null && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '12.5px', padding: '20px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', padding: '20px 0' }}>
             <Loader2 size={15} className="spin" /> Loading conversation…
           </div>
         )}
         {messages?.length === 0 && (
-          <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12.5px' }}>
+          <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
             <MessageSquare size={24} style={{ opacity: 0.3, marginBottom: '8px' }} />
             <div>No messages yet.</div>
           </div>
@@ -96,7 +96,7 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
           if (m.authorType === 'SYSTEM') {
             return (
               <div key={m.id} style={{ alignSelf: 'center', maxWidth: '90%', textAlign: 'center' }}>
-                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontStyle: 'italic', padding: '4px 10px', background: 'var(--bg-surface-2)', borderRadius: '8px', display: 'inline-block' }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontStyle: 'italic', padding: '4px 10px', background: 'var(--bg-surface-2)', borderRadius: '8px', display: 'inline-block' }}>
                   {m.body} · {fmtWhen(m.createdAt)}
                 </div>
               </div>
@@ -106,9 +106,9 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
           const rightAlign = isTeam ? m.authorType === 'TEAM' : m.authorType === 'REPORTER';
           return (
             <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: rightAlign ? 'flex-end' : 'flex-start' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 600 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
                 <span style={{
-                  padding: '1px 5px', borderRadius: '4px', fontSize: '9.5px', fontWeight: 700,
+                  padding: '1px 5px', borderRadius: '4px', fontSize: 'var(--text-3xs)', fontWeight: 700,
                   background: m.authorType === 'TEAM' ? 'rgba(59,130,246,0.15)' : 'rgba(168,85,247,0.15)',
                   color: m.authorType === 'TEAM' ? '#3b82f6' : '#a855f7',
                 }}>
@@ -124,7 +124,7 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
                 )}
               </div>
               <div style={{
-                maxWidth: '85%', padding: '10px 14px', borderRadius: '12px', fontSize: '13px', lineHeight: 1.45,
+                maxWidth: '85%', padding: '10px 14px', borderRadius: '12px', fontSize: 'var(--text-sm)', lineHeight: 1.45,
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 background: m.isInternal ? 'rgba(234,179,8,0.12)' : mine ? 'var(--accent)' : 'var(--bg-surface-2)',
                 color: mine && !m.isInternal ? '#ffffff' : 'inherit',
@@ -149,7 +149,7 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
                         onClick={() => downloadFeedbackAttachment(a).catch((e) => setErr(userMessage(e)))}
                         style={{
                           display: 'inline-flex', alignItems: 'center', gap: '6px', textAlign: 'left',
-                          padding: '5px 9px', borderRadius: '7px', cursor: 'pointer', fontSize: '11.5px',
+                          padding: '5px 9px', borderRadius: '7px', cursor: 'pointer', fontSize: 'var(--text-2xs)',
                           background: mine && !m.isInternal ? 'rgba(255,255,255,0.18)' : 'var(--bg-card)',
                           color: mine && !m.isInternal ? '#ffffff' : 'var(--accent)',
                           border: 'none', fontWeight: 600,
@@ -172,14 +172,14 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
       </div>
 
       {err && (
-        <div style={{ padding: '7px 13px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ padding: '7px 13px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', gap: '6px', alignItems: 'center' }}>
           <AlertTriangle size={12} /> {err}
         </div>
       )}
 
       <div style={{ borderTop: '1px solid var(--border-color)', padding: '10px 13px' }}>
         {isTeam && (
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '8px', cursor: 'pointer' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', marginBottom: '8px', cursor: 'pointer' }}>
             <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
             <Lock size={11} /> Internal note (team only)
           </label>
@@ -192,7 +192,7 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
             placeholder={isTeam ? (internal ? 'Note for the team…' : 'Reply to the reporter…') : 'Add to the conversation…'}
             rows={2}
             style={{
-              flex: 1, resize: 'none', padding: '8px 10px', fontSize: '12.5px', borderRadius: '8px',
+              flex: 1, resize: 'none', padding: '8px 10px', fontSize: 'var(--text-xs)', borderRadius: '8px',
               background: internal ? 'rgba(234,179,8,0.08)' : 'var(--bg-input)', color: 'inherit',
               border: `1px solid ${internal ? 'var(--warning)' : 'var(--border-color)'}`, outline: 'none',
             }}

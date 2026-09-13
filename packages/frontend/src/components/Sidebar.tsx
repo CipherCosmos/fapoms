@@ -230,7 +230,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         {menuGroups.map(group => (
           <div key={group.category} style={{ marginBottom: collapsed ? '4px' : '8px' }}>
             {!collapsed && (
-              <div style={{ padding: '4px 16px 6px', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+              <div style={{ padding: '4px 16px 6px', fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>
                 {group.category}
               </div>
             )}

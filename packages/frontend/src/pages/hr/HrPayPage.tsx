@@ -246,7 +246,7 @@ export const HrPayPage: React.FC = () => {
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', flex: '1 1 320px', minWidth: 0 }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', flex: '1 1 320px', minWidth: 0 }}>
           What each person is paid, side by side. {unpricedCount > 0
             ? `${counted(unpricedCount, 'person', 'people')} have no agreed base fee of their own, so every audit they do is paid at the client’s contracted default.`
             : 'Everybody has their own agreed base fee.'}
@@ -256,14 +256,14 @@ export const HrPayPage: React.FC = () => {
           feed — a rate card is money, and a clerk deciding whether to trust the amber "paid the
           client default" tag needs to know how old it might be before acting on it.
         */}
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           Figures as of {asOf ? fmtWhen(new Date(asOf).toISOString()) : '—'}
         </span>
         <button
           onClick={refresh}
           disabled={refreshing}
           className="btn btn-secondary"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', padding: '4px 10px' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', padding: '4px 10px' }}
         >
           <RefreshCw size={12} className={refreshing ? 'spin' : undefined} /> {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
@@ -317,7 +317,7 @@ export const HrPayPage: React.FC = () => {
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' }}>
           <Wallet size={15} style={{ color: 'var(--accent)' }} />
-          <span style={{ ...label, fontSize: '12px' }}>What each person is paid today</span>
+          <span style={{ ...label, fontSize: 'var(--text-xs)' }}>What each person is paid today</span>
           {/* The shared one. This was the magnifier-in-a-relative-wrapper written out by hand for
               the ninth time, a pixel or two off the eight others. */}
           <SearchInput
@@ -364,7 +364,7 @@ export const HrPayPage: React.FC = () => {
                 return (
                   <>
                     <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
                     {/*
                       Somebody still joining is not a pricing omission, and this page had no way of
                       saying so: `lifecycleStatus` was fetched, typed, and then read by nothing, so a
@@ -377,7 +377,7 @@ export const HrPayPage: React.FC = () => {
                       second wording of it.
                     */}
                     {onboardingNextStep(a.lifecycleStatus) && (
-                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
                         Still joining — {onboardingNextStep(a.lifecycleStatus)}
                       </div>
                     )}
@@ -394,7 +394,7 @@ export const HrPayPage: React.FC = () => {
                          * ignored and the scroll-and-ring still answers "where is the gap".
                          */
                         to={`/hr/roster?assayer=${a.id}&edit=1&section=${gap.section}`}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
                       >
                         <AlertTriangle size={11} /> {gap.message}
                       </Link>
@@ -424,7 +424,7 @@ export const HrPayPage: React.FC = () => {
                   return (
                     <>
                       <span style={{ color: 'var(--text-muted)' }}>—</span>
-                      <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
+                      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
                         no pay terms · paid the client default
                       </div>
                     </>
@@ -434,7 +434,7 @@ export const HrPayPage: React.FC = () => {
                   <>
                     <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{rate(p.baseFee, p.currency)}</span>
                     {!paidOwnFee(row) && (
-                      <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
+                      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
                         paid the client default
                       </div>
                     )}
@@ -458,7 +458,7 @@ export const HrPayPage: React.FC = () => {
                   Number(p.travelReimbursement) > 0 ? `travel ${formatMoney(p.travelReimbursement, p.currency)}` : null,
                 ].filter(Boolean);
                 return bits.length > 0
-                  ? <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{bits.join(' · ')}</span>
+                  ? <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>{bits.join(' · ')}</span>
                   : <span style={{ color: 'var(--text-muted)' }}>—</span>;
               },
             },
@@ -470,7 +470,7 @@ export const HrPayPage: React.FC = () => {
                 const row = pay[a.id];
                 if (!row?.profile) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
                 return (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                     {fmtDate(row.profile.effectiveStartDate)}
                     {/*
                       The clock icon on its own said nothing: hovering for a tooltip is not how
@@ -492,7 +492,7 @@ export const HrPayPage: React.FC = () => {
               align: 'right',
               render: (a) => (canManage ? (
                 <button onClick={() => setEditing({ assayerId: a.id, profile: pay[a.id]?.profile ?? null })}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 600, padding: '5px 10px', borderRadius: '7px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', fontWeight: 600, padding: '5px 10px', borderRadius: '7px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
                   {pay[a.id]?.profile ? <><Pencil size={12} /> Change pay</> : <><Plus size={12} /> Set pay terms</>}
                 </button>
               ) : null),
@@ -514,7 +514,7 @@ export const HrPayPage: React.FC = () => {
   );
 };
 
-const statValue: React.CSSProperties = { fontSize: '24px', fontWeight: 700, lineHeight: 1.1 };
+const statValue: React.CSSProperties = { fontSize: 'var(--text-2xl)', fontWeight: 700, lineHeight: 1.1 };
 const tile = (active: boolean, warn = false): React.CSSProperties => ({
   ...card, flex: '1 1 150px', minWidth: 0, textAlign: 'left', cursor: 'pointer',
   border: `1px solid ${active ? (warn ? 'var(--warning)' : 'var(--accent)') : 'var(--border-color)'}`,

@@ -156,10 +156,10 @@ export const Settings: React.FC = () => {
       
       {/* Header Banner */}
       <div>
-        <h2 style={{ fontSize: '24px', fontWeight: 800, fontFamily: 'var(--font-display)', margin: 0 }}>
+        <h2 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, fontFamily: 'var(--font-display)', margin: 0 }}>
           My Account
         </h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: '4px 0 0' }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-base)', margin: '4px 0 0' }}>
           Manage your personal details, security credentials, visual themes, and workspace preferences.
         </p>
       </div>
@@ -175,7 +175,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('PROFILE')}
           className={`btn ${activeTab === 'PROFILE' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ gap: '8px', padding: '8px 16px', fontSize: '13px', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
+          style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <User size={16} />
           <span>Profile Details</span>
@@ -183,7 +183,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('SECURITY')}
           className={`btn ${activeTab === 'SECURITY' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ gap: '8px', padding: '8px 16px', fontSize: '13px', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
+          style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <Lock size={16} />
           <span>Security & Password</span>
@@ -191,7 +191,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('SESSIONS')}
           className={`btn ${activeTab === 'SESSIONS' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ gap: '8px', padding: '8px 16px', fontSize: '13px', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
+          style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <MonitorSmartphone size={16} />
           <span>Sessions & Devices</span>
@@ -199,7 +199,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('APPEARANCE')}
           className={`btn ${activeTab === 'APPEARANCE' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ gap: '8px', padding: '8px 16px', fontSize: '13px', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
+          style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <Palette size={16} />
           <span>Theme & Appearance</span>
@@ -222,13 +222,13 @@ export const Settings: React.FC = () => {
          * beside this one stays available.
          */
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Personal Profile</h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '18px' }}>
+          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Personal Profile</h3>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: '18px' }}>
             Your name, contact details and work preferences are kept in the FAPOMS field app, where
             you can edit them yourself. They are not editable from this browser.
           </p>
           <div style={{
-            padding: '14px 16px', borderRadius: 'var(--radius-md)', fontSize: '13px',
+            padding: '14px 16px', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-sm)',
             background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
             color: 'var(--text-secondary)', lineHeight: 1.6,
           }}>
@@ -246,8 +246,8 @@ export const Settings: React.FC = () => {
 
       {activeTab === 'PROFILE' && !isAssayer && (
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Personal Profile</h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Personal Profile</h3>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: '24px' }}>
             Update your identity details as displayed across project workflows and audit trail records.
           </p>
 
@@ -256,7 +256,7 @@ export const Settings: React.FC = () => {
               padding: '12px 16px',
               borderRadius: 'var(--radius-md)',
               marginBottom: '20px',
-              fontSize: '13px',
+              fontSize: 'var(--text-sm)',
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
@@ -276,12 +276,12 @@ export const Settings: React.FC = () => {
           {profileLoadError != null ? (
             <LoadFailure loads={[{ label: 'your profile', query: caughtLoad(profileLoadError, loadProfile) }]} />
           ) : profileLoading ? (
-            <div style={{ padding: '24px 0', color: 'var(--text-muted)', fontSize: '13px' }}>Loading your profile…</div>
+            <div style={{ padding: '24px 0', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading your profile…</div>
           ) : (
           <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>FIRST NAME</label>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>FIRST NAME</label>
                 <input
                   type="text"
                   required
@@ -293,14 +293,14 @@ export const Settings: React.FC = () => {
                     border: '1px solid var(--border-color)',
                     borderRadius: 'var(--radius-md)',
                     color: 'var(--text-primary)',
-                    fontSize: '14px',
+                    fontSize: 'var(--text-base)',
                     outline: 'none',
                   }}
                 />
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>LAST NAME</label>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>LAST NAME</label>
                 <input
                   type="text"
                   required
@@ -312,7 +312,7 @@ export const Settings: React.FC = () => {
                     border: '1px solid var(--border-color)',
                     borderRadius: 'var(--radius-md)',
                     color: 'var(--text-primary)',
-                    fontSize: '14px',
+                    fontSize: 'var(--text-base)',
                     outline: 'none',
                   }}
                 />
@@ -321,7 +321,7 @@ export const Settings: React.FC = () => {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>PHONE NUMBER</label>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>PHONE NUMBER</label>
                 <input
                   type="tel"
                   value={phone}
@@ -333,14 +333,14 @@ export const Settings: React.FC = () => {
                     border: '1px solid var(--border-color)',
                     borderRadius: 'var(--radius-md)',
                     color: 'var(--text-primary)',
-                    fontSize: '14px',
+                    fontSize: 'var(--text-base)',
                     outline: 'none',
                   }}
                 />
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>EMAIL ADDRESS (READ-ONLY)</label>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>EMAIL ADDRESS (READ-ONLY)</label>
                 <input
                   type="email"
                   disabled
@@ -351,7 +351,7 @@ export const Settings: React.FC = () => {
                     border: '1px solid var(--border-color)',
                     borderRadius: 'var(--radius-md)',
                     color: 'var(--text-muted)',
-                    fontSize: '14px',
+                    fontSize: 'var(--text-base)',
                     cursor: 'not-allowed',
                   }}
                 />
@@ -360,7 +360,7 @@ export const Settings: React.FC = () => {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>USERNAME (READ-ONLY)</label>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>USERNAME (READ-ONLY)</label>
                 <input
                   type="text"
                   disabled
@@ -371,17 +371,17 @@ export const Settings: React.FC = () => {
                     border: '1px solid var(--border-color)',
                     borderRadius: 'var(--radius-md)',
                     color: 'var(--text-muted)',
-                    fontSize: '14px',
+                    fontSize: 'var(--text-base)',
                     cursor: 'not-allowed',
                   }}
                 />
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>ASSIGNED ROLES</label>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>ASSIGNED ROLES</label>
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', paddingTop: '4px' }}>
                   {userRoles.map((r) => (
-                    <span key={r} className="badge badge-accent" style={{ fontSize: '11px' }}>
+                    <span key={r} className="badge badge-accent" style={{ fontSize: 'var(--text-2xs)' }}>
                       {r.replace('_', ' ')}
                     </span>
                   ))}
@@ -408,8 +408,8 @@ export const Settings: React.FC = () => {
       {/* TAB 2: SECURITY */}
       {activeTab === 'SECURITY' && (
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Password & Security</h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Password & Security</h3>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: '24px' }}>
             Update your authentication password to maintain security compliance.
           </p>
 
@@ -418,7 +418,7 @@ export const Settings: React.FC = () => {
               padding: '12px 16px',
               borderRadius: 'var(--radius-md)',
               marginBottom: '20px',
-              fontSize: '13px',
+              fontSize: 'var(--text-sm)',
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
@@ -433,7 +433,7 @@ export const Settings: React.FC = () => {
 
           <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '480px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>CURRENT PASSWORD</label>
+              <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>CURRENT PASSWORD</label>
               <input
                 type="password"
                 required
@@ -446,14 +446,14 @@ export const Settings: React.FC = () => {
                   border: '1px solid var(--border-color)',
                   borderRadius: 'var(--radius-md)',
                   color: 'var(--text-primary)',
-                  fontSize: '14px',
+                  fontSize: 'var(--text-base)',
                   outline: 'none',
                 }}
               />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>NEW PASSWORD</label>
+              <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>NEW PASSWORD</label>
               <input
                 type="password"
                 required
@@ -467,14 +467,14 @@ export const Settings: React.FC = () => {
                   border: '1px solid var(--border-color)',
                   borderRadius: 'var(--radius-md)',
                   color: 'var(--text-primary)',
-                  fontSize: '14px',
+                  fontSize: 'var(--text-base)',
                   outline: 'none',
                 }}
               />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>CONFIRM NEW PASSWORD</label>
+              <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>CONFIRM NEW PASSWORD</label>
               <input
                 type="password"
                 required
@@ -488,7 +488,7 @@ export const Settings: React.FC = () => {
                   border: '1px solid var(--border-color)',
                   borderRadius: 'var(--radius-md)',
                   color: 'var(--text-primary)',
-                  fontSize: '14px',
+                  fontSize: 'var(--text-base)',
                   outline: 'none',
                 }}
               />
@@ -516,8 +516,8 @@ export const Settings: React.FC = () => {
       {/* TAB 3: SESSIONS & DEVICES */}
       {activeTab === 'SESSIONS' && (
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Sessions & Devices</h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Sessions & Devices</h3>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: '24px' }}>
             Every device signed in to your account, with the address and when it was last active.
             If you don’t recognise one, sign it out — that device will be signed out and cannot refresh.
           </p>
@@ -528,15 +528,15 @@ export const Settings: React.FC = () => {
       {/* TAB 4: APPEARANCE */}
       {activeTab === 'APPEARANCE' && (
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Theme & Visual Style</h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Theme & Visual Style</h3>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: '24px' }}>
             Customize your workspace visual theme, color palette, and interface styling.
           </p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
             {/* Built-in Preset Themes */}
             <div>
-              <h4 style={{ fontSize: '14px', fontWeight: 700, marginBottom: '12px', color: 'var(--text-primary)' }}>Preset Themes</h4>
+              <h4 style={{ fontSize: 'var(--text-base)', fontWeight: 700, marginBottom: '12px', color: 'var(--text-primary)' }}>Preset Themes</h4>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' }}>
                 {THEMES.map((t) => {
                   const active = !customActive && theme === t.id;
@@ -558,7 +558,7 @@ export const Settings: React.FC = () => {
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: t.swatch[2] }} />
-                        <span style={{ fontSize: '13px', fontWeight: active ? 700 : 500, color: 'var(--text-primary)' }}>{t.label}</span>
+                        <span style={{ fontSize: 'var(--text-sm)', fontWeight: active ? 700 : 500, color: 'var(--text-primary)' }}>{t.label}</span>
                       </div>
                       {active && <Check size={16} style={{ color: 'var(--accent-primary)' }} />}
                     </div>
@@ -569,7 +569,7 @@ export const Settings: React.FC = () => {
 
             {/* Custom Accent Color Palette */}
             <div>
-              <h4 style={{ fontSize: '14px', fontWeight: 700, marginBottom: '12px', color: 'var(--text-primary)' }}>Accent Color Palette</h4>
+              <h4 style={{ fontSize: 'var(--text-base)', fontWeight: 700, marginBottom: '12px', color: 'var(--text-primary)' }}>Accent Color Palette</h4>
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 {ACCENTS.map((item) => {
                   const active = customActive && custom.accent.toLowerCase() === item.hex.toLowerCase();

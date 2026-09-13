@@ -155,7 +155,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <ShieldCheck size={18} style={{ color: 'var(--accent-primary)' }} />
-            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600 }}>
+            <h3 style={{ margin: 0, fontSize: 'var(--text-md)', fontWeight: 600 }}>
               Verify Document: {doc.label || doc.requirement}
             </h3>
           </div>
@@ -190,10 +190,10 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
             >
               <AlertTriangle size={18} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: '2px' }} />
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: '12.5px', color: 'var(--danger)' }}>
+                <div style={{ fontWeight: 600, fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>
                   {conflictError.code}
                 </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginTop: '2px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', marginTop: '2px' }}>
                   {conflictError.message}
                 </div>
                 <button
@@ -203,7 +203,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                     onClose();
                   }}
                   className="btn btn-secondary"
-                  style={{ fontSize: '11.5px', padding: '4px 8px', marginTop: '8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  style={{ fontSize: 'var(--text-2xs)', padding: '4px 8px', marginTop: '8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                 >
                   <RefreshCw size={11} /> Reload fresh document
                 </button>
@@ -224,10 +224,10 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+              <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
                 Target Version & Provenance
               </span>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 {versions.length} version{versions.length > 1 ? 's' : ''} on record
               </span>
             </div>
@@ -241,7 +241,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                   borderRadius: '6px',
                   border: '1px solid var(--border-color)',
                   background: 'var(--bg-surface)',
-                  fontSize: '12.5px',
+                  fontSize: 'var(--text-xs)',
                   color: 'var(--text-primary)',
                 }}
               >
@@ -252,19 +252,19 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                 ))}
               </select>
             ) : (
-              <div style={{ fontSize: '12.5px', fontWeight: 500 }}>
+              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 500 }}>
                 Version v{currentVersion.version} · {currentVersion.verificationStatus}
               </div>
             )}
 
             {currentVersion.contentSha256 && (
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
                 SHA-256: {currentVersion.contentSha256}
               </div>
             )}
 
             {isSuperseded && (
-              <div style={{ fontSize: '11.5px', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <AlertTriangle size={13} />
                 <span>Notice: This version has been superseded by a newer version. The backend prohibits verifying historical superseded versions.</span>
               </div>
@@ -273,7 +273,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
 
           {/* Verdict Switcher */}
           <div>
-            <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
+            <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>
               Verification Action
             </label>
             <div style={{ display: 'flex', gap: '10px' }}>
@@ -288,7 +288,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                   background: verdict === 'VERIFIED' ? 'var(--status-active-bg)' : 'var(--bg-surface-2)',
                   color: verdict === 'VERIFIED' ? 'var(--success)' : 'var(--text-secondary)',
                   fontWeight: 600,
-                  fontSize: '12.5px',
+                  fontSize: 'var(--text-xs)',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -309,7 +309,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                   background: verdict === 'REJECTED' ? 'color-mix(in srgb, var(--danger) 10%, transparent)' : 'var(--bg-surface-2)',
                   color: verdict === 'REJECTED' ? 'var(--danger)' : 'var(--text-secondary)',
                   fontWeight: 600,
-                  fontSize: '12.5px',
+                  fontSize: 'var(--text-xs)',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -325,7 +325,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
           {verdict === 'VERIFIED' ? (
             <>
               <div>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                   Name on Document
                 </label>
                 <input
@@ -339,7 +339,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-surface)',
-                    fontSize: '12.5px',
+                    fontSize: 'var(--text-xs)',
                     color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                   }}
@@ -347,7 +347,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
               </div>
 
               <div>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                   Name Mismatch Note (optional)
                 </label>
                 <input
@@ -361,7 +361,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-surface)',
-                    fontSize: '12.5px',
+                    fontSize: 'var(--text-xs)',
                     color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                   }}
@@ -371,7 +371,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
           ) : (
             <>
               <div>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                   Rejection Reason
                 </label>
                 <select
@@ -383,7 +383,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-surface)',
-                    fontSize: '12.5px',
+                    fontSize: 'var(--text-xs)',
                     color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                   }}
@@ -398,7 +398,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
               </div>
 
               <div>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
                   Rejection Remarks
                 </label>
                 <textarea
@@ -412,7 +412,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-surface)',
-                    fontSize: '12.5px',
+                    fontSize: 'var(--text-xs)',
                     color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                   }}
@@ -427,7 +427,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
               className="btn btn-secondary"
               onClick={onClose}
               disabled={busy}
-              style={{ fontSize: '12.5px', padding: '7px 14px' }}
+              style={{ fontSize: 'var(--text-xs)', padding: '7px 14px' }}
             >
               Cancel
             </button>
@@ -436,7 +436,7 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
               className="btn btn-primary"
               disabled={busy || isSuperseded}
               style={{
-                fontSize: '12.5px',
+                fontSize: 'var(--text-xs)',
                 padding: '7px 14px',
                 background: verdict === 'VERIFIED' ? 'var(--accent-primary)' : 'var(--danger)',
                 borderColor: verdict === 'VERIFIED' ? 'var(--accent-primary)' : 'var(--danger)',

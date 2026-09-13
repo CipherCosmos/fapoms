@@ -91,7 +91,7 @@ export const RuleBypassBanner: React.FC = () => {
     <div role="alert" style={{ background: 'var(--danger)', color: '#fff' }}>
       <div style={{
         padding: '7px 16px', display: 'flex', alignItems: 'center', gap: '9px', flexWrap: 'wrap',
-        fontSize: '12.5px', fontWeight: 600, lineHeight: 1.45,
+        fontSize: 'var(--text-xs)', fontWeight: 600, lineHeight: 1.45,
       }}>
         <AlertOctagon size={16} style={{ flexShrink: 0 }} />
         <span style={{ fontWeight: 800, letterSpacing: '0.03em', flexShrink: 0 }}>TEST MODE</span>
@@ -111,7 +111,7 @@ export const RuleBypassBanner: React.FC = () => {
               key={r.rule}
               title={r.protects}
               style={{
-                fontSize: '11px', fontWeight: 700, padding: '1px 8px', borderRadius: '10px',
+                fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '1px 8px', borderRadius: '10px',
                 background: 'rgba(255,255,255,0.16)', whiteSpace: 'nowrap', cursor: 'help',
               }}
             >
@@ -148,7 +148,7 @@ export const RuleBypassBanner: React.FC = () => {
           <Link
             to="/admin/rule-bypass"
             style={{
-              marginLeft: 'auto', flexShrink: 0, color: '#fff', fontWeight: 700, fontSize: '11.5px',
+              marginLeft: 'auto', flexShrink: 0, color: '#fff', fontWeight: 700, fontSize: 'var(--text-2xs)',
               display: 'inline-flex', alignItems: 'center', gap: '3px', textDecoration: 'none',
               background: 'rgba(255,255,255,0.18)', padding: '3px 9px', borderRadius: '999px',
             }}

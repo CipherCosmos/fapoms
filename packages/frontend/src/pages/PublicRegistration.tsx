@@ -57,20 +57,20 @@ const SECTION_STYLE: React.CSSProperties = {
 };
 
 const SECTION_TITLE_STYLE: React.CSSProperties = {
-  fontSize: '15px',
+  fontSize: 'var(--text-md)',
   fontWeight: 700,
   color: 'var(--text-primary)',
 };
 
 const SECTION_NOTE_STYLE: React.CSSProperties = {
-  fontSize: '12.5px',
+  fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   lineHeight: 1.5,
 };
 
 const LABEL_STYLE: React.CSSProperties = {
   display: 'block',
-  fontSize: '12px',
+  fontSize: 'var(--text-xs)',
   fontWeight: 600,
   color: 'var(--text-secondary)',
   marginBottom: '4px',
@@ -79,7 +79,7 @@ const LABEL_STYLE: React.CSSProperties = {
 const INPUT_STYLE: React.CSSProperties = {
   width: '100%',
   padding: '10px 12px',
-  fontSize: '15px',
+  fontSize: 'var(--text-md)',
   fontFamily: 'inherit',
   background: 'var(--bg-input)',
   color: 'var(--text-primary)',
@@ -244,7 +244,7 @@ const STATUS_COPY: Partial<Record<ApplicationStatus, (app: RegistrationApplicati
 const PublicMasthead: React.FC = () => (
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', marginBottom: '18px' }}>
     <BrandLogo size="md" showSubtext={false} />
-    <div style={{ fontSize: '12px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+    <div style={{ fontSize: 'var(--text-xs)', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
       Appraiser registration
     </div>
   </div>
@@ -261,7 +261,7 @@ const PrimaryButton: React.FC<{
     onClick={onClick}
     disabled={disabled || busy}
     className="btn btn-primary"
-    style={{ width: '100%', padding: '11px 16px', fontSize: '14px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+    style={{ width: '100%', padding: '11px 16px', fontSize: 'var(--text-base)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
   >
     {busy && <Loader2 size={15} className="spin" />}
     {children}
@@ -527,7 +527,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
         <div style={CARD_STYLE}>
           <div style={{ ...SECTION_STYLE, borderColor: 'var(--danger)' }}>
             <div style={SECTION_TITLE_STYLE}>This link is not valid</div>
-            <div style={{ fontSize: '13.5px', color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               {loadError || 'Ask HR to resend your registration link.'}
             </div>
           </div>
@@ -554,7 +554,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               {application.status === ApplicationStatus.APPROVED && 'Application approved'}
               {application.status === ApplicationStatus.REJECTED && 'Application not approved'}
             </div>
-            <div style={{ fontSize: '13.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
               {statusMessage}
             </div>
           </div>
@@ -568,8 +568,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       <PublicMasthead />
       <div style={CARD_STYLE}>
         <div>
-          <div style={{ fontSize: '19px', fontWeight: 700 }}>Your registration</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700 }}>Your registration</div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
             Confirm your email with the code we send, then fill in your details and attach your documents. You can
             come back to this same link at any time before you submit.
           </div>
@@ -587,7 +587,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
             <Phone size={16} style={{ color: 'var(--text-muted)' }} aria-hidden />
             <div style={SECTION_TITLE_STYLE}>Confirm it&apos;s you</div>
             {otpVerified && (
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--success)', fontWeight: 600 }}>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', color: 'var(--success)', fontWeight: 600 }}>
                 <Check size={13} aria-hidden /> Verified
               </span>
             )}
@@ -598,7 +598,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 {/* The code goes to the mailbox that received the invite, not to this number —
                     SMS is not configured, and email is the channel for everything here. The number
                     is still collected because the record needs it. */}
-                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '10px' }}>
                   We&apos;ll email a 6-digit code to <strong>{application.email ?? 'your email address'}</strong>.
                 </div>
                 <label htmlFor="reg-phone" style={LABEL_STYLE}>Your mobile number</label>
@@ -647,18 +647,18 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       onClick={() => void handleSendCode()}
                       disabled={otpBusy}
                       className="btn btn-secondary"
-                      style={{ flex: '1 1 140px', padding: '11px 16px', fontSize: '13px' }}
+                      style={{ flex: '1 1 140px', padding: '11px 16px', fontSize: 'var(--text-sm)' }}
                     >
                       Resend code
                     </button>
                   </div>
                 </>
               )}
-              {otpInfo && <div style={{ fontSize: '12.5px', color: 'var(--success)' }}>{otpInfo}</div>}
+              {otpInfo && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>{otpInfo}</div>}
               {otpError && <AlertBanner type="error" message={otpError} onClose={() => setOtpError(null)} />}
             </>
           ) : (
-            <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               {phone} is verified for this application.
             </div>
           )}
@@ -919,12 +919,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   onClick={() => form && void saveDraft(wholeFormPatch(form))}
                   disabled={savingDraft}
                   className="btn btn-secondary"
-                  style={{ padding: '9px 16px', fontSize: '13px' }}
+                  style={{ padding: '9px 16px', fontSize: 'var(--text-sm)' }}
                 >
                   {savingDraft ? 'Saving…' : 'Save draft'}
                 </button>
                 {draftSaved && !savingDraft && (
-                  <span style={{ fontSize: '12px', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     <Check size={13} aria-hidden /> Saved
                   </span>
                 )}
@@ -954,8 +954,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       }}
                     >
                       <div style={{ flex: '1 1 160px', minWidth: 0 }}>
-                        <div style={{ fontSize: '13px', fontWeight: 600 }}>{label}</div>
-                        <div style={{ fontSize: '12px', color: uploaded ? 'var(--success)' : 'var(--text-muted)', marginTop: '2px' }}>
+                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{label}</div>
+                        <div style={{ fontSize: 'var(--text-xs)', color: uploaded ? 'var(--success)' : 'var(--text-muted)', marginTop: '2px' }}>
                           {uploaded
                             ? `Uploaded (${doc!.filePaths.length} ${doc!.filePaths.length === 1 ? 'file' : 'files'})`
                             : requirement === 'PHOTOGRAPH'
@@ -963,12 +963,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                               : 'Nothing uploaded yet'}
                         </div>
                         {uploadErrors[requirement] && (
-                          <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '4px' }}>{uploadErrors[requirement]}</div>
+                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '4px' }}>{uploadErrors[requirement]}</div>
                         )}
                       </div>
                       <label
                         className="btn btn-secondary"
-                        style={{ fontSize: '12px', padding: '7px 12px', cursor: busy ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto' }}
+                        style={{ fontSize: 'var(--text-xs)', padding: '7px 12px', cursor: busy ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto' }}
                       >
                         <Paperclip size={13} aria-hidden />
                         {busy ? 'Uploading…' : uploaded ? 'Replace' : 'Attach'}
@@ -997,7 +997,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
             {/* ── Consent ────────────────────────────────────────────────── */}
             <div style={SECTION_STYLE}>
               <div style={SECTION_TITLE_STYLE}>Declaration and consent</div>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5, cursor: consentAccepted ? 'default' : 'pointer' }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5, cursor: consentAccepted ? 'default' : 'pointer' }}>
                 <input
                   type="checkbox"
                   checked={consentAccepted}
@@ -1012,7 +1012,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 </span>
               </label>
               {consentAccepted && (
-                <div style={{ fontSize: '12px', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                   <ShieldCheck size={13} aria-hidden /> Recorded.
                 </div>
               )}

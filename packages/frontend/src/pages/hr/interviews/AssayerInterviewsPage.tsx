@@ -122,7 +122,7 @@ export const AssayerInterviewsPage: React.FC = () => {
       render: (r) => (
         <div>
           <div style={{ fontWeight: 600 }}>{r.candidateName}</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             {r.mobile}{r.email ? ` · ${r.email}` : ''}
           </div>
         </div>
@@ -148,8 +148,8 @@ export const AssayerInterviewsPage: React.FC = () => {
       header: 'Application',
       render: (r) => (
         r.spawnedApplicationId
-          ? <span style={{ fontSize: '12px', color: 'var(--status-active-fg, var(--success))' }}>Invite sent</span>
-          : <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>—</span>
+          ? <span style={{ fontSize: 'var(--text-xs)', color: 'var(--status-active-fg, var(--success))' }}>Invite sent</span>
+          : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>—</span>
       ),
     },
     {
@@ -158,7 +158,7 @@ export const AssayerInterviewsPage: React.FC = () => {
       render: (r) => (
         <div>
           <div>{fmtWhen(r.interviewedAt)}</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{r.interviewedByName || '—'}</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{r.interviewedByName || '—'}</div>
         </div>
       ),
     },
@@ -215,7 +215,7 @@ export const AssayerInterviewsPage: React.FC = () => {
                   style={{
                     flex: 1,
                     padding: '7px 14px',
-                    fontSize: '12.5px',
+                    fontSize: 'var(--text-xs)',
                     fontWeight: 600,
                     borderRadius: '7px',
                     cursor: 'pointer',
@@ -233,7 +233,7 @@ export const AssayerInterviewsPage: React.FC = () => {
                   style={{
                     flex: 1,
                     padding: '7px 14px',
-                    fontSize: '12.5px',
+                    fontSize: 'var(--text-xs)',
                     fontWeight: 600,
                     borderRadius: '7px',
                     cursor: 'pointer',
@@ -257,7 +257,7 @@ export const AssayerInterviewsPage: React.FC = () => {
             />
           </Field>
           <div>
-            <button type="submit" className="btn btn-primary" disabled={!canSubmit || submitting} style={{ fontSize: '13px', padding: '9px 18px' }}>
+            <button type="submit" className="btn btn-primary" disabled={!canSubmit || submitting} style={{ fontSize: 'var(--text-sm)', padding: '9px 18px' }}>
               {submitting ? 'Recording…' : 'Record interview'}
             </button>
           </div>

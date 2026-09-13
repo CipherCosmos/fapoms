@@ -87,7 +87,7 @@ const ScopeSelect: React.FC<{
   onChange: (value: string) => void;
 }> = ({ label, value, allLabel, options, onChange }) => (
   <label style={{ display: 'grid', gridTemplateColumns: '52px 1fr', alignItems: 'center', gap: '8px' }}>
-    <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-muted)' }}>{label}</span>
     <Select
       value={value}
       onChange={onChange}
@@ -227,7 +227,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
           <MenuToggle onClick={onToggleSidebar} title="Toggle Menu" />
         )}
         {match ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '12px', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-xs)', overflow: 'hidden' }}>
             <span style={{ color: 'var(--text-muted)' }}>/</span>
             <span style={{ fontWeight: 600, color: 'var(--accent)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {title || match.label}
@@ -258,7 +258,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                 background: activeCount > 0 ? 'var(--accent-soft)' : 'var(--bg-primary)',
                 border: `1px solid ${activeCount > 0 ? 'var(--accent-primary)' : 'var(--border-color)'}`,
                 color: activeCount > 0 ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                fontSize: '12px',
+                fontSize: 'var(--text-xs)',
                 fontWeight: 600,
                 cursor: 'pointer',
                 transition: 'all var(--transition-fast)',
@@ -271,7 +271,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
               {activeCount > 1 && (
                 <span
                   style={{
-                    fontSize: '10px', fontWeight: 700, lineHeight: 1,
+                    fontSize: 'var(--text-3xs)', fontWeight: 700, lineHeight: 1,
                     padding: '2px 5px', borderRadius: 'var(--radius-full)',
                     background: 'var(--accent-primary)', color: 'var(--bg-primary)',
                   }}
@@ -336,7 +336,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                   */}
                   {optionsFailed && (
                     <div style={{
-                      padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', fontSize: '12px',
+                      padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', fontSize: 'var(--text-xs)',
                       color: 'var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
                       border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)',
                     }}>
@@ -391,7 +391,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                       background: 'transparent',
                       border: 'none',
                       color: 'var(--text-primary)',
-                      fontSize: '12px',
+                      fontSize: 'var(--text-xs)',
                       outline: 'none',
                     }}
                   />
@@ -420,7 +420,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                       background: selectedProjectId === 'ALL' ? 'var(--status-pending-bg)' : 'transparent',
                       border: 'none',
                       color: selectedProjectId === 'ALL' ? 'var(--accent-primary)' : 'var(--text-primary)',
-                      fontSize: '12px',
+                      fontSize: 'var(--text-xs)',
                       fontWeight: selectedProjectId === 'ALL' ? 700 : 500,
                       cursor: 'pointer',
                       display: 'flex',
@@ -449,7 +449,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                           background: active ? 'var(--status-pending-bg)' : 'transparent',
                           border: 'none',
                           color: active ? 'var(--accent-primary)' : 'var(--text-primary)',
-                          fontSize: '12px',
+                          fontSize: 'var(--text-xs)',
                           fontWeight: active ? 700 : 500,
                           cursor: 'pointer',
                           display: 'flex',
@@ -459,8 +459,8 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                         }}
                       >
                         <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                          <span style={{ fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{p.projectNumber} {p.client?.name ? `• ${p.client.name}` : ''}</span>
+                          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
+                          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>{p.projectNumber} {p.client?.name ? `• ${p.client.name}` : ''}</span>
                         </div>
                         {active && <Check size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />}
                       </button>
@@ -468,7 +468,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                   })}
 
                   {filteredProjects.length === 0 && (
-                    <div style={{ padding: '12px 14px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                    <div style={{ padding: '12px 14px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', textAlign: 'center' }}>
                       No matching projects
                     </div>
                   )}
@@ -489,7 +489,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                         background: 'transparent',
                         border: 'none',
                         color: 'var(--text-muted)',
-                        fontSize: '11px',
+                        fontSize: 'var(--text-2xs)',
                         fontWeight: 600,
                         cursor: 'pointer',
                         display: 'flex',
@@ -517,7 +517,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
           style={{
             display: 'flex', alignItems: 'center', gap: 5,
             padding: '4px 8px', borderRadius: 'var(--radius-full)',
-            fontSize: '11px', fontWeight: 600,
+            fontSize: 'var(--text-2xs)', fontWeight: 600,
             background: live ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
             color: live ? 'var(--success)' : 'var(--danger)',
             whiteSpace: 'nowrap',
@@ -551,7 +551,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: '12px',
+              fontSize: 'var(--text-xs)',
               fontWeight: 700,
               color: 'var(--accent)',
               cursor: 'pointer',
@@ -585,10 +585,10 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
             >
               {/* User Header Info */}
               <div style={{ padding: '8px 14px 10px 14px', borderBottom: '1px solid var(--border-color)' }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
                   {user?.displayName || 'System Admin'}
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {user?.email || 'admin@fapoms.com'}
                 </div>
               </div>
@@ -608,7 +608,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                   background: 'none',
                   border: 'none',
                   color: 'var(--text-primary)',
-                  fontSize: '13px',
+                  fontSize: 'var(--text-sm)',
                   fontWeight: 500,
                   cursor: 'pointer',
                   textAlign: 'left',
@@ -637,7 +637,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                     background: 'none',
                     border: 'none',
                     color: 'var(--danger)',
-                    fontSize: '13px',
+                    fontSize: 'var(--text-sm)',
                     fontWeight: 500,
                     cursor: 'pointer',
                     textAlign: 'left',

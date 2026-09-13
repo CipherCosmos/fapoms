@@ -1050,10 +1050,10 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           // a marker that's simultaneously coloured red as a restricted-zone breach is a direct
           // visual contradiction.
           const rankBadge = ranking && ranking.rank <= 3 && !inBreach
-            ? `<div style="position:absolute;top:-5px;right:-5px;background:${markerColor};color:#fff;font-size:8px;font-weight:800;width:12px;height:12px;line-height:12px;border-radius:50%;text-align:center;border:1px solid rgba(255,255,255,0.9);">${ranking.rank}</div>`
+            ? `<div style="position:absolute;top:-5px;right:-5px;background:${markerColor};color:#fff;font-size:var(--text-3xs);font-weight:800;width:12px;height:12px;line-height:12px;border-radius:50%;text-align:center;border:1px solid rgba(255,255,255,0.9);">${ranking.rank}</div>`
             : '';
           const blockedMark = blocked
-            ? `<div style="position:absolute;top:-4px;right:-4px;color:#f87171;font-size:10px;font-weight:800;">✕</div>`
+            ? `<div style="position:absolute;top:-4px;right:-4px;color:#f87171;font-size:var(--text-3xs);font-weight:800;">✕</div>`
             : '';
 
           const assayerIconHtml = `<div style="position:relative;width:18px;height:18px;opacity:${blocked ? 0.55 : dimExited ? 0.72 : 1};">${assayerSvg}${rankBadge}${blockedMark}</div>`;
@@ -1063,24 +1063,24 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           // a standing with — the control-center facts, on the pin itself.
           const bucket = lifecycleBucketOf(assayer.lifecycleStatus);
           const tint = LIFECYCLE_BUCKET_TINT[bucket.key] ?? { bg: '#e2e8f0', fg: '#334155' };
-          const lifecycleChip = `<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:${tint.bg};color:${tint.fg};font-size:10px;font-weight:700;">${assayer.lifecycleStatus ?? '—'}</span>`;
+          const lifecycleChip = `<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:${tint.bg};color:${tint.fg};font-size:var(--text-3xs);font-weight:700;">${assayer.lifecycleStatus ?? '—'}</span>`;
           const availabilityLine = assayer.assignedToday
             ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">📌 Assigned today${assayer.openAssignments > 1 ? ` · ${assayer.openAssignments} open` : ''}</div>`
             : `<div style="margin-top:3px;color:#047857;font-weight:600;">✅ Free today${assayer.openAssignments > 0 ? ` · ${assayer.openAssignments} open elsewhere` : ''}</div>`;
           const approxLine = assayer.approxLocation
-            ? `<div style="margin-top:3px;font-size:10px;color:#92400e;">📍 Approximate area — the exact address is still being located</div>`
+            ? `<div style="margin-top:3px;font-size:var(--text-3xs);color:#92400e;">📍 Approximate area — the exact address is still being located</div>`
             : '';
           const emps: MapEmpanelment[] = assayer.empanelments ?? [];
           const bankRows = emps.slice(0, 4).map((e) =>
-            `<div style="display:flex;align-items:center;gap:5px;font-size:11px;">`
+            `<div style="display:flex;align-items:center;gap:5px;font-size:var(--text-2xs);">`
             + `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${clientColorOf(e.clientId)};"></span>`
             + `<span>${e.clientName}</span><span style="color:#666;">— ${e.status}</span></div>`,
           ).join('');
           const banksBlock = emps.length
             ? `<div style="margin-top:4px;border-top:1px solid #e2e8f0;padding-top:3px;">${bankRows}`
-              + (emps.length > 4 ? `<div style="font-size:10px;color:#666;">+${emps.length - 4} more</div>` : '')
+              + (emps.length > 4 ? `<div style="font-size:var(--text-3xs);color:#666;">+${emps.length - 4} more</div>` : '')
               + `</div>`
-            : `<div style="margin-top:4px;font-size:10px;color:#94a3b8;">No bank empanelments</div>`;
+            : `<div style="margin-top:4px;font-size:var(--text-3xs);color:#94a3b8;">No bank empanelments</div>`;
 
           // Filled in by whichever of the two branches below applies, then handed to the
           // reconciler together with the icon. Assayer pins away from a selected branch carry a
@@ -1102,14 +1102,14 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             // map's own SLA-risk layer is on) while still standing inside the restricted zone.
             const verdict = blocked
               ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — ${blocked.reason}</div>` +
-                (blocked.detail ? `<div style="font-size:10px;color:#92400e;">└─ ${blocked.detail}</div>` : '')
+                (blocked.detail ? `<div style="font-size:var(--text-3xs);color:#92400e;">└─ ${blocked.detail}</div>` : '')
               : inBreach
               ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — within the ${effectiveSlaRadius}km restricted zone</div>`
               : ranking
               ? `<div style="margin-top:3px;color:#047857;font-weight:600;">#${ranking.rank} recommended · score ${ranking.score ?? '—'}</div>`
               : '';
             assayerPopupHtml = `
-              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:180px;">
+              <div style="color:#000;font-family:sans-serif;font-size:var(--text-xs);min-width:180px;">
                 <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.displayName} ${lifecycleChip}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 <div>Distance: <b>~${straightDist.toFixed(1)} km</b> <span style="color:#666;">straight line</span></div>
@@ -1118,7 +1118,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                 ${availabilityLine}
                 ${approxLine}
                 ${banksBlock}
-                ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>'}
+                ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:var(--text-3xs);color:#666;">Click to show route</div>'}
               </div>
             `;
             assayerOnClick = () => {
@@ -1134,7 +1134,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             };
           } else {
             assayerPopupHtml = `
-              <div style="color:#000; font-family:sans-serif; font-size:12px; min-width: 170px;">
+              <div style="color:#000; font-family:sans-serif; font-size:var(--text-xs); min-width: 170px;">
                 <b style="color:${markerColor}; display:block; margin-bottom: 4px;">${assayer.displayName} ${lifecycleChip}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 ${availabilityLine}
@@ -1196,7 +1196,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }).addTo(map);
 
         densityCircle.bindPopup(`
-          <div style="color:#000; font-size:11px; font-family:sans-serif; min-width: 120px;">
+          <div style="color:#000; font-size:var(--text-2xs); font-family:sans-serif; min-width: 120px;">
             <b style="display:block; margin-bottom: 4px;">${city} Audit Density</b>
             <div>Audit sites: <b>${data.count}</b></div>
             <div style="margin-top: 4px; font-weight:600; color:${color}">${isHigh ? '🔥 High Volume' : 'Standard Volume'}</div>
@@ -1337,12 +1337,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-        <h4 style={{ fontSize: '15px', fontWeight: 600 }}>Geographic Workspace Map</h4>
+        <h4 style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>Geographic Workspace Map</h4>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <button type="button" onClick={() => setIsFullscreen(f => !f)}
             aria-label={isFullscreen ? 'Exit the bigger view' : 'Open the bigger view'}
             title={isFullscreen ? 'Exit the bigger view (Esc)' : 'Bigger view'}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', font: 'inherit' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)', font: 'inherit' }}>
             {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             <span>{isFullscreen ? 'Exit' : 'Bigger view'}</span>
           </button>
@@ -1401,13 +1401,13 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             display: 'flex',
             flexDirection: 'column',
             gap: '8px',
-            fontSize: '11px',
+            fontSize: 'var(--text-2xs)',
             color: 'var(--text-primary)',
             minWidth: '160px'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', borderBottom: '1px solid var(--border-hair)', paddingBottom: '4px' }}>
-              <span style={{ fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-primary)' }}>Map Legend</span>
-              <button type="button" aria-label="Close legend" onClick={() => setShowLegend(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}>&times;</button>
+              <span style={{ fontWeight: 600, fontSize: 'var(--text-3xs)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-primary)' }}>Map Legend</span>
+              <button type="button" aria-label="Close legend" onClick={() => setShowLegend(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-base)', padding: '0 2px', lineHeight: 1 }}>&times;</button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#6366f1' }} />
@@ -1465,7 +1465,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             borderRadius: 'var(--radius-sm)',
             padding: '6px 10px',
             color: 'var(--text-primary)',
-            fontSize: '11px',
+            fontSize: 'var(--text-2xs)',
             fontWeight: 600,
             cursor: 'pointer',
             boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
@@ -1495,10 +1495,10 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <b style={{ color: 'var(--accent)', fontSize: '13px' }}>{selectedAssayerForRouting.displayName ?? [selectedAssayerForRouting.firstName, selectedAssayerForRouting.lastName].filter(Boolean).join(' ')}</b>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Route to {selectedAssayerForRouting.branchName}</div>
+              <b style={{ color: 'var(--accent)', fontSize: 'var(--text-sm)' }}>{selectedAssayerForRouting.displayName ?? [selectedAssayerForRouting.firstName, selectedAssayerForRouting.lastName].filter(Boolean).join(' ')}</b>
+              <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>Route to {selectedAssayerForRouting.branchName}</div>
             </div>
-            <button type="button" aria-label="Close routing panel" onClick={() => setSelectedAssayerForRouting(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>&times;</button>
+            <button type="button" aria-label="Close routing panel" onClick={() => setSelectedAssayerForRouting(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-base)' }}>&times;</button>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
@@ -1516,21 +1516,21 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
                     border: 'none',
                     borderRadius: 'var(--radius-sm)',
                     color: travelMode === mode ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    fontSize: '10px',
+                    fontSize: 'var(--text-3xs)',
                     fontWeight: travelMode === mode ? 700 : 500,
                     cursor: 'pointer',
                     textAlign: 'center',
                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1px',
                   }}
                 >
-                  <span aria-hidden="true" style={{ fontSize: '12px' }}>{mode === 'driving' ? '🚗' : mode === 'two-wheeler' ? '🏍️' : '🚶'}</span>
+                  <span aria-hidden="true" style={{ fontSize: 'var(--text-xs)' }}>{mode === 'driving' ? '🚗' : mode === 'two-wheeler' ? '🏍️' : '🚶'}</span>
                   {label}
                 </button>
               );
             })}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>{roadDistanceKm !== null ? 'Road Distance:' : 'Straight-line:'}</span>
               <b>{actualDistance.toFixed(1)} km</b>
@@ -1539,7 +1539,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span>Est. Travel Time:</span>
               <b>{durationVal} mins</b>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: '10px', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
               <span>Mode:</span>
               <span>{travelMode === 'driving' ? '🚗 Car' : travelMode === 'two-wheeler' ? '🏍️ Motorcycle' : '🚶 Walking'}</span>
               <span>| Speed: ~{speed} km/h</span>
@@ -1548,11 +1548,11 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span>{travelMode === 'driving'
                 ? (roadDistanceKm !== null ? 'Travel allowance:' : 'Travel allowance (approx):')
                 : 'Est. fuel cost:'}</span>
-              <b style={{ color: estCost == null ? 'var(--text-muted)' : 'var(--text-primary)', fontSize: '12px' }}>
+              <b style={{ color: estCost == null ? 'var(--text-muted)' : 'var(--text-primary)', fontSize: 'var(--text-xs)' }}>
                 {estCost == null ? 'rate unavailable' : `₹${estCost}`}
               </b>
             </div>
-            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
               {roadDistanceKm !== null ? 'Road distance from OSRM' : 'Estimate based on straight-line distance'} — traffic not included
             </div>
           </div>

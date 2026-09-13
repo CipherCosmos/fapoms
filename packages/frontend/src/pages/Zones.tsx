@@ -243,7 +243,7 @@ export const Zones: React.FC = () => {
         title="Territorial Zones"
         subtitle="Groupings of states and districts the coverage planner keeps audits within."
         actions={canManage && (
-          <button onClick={handleOpenCreate} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+          <button onClick={handleOpenCreate} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
             <Plus size={14} /> Add Zone
           </button>
         )}
@@ -266,7 +266,7 @@ export const Zones: React.FC = () => {
           <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
           <table className="table" style={{ width: '100%', minWidth: '640px', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', fontSize: '12px' }}>
+              <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                 <th style={{ padding: '10px' }}>Zone</th>
                 <th style={{ padding: '10px' }}>Client Scope</th>
                 <th style={{ padding: '10px' }}>States</th>
@@ -278,12 +278,12 @@ export const Zones: React.FC = () => {
               {[...zones].sort((a, b) => a.name.localeCompare(b.name)).map((z) => {
                 const matchedClient = clients.find((c: any) => c.id === z.clientId);
                 return (
-                  <tr key={z.id} style={{ borderBottom: '1px solid var(--border-hair)', fontSize: '13px' }}>
+                  <tr key={z.id} style={{ borderBottom: '1px solid var(--border-hair)', fontSize: 'var(--text-sm)' }}>
                     <td style={{ padding: '12px 10px' }}>
                       <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{z.name}</div>
-                      {z.description && <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: 2 }}>{z.description}</div>}
+                      {z.description && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 2 }}>{z.description}</div>}
                     </td>
-                    <td style={{ padding: '12px 10px', fontSize: '12px' }}>
+                    <td style={{ padding: '12px 10px', fontSize: 'var(--text-xs)' }}>
                       {!z.clientId
                         ? <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>🌐 All clients</span>
                         : <span style={{ color: 'var(--warning)', fontWeight: 600 }}><Building2 size={11} style={{ verticalAlign: '-1px' }} /> {matchedClient?.name || 'Specific client'}</span>}
@@ -316,7 +316,7 @@ export const Zones: React.FC = () => {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '10px', marginTop: '14px', fontSize: '11px', color: 'var(--text-muted)', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '10px', marginTop: '14px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', alignItems: 'center' }}>
           <Info size={12} />
           <span>A zone scoped to a client applies only to that client's branches; an unscoped zone is available to all.</span>
         </div>
@@ -333,19 +333,19 @@ export const Zones: React.FC = () => {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Zone Name</label>
+              <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Zone Name</label>
               <input type="text" required placeholder="e.g. South Maharashtra" value={name} onChange={(e) => setName(e.target.value)}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Description (Optional)</label>
+              <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Description (Optional)</label>
               <input type="text" placeholder="What this zone covers" value={description} onChange={(e) => setDescription(e.target.value)}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
                 Client Scope (Optional){editingId ? ' — set at creation, not editable here' : ''}
               </label>
               <Select
@@ -358,7 +358,7 @@ export const Zones: React.FC = () => {
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>States in this zone</label>
+              <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>States in this zone</label>
               <ChipMultiSelect
                 aria-label="States in this zone"
                 options={INDIAN_STATES}
@@ -370,18 +370,18 @@ export const Zones: React.FC = () => {
             </div>
 
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
                 Districts (Optional){geoUnavailable ? <span style={{ fontWeight: 400 }}> — comma separated</span> : null}
               </label>
               {geoUnavailable ? (
                 <input type="text" placeholder="e.g. Kolhapur, Sangli, Satara" value={districtsText} onChange={(e) => setDistrictsText(e.target.value)}
-                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               ) : selectedStates.length === 0 ? (
-                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px', border: '1px dashed var(--border-color)', borderRadius: '6px' }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '9px', border: '1px dashed var(--border-color)', borderRadius: '6px' }}>
                   Choose a state first — districts are listed per state.
                 </div>
               ) : districtOptions === null ? (
-                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px' }}>Loading districts…</div>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '9px' }}>Loading districts…</div>
               ) : (
                 <>
                   <ChipMultiSelect
@@ -393,7 +393,7 @@ export const Zones: React.FC = () => {
                     emptyText="No districts on record for the selected state(s)."
                     maxHeight={140}
                   />
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
                     {selectedDistricts.length === 0
                       ? 'Leave empty to cover every district in the selected states.'
                       : `${selectedDistricts.length} selected.`}

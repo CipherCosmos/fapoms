@@ -57,7 +57,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
             type="button"
             onClick={onClearFilters}
             className="btn btn-secondary"
-            style={{ fontSize: '12px', padding: '6px 14px' }}
+            style={{ fontSize: 'var(--text-xs)', padding: '6px 14px' }}
           >
             Clear all filters
           </button>
@@ -81,7 +81,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
             type="button"
             onClick={onRetry}
             className="btn btn-secondary"
-            style={{ fontSize: '12px', padding: '6px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            style={{ fontSize: 'var(--text-xs)', padding: '6px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
             <RotateCcw size={13} />
             Retry
@@ -136,10 +136,10 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
           {icon}
         </div>
       )}
-      <div style={{ fontSize: compact ? 14 : 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+      <div style={{ fontSize: compact ? 'var(--text-base)' : 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>
         {title}
       </div>
-      {message && <div style={{ fontSize: 13, maxWidth: 440, lineHeight: 1.5 }}>{message}</div>}
+      {message && <div style={{ fontSize: 'var(--text-sm)', maxWidth: 440, lineHeight: 1.5 }}>{message}</div>}
       {action && <div style={{ marginTop: 6 }}>{action}</div>}
     </div>
   );

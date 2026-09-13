@@ -30,7 +30,7 @@ export const MenuToggle: React.FC<MenuToggleProps> = ({
       alignItems: 'center',
       justifyContent: 'center',
       ...(label
-        ? { flexDirection: 'column' as const, gap: 2, fontSize: 10, fontWeight: 600, padding: 0 }
+        ? { flexDirection: 'column' as const, gap: 2, fontSize: 'var(--text-3xs)', fontWeight: 600, padding: 0 }
         : { padding: 4, borderRadius: 'var(--radius-sm)' }),
       ...style,
     }}

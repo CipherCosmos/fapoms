@@ -60,10 +60,10 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
    */
   return (
     <div style={{ maxWidth: 520, margin: '18vh auto', padding: '0 24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-      <h2 style={{ margin: '0 0 10px', fontSize: 19, color: 'var(--text-primary)' }}>
+      <h2 style={{ margin: '0 0 10px', fontSize: 'var(--text-xl)', color: 'var(--text-primary)' }}>
         Nothing has been shared with you yet
       </h2>
-      <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.6 }}>
+      <p style={{ margin: 0, fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
         Your account is active, but it has not been given access to any part of the system.
         Ask an administrator to add the areas you need to your role.
       </p>

@@ -78,7 +78,7 @@ export const UploadExcelControls: React.FC<{
           borderRadius: 'var(--radius-md)',
           fontWeight: 600,
           cursor: off ? 'not-allowed' : 'pointer',
-          fontSize: '13px',
+          fontSize: 'var(--text-sm)',
         }}
       >
         <Upload size={16} />
@@ -110,7 +110,7 @@ export const UploadExcelControls: React.FC<{
           fontWeight: 600,
           opacity: off ? 0.6 : 1,
           cursor: off ? 'not-allowed' : 'pointer',
-          fontSize: '13px',
+          fontSize: 'var(--text-sm)',
         }}
       >
         <Download size={16} />

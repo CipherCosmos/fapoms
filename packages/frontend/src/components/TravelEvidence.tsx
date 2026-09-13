@@ -70,10 +70,10 @@ export const TravelEvidence: React.FC<{ assignmentId: string }> = ({ assignmentI
   }, [assignmentId]);
 
   if (loading) {
-    return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Checking the movement trail…</div>;
+    return <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Checking the movement trail…</div>;
   }
   if (error) {
-    return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Movement trail unavailable: {error}</div>;
+    return <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Movement trail unavailable: {error}</div>;
   }
   if (!data) return null;
 
@@ -81,7 +81,7 @@ export const TravelEvidence: React.FC<{ assignmentId: string }> = ({ assignmentI
   if (!data.assessment) {
     return (
       <div style={wrap('var(--bg-surface-2, rgba(127,127,127,0.08))')}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontWeight: 600, fontSize: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontWeight: 600, fontSize: 'var(--text-xs)' }}>
           <HelpCircle size={14} /> No journey to compare
         </div>
         <p style={body}>{data.unavailableReason ?? 'This assignment has no recorded arrival.'}</p>
@@ -95,7 +95,7 @@ export const TravelEvidence: React.FC<{ assignmentId: string }> = ({ assignmentI
 
   return (
     <div style={wrap(style.background)}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: style.colour, fontWeight: 700, fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: style.colour, fontWeight: 700, fontSize: 'var(--text-xs)' }}>
         <Icon size={14} /> {style.label}
       </div>
 
@@ -149,12 +149,12 @@ export const TravelEvidence: React.FC<{ assignmentId: string }> = ({ assignmentI
 
 const Stat: React.FC<{ label: string; value: string; note?: string }> = ({ label, value, note }) => (
   <div>
-    <dt style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
+    <dt style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
       {label}
     </dt>
-    <dd style={{ margin: 0, fontSize: 13, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+    <dd style={{ margin: 0, fontSize: 'var(--text-sm)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
       {value}
-      {note && <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--text-muted)' }}> ({note})</span>}
+      {note && <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 400, color: 'var(--text-muted)' }}> ({note})</span>}
     </dd>
   </div>
 );
@@ -169,7 +169,7 @@ const wrap = (background: string): React.CSSProperties => ({
   gap: 6,
 });
 
-const body: React.CSSProperties = { margin: 0, fontSize: 12, lineHeight: 1.5 };
+const body: React.CSSProperties = { margin: 0, fontSize: 'var(--text-xs)', lineHeight: 1.5 };
 
 const grid: React.CSSProperties = {
   margin: 0,

@@ -166,7 +166,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
     );
   };
 
-  if (isLoading || detail.isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
+  if (isLoading || detail.isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>;
 
   /**
    * A failed fetch must not fall through to the form below: `form` was seeded from `billing`
@@ -182,7 +182,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
    */
   if (billingIsError) {
     return (
-      <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '12px 14px', borderLeft: '3px solid var(--danger)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 12.5 }}>
+      <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '12px 14px', borderLeft: '3px solid var(--danger)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)' }}>
         <AlertTriangle size={15} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />
         <span style={{ color: 'var(--text-secondary)' }}>
           Could not load this client's billing profile — this is not saying it's unset, the request failed.
@@ -211,7 +211,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   return (
     <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {!hasRate && (
-        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderLeft: '3px solid var(--warning)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 12.5 }}>
+        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderLeft: '3px solid var(--warning)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)' }}>
           <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
           <span style={{ color: 'var(--text-secondary)' }}>
             No rate set. Until one is, this client's audits are billed at what the assayer is paid — every audit earns zero margin.
@@ -220,7 +220,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       )}
 
       {!hasBillingProfile && (
-        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderLeft: '3px solid var(--warning)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 12.5 }}>
+        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderLeft: '3px solid var(--warning)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)' }}>
           <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
           <span style={{ color: 'var(--text-secondary)' }}>
             No billing profile saved for this client yet. The GST, TDS and terms below are the platform
@@ -272,13 +272,13 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
             {/* Advisory only — the column already holds either a GSTIN or a bare PAN for
                 clients not GST-registered, and this must not block either. */}
             {taxIdHint(form.taxIdentifier ?? '') && (
-              <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{taxIdHint(form.taxIdentifier ?? '')}</span>
+              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>{taxIdHint(form.taxIdentifier ?? '')}</span>
             )}
             {/* A bare PAN is a valid, accepted shape (the hint above stays silent for it) but it
                 carries no GST state prefix, so it has a real tax-invoice consequence the operator
                 should see now rather than discover on a printed invoice later. */}
             {taxIdGstinConsequenceHint(form.taxIdentifier ?? '') && (
-              <span style={{ fontSize: '10.5px', color: 'var(--warning)' }}>{taxIdGstinConsequenceHint(form.taxIdentifier ?? '')}</span>
+              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--warning)' }}>{taxIdGstinConsequenceHint(form.taxIdentifier ?? '')}</span>
             )}
           </label>
           <label style={labelStyle}>Currency{vocabField(form.currency ?? '', (v) => set('currency', v), CURRENCY_OPTIONS, 'e.g. AED')}</label>
@@ -292,7 +292,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
             <input style={{ ...inputStyle, width: '100%' }} value={form.ifscCode ?? ''} onChange={(e) => set('ifscCode', e.target.value)} />
             {/* Read-only supporting text from the lookup — not extra input fields of their own. */}
             {ifscInfo && (
-              <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
                 {[ifscInfo.branchName, ifscInfo.city, ifscInfo.state].filter(Boolean).join(', ')}
               </span>
             )}
@@ -346,7 +346,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       </section>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Applies to audits completed from now on; booked lines are unchanged.</span>
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Applies to audits completed from now on; booked lines are unchanged.</span>
         <button type="submit" disabled={saving} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <Save size={14} /> {saving ? 'Saving…' : 'Save billing'}
         </button>
@@ -356,15 +356,15 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
 };
 
 const sectionStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, padding: 14, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' };
-const sectionTitle: React.CSSProperties = { margin: '0 0 6px', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
-const inputStyle: React.CSSProperties = { width: 200, maxWidth: '100%', padding: '7px 10px', fontSize: 13, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' };
-const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' };
+const sectionTitle: React.CSSProperties = { margin: '0 0 6px', fontSize: 'var(--text-sm)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
+const inputStyle: React.CSSProperties = { width: 200, maxWidth: '100%', padding: '7px 10px', fontSize: 'var(--text-sm)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' };
+const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
 
 const Field: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({ label, hint, children }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '8px 0', borderBottom: '1px solid var(--border-hair, var(--border-color))', flexWrap: 'wrap' }}>
     <div style={{ minWidth: 200, flex: 1 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
-      {hint && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, maxWidth: 380 }}>{hint}</div>}
+      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
+      {hint && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 2, maxWidth: 380 }}>{hint}</div>}
     </div>
     {children}
   </div>

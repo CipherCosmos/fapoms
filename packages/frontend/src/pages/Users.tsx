@@ -45,7 +45,7 @@ export const Users: React.FC = () => {
               onClick={() => setTab(t.key)}
               style={{
                 display: 'flex', alignItems: 'center', gap: '7px', padding: '10px 16px',
-                fontSize: '13px', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
+                fontSize: 'var(--text-sm)', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
                 color: active ? 'var(--accent-primary)' : 'var(--text-muted)',
                 borderBottom: `2px solid ${active ? 'var(--accent-primary)' : 'transparent'}`,
               }}

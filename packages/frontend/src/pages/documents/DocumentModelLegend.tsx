@@ -31,7 +31,7 @@ export const DocumentModelLegend: React.FC = () => {
         onClick={() => setOpen((v) => !v)}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
-          background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 12.5, fontWeight: 600,
+          background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 'var(--text-xs)', fontWeight: 600,
         }}
       >
         <HelpCircle size={14} />
@@ -41,23 +41,23 @@ export const DocumentModelLegend: React.FC = () => {
       {open && (
         <div style={{ padding: '4px 16px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 18 }}>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 8 }}>File types</div>
+            <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 8 }}>File types</div>
             {TYPES.map((t) => (
               <div key={t.type} style={{ marginBottom: 9 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{t.type} <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>· {t.who}</span></div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 2 }}>{t.purpose}</div>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600 }}>{t.type} <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>· {t.who}</span></div>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 2 }}>{t.purpose}</div>
               </div>
             ))}
           </div>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 8 }}>Pipeline stages</div>
+            <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 8 }}>Pipeline stages</div>
             {STAGES.map((s) => (
               <div key={s.stage} style={{ marginBottom: 9 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{s.stage}</div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 2 }}>{s.meaning}</div>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600 }}>{s.stage}</div>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 2 }}>{s.meaning}</div>
               </div>
             ))}
-            <div style={{ marginTop: 12, padding: '9px 11px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+            <div style={{ marginTop: 12, padding: '9px 11px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
               <strong>Scope:</strong> every file belongs to one branch within one project cycle — not to whichever
               assayer is currently assigned. If the assayer changes, these files and their state stay exactly as they are.
             </div>

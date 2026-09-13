@@ -42,14 +42,14 @@ const cardStyle: React.CSSProperties = {
 // the dark themes is the same colour as `--bg-page` — a box drawn against the page colour
 // vanished into the card around it instead of standing out as something to type into.
 const searchStyle: React.CSSProperties = {
-  width: '100%', padding: '8px 10px 8px 32px', fontSize: '13px',
+  width: '100%', padding: '8px 10px 8px 32px', fontSize: 'var(--text-sm)',
   background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
   outline: 'none', boxSizing: 'border-box',
 };
 
 const reasonStyle: React.CSSProperties = {
-  width: '100%', padding: '7px 9px', fontSize: '12.5px', marginTop: '8px',
+  width: '100%', padding: '7px 9px', fontSize: 'var(--text-xs)', marginTop: '8px',
   background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
   outline: 'none', boxSizing: 'border-box',
@@ -118,8 +118,8 @@ const ClientRow: React.FC<{
     }}>
       <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 160px', minWidth: 0 }}>
-          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{client.name}</div>
-          <div style={{ fontSize: '12px', color: recorded ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>{client.name}</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: recorded ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
             {chosen
               ? chosen.consequence
               : standing
@@ -303,7 +303,7 @@ export const ClientsStep: React.FC<{
 
   if (!assayerId) {
     return (
-      <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
         Available once their record is saved.
       </div>
     );
@@ -325,13 +325,13 @@ export const ClientsStep: React.FC<{
         background: 'var(--bg-surface-2)',
         borderColor: plannableCount > 0 ? 'var(--success)' : 'var(--warning)',
       }}>
-        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '7px' }}>
+        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '7px' }}>
           <Building2 size={15} aria-hidden />
           {plannableCount > 0
             ? `They can be given work for ${plannableCount === 1 ? 'one client' : `${plannableCount} clients`}.`
             : 'No client will be offered this person yet.'}
         </div>
-        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '6px' }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginTop: '6px' }}>
           Work is planned one client at a time, and a client is only ever offered somebody they
           have accepted. Set every bank this person has been put forward to — you can finish
           without doing it, and come back to their record later.
@@ -355,7 +355,7 @@ export const ClientsStep: React.FC<{
               onClick={() => void applyToAllUnset()}
               disabled={unset.length === 0 || bulkBusy || Boolean(clientsFailed)}
               className="btn btn-secondary"
-              style={{ fontSize: '12px', padding: '8px 14px', width: 'auto' }}
+              style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', width: 'auto' }}
               title={unset.length === 0
                 ? 'Every client already has a standing recorded'
                 : 'Files the chosen standing for every client with nothing recorded yet'}
@@ -384,9 +384,9 @@ export const ClientsStep: React.FC<{
       )}
 
       {clients === null ? (
-        <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Loading the list of clients…</div>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Loading the list of clients…</div>
       ) : rows.length === 0 ? (
-        <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
           {query ? `No client here is called “${query}”.` : 'No clients are set up yet.'}
         </div>
       ) : (

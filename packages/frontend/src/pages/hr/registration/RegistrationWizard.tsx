@@ -103,10 +103,10 @@ const gridStyle: React.CSSProperties = {
 };
 
 const blockTitleStyle: React.CSSProperties = {
-  fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px',
+  fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px',
 };
 const blockNoteStyle: React.CSSProperties = {
-  fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px',
+  fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '10px',
 };
 
 /**
@@ -187,7 +187,7 @@ const StepRail: React.FC<{
             title={step.caption}
             style={{
               display: 'flex', alignItems: 'center', gap: '8px', textAlign: 'left',
-              padding: narrow ? '9px 14px' : '10px 12px', fontSize: '13px', fontWeight: active ? 700 : 600,
+              padding: narrow ? '9px 14px' : '10px 12px', fontSize: 'var(--text-sm)', fontWeight: active ? 700 : 600,
               borderRadius: 'var(--radius-md)', cursor: 'pointer',
               border: `1px solid ${active ? 'var(--accent)' : 'var(--border-color)'}`,
               background: active ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
@@ -262,7 +262,7 @@ const ReferencesBlock: React.FC<{
   const inputStyle: React.CSSProperties = {
     // `--bg-input`, not `--bg-page` — the two render identically in the dark themes, which is
     // why this box used to be invisible against the page it sits directly on.
-    padding: '9px 11px', fontSize: '13px', background: 'var(--bg-input)',
+    padding: '9px 11px', fontSize: 'var(--text-sm)', background: 'var(--bg-input)',
     border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
     color: 'var(--text-primary)', outline: 'none', width: '100%', boxSizing: 'border-box',
   };
@@ -277,12 +277,12 @@ const ReferencesBlock: React.FC<{
       {references.length > 0 && (
         <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {references.map((r) => (
-            <li key={r.id} style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <li key={r.id} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
               <Phone size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} aria-hidden />
               <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{r.fullName}</span>
               {r.relationship && <span>· {r.relationship}</span>}
               {r.phone && <span>· {r.phone}</span>}
-              <span style={{ color: r.checkedAt ? 'var(--success)' : 'var(--text-muted)', fontSize: '12px' }}>
+              <span style={{ color: r.checkedAt ? 'var(--success)' : 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                 {r.checkedAt ? '· spoken to' : '· not rung yet'}
               </span>
             </li>
@@ -323,12 +323,12 @@ const ReferencesBlock: React.FC<{
           onClick={() => void add()}
           disabled={saving || !assayerId}
           className="btn btn-secondary"
-          style={{ fontSize: '12px', padding: '9px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto' }}
+          style={{ fontSize: 'var(--text-xs)', padding: '9px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto' }}
         >
           <Plus size={13} /> {saving ? 'Adding…' : 'Add this person'}
         </button>
       </div>
-      {error && <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '6px' }}>{error}</div>}
+      {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '6px' }}>{error}</div>}
     </div>
   );
 };
@@ -355,7 +355,7 @@ const ReviewStep: React.FC<{
         ...cardish,
         borderColor: 'var(--success)',
       }}>
-        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '7px' }}>
+        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '7px' }}>
           <Check size={15} /> {name || 'This person'} is on the roster
         </div>
         {/*
@@ -368,13 +368,13 @@ const ReviewStep: React.FC<{
           */}
         {name && (
           <div style={{ marginTop: '8px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Full name (as on Aadhaar/PAN)
             </div>
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 600 }}>{name}</div>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)', fontWeight: 600 }}>{name}</div>
           </div>
         )}
-        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '6px' }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginTop: '6px' }}>
           Their code is <strong style={{ fontFamily: 'var(--font-mono, monospace)' }}>{record?.assayerCode || '—'}</strong>.
           {' '}They are waiting to be taken through onboarding on their record, where the stage is moved by hand.
         </div>
@@ -402,7 +402,7 @@ const ReviewStep: React.FC<{
         <div style={{ ...blockTitleStyle, color: plannable ? 'var(--text-primary)' : 'var(--danger)' }}>
           {plannable ? 'Who they can work for' : 'They cannot be given work yet'}
         </div>
-        <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           {plannable
             ? `Accepted by ${standings.filter((s) => s.client).map((s) => s.client!.name).join(', ') || 'a client'}.`
             : `${name || 'This person'} cannot be given work for any client until a client standing is set. `
@@ -416,7 +416,7 @@ const ReviewStep: React.FC<{
 
       <div style={cardish}>
         <div style={blockTitleStyle}>Papers on file</div>
-        <div style={{ fontSize: '13px', color: scannedCount > 0 ? 'var(--text-secondary)' : 'var(--warning)' }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: scannedCount > 0 ? 'var(--text-secondary)' : 'var(--warning)' }}>
           {scannedCount} of {requirementCount} documents have a scan attached.
           {scannedCount === 0 && ' Nothing has been scanned, so nobody can check this person’s identity against a document later.'}
         </div>
@@ -437,8 +437,8 @@ const ReviewStep: React.FC<{
             {gaps.map((gap) => (
               <li key={gap.key} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap' }}>
                 <AlertTriangle size={13} style={{ color: 'var(--warning)', flexShrink: 0 }} aria-hidden />
-                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{gap.label}</span>
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>blocks {gap.why}</span>
+                <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{gap.label}</span>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>blocks {gap.why}</span>
                 {gap.step && (
                   <button type="button" onClick={() => onGo(gap.step!)} style={linkButtonStyle}>
                     Fill it in
@@ -461,7 +461,7 @@ const ReviewStep: React.FC<{
         */}
       <div style={{ ...cardish, background: 'var(--bg-surface-2)' }}>
         <div style={blockTitleStyle}>They do not need a phone or the app</div>
-        <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           This registration is complete without a mobile number, an email address, a password or
           the app. Giving somebody app access is a separate thing you can do later from their
           record, and no stage of onboarding waits on it.
@@ -480,7 +480,7 @@ const cardish: React.CSSProperties = {
 
 const linkButtonStyle: React.CSSProperties = {
   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-  color: 'var(--accent-primary)', fontSize: '12px', fontWeight: 600, textDecoration: 'underline',
+  color: 'var(--accent-primary)', fontSize: 'var(--text-xs)', fontWeight: 600, textDecoration: 'underline',
 };
 
 /**
@@ -704,7 +704,7 @@ export const RegistrationWizard: React.FC<{
     if (!isSensitiveKey(key) || !reg.assayerId || !stored) return renderOne(field);
     return (
       <div key={key}>
-        <div style={{ ...blockTitleStyle, fontSize: '12px', marginBottom: '4px' }}>{field.label}</div>
+        <div style={{ ...blockTitleStyle, fontSize: 'var(--text-xs)', marginBottom: '4px' }}>{field.label}</div>
         <SensitiveValue
           assayerId={reg.assayerId}
           fieldKey={key}
@@ -892,8 +892,8 @@ export const RegistrationWizard: React.FC<{
 
         <div style={{ flex: '1 1 0%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div>
-        <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{current.title}</h2>
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '4px 0 0' }}>{current.caption}</p>
+        <h2 style={{ fontSize: 'var(--text-md)', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{current.title}</h2>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '4px 0 0' }}>{current.caption}</p>
       </div>
 
       {reg.loadError && (
@@ -937,14 +937,14 @@ export const RegistrationWizard: React.FC<{
       {cannotSaveYet && (
         <div style={{ ...cardish, background: 'var(--bg-surface-2)' }}>
           <div style={blockTitleStyle}>Saving</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
             The person creates their record — save it before this page can hold anything.
           </div>
         </div>
       )}
 
       {reg.loading ? (
-        <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Opening their record…</div>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Opening their record…</div>
       ) : step === 'person' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           <Block
@@ -975,11 +975,11 @@ export const RegistrationWizard: React.FC<{
             render={renderOne}
           />
           {addrLookup && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Looking the pincode up…</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Looking the pincode up…</div>
           )}
           {addrNote && (
             <div style={{
-              padding: '10px 13px', borderRadius: 'var(--radius-md)', fontSize: '13px',
+              padding: '10px 13px', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-sm)',
               background: addrNote.blocking ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
               color: addrNote.blocking ? 'var(--danger)' : 'var(--warning)',
               display: 'flex', gap: '8px', alignItems: 'center',
@@ -1014,7 +1014,7 @@ export const RegistrationWizard: React.FC<{
                     ? `${Number(reg.record.latitude).toFixed(6)}, ${Number(reg.record.longitude).toFixed(6)}`
                     : null;
                   return (
-                    <div style={{ fontSize: '12px', color: pinned ? 'var(--success)' : 'var(--text-muted)', marginTop: '8px' }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: pinned ? 'var(--success)' : 'var(--text-muted)', marginTop: '8px' }}>
                       {pinned
                         ? `Pinned by hand at ${at}. No later import or re-geocode will overwrite it.`
                         : at
@@ -1025,7 +1025,7 @@ export const RegistrationWizard: React.FC<{
                 })()}
               </>
             ) : (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                 Available once their record is saved.
               </div>
             )}
@@ -1099,7 +1099,7 @@ export const RegistrationWizard: React.FC<{
             */}
           <div style={{ ...cardish, background: 'var(--bg-surface-2)' }}>
             <div style={blockTitleStyle}>What they can do, and when they will work</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               Skills, languages, certificates, working hours and the regions they will travel to
               are not asked for here. The assayer keeps those up to date themselves from the app,
               and you can add a skill or a certificate — with its expiry date — on the Skills tab
@@ -1148,16 +1148,16 @@ export const RegistrationWizard: React.FC<{
           onClick={() => void goTo(REGISTRATION_STEP_KEYS[Math.max(stepIndex - 1, 0)])}
           disabled={stepIndex === 0}
           className="btn btn-secondary"
-          style={{ padding: '9px 16px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px', visibility: stepIndex === 0 ? 'hidden' : 'visible' }}
+          style={{ padding: '9px 16px', fontSize: 'var(--text-sm)', display: 'inline-flex', alignItems: 'center', gap: '6px', visibility: stepIndex === 0 ? 'hidden' : 'visible' }}
         >
           <ChevronLeft size={15} aria-hidden /> Back
         </button>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             Step {stepIndex + 1} of {REGISTRATION_STEPS.length}
           </span>
           {step === 'review' ? (
-            <button type="button" onClick={() => void finish()} disabled={busy} className="btn btn-primary" style={{ padding: '9px 20px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+            <button type="button" onClick={() => void finish()} disabled={busy} className="btn btn-primary" style={{ padding: '9px 20px', fontSize: 'var(--text-sm)', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
               <Check size={15} aria-hidden /> {busy ? 'Saving…' : 'Finish'}
             </button>
           ) : (
@@ -1167,7 +1167,7 @@ export const RegistrationWizard: React.FC<{
               disabled={busy || cannotSaveYet}
               title={cannotSaveYet ? 'Save their name and state on the first page first — the rest is filed against their record.' : undefined}
               className="btn btn-primary"
-              style={{ padding: '9px 20px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}
+              style={{ padding: '9px 20px', fontSize: 'var(--text-sm)', display: 'inline-flex', alignItems: 'center', gap: '7px' }}
             >
               {busy ? 'Saving…' : step === 'person' && !reg.assayerId ? 'Save and continue' : 'Continue'}
               <ChevronRight size={15} aria-hidden />

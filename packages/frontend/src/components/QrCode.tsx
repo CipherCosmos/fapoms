@@ -166,7 +166,7 @@ export const QrCode: React.FC<QrCodeProps> = ({ value, size = 220, logoSrc = '/s
 
   if (error) {
     return (
-      <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
         Couldn’t draw the QR code — use the setup key below instead.
       </div>
     );

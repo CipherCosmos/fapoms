@@ -196,7 +196,7 @@ export const PacketsQueue: React.FC = () => {
           return (
             <button key={l.key || 'all'} onClick={() => setLane(l.key)}
               className={active ? 'btn btn-primary' : 'btn btn-secondary'}
-              style={{ fontSize: '12px', padding: '6px 12px', width: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
+              style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', width: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
               {l.label}
               {count != null && <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.8 }}>{count}</span>}
             </button>
@@ -205,7 +205,7 @@ export const PacketsQueue: React.FC = () => {
         <span style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 10px' }}>
           <Search size={13} style={{ color: 'var(--text-muted)' }} />
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search branch / code / file…"
-            style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: '12.5px', width: '190px' }} />
+            style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 'var(--text-xs)', width: '190px' }} />
         </span>
         {isHead && (
           <Select
@@ -222,7 +222,7 @@ export const PacketsQueue: React.FC = () => {
       </div>
 
       {err && (
-        <div style={{ padding: '9px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '12.5px', display: 'flex', gap: '7px', alignItems: 'center' }}>
+        <div style={{ padding: '9px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: 'var(--text-xs)', display: 'flex', gap: '7px', alignItems: 'center' }}>
           <AlertTriangle size={14} /> {err}
         </div>
       )}
@@ -230,7 +230,7 @@ export const PacketsQueue: React.FC = () => {
       {loadErr != null && <LoadFailure loads={[{ label: 'the packet queue', query: caughtLoad(loadErr, load) }]} />}
 
       <section style={{ ...deskCard, padding: 0, overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-xs)' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
               {['Branch', 'Received', 'With', 'Lane', ''].map((h) => (
@@ -253,7 +253,7 @@ export const PacketsQueue: React.FC = () => {
                 <tr key={d.id} style={{ borderBottom: '1px solid var(--border-hair)' }}>
                   <td style={{ padding: '9px 14px' }}>
                     <div style={{ fontWeight: 600 }}>{d.branchName ?? d.fileName}</div>
-                    <div style={{ ...deskLabel, fontSize: '10px' }}>{d.solId ?? '—'}</div>
+                    <div style={{ ...deskLabel, fontSize: 'var(--text-3xs)' }}>{d.solId ?? '—'}</div>
                   </td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{fmtWhen(d.receivedAt)}</td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
@@ -278,7 +278,7 @@ export const PacketsQueue: React.FC = () => {
                           onClick={() => assign(d.id, pick[d.id] ?? leastLoadedId)}
                           disabled={busy === d.id || !(pick[d.id] ?? leastLoadedId)}
                           className="btn btn-secondary"
-                          style={{ fontSize: '11.5px', padding: '5px 10px', width: 'auto', fontWeight: 700 }}>
+                          style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', fontWeight: 700 }}>
                           {busy === d.id ? 'Assigning…' : 'Assign'}
                         </button>
                       </span>
@@ -288,7 +288,7 @@ export const PacketsQueue: React.FC = () => {
                   </td>
                   <td style={{ padding: '9px 14px' }}>
                     {chip && (
-                      <span style={{ fontSize: '9.5px', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: chip.color, border: `1px solid ${chip.color}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: chip.color, border: `1px solid ${chip.color}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
                         {chip.label}
                       </span>
                     )}
@@ -297,13 +297,13 @@ export const PacketsQueue: React.FC = () => {
                     <div style={{ display: 'inline-flex', gap: '6px' }}>
                       {(d.lane === 'working' || d.lane === 'rework') && (
                         <button onClick={() => handBack(d.id)} disabled={busy === d.id} className="btn btn-secondary"
-                          style={{ fontSize: '11.5px', padding: '5px 10px', width: 'auto', fontWeight: 700 }}>
+                          style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', fontWeight: 700 }}>
                           {busy === d.id ? 'Saving…' : '✓ Hand back'}
                         </button>
                       )}
                       <button onClick={() => d.projectBranchId && navigate(`/data-entry/case/${d.projectBranchId}`)}
                         disabled={!d.projectBranchId} className="btn btn-secondary"
-                        style={{ fontSize: '11.5px', padding: '5px 10px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <FileText size={12} /> Open
                       </button>
                     </div>
@@ -315,13 +315,13 @@ export const PacketsQueue: React.FC = () => {
         </table>
       </section>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         <span>{data ? `${data.total} packet${data.total === 1 ? '' : 's'}` : '…'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <button className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '4px 10px', width: 'auto' }}
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
             disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>{page} / {totalPages}</span>
-          <button className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '4px 10px', width: 'auto' }}
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
             disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
         </span>
       </div>

@@ -173,16 +173,16 @@ export const Notifications: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h2 style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)', margin: 0 }}>
+          <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)', margin: 0 }}>
             Notifications
           </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '4px', margin: 0 }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', marginTop: '4px', margin: 0 }}>
             {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           {tab === 'inbox' && unreadCount > 0 && (
-            <button onClick={handleMarkAllRead} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: '12px' }}>
+            <button onClick={handleMarkAllRead} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)' }}>
               <CheckCheck size={14} /> Mark all read
             </button>
           )}
@@ -190,7 +190,7 @@ export const Notifications: React.FC = () => {
               on Preferences fetched the inbox list to update a header count and left the
               preference rows the user was looking at untouched — the one thing Refresh should
               have done there. */}
-          <button onClick={handleRefresh} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: '12px' }}>
+          <button onClick={handleRefresh} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
@@ -203,7 +203,7 @@ export const Notifications: React.FC = () => {
             onClick={() => setTab(t)}
             style={{
               padding: '10px 4px', marginRight: '20px', background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: '13px', fontWeight: 700, color: tab === t ? 'var(--text-primary)' : 'var(--text-muted)',
+              fontSize: 'var(--text-sm)', fontWeight: 700, color: tab === t ? 'var(--text-primary)' : 'var(--text-muted)',
               borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
             }}
           >
@@ -230,7 +230,7 @@ export const Notifications: React.FC = () => {
               );
             })}
             <span style={{ width: '1px', height: '18px', background: 'var(--border-color)', margin: '0 4px' }} />
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
               <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
               Unread only
             </label>
@@ -240,19 +240,19 @@ export const Notifications: React.FC = () => {
             <div className="glass-card" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading notifications…</div>
           ) : error ? (
             <div className="glass-card" style={{ padding: '40px', textAlign: 'center' }}>
-              <div style={{ color: 'var(--danger)', fontSize: '14px' }}>Couldn't load notifications</div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '4px' }}>{error}</div>
-              <button onClick={() => load(0)} className="btn btn-primary" style={{ marginTop: '16px', padding: '8px 16px', fontSize: '12px' }}>
+              <div style={{ color: 'var(--danger)', fontSize: 'var(--text-base)' }}>Couldn't load notifications</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginTop: '4px' }}>{error}</div>
+              <button onClick={() => load(0)} className="btn btn-primary" style={{ marginTop: '16px', padding: '8px 16px', fontSize: 'var(--text-xs)' }}>
                 <RefreshCw size={14} /> Retry
               </button>
             </div>
           ) : notifications.length === 0 ? (
             <div className="glass-card" style={{ padding: '40px', textAlign: 'center' }}>
               <Bell size={32} style={{ color: 'var(--text-muted)', marginBottom: '12px', opacity: 0.5 }} />
-              <div style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-base)' }}>
                 {unreadOnly ? 'Nothing unread' : 'No notifications yet'}
               </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '4px' }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginTop: '4px' }}>
                 Assignment updates and system alerts will appear here.
               </div>
             </div>
@@ -279,12 +279,12 @@ export const Notifications: React.FC = () => {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: '14px', fontWeight: !n.isRead ? 700 : 500, color: !n.isRead ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                            <span style={{ fontSize: 'var(--text-base)', fontWeight: !n.isRead ? 700 : 500, color: !n.isRead ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
                               {n.title}
                             </span>
                             {(n.priority === 'CRITICAL' || n.priority === 'HIGH') && (
                               <span style={{
-                                fontSize: '9.5px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px',
+                                fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 6px', borderRadius: '4px',
                                 color: n.priority === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)',
                                 background: n.priority === 'CRITICAL' ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
                               }}>
@@ -295,17 +295,17 @@ export const Notifications: React.FC = () => {
                           {!n.isRead && (
                             <button
                               onClick={(e) => { e.stopPropagation(); void handleOpen({ ...n, link: null }); }}
-                              className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', flexShrink: 0 }}
+                              className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: 'var(--text-2xs)', flexShrink: 0 }}
                               title="Mark as read"
                             >
                               <CheckCheck size={12} /> Read
                             </button>
                           )}
                         </div>
-                        <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: '18px' }}>
+                        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginTop: '4px', lineHeight: '18px' }}>
                           {n.message}
                         </div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px', fontWeight: 500 }}>
+                        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '8px', fontWeight: 500 }}>
                           {formatTime(n.createdAt)}
                         </div>
                       </div>
@@ -319,7 +319,7 @@ export const Notifications: React.FC = () => {
                   onClick={() => load(offset + PAGE_SIZE)}
                   disabled={loadingMore}
                   className="btn btn-secondary"
-                  style={{ alignSelf: 'center', padding: '9px 20px', fontSize: '12.5px' }}
+                  style={{ alignSelf: 'center', padding: '9px 20px', fontSize: 'var(--text-xs)' }}
                 >
                   {loadingMore ? 'Loading…' : `Load more (${total - notifications.length} more)`}
                 </button>
@@ -338,7 +338,7 @@ export const Notifications: React.FC = () => {
 
 const chipStyle = (active: boolean): React.CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', gap: '5px',
-  padding: '6px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+  padding: '6px 12px', borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
   border: `1px solid ${active ? 'transparent' : 'var(--border-color)'}`,
   background: active ? 'var(--accent)' : 'transparent',
   color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -394,13 +394,13 @@ const PreferencesPanel: React.FC = () => {
     <div className="glass-card" style={{ overflow: 'hidden' }}>
       {confirmDialog}
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-        <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0 }}>
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: 0 }}>
           Choose how each kind of update reaches you. Nothing selected here yet still means everything is on —
           turning a switch off only takes effect from this point on.
         </p>
       </div>
       <div style={{ overflowX: 'auto' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '10px 20px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '10px 20px', fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
         <span>Category</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><MonitorSmartphone size={12} /> In-app</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><Smartphone size={12} /> Push</span>
@@ -410,7 +410,7 @@ const PreferencesPanel: React.FC = () => {
         const meta = metaFor(p.category);
         return (
           <div key={p.category} style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border-hair)' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', fontWeight: 600 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
               <meta.icon size={15} style={{ color: meta.tone }} /> {meta.label}
             </span>
             {(['inApp', 'push', 'email'] as const).map((key) => (

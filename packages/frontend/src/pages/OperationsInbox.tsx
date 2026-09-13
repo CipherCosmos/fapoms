@@ -121,7 +121,7 @@ export const ReasonPresetSelect: React.FC<{ value: string; onChange: (v: string)
     aria-label="Reason preset"
     value={(ASSIGNMENT_REASON_PRESETS as readonly string[]).includes(value) ? value : REASON_OTHER}
     onChange={(e) => onChange(e.target.value === REASON_OTHER ? '' : e.target.value)}
-    style={{ padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}
+    style={{ padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-xs)' }}
   >
     {ASSIGNMENT_REASON_PRESETS.map((r) => <option key={r} value={r}>{r}</option>)}
     <option value={REASON_OTHER}>Other…</option>
@@ -355,27 +355,27 @@ export const OperationsInbox: React.FC = () => {
    */
   const bookingPanel = (item: InboxItem) => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-      <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)' }}>
         {bookLoadingDate
           ? 'Finding the earliest date that works…'
           : <>Book <b>{item.assayerName || 'the assayer'}</b> for <b>{formatDateOnly(bookDate)}</b>?</>}
       </div>
       {bookNote && !bookLoadingDate && (
-        <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>{bookNote}</div>
+        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-secondary)' }}>{bookNote}</div>
       )}
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
         <button onClick={() => confirmBooking(item)} disabled={busyId === item.id || bookLoadingDate}
-          className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+          className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
           {busyId === item.id ? 'Booking…' : 'Confirm'}
         </button>
         {/* Changing anything hands the operator the full scheduling page, with this
             assignment already chosen — the old behaviour, kept as the escape hatch
             rather than the default. */}
         <button onClick={() => navigate(`/scheduling?assignmentId=${item.id}`)}
-          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
           Change date
         </button>
-        <button onClick={() => { setBookFor(null); openBookingIdRef.current = null; }} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+        <button onClick={() => { setBookFor(null); openBookingIdRef.current = null; }} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
           Cancel
         </button>
       </div>
@@ -385,7 +385,7 @@ export const OperationsInbox: React.FC = () => {
   const lane = (title: string, icon: React.ReactNode, count: number, tone: string, children: React.ReactNode) =>
     count === 0 ? null : (
       <section style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: tone, margin: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+        <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', fontWeight: 800, color: tone, margin: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
           {icon} {title} <span style={{ background: `${tone}20`, padding: '1px 9px', borderRadius: '10px' }}>{count}</span>
         </h2>
         {children}
@@ -396,12 +396,12 @@ export const OperationsInbox: React.FC = () => {
     <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
+          <div style={{ fontSize: 'var(--text-base)', fontWeight: 800, color: 'var(--text-primary)' }}>
             {item.branchName || item.assignmentNumber}
             {item.branchCity && <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}> · {item.branchCity}</span>}
             {chip}
           </div>
-          <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <span>{item.assignmentNumber}</span>
             {item.projectName && <span>{item.projectName}</span>}
             <span>offered {age(item.ageHours)}</span>
@@ -411,7 +411,7 @@ export const OperationsInbox: React.FC = () => {
               </span>
             )}
           </div>
-          <div style={{ fontSize: '12.5px', color: 'var(--text-primary)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <b>{item.assayerName || 'Assayer'}</b>
             {item.assayerPhone && (
               <a href={`tel:${item.assayerPhone}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 700 }}>
@@ -423,7 +423,7 @@ export const OperationsInbox: React.FC = () => {
             {item.feeFlagged && item.clientBaseFee != null && item.proposedFee != null && (
               <span
                 title={`This fee is ${(item.proposedFee / item.clientBaseFee).toFixed(1)}× the client's reference rate of ${inr(item.clientBaseFee)}. Check the assayer's contracted rate before offering.`}
-                style={{ fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', cursor: 'help' }}
+                style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', cursor: 'help' }}
               >
                 ⚠ {(item.proposedFee / item.clientBaseFee).toFixed(1)}× CLIENT RATE
               </span>
@@ -438,7 +438,7 @@ export const OperationsInbox: React.FC = () => {
   const miniInput = (placeholder: string, value: string, onChange: (v: string) => void, type = 'number') => (
     <input
       autoFocus type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-      style={{ width: type === 'number' ? '110px' : '220px', padding: '5px 9px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}
+      style={{ width: type === 'number' ? '110px' : '220px', padding: '5px 9px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-xs)' }}
     />
   );
 
@@ -458,7 +458,7 @@ export const OperationsInbox: React.FC = () => {
         subtitle="Every assignment waiting on a desk decision. Phone-channel assayers appear as call tasks — record the call's outcome and the system does the rest. An empty inbox is a healthy operation."
         actions={<>
           {data0.waitingOnApp > 0 && (
-            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               {data0.waitingOnApp} offer{data0.waitingOnApp > 1 ? 's' : ''} awaiting in-app response
             </span>
           )}
@@ -481,8 +481,8 @@ export const OperationsInbox: React.FC = () => {
       ) : totalActionable === 0 ? (
         <div className="glass-card" style={{ padding: '48px', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <InboxIcon size={34} style={{ opacity: 0.5, marginBottom: 10 }} />
-          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>Inbox zero — the operation is healthy.</div>
-          <div style={{ fontSize: '12.5px', marginTop: 4 }}>New calls, declines and field issues will appear here the moment they need you.</div>
+          <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>Inbox zero — the operation is healthy.</div>
+          <div style={{ fontSize: 'var(--text-xs)', marginTop: 4 }}>New calls, declines and field issues will appear here the moment they need you.</div>
         </div>
       ) : (
         <>
@@ -496,7 +496,7 @@ export const OperationsInbox: React.FC = () => {
                   key={item.id}
                   item={item}
                   chip={
-                    <span style={{ marginLeft: 8, fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: item.channel === 'PHONE' ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)', color: item.channel === 'PHONE' ? 'var(--warning)' : 'var(--text-muted)' }}>
+                    <span style={{ marginLeft: 8, fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: item.channel === 'PHONE' ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)', color: item.channel === 'PHONE' ? 'var(--warning)' : 'var(--text-muted)' }}>
                       {item.channel === 'PHONE' ? 'PHONE-ONLY' : 'APP · GONE QUIET'}
                     </span>
                   }
@@ -506,19 +506,19 @@ export const OperationsInbox: React.FC = () => {
                       {form === 'agree' ? (
                         <>
                           {miniInput('Agreed ₹', feeInput, setFeeInput)}
-                          <button onClick={() => agree(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
+                          <button onClick={() => agree(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--success)', borderColor: 'var(--success)' }}>
                             {busy ? 'Saving…' : 'Confirm & assign'}
                           </button>
-                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11.5px' }}><X size={12} /></button>
+                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}><X size={12} /></button>
                         </>
                       ) : form === 'decline' ? (
                         <>
                           <ReasonPresetSelect value={reasonInput} onChange={setReasonInput} />
                           {miniInput('Reason…', reasonInput, setReasonInput, 'text')}
-                          <button onClick={() => decline(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--danger)', borderColor: 'var(--danger)' }}>
+                          <button onClick={() => decline(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--danger)', borderColor: 'var(--danger)' }}>
                             {busy ? 'Saving…' : 'Confirm decline'}
                           </button>
-                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11.5px' }}><X size={12} /></button>
+                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}><X size={12} /></button>
                         </>
                       ) : (
                         <>
@@ -529,15 +529,15 @@ export const OperationsInbox: React.FC = () => {
                             desk either agrees a figure here and assigns, or declines.
                           */}
                           <button onClick={() => { setFeeInput(String(item.proposedFee ?? '')); setOpenForm({ id: item.id, kind: 'agree' }); }} disabled={busy}
-                            className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--success)', borderColor: 'var(--success)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--success)', borderColor: 'var(--success)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <CheckCircle size={12} /> Agreed at ₹…
                           </button>
                           <button onClick={() => { setReasonInput(''); setOpenForm({ id: item.id, kind: 'decline' }); }} disabled={busy}
-                            className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <XCircle size={12} /> Declined
                           </button>
                           <button onClick={() => noAnswer(item)} disabled={busy}
-                            className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <PhoneOff size={12} /> {busy ? '…' : 'No answer'}
                           </button>
                         </>
@@ -545,7 +545,7 @@ export const OperationsInbox: React.FC = () => {
                     </div>
                     {suggestNext && !form && (
                       <button onClick={() => setReassignFor(item)} className="btn btn-secondary"
-                        style={{ padding: '4px 10px', fontSize: '11px', color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
+                        style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
                         {item.callAttempts}+ unanswered calls — find another assayer
                       </button>
                     )}
@@ -558,14 +558,14 @@ export const OperationsInbox: React.FC = () => {
           {lane('Needs a replacement', <UserX size={14} />, data0.replacements.length, 'var(--danger)', (
             data0.replacements.map((item) => (
               <CardShell key={item.id} item={item}
-                chip={<span style={{ marginLeft: 8, fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                chip={<span style={{ marginLeft: 8, fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                   {item.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' ? 'OFFER EXPIRED' : 'DECLINED'}
                 </span>}>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  <button onClick={() => setReassignFor(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                  <button onClick={() => setReassignFor(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                     Find replacement
                   </button>
-                  <button onClick={() => openPlanningFor(item)} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                  <button onClick={() => openPlanningFor(item)} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                     Open planning
                   </button>
                 </div>
@@ -577,7 +577,7 @@ export const OperationsInbox: React.FC = () => {
             data0.unscheduled.map((item) => (
               <CardShell key={item.id} item={item}>
                 {bookFor?.id !== item.id ? (
-                  <button onClick={() => startBooking(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                  <button onClick={() => startBooking(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                     Put on calendar
                   </button>
                 ) : (
@@ -593,7 +593,7 @@ export const OperationsInbox: React.FC = () => {
               const form = openForm?.id === item.id ? openForm.kind : null;
               return (
                 <CardShell key={item.id} item={item}
-                  chip={<span style={{ marginLeft: 8, fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                  chip={<span style={{ marginLeft: 8, fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                     WAS DUE {item.scheduledDate}
                   </span>}>
                   {bookFor?.id === item.id ? bookingPanel(item) : (
@@ -603,19 +603,19 @@ export const OperationsInbox: React.FC = () => {
                           date-picker; No-show cancels with a captured reason. */}
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <button onClick={() => setReassignFor(item)} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <UserX size={12} /> Reassign
                         </button>
                         <button onClick={() => startBooking(item)} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <CalendarClock size={12} /> Reschedule
                         </button>
                         <button onClick={() => { setReasonInput(''); setOpenForm({ id: item.id, kind: 'noshow' }); }} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <UserX size={12} /> Mark no-show
                         </button>
                         <button onClick={() => navigate(`/assignments?id=${item.id}`)} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                           Open
                         </button>
                       </div>
@@ -624,10 +624,10 @@ export const OperationsInbox: React.FC = () => {
                           <ReasonPresetSelect value={reasonInput} onChange={setReasonInput} />
                           {miniInput("Why? e.g. assayer didn't attend", reasonInput, setReasonInput, 'text')}
                           <button onClick={() => markNoShow(item)} disabled={busy} className="btn btn-primary"
-                            style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--danger)', borderColor: 'var(--danger)' }}>
+                            style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--danger)', borderColor: 'var(--danger)' }}>
                             {busy ? 'Saving…' : 'Confirm no-show'}
                           </button>
-                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11.5px' }}><X size={12} /></button>
+                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}><X size={12} /></button>
                         </div>
                       )}
                     </div>
@@ -641,14 +641,14 @@ export const OperationsInbox: React.FC = () => {
             data0.fieldIssues.map((issue) => (
               <div key={issue.id} className="glass-card" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <div>
-                  <div style={{ fontSize: '13.5px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 800, color: 'var(--text-primary)' }}>
                     {issue.categoryLabel || issue.category || 'Issue'} · {issue.branchName || issue.assignmentId.slice(0, 8)}
                   </div>
-                  <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                  <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
                     {issue.note || 'No detail given.'} — {issue.assayerName || 'Assayer'} · {new Date(issue.reportedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
                   </div>
                 </div>
-                <button onClick={() => navigate(`/assignments?id=${issue.assignmentId}`)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                <button onClick={() => navigate(`/assignments?id=${issue.assignmentId}`)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                   Open assignment
                 </button>
               </div>
@@ -738,8 +738,8 @@ const ReassignDrawer: React.FC<{
         style={{ width: 'min(420px, 100%)', height: '100%', overflowY: 'auto', background: 'var(--bg-primary)', borderLeft: '1px solid var(--border-color)', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
           <div>
-            <div id="reassign-drawer-title" style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Find a replacement</div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+            <div id="reassign-drawer-title" style={{ fontSize: 'var(--text-md)', fontWeight: 800, color: 'var(--text-primary)' }}>Find a replacement</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
               {item.branchName}{item.branchCity ? ` · ${item.branchCity}` : ''} — the engine's ranked candidates. One click sends the offer;
               the fee is the full quote (base + travel to this branch), priced when it is sent.
             </div>
@@ -750,7 +750,7 @@ const ReassignDrawer: React.FC<{
         {error && <AlertBanner type="error" message={error} onClose={() => setError(null)} />}
 
         {!item.branchId ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: '12.5px' }}>This item carries no branch reference — open planning instead.</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>This item carries no branch reference — open planning instead.</div>
         ) : loadFailed(recommendations) ? (
           /* "No eligible candidates — open planning to widen the filters" sends an operator who
              is replacing a declined audit to go and loosen filters that were never consulted. */
@@ -760,22 +760,22 @@ const ReassignDrawer: React.FC<{
             <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} /> Ranking candidates…
           </div>
         ) : candidates.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: '12.5px' }}>No eligible candidates — open planning to widen the filters.</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>No eligible candidates — open planning to widen the filters.</div>
         ) : (
           candidates.map((c, i) => (
             <div key={c.id} className="glass-card" style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
                   <span style={{ color: 'var(--text-muted)', fontWeight: 800, marginRight: 6 }}>#{i + 1}</span>
                   {c.displayName}
-                  {c.score != null && <span style={{ marginLeft: 6, fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>{Math.round(c.score)}%</span>}
+                  {c.score != null && <span style={{ marginLeft: 6, fontSize: 'var(--text-3xs)', fontWeight: 800, color: 'var(--success)' }}>{Math.round(c.score)}%</span>}
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
                   {formatRouteDistance(c.distanceKm, c.distanceSource ?? null, { emptyAs: 'distance n/a' })} · base {inr(c.baseFee)} + travel
                 </div>
               </div>
               <button onClick={() => offer(c)} disabled={busyId != null}
-                className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', flexShrink: 0 }}>
+                className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', flexShrink: 0 }}>
                 {busyId === c.id ? 'Offering…' : 'Offer'}
               </button>
             </div>

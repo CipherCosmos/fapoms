@@ -104,7 +104,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
             Deployment Readiness
           </span>
           {/*
@@ -113,7 +113,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
             act on and everything about where the answer was computed. What they need to know is
             that this is the same verdict dispatch will apply — so say that.
           */}
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             the same check dispatch makes
           </span>
         </div>
@@ -125,7 +125,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
             gap: '5px',
             padding: '3px 10px',
             borderRadius: '999px',
-            fontSize: '11.5px',
+            fontSize: 'var(--text-2xs)',
             fontWeight: 700,
             background: verdictTone.bg,
             color: verdictTone.fg,
@@ -157,21 +157,21 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
           background: 'var(--bg-surface-2)',
           padding: '10px 12px',
           borderRadius: '8px',
-          fontSize: '12px',
+          fontSize: 'var(--text-xs)',
         }}
       >
         <div>
-          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>Lifecycle Stage</span>
+          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Lifecycle Stage</span>
           <strong style={{ color: 'var(--text-primary)' }}>{assayerLifecycleLabel(assayer.lifecycleStatus)}</strong>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>Active Banks</span>
+          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Active Banks</span>
           <strong style={{ color: 'var(--text-primary)' }}>
             {plannableEmpanelmentCount} plannable
           </strong>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>Spare Workload</span>
+          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Spare Workload</span>
           <strong style={{ color: 'var(--text-primary)' }}>
             {remainingCapacity !== null ? `${remainingCapacity} slots` : '—'}
           </strong>
@@ -189,11 +189,11 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
             padding: '10px 12px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--danger)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--danger)' }}>
             <ShieldAlert size={14} />
             Blocking Reasons:
           </div>
-          <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: '12px', color: 'var(--text-primary)' }}>
+          <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 'var(--text-xs)', color: 'var(--text-primary)' }}>
             {blockers.map((b, idx) => (
               <li key={idx} style={{ marginBottom: '2px' }}>{b}</li>
             ))}
@@ -212,11 +212,11 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
             padding: '10px 12px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--warning)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)' }}>
             <AlertTriangle size={14} />
             Compliance Attention:
           </div>
-          <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: '12px', color: 'var(--text-primary)' }}>
+          <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 'var(--text-xs)', color: 'var(--text-primary)' }}>
             {warnings.map((w, idx) => (
               <li key={idx} style={{ marginBottom: '2px' }}>{w}</li>
             ))}
@@ -225,7 +225,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
       )}
 
       {!answered && (
-        <div data-testid="readiness-unavailable-note" style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+        <div data-testid="readiness-unavailable-note" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           The readiness check has not answered for this record — the dossier is still loading, or
           this account is not entitled to read it. Nothing here is a statement that they are clear
           to deploy.
@@ -233,7 +233,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
       )}
 
       {isDeployable && warnings.length === 0 && (
-        <div style={{ fontSize: '12px', color: 'var(--success)' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>
           Profile meets all baseline operational and compliance gates for assignment dispatch.
         </div>
       )}

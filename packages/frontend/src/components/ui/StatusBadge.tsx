@@ -176,7 +176,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
           ? '4px 10px'
           : '6px 14px',
         borderRadius: isTag ? 'var(--radius-sm, 6px)' : 'var(--radius-full, 9999px)',
-        fontSize: isTag ? (isSmall ? '11px' : '12px') : isSmall ? '11.5px' : '12.5px',
+        // A tag and a pill are the same size; only their padding and radius differ.
+        fontSize: isSmall ? 'var(--text-2xs)' : 'var(--text-xs)',
         fontWeight: 600,
         lineHeight: 1.2,
         minHeight: isSmall ? '22px' : '28px',

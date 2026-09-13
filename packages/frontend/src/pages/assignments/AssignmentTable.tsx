@@ -189,7 +189,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
               style={{
                 borderBottom: '1px solid var(--border-color)',
                 color: 'var(--text-muted)',
-                fontSize: '11.5px',
+                fontSize: 'var(--text-2xs)',
                 textTransform: 'uppercase',
               }}
             >
@@ -235,7 +235,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                   onClick={() => onSelectAssignment(asn.id)}
                   style={{
                     borderBottom: '1px solid var(--border-color)',
-                    fontSize: '13px',
+                    fontSize: 'var(--text-sm)',
                     cursor: 'pointer',
                     background: selectedAsnId === asn.id ? 'var(--bg-surface-2)' : 'transparent',
                     borderLeft: selectedAsnId === asn.id ? '4px solid var(--accent)' : '4px solid transparent',
@@ -245,7 +245,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                     <div style={{ fontWeight: 700 }}>
                       {asn.projectBranch?.branch?.name || asn.assignmentNumber}
                     </div>
-                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
                       {asn.assignmentNumber} · {asn.project?.name}
                     </span>
                   </td>
@@ -286,12 +286,12 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                         >
                           📍
                           {read.durationLabel && (
-                            <span style={{ marginLeft: '3px', fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            <span style={{ marginLeft: '3px', fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
                               {read.durationLabel}
                             </span>
                           )}
                           {missingDeparture && (
-                            <span style={{ marginLeft: '3px', fontSize: '10px', fontWeight: 700 }}>
+                            <span style={{ marginLeft: '3px', fontSize: 'var(--text-3xs)', fontWeight: 700 }}>
                               no check-out
                             </span>
                           )}
@@ -374,7 +374,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                     onClick={(e) => e.stopPropagation()}
                   >
                     {isAttentionView ? (
-                      <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                         Waiting since {formatRelativeTime(asn.createdAt)}
                       </span>
                     ) : (
@@ -387,7 +387,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                             style={{
                               padding: '3px 9px',
                               minHeight: '32px',
-                              fontSize: '11px',
+                              fontSize: 'var(--text-2xs)',
                               background: 'var(--success)',
                               borderColor: 'var(--success)',
                             }}
@@ -400,7 +400,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                             onClick={() => onQuickAction(asn.id, 'COMPLETED', !!asn.checkedInAt, !!asn.checkedOutAt)}
                             disabled={rowBusy}
                             className="btn btn-primary"
-                            style={{ padding: '3px 9px', minHeight: '32px', fontSize: '11px' }}
+                            style={{ padding: '3px 9px', minHeight: '32px', fontSize: 'var(--text-2xs)' }}
                           >
                             {rowBusy ? '…' : 'Complete'}
                           </button>
@@ -409,7 +409,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                           <button
                             onClick={() => onSelectAssignment(asn.id)}
                             className="btn btn-secondary"
-                            style={{ padding: '3px 9px', minHeight: '32px', fontSize: '11px' }}
+                            style={{ padding: '3px 9px', minHeight: '32px', fontSize: 'var(--text-2xs)' }}
                           >
                             Open
                           </button>
@@ -436,7 +436,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
             borderTop: '1px solid var(--border-color)',
           }}
         >
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             Showing {pageStart}–{pageEnd} of {total}
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -453,7 +453,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
             >
               <ChevronLeft size={14} />
             </button>
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', padding: '0 6px' }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '0 6px' }}>
               Page {page} of {totalPages}
             </span>
             <button

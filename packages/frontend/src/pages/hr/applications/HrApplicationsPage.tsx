@@ -127,7 +127,7 @@ export const HrApplicationsPage: React.FC = () => {
       render: (r) => (
         <div>
           <div style={{ fontWeight: 600 }}>{r.fullName || r.mobile}</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             {r.mobile}{r.email ? ` · ${r.email}` : ''}
           </div>
         </div>

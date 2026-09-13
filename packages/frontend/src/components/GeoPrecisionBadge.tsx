@@ -128,7 +128,7 @@ export const GeoPrecisionBadge: React.FC<{
         display: 'inline-flex',
         alignItems: 'center',
         gap: '4px',
-        fontSize: compact ? '9px' : '9.5px',
+        fontSize: 'var(--text-3xs)',
         fontWeight: 700,
         padding: compact ? '1px 5px' : '2px 7px',
         borderRadius: '8px',

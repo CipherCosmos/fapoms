@@ -18,7 +18,7 @@ export const StyledInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>> 
         border: '1px solid var(--border-color)',
         borderRadius: 'var(--radius-sm)',
         color: 'var(--text-primary)',
-        fontSize: '13px',
+        fontSize: 'var(--text-sm)',
         ...props.style,
       }}
     />
@@ -56,7 +56,7 @@ export const SearchInput: React.FC<{
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        style={compact ? { padding: '7px 10px 7px 30px', fontSize: '12px', width: '100%' } : { width: '100%', padding: '8px 12px 8px 34px' }}
+        style={compact ? { padding: '7px 10px 7px 30px', fontSize: 'var(--text-xs)', width: '100%' } : { width: '100%', padding: '8px 12px 8px 34px' }}
       />
     </div>
   );

@@ -69,7 +69,7 @@ export const card: React.CSSProperties = {
  * reads by, so the size has to make up for it.
  */
 export const label: React.CSSProperties = {
-  fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.06em',
+  fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.06em',
   color: 'var(--text-muted)', fontWeight: 700,
 };
 
@@ -84,7 +84,7 @@ export const Stat: React.FC<{ value: React.ReactNode; caption: string; tone?: st
   value, caption, tone, hint,
 }) => (
   <div style={{ ...card, flex: '1 1 150px', minWidth: 0 }} title={hint}>
-    <div style={{ fontSize: '26px', fontWeight: 700, color: tone ?? 'var(--text-primary)', lineHeight: 1.1 }}>
+    <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: tone ?? 'var(--text-primary)', lineHeight: 1.1 }}>
       {value}
     </div>
     <div style={{ ...label, marginTop: '6px' }}>{caption}</div>
@@ -99,7 +99,7 @@ export const Bar: React.FC<{ pct: number; tone: string }> = ({ pct, tone }) => (
 );
 
 export const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+  <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
     {children}
   </div>
 );
@@ -118,7 +118,7 @@ export const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => 
  */
 export const Lede: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p style={{
-    fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.55,
+    fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55,
     margin: '0 0 14px', maxWidth: '86ch',
   }}>
     {children}
@@ -167,7 +167,7 @@ export const Notice: React.FC<{
         ? { borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border-hair)', padding: '10px 14px' }
         : {}),
       borderLeft: `3px solid ${colour}`,
-      display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px', ...style,
+      display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: 'var(--text-xs)', ...style,
     }}>
       <Icon size={15} style={{ color: colour, flexShrink: 0, marginTop: '1px' }} />
       <div style={{ color: 'var(--text-secondary)', lineHeight: 1.55, minWidth: 0 }}>
@@ -210,7 +210,7 @@ export const Section: React.FC<{
       </div>
       {action}
     </div>
-    {hint && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>{hint}</div>}
+    {hint && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>{hint}</div>}
     {children}
   </div>
 );
@@ -252,7 +252,7 @@ export const LinkButton: React.FC<{
     style={{
       background: 'none', border: 'none', padding: 0,
       cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1,
-      color: LINK_TONES[tone], fontSize: '12px', fontWeight: 600,
+      color: LINK_TONES[tone], fontSize: 'var(--text-xs)', fontWeight: 600,
       display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
       ...style,
     }}
@@ -273,7 +273,7 @@ export const RowActions: React.FC<{ children: React.ReactNode }> = ({ children }
  * of habits had boxes of two different heights next to each other.
  */
 export const fieldInput: React.CSSProperties = {
-  width: '100%', padding: '7px 9px', fontSize: '12.5px',
+  width: '100%', padding: '7px 9px', fontSize: 'var(--text-xs)',
   background: 'var(--bg-surface)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: '7px', fontFamily: 'inherit',
   boxSizing: 'border-box',
@@ -285,7 +285,7 @@ export const Field: React.FC<{
 }> = ({ title, hint, children, wide }) => (
   <div style={{ flex: wide ? '1 1 100%' : '1 1 150px', minWidth: 0 }}>
     <div style={{ ...label, marginBottom: '5px' }}>{title}</div>
-    {hint && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px', lineHeight: 1.5 }}>{hint}</div>}
+    {hint && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '5px', lineHeight: 1.5 }}>{hint}</div>}
     {children}
   </div>
 );
@@ -333,20 +333,20 @@ export const Editor: React.FC<{
     footer={(
       <>
         {note && (
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginRight: 'auto', maxWidth: '52ch', lineHeight: 1.5, textAlign: 'left' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginRight: 'auto', maxWidth: '52ch', lineHeight: 1.5, textAlign: 'left' }}>
             {note}
           </span>
         )}
-        <button type="button" onClick={onCancel} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>
+        <button type="button" onClick={onCancel} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
           Cancel
         </button>
-        <button type="submit" disabled={busy || saveDisabled} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 14px' }}>
+        <button type="submit" disabled={busy || saveDisabled} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
           {busy ? 'Saving…' : saveLabel}
         </button>
       </>
     )}
   >
-    {intro && <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.55 }}>{intro}</div>}
+    {intro && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.55 }}>{intro}</div>}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>{children}</div>
   </Modal>
 );
@@ -412,20 +412,20 @@ export const InviteLinkBox: React.FC<{ link: string; note?: string }> = ({ link,
       marginTop: 10, padding: 12, borderRadius: 8,
       background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
     }}>
-      <p style={{ margin: '0 0 8px', fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+      <p style={{ margin: '0 0 8px', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
         {note ?? 'Send this registration link to the candidate'}
       </p>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <code style={{
-          flex: 1, minWidth: 240, fontFamily: 'var(--font-mono, monospace)', fontSize: 12,
+          flex: 1, minWidth: 240, fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-xs)',
           background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
           borderRadius: 6, padding: '8px 10px', color: 'var(--text-primary)', wordBreak: 'break-all',
         }}>{link}</code>
-        <button type="button" onClick={copy} className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+        <button type="button" onClick={copy} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
           {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy link'}
         </button>
       </div>
-      <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+      <p style={{ margin: '8px 0 0', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
         Anyone holding this link can complete the application, so send it to the candidate only.
         It expires, and resending replaces it.
       </p>
@@ -485,7 +485,7 @@ export const ViewChips = <K extends string>({ options, value, onChange }: {
           onClick={() => onChange(o.key)}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: '6px',
-            padding: '6px 12px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
+            padding: '6px 12px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
             borderRadius: '7px',
             border: `1px solid ${active ? 'var(--accent)' : 'var(--border-color)'}`,
             // Mixed from the theme's own accent rather than written out as the gold one theme
@@ -499,7 +499,7 @@ export const ViewChips = <K extends string>({ options, value, onChange }: {
           {o.label}
           {o.count !== null && o.count !== undefined && (
             <span style={{
-              fontSize: '12px', fontWeight: 700, padding: '1px 7px', borderRadius: '9px',
+              fontSize: 'var(--text-xs)', fontWeight: 700, padding: '1px 7px', borderRadius: '9px',
               background: o.count > 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
               color: o.count > 0 ? 'var(--danger)' : 'var(--text-muted)',
             }}>{o.count}</span>

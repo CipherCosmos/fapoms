@@ -95,7 +95,7 @@ export const Billing: React.FC = () => {
       <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid var(--border-color)', paddingBottom: 8 }}>
         {TABS.map((t) => (
           <button key={t.key} onClick={() => go(t.key)} style={{
-            padding: '8px 14px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+            padding: '8px 14px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-sm)', fontWeight: 600,
             background: tab === t.key ? 'var(--status-pending-bg)' : 'transparent', color: tab === t.key ? 'var(--text-primary)' : 'var(--text-secondary)',
             border: `1px solid ${tab === t.key ? 'var(--accent-primary)' : 'transparent'}`,
           }}>{t.label}</button>
@@ -167,10 +167,10 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
         </button>
       </>
     }>
-      <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
         Every assignment books its payout and client line the moment it completes. Reconcile finds any <strong>completed</strong> assignment that is missing one and books it — the same way, at today's client rate and tax settings. Nothing already booked is touched.
       </div>
-      <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
         Only assignments completed on or after <span style={{ fontWeight: 400 }}>(blank = the whole book)</span>
         <StyledInput type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 200 }} />
       </label>
@@ -181,7 +181,7 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
         it does. The count is what somebody decides on, so the failure states its reason.
       */}
       {loadFailed(preview) && <LoadFailure loads={[{ label: 'the count of assignments waiting to be booked', query: preview }]} />}
-      <div style={{ fontSize: 13, padding: '10px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
+      <div style={{ fontSize: 'var(--text-sm)', padding: '10px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
         {loadFailed(preview)
           ? 'The count above could not be read, so nothing can be booked from here until it can.'
           : preview.isLoading ? 'Counting…' : count === undefined ? 'Could not count.' : count === 0 ? 'Every completed assignment is booked. Nothing to do.' : <>This will book <strong>{count}</strong> completed assignment{count === 1 ? '' : 's'}.</>}

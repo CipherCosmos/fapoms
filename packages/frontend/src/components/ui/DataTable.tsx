@@ -56,7 +56,7 @@ export interface Column<T> {
 
 const DENSITY = {
   comfortable: { cellPad: undefined, headPad: undefined, fontSize: undefined },
-  compact: { cellPad: '9px 10px', headPad: '8px 10px', fontSize: '12.5px' },
+  compact: { cellPad: '9px 10px', headPad: '8px 10px', fontSize: 'var(--text-xs)' },
 } as const;
 
 export const DataTable = <T,>({
@@ -162,7 +162,7 @@ export const DataTable = <T,>({
                     >
                       {c.header}
                       {isSorted && (
-                        <span style={{ fontSize: 10, color: 'var(--accent-primary)' }}>
+                        <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent-primary)' }}>
                           {sortOrder === 'asc' ? '▲' : '▼'}
                         </span>
                       )}
@@ -182,14 +182,14 @@ export const DataTable = <T,>({
             ) : (
               <tr>
                 <td colSpan={colSpan} style={{ textAlign: 'center', padding: '28px' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</span>
                 </td>
               </tr>
             )
           ) : rows.length === 0 ? (
             <tr>
               <td colSpan={colSpan} style={{ textAlign: 'center', padding: '32px' }}>
-                {emptyState ?? <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{emptyMessage}</span>}
+                {emptyState ?? <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>{emptyMessage}</span>}
               </td>
             </tr>
           ) : (

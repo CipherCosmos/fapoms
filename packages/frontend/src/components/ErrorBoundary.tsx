@@ -88,7 +88,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <AlertTriangle size={20} style={{ color: 'var(--danger)', flexShrink: 0 }} />
-          <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0 }}>
+          <h2 style={{ fontSize: 'var(--text-md)', fontWeight: 700, margin: 0 }}>
             {this.props.area} could not be displayed
           </h2>
         </div>
@@ -97,7 +97,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           server response reads as the sentence that failure already has, and a genuine JavaScript
           crash falls back to plain wording rather than showing a stack to a bank auditor.
         */}
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
           {userMessage(error)} Nothing you were working on has been sent to the server. The rest of
           the application is still working — you can move to another screen, or try this one again.
         </p>
@@ -106,7 +106,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
             type="button"
             onClick={this.reset}
             className="btn btn-primary"
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', fontSize: '13px', fontWeight: 700 }}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', fontSize: 'var(--text-sm)', fontWeight: 700 }}
           >
             <RefreshCw size={14} /> Try again
           </button>
@@ -114,7 +114,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
             type="button"
             onClick={() => window.location.reload()}
             className="btn btn-secondary"
-            style={{ padding: '8px 16px', fontSize: '13px', fontWeight: 600 }}
+            style={{ padding: '8px 16px', fontSize: 'var(--text-sm)', fontWeight: 600 }}
           >
             Reload the page
           </button>

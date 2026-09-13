@@ -84,7 +84,7 @@ export const LifecycleModal: React.FC<{
         </button>
       </>
     }>
-      <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>
         {clientName} — Current: <b style={{ color: colorMap[currentStatus] }}>{clientLifecycleLabel(currentStatus)}</b>
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

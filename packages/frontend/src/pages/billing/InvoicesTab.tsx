@@ -41,7 +41,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
           <Empty>Nothing to invoice. Completed assignments appear here automatically.</Empty>
         ) : (<>
           {invoiceable.data?.truncated && (
-            <div style={{ fontSize: 11.5, color: 'var(--warning)', marginBottom: 8, lineHeight: 1.45 }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', marginBottom: 8, lineHeight: 1.45 }}>
               Showing the first {invoiceable.data.total} un-invoiced lines — there are more. Invoice a client to clear its
               share, or open that client from the Overview to see all of theirs.
             </div>
@@ -53,14 +53,14 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
                 <div key={c.clientId} style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                     <div>
-                      <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 13 }}>{c.clientName}</div>
-                      <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                      <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}>{c.clientName}</div>
+                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                         {c.count} assignment{c.count === 1 ? '' : 's'} · {money(c.total)}
                         {held.length > 0 && <> · <HoldPill reason={held.map((l) => l.holdReason).filter(Boolean).join('; ')} /> {held.length}</>}
                       </div>
                     </div>
                     {canAct && (
-                      <button className="btn btn-primary" disabled={c.count === 0} onClick={() => setCreating(c)} style={{ display: 'inline-flex', gap: 5, alignItems: 'center', padding: '6px 10px', fontSize: 12 }}>
+                      <button className="btn btn-primary" disabled={c.count === 0} onClick={() => setCreating(c)} style={{ display: 'inline-flex', gap: 5, alignItems: 'center', padding: '6px 10px', fontSize: 'var(--text-xs)' }}>
                         <Plus size={13} /> Invoice
                       </button>
                     )}
@@ -78,7 +78,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {(['ALL', InvoiceStatus.DRAFT, InvoiceStatus.ISSUED, InvoiceStatus.PAID, InvoiceStatus.CANCELLED] as InvoiceFilter[]).map((f) => (
               <button key={f} onClick={() => { onFilter(f); setPage(1); }} style={{
-                padding: '4px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                padding: '4px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
                 background: filter === f ? 'var(--status-pending-bg)' : 'transparent', color: filter === f ? 'var(--text-primary)' : 'var(--text-secondary)',
                 border: `1px solid ${filter === f ? 'var(--accent-primary)' : 'var(--border-color)'}`,
               }}>{f === 'ALL' ? 'All' : invoiceStatusLabel(f)}</button>

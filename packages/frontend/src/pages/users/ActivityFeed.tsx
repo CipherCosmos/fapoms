@@ -51,7 +51,7 @@ const fmtWhen = (d: string) =>
   new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 const label: React.CSSProperties = {
-  fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
+  fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 
@@ -74,13 +74,13 @@ export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
    * ordinary, not exceptional. Checked first, before both the loading and the empty branches.
    */
   if (loadFailed(activity)) return <LoadFailure loads={[{ label: "this person's activity", query: activity }]} />;
-  if (isLoading) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading…</div>;
-  if (events.length === 0) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Nothing recorded for this person yet. Their sign-ins and the changes they make will be listed here.</div>;
+  if (isLoading) return <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '8px 0' }}>Loading…</div>;
+  if (events.length === 0) return <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '8px 0' }}>Nothing recorded for this person yet. Their sign-ins and the changes they make will be listed here.</div>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '220px', overflowY: 'auto' }}>
       {events.map((e: AuditEvent) => (
-        <div key={e.id} style={{ display: 'flex', gap: '8px', padding: '6px 0', borderBottom: '1px solid var(--border-hair)', fontSize: '11.5px' }}>
+        <div key={e.id} style={{ display: 'flex', gap: '8px', padding: '6px 0', borderBottom: '1px solid var(--border-hair)', fontSize: 'var(--text-2xs)' }}>
           <span style={{ color: CATEGORY_TONE[e.category] ?? 'var(--text-muted)', flexShrink: 0, marginTop: '1px' }}>
             {EVENT_ICON[e.eventType] ?? <Activity size={13} />}
           </span>
@@ -107,12 +107,12 @@ export const ActivityFeed: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>Every recorded change across the system, most recent first.</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Every recorded change across the system, most recent first.</span>
         <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
           {['ALL', 'USER', 'DATA_ACCESS', 'OPERATIONAL', 'WORKFLOW'].map((c) => (
             <button key={c} onClick={() => setCategory(c)}
               style={{
-                padding: '5px 11px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
+                padding: '5px 11px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
                 border: `1px solid ${category === c ? 'transparent' : 'var(--border-color)'}`,
                 background: category === c ? 'var(--accent)' : 'transparent',
                 color: category === c ? 'var(--on-accent)' : 'var(--text-secondary)',
@@ -134,7 +134,7 @@ export const ActivityFeed: React.FC = () => {
         ) : events.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
             <ShieldAlert size={28} style={{ opacity: 0.35 }} />
-            <div style={{ fontSize: '13px', marginTop: '8px' }}>Nothing has been recorded in this category yet. Pick another category to see other activity.</div>
+            <div style={{ fontSize: 'var(--text-sm)', marginTop: '8px' }}>Nothing has been recorded in this category yet. Pick another category to see other activity.</div>
           </div>
         ) : (
           <div>
@@ -144,7 +144,7 @@ export const ActivityFeed: React.FC = () => {
                   {EVENT_ICON[e.eventType] ?? (e.entityType === 'USER' ? <UserIcon size={14} /> : <FileText size={14} />)}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '13px' }}>
+                  <div style={{ fontSize: 'var(--text-sm)' }}>
                     {e.remarks || `${activityEventLabel(e.eventType)} — ${e.entityType.toLowerCase()}`}
                     {/* The audit trail spans every entity, so the two ends of a change can be a
                         branch status, an assignment status or something with no map at all.
@@ -162,7 +162,7 @@ export const ActivityFeed: React.FC = () => {
                     )}
                   </div>
                 </div>
-                <span style={{ fontSize: '10px', fontWeight: 700, color: CATEGORY_TONE[e.category] ?? 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, color: CATEGORY_TONE[e.category] ?? 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                   {e.category === 'DATA_ACCESS' ? 'DATA ACCESS' : e.category}
                 </span>
               </div>

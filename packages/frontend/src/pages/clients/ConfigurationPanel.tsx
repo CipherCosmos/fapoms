@@ -59,12 +59,12 @@ const WEIGHT_FIELDS: { key: string; label: string; default: number; help: string
 const WEIGHT_KEYS = WEIGHT_FIELDS.map((w) => w.key);
 
 const inputStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' };
-const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' };
-const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
+const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 'var(--text-sm)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
 
 /** One plain sentence under a field: what it does, its range, and what empty means. */
 const Hint: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <span style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.35 }}>{children}</span>
+  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.35 }}>{children}</span>
 );
 
 /**
@@ -238,7 +238,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
     return <LoadFailure loads={[{ label: "this client's configuration", query: clientQuery }]} />;
   }
   if (clientQuery.isPending || !client) {
-    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>;
   }
 
   // Shown on the collapsed disclosure so an override in force is never invisible.
@@ -298,7 +298,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
                   key={d.value}
                   type="button"
                   onClick={() => setWorkingDays((wd) => on ? wd.filter((x) => x !== d.value) : [...wd, d.value].sort())}
-                  style={{ padding: '6px 10px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: on ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)', background: on ? 'var(--status-pending-bg)' : 'var(--bg-primary)', color: on ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer' }}
+                  style={{ padding: '6px 10px', fontSize: 'var(--text-xs)', borderRadius: 'var(--radius-sm)', border: on ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)', background: on ? 'var(--status-pending-bg)' : 'var(--bg-primary)', color: on ? 'var(--accent-primary)' : 'var(--text-secondary)', cursor: 'pointer' }}
                 >
                   {d.label}
                 </button>
@@ -365,7 +365,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
             type="button"
             onClick={() => setShowWeights((v) => !v)}
             aria-expanded={showWeights}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 'var(--text-xs)', fontWeight: 600 }}
           >
             {showWeights ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             Advanced — ranking weights
@@ -375,7 +375,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
           </button>
           {showWeights && (
             <div style={{ marginTop: 10 }}>
-              <p style={{ margin: '0 0 10px 0', fontSize: 12, color: 'var(--text-muted)' }}>
+              <p style={{ margin: '0 0 10px 0', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                 These change how candidates are ranked for this client only. Leave a box empty to keep the
                 platform default shown beside it — an empty box is not a zero. Each value is a share
                 between 0 and 1; raising one makes that factor count for more than the others.
@@ -426,7 +426,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
           * to the heading shown below it, so a file using the standard headings imports without
           * anything typed here — which the importer used to refuse until all ten were filled.
           */}
-        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
           Leave these blank unless this client's branch file uses different column headings.
           Each field already reads the heading shown in its box; fill one in only to override it.
         </p>

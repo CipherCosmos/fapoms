@@ -65,14 +65,14 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
     );
   }
   if (isLoading || !data) {
-    return <div style={wrap}><span style={title}><Wallet size={11} /> MONEY</span><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading…</span></div>;
+    return <div style={wrap}><span style={title}><Wallet size={11} /> MONEY</span><span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Loading…</span></div>;
   }
 
   if (!data.booked) {
     return (
       <div style={wrap}>
         <span style={title}><Wallet size={11} /> MONEY</span>
-        <span style={{ fontSize: 11.5, color: 'var(--warning)' }}>
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)' }}>
           {data.fee ? 'Completed but not booked yet — Billing → Reconcile will book it.' : 'Completed with no fee on the assignment — nothing to book.'}
         </span>
       </div>
@@ -85,7 +85,7 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
     <div style={wrap}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={title}><Wallet size={11} /> MONEY</span>
-        <Link to="/billing" style={{ fontSize: 10.5, color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Billing →</Link>
+        <Link to="/billing" style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Billing →</Link>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr' : '1fr 1fr', gap: 8 }}>
         {p && (
@@ -100,12 +100,12 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
                 the other box. While it is invited/submitted, approving happens on the invoice,
                 not on this payout. */}
             {assayerInvoice && (
-              <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
                 {assayerInvoice.invoiceNumber} <AssayerInvoiceStatusPill status={assayerInvoice.status} />
               </div>
             )}
             {data.reimbursements.length > 0 && (
-              <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 4 }}>
+              <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 4 }}>
                 + {data.reimbursements.length} expense reimbursement{data.reimbursements.length === 1 ? '' : 's'} ({money(data.reimbursements.reduce((s, r) => s + Number(r.totalAmount), 0))})
               </div>
             )}
@@ -129,7 +129,7 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
             <Row k="TDS by client" v={`−${money(e.tdsAmount)}`} />
             <Row k="Total" v={money(e.totalAmount)} strong />
             {data.invoice && (
-              <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
                 {data.invoice.invoiceNumber} <InvoiceStatusPill status={data.invoice.status} /> due {fmtDate(data.invoice.dueDate)}
               </div>
             )}
@@ -211,24 +211,24 @@ const ClientLineModal: React.FC<{ assignmentId: string; entry: any; onClose: () 
 
   return (
     <Modal open onClose={onClose} title={<><SlidersHorizontal size={16} /> Client line · {entry.entryNumber}</>} width="480px" footer={<button type="button" onClick={onClose} className="btn btn-secondary">Close</button>}>
-      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>Both edits apply only while the line is unbilled. An invoiced line is a record of what was billed — cancel the invoice to change it.</div>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Both edits apply only while the line is unbilled. An invoiced line is a record of what was billed — cancel the invoice to change it.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
-        <div style={{ fontSize: 12, fontWeight: 700 }}>Adjustment (₹, negative to reduce)</div>
+        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700 }}>Adjustment (₹, negative to reduce)</div>
         <input type="number" step="0.01" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} style={{ ...inputStyle, width: '100%' }} placeholder="0" />
         {/* Live preview, computed the same way the server will — so a stray extra digit is
             visible as "New total ₹50,300.00" before the click, not only after it. */}
         {!amountIsNumber ? (
-          <div style={{ fontSize: 11, color: 'var(--danger)' }}>Enter a number.</div>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)' }}>Enter a number.</div>
         ) : belowFloor ? (
-          <div style={{ fontSize: 11, color: 'var(--danger)' }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)' }}>
             This credit exceeds the line. The most this line can be reduced by is {money(preTaxBase)} (to zero).
           </div>
         ) : totalChanged ? (
-          <div style={{ fontSize: 11, color: 'var(--warning)' }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)' }}>
             New total for this line: <strong>{money(previewTotal)}</strong> (currently {money(entry.totalAmount)})
           </div>
         ) : (
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No change to the current total of {money(entry.totalAmount)}.</div>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>No change to the current total of {money(entry.totalAmount)}.</div>
         )}
         <Select
           value={adjustmentPreset}
@@ -246,9 +246,9 @@ const ClientLineModal: React.FC<{ assignmentId: string; entry: any; onClose: () 
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button onClick={saveAdjustment} disabled={busy || !amountIsNumber || belowFloor} className="btn btn-primary">Save adjustment</button></div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>{entry.onHold ? <><PlayCircle size={13} /> Release hold</> : <><PauseCircle size={13} /> Put on hold</>}</div>
+        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>{entry.onHold ? <><PlayCircle size={13} /> Release hold</> : <><PauseCircle size={13} /> Put on hold</>}</div>
         {entry.onHold ? (
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Held for: <em>{entry.holdReason}</em>. Releasing lets it be invoiced.</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Held for: <em>{entry.holdReason}</em>. Releasing lets it be invoiced.</div>
         ) : (
           <>
             <Select
@@ -273,13 +273,13 @@ const ClientLineModal: React.FC<{ assignmentId: string; entry: any; onClose: () 
 };
 
 const Row: React.FC<{ k: string; v: string; strong?: boolean }> = ({ k, v, strong }) => (
-  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, padding: '2px 0' }}>
+  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 'var(--text-2xs)', padding: '2px 0' }}>
     <span style={{ color: 'var(--text-muted)' }}>{k}</span>
     <span style={{ fontWeight: strong ? 700 : 600, color: strong ? 'var(--text-primary)' : 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{v}</span>
   </div>
 );
 
 const wrap: React.CSSProperties = { padding: '10px 16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 6 };
-const title: React.CSSProperties = { fontSize: 10, color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.3px', display: 'inline-flex', alignItems: 'center', gap: 4 };
+const title: React.CSSProperties = { fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.3px', display: 'inline-flex', alignItems: 'center', gap: 4 };
 const box: React.CSSProperties = { background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair, var(--border-color))', borderRadius: 'var(--radius-sm)', padding: '7px 9px' };
-const boxHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 };
+const boxHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 };

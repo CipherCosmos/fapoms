@@ -81,10 +81,10 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Building size={16} style={{ color: 'var(--accent)' }} />
           <div>
-            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
               CURRENT BANK PROFILE
             </span>
-            <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <span style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               Live profile destination for future payables
             </span>
           </div>
@@ -94,7 +94,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
             type="button"
             onClick={onEditBank}
             className="btn btn-secondary"
-            style={{ fontSize: '11px', padding: '4px 8px' }}
+            style={{ fontSize: 'var(--text-2xs)', padding: '4px 8px' }}
           >
             Edit Profile Bank
           </button>
@@ -110,15 +110,15 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
           background: 'var(--bg-surface-2)',
           padding: '12px',
           borderRadius: '8px',
-          fontSize: '12.5px',
+          fontSize: 'var(--text-xs)',
         }}
       >
         <div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block' }}>Bank Name</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Bank Name</span>
           <strong style={{ color: 'var(--text-primary)' }}>{assayer.bankName || 'Not recorded'}</strong>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block' }}>Account Number</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Account Number</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
               {revealedAccount || maskedIdentifier(assayer.bankAccountNumber)}
@@ -145,7 +145,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
           </div>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block' }}>IFSC Code</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>IFSC Code</span>
           <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
             {assayer.ifscCode || 'Not recorded'}
           </strong>
@@ -153,13 +153,13 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
       </div>
 
       {error && (
-        <div style={{ fontSize: '11.5px', color: 'var(--danger)', fontWeight: 600 }}>{error}</div>
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 600 }}>{error}</div>
       )}
 
       {isDeparted ? (
         <div
           data-testid="departed-payout-notice"
-          style={{ fontSize: '12px', color: 'var(--text-muted)' }}
+          style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}
         >
           No active payout blockers: assayer is departed ({assayer.lifecycleStatus}). Profile is inactive and not queued for active payout.
         </div>
@@ -173,18 +173,18 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
             border: '1px solid var(--warning)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--warning)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)' }}>
             <AlertTriangle size={14} />
             Payout Readiness Blocked:
           </div>
-          <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '12px', color: 'var(--text-primary)' }}>
+          <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: 'var(--text-xs)', color: 'var(--text-primary)' }}>
             {blockers.map((b, i) => (
               <li key={i} style={{ marginBottom: '2px' }}>{b}</li>
             ))}
           </ul>
         </div>
       ) : (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--success)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', color: 'var(--success)' }}>
           <CheckCircle2 size={13} />
           <span>Profile bank details and PAN are complete for new payout creation.</span>
         </div>

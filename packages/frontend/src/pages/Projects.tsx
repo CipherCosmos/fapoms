@@ -785,7 +785,7 @@ export const Projects: React.FC = () => {
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Name *</label>
+            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Project Name *</label>
             <input type="text" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. SBI Quarter 3 Audit" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
@@ -800,7 +800,7 @@ export const Projects: React.FC = () => {
           */}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Client *</label>
+            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Client *</label>
             <Select
               value={form.clientId}
               onChange={(v) => setForm(f => ({ ...f, clientId: v }))}
@@ -811,7 +811,7 @@ export const Projects: React.FC = () => {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Priority *</label>
+            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Priority *</label>
             <Select
               value={form.priority}
               onChange={(v) => setForm(f => ({ ...f, priority: v as Priority }))}
@@ -822,27 +822,27 @@ export const Projects: React.FC = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Start Date</label>
+              <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Start Date</label>
               <input type="date" value={form.startDate} onChange={(e) => setForm(f => ({ ...f, startDate: e.target.value }))} style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>End Date</label>
+              <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>End Date</label>
               <input type="date" value={form.endDate} onChange={(e) => setForm(f => ({ ...f, endDate: e.target.value }))} style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Budget (INR)</label>
+            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Budget (INR)</label>
             <input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value === '' ? '' : Number(e.target.value) }))} placeholder="e.g. 150000" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Description</label>
+            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Description</label>
             <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Project description..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scope</label>
+            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Scope</label>
             <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
           </div>
 
@@ -856,7 +856,7 @@ export const Projects: React.FC = () => {
             */}
           <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
             <button type="button" onClick={() => setShowAdvancedMatching(v => !v)} aria-expanded={showAdvancedMatching}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 600 }}>
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 'var(--text-xs)', fontWeight: 600 }}>
               <ChevronDown size={14} style={{ transform: showAdvancedMatching ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }} />
               Advanced matching rules
               <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
@@ -869,7 +869,7 @@ export const Projects: React.FC = () => {
 
             {showAdvancedMatching && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
-                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0 }}>
+                <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: 0 }}>
                   Only assayers who have everything selected here will be offered branches on this project. Leave both empty to consider the whole roster.
                 </p>
 
@@ -880,9 +880,9 @@ export const Projects: React.FC = () => {
                   const selected = csvValues(form[key]);
                   return (
                     <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{title}</label>
+                      <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{title}</label>
                       {options === null ? (
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading…</span>
+                        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Loading…</span>
                       ) : options.length > 0 ? (
                         /* Picked, never typed — a misspelling here matches nobody and there is
                            nothing on screen afterwards to say why the shortlist came back empty.
@@ -936,7 +936,7 @@ export const Projects: React.FC = () => {
               const a = document.createElement('a'); a.href = url; a.download = `projects_export_${new Date().toISOString().split('T')[0]}.csv`; a.click();
               URL.revokeObjectURL(url);
             } catch { setMessage({ type: 'error', text: 'Export failed' }); }
-          }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+          }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
             <FileSpreadsheet size={15} /> Export
           </button>
           {canManage && (
@@ -944,7 +944,7 @@ export const Projects: React.FC = () => {
               onClick={() => { setMessage(null); setQuickForm({ name: '', clientId: clients[0]?.id || '', priority: Priority.MEDIUM }); setShowQuickModal(true); }}
               className="btn btn-secondary"
               title="Create a project with just a name and client — add the rest later"
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
               <Zap size={15} /> Quick create
             </button>
           )}
@@ -973,7 +973,7 @@ export const Projects: React.FC = () => {
             const s = STAGE_TONE[stage];
             return (
               <React.Fragment key={stage}>
-                {i > 0 && <div style={{ alignSelf: 'center', color: 'var(--text-muted)', opacity: 0.4, fontSize: '11px' }}>›</div>}
+                {i > 0 && <div style={{ alignSelf: 'center', color: 'var(--text-muted)', opacity: 0.4, fontSize: 'var(--text-2xs)' }}>›</div>}
                 <button
                   onClick={() => setStatusFilter(on ? 'ALL' : stage)}
                   title={`${n} project(s) in ${stage}`}
@@ -984,8 +984,8 @@ export const Projects: React.FC = () => {
                     border: `1px solid ${on ? s : 'transparent'}`,
                     opacity: n === 0 && !on ? 0.45 : 1,
                   }}>
-                  <div style={{ fontSize: '19px', fontWeight: 700, color: n > 0 ? s : 'var(--text-muted)', lineHeight: 1 }}>{n}</div>
-                  <div style={{ fontSize: '9.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: n > 0 ? s : 'var(--text-muted)', lineHeight: 1 }}>{n}</div>
+                  <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginTop: '4px' }}>
                     {projectStatusLabel(stage)}
                   </div>
                 </button>
@@ -1002,7 +1002,7 @@ export const Projects: React.FC = () => {
               return (
                 <button key={stage} onClick={() => setStatusFilter(on ? 'ALL' : stage)}
                   style={{
-                    padding: '4px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                    padding: '4px 10px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
                     background: on ? `${STAGE_TONE[stage]}22` : 'transparent',
                     border: `1px solid ${on ? STAGE_TONE[stage] : 'var(--border-color)'}`,
                     color: STAGE_TONE[stage],
@@ -1026,7 +1026,7 @@ export const Projects: React.FC = () => {
              they were the same thing. */
           ...Object.values(ProjectStatus).map(status => ({ value: status, label: projectStatusLabel(status) })),
         ]} />
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{filteredProjects.length} of {projects.length} results</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{filteredProjects.length} of {projects.length} results</span>
       </div>
 
       {/* Main Grid: Table + Detail Panel */}
@@ -1057,7 +1057,7 @@ export const Projects: React.FC = () => {
                 ) : filteredProjects.length === 0 ? (
                   <tr><td colSpan={7} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
                     <FolderKanban size={36} style={{ margin: '0 auto 10px', opacity: 0.3 }} />
-                    <p style={{ fontSize: '14px' }}>{searchTerm || statusFilter !== 'ALL' ? 'No projects match your filters.' : 'No projects yet. Create your first one.'}</p>
+                    <p style={{ fontSize: 'var(--text-base)' }}>{searchTerm || statusFilter !== 'ALL' ? 'No projects match your filters.' : 'No projects yet. Create your first one.'}</p>
                   </td></tr>
                 ) : (
                   filteredProjects.map((p) => (
@@ -1067,19 +1067,19 @@ export const Projects: React.FC = () => {
                         <ChevronRight size={14} style={{ color: selectedId === p.id ? 'var(--accent-primary)' : 'var(--text-muted)', opacity: selectedId === p.id ? 1 : 0.3 }} />
                       </td>
                       <td>
-                        <div style={{ fontWeight: 600, fontSize: '14px' }}>{p.name}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '1px' }}>{p.projectNumber}</div>
+                        <div style={{ fontWeight: 600, fontSize: 'var(--text-base)' }}>{p.name}</div>
+                        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '1px' }}>{p.projectNumber}</div>
                       </td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <Building2 size={13} style={{ color: 'var(--text-muted)' }} />
-                          <span style={{ fontSize: '13px' }}>{p.client?.name || getClientName(p.clientId)}</span>
+                          <span style={{ fontSize: 'var(--text-sm)' }}>{p.client?.name || getClientName(p.clientId)}</span>
                         </div>
                       </td>
                       <td>
                         <span style={{
                           color: p.priority === Priority.CRITICAL ? 'var(--priority-critical)' : p.priority === Priority.HIGH ? 'var(--priority-high)' : p.priority === Priority.MEDIUM ? 'var(--priority-medium)' : 'var(--priority-low)',
-                          fontWeight: 600, fontSize: '13px'
+                          fontWeight: 600, fontSize: 'var(--text-sm)'
                         }}>
                           {p.priority}
                         </span>
@@ -1087,16 +1087,16 @@ export const Projects: React.FC = () => {
                       {/* Coverage: how far the branch book has actually got. A project
                           with no branches previously looked the same as a fully
                           scheduled one. */}
-                      <td style={{ fontSize: '12px' }}>
+                      <td style={{ fontSize: 'var(--text-xs)' }}>
                         {(() => {
                           const bp = p.branchProgress;
                           if (!bp || bp.total === 0) {
-                            return <span style={{ color: 'var(--warning)', fontSize: '11.5px' }}>No branches</span>;
+                            return <span style={{ color: 'var(--warning)', fontSize: 'var(--text-2xs)' }}>No branches</span>;
                           }
                           const pct = Math.round((bp.assigned / bp.total) * 100);
                           return (
                             <div style={{ minWidth: '92px' }} title={`${bp.assigned} covered, ${bp.completed} done, ${bp.uncovered} unable to cover, ${bp.unstaffed ?? 0} still unstaffed, of ${bp.total}`}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-2xs)', marginBottom: '3px' }}>
                                 <span>{bp.assigned}/{bp.total}</span>
                                 <span style={{ color: 'var(--text-muted)' }}>{pct}%</span>
                               </div>
@@ -1107,19 +1107,19 @@ export const Projects: React.FC = () => {
                                   sit at 11% covered with no visible signal that the other 89%
                                   has had no decision taken on it at all. */}
                               {(bp.unstaffed ?? 0) > 0 && (
-                                <div style={{ fontSize: '10px', color: 'var(--warning)', marginTop: '2px', fontWeight: 600 }}>
+                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--warning)', marginTop: '2px', fontWeight: 600 }}>
                                   {bp.unstaffed} unstaffed
                                 </div>
                               )}
                               {bp.uncovered > 0 && (
-                                <div style={{ fontSize: '10px', color: 'var(--danger)', marginTop: '2px' }}>{bp.uncovered} uncovered</div>
+                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--danger)', marginTop: '2px' }}>{bp.uncovered} uncovered</div>
                               )}
                             </div>
                           );
                         })()}
                       </td>
                       {/* Schedule: the dates, plus whether the deadline is a problem. */}
-                      <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      <td style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                         {p.startDate ? (
                           <>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -1128,7 +1128,7 @@ export const Projects: React.FC = () => {
                             </div>
                             {(() => {
                               const h = scheduleHealth(p);
-                              return h ? <div style={{ fontSize: '11px', fontWeight: 600, color: h.tone, marginTop: '2px' }}>{h.label}</div> : null;
+                              return h ? <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: h.tone, marginTop: '2px' }}>{h.label}</div> : null;
                             })()}
                           </>
                         ) : (
@@ -1142,12 +1142,12 @@ export const Projects: React.FC = () => {
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                           <button onClick={() => navigate(`/planning?projectId=${p.id}`)}
                             className="btn btn-primary"
-                            style={{ padding: '5px 10px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <Compass size={13} /> Plan
                           </button>
                           <button onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
                             className="btn btn-secondary"
-                            style={{ padding: '5px 10px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <Eye size={13} /> {selectedId === p.id ? 'Close' : 'Detail'}
                           </button>
                         </div>
@@ -1160,7 +1160,7 @@ export const Projects: React.FC = () => {
           </div>
           {!isLoading && !projectsError && filteredProjects.length > 0 && hasMore && (
             <div style={{ padding: '10px', textAlign: 'center', borderTop: '1px solid var(--border-hair)' }}>
-              <button onClick={loadMoreProjects} disabled={isLoadingMore} className="btn btn-secondary" style={{ padding: '7px 16px', fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={loadMoreProjects} disabled={isLoadingMore} className="btn btn-secondary" style={{ padding: '7px 16px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                 {isLoadingMore ? <RefreshCw size={13} className="spinner" /> : <ChevronDown size={13} />}
                 {isLoadingMore ? 'Loading…' : `Load more (${projects.length} of ${totalProjects})`}
               </button>
@@ -1173,7 +1173,7 @@ export const Projects: React.FC = () => {
           <div className="glass-card" style={{ padding: '0', overflow: 'hidden', minHeight: '400px', display: 'flex', flexDirection: 'column' }}>
             {isLoadingDetail ? (
               <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '60px 20px' }}>
-                <div style={{ fontSize: '13px' }}>Loading project details...</div>
+                <div style={{ fontSize: 'var(--text-sm)' }}>Loading project details...</div>
               </div>
             ) : detail ? (
               <>
@@ -1181,21 +1181,21 @@ export const Projects: React.FC = () => {
                 <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border-color)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div>
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>Project Details</span>
-                      <h3 style={{ fontSize: '18px', fontWeight: 700, margin: '4px 0 2px' }}>{detail.name}</h3>
-                      <code style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{detail.projectNumber}</code>
+                      <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>Project Details</span>
+                      <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: '4px 0 2px' }}>{detail.name}</h3>
+                      <code style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{detail.projectNumber}</code>
                     </div>
                     <StatusBadge className="badge" label={projectStatusLabel(detail.status)} bg={statusBadge(detail.status).background} color={statusBadge(detail.status).color} />
                   </div>
                 </div>
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)' }}>
-                  <button type="button" onClick={() => setActiveTab('overview')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'overview' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'overview' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'overview' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                  <button type="button" onClick={() => setActiveTab('overview')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'overview' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'overview' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'overview' ? 600 : 400, cursor: 'pointer', fontSize: 'var(--text-xs)', transition: 'all 0.2s' }}>
                     📁 Overview
                   </button>
-                  <button type="button" onClick={() => setActiveTab('branches')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'branches' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'branches' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'branches' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                  <button type="button" onClick={() => setActiveTab('branches')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'branches' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'branches' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'branches' ? 600 : 400, cursor: 'pointer', fontSize: 'var(--text-xs)', transition: 'all 0.2s' }}>
                     🏢 Branches ({projectBranches.length})
                   </button>
-                  <button type="button" onClick={() => setActiveTab('settings')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'settings' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'settings' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', fontSize: '12px', transition: 'all 0.2s' }}>
+                  <button type="button" onClick={() => setActiveTab('settings')} style={{ flex: 1, padding: '12px 8px', border: 'none', background: 'none', borderBottom: activeTab === 'settings' ? '2px solid var(--accent-primary)' : '2px solid transparent', color: activeTab === 'settings' ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', fontSize: 'var(--text-xs)', transition: 'all 0.2s' }}>
                     ⚙️ Settings & Workflow
                   </button>
                 </div>
@@ -1203,7 +1203,7 @@ export const Projects: React.FC = () => {
                 {activeTab === 'overview' && (
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     {/* Key Info */}
-                    <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
+                    <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: 'var(--text-xs)' }}>
                       <div>
                         <span style={{ color: 'var(--text-muted)' }}>Client</span>
                         <div style={{ fontWeight: 600, marginTop: '1px', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -1236,9 +1236,9 @@ export const Projects: React.FC = () => {
                     {/* Scope / Description */}
                     {(detail.scope || detail.description) && (
                       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Scope & Description</span>
-                        {detail.scope && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>{detail.scope}</p>}
-                        {detail.description && <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '6px 0 0', lineHeight: 1.5, fontStyle: 'italic' }}>{detail.description}</p>}
+                        <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Scope & Description</span>
+                        {detail.scope && <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>{detail.scope}</p>}
+                        {detail.description && <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '6px 0 0', lineHeight: 1.5, fontStyle: 'italic' }}>{detail.description}</p>}
                       </div>
                     )}
 
@@ -1249,24 +1249,24 @@ export const Projects: React.FC = () => {
                       if (skills.length === 0 && certs.length === 0) return null;
                       return (
                         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Required Qualifications</span>
+                          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Required Qualifications</span>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                             {skills.length > 0 && (
                               <div>
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Skills: </span>
+                                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Skills: </span>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
                                   {skills.map((s, i) => (
-                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(216,174,71,0.08)', borderRadius: '4px', color: 'var(--accent-primary)', fontWeight: 500 }}>{s}</span>
+                                    <span key={i} style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', background: 'rgba(216,174,71,0.08)', borderRadius: '4px', color: 'var(--accent-primary)', fontWeight: 500 }}>{s}</span>
                                   ))}
                                 </div>
                               </div>
                             )}
                             {certs.length > 0 && (
                               <div>
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Certifications: </span>
+                                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Certifications: </span>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
                                   {certs.map((c, i) => (
-                                    <span key={i} style={{ fontSize: '11px', padding: '2px 8px', background: 'var(--status-active-bg)', borderRadius: '4px', color: 'var(--accent-secondary)', fontWeight: 500 }}>{c}</span>
+                                    <span key={i} style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', background: 'var(--status-active-bg)', borderRadius: '4px', color: 'var(--accent-secondary)', fontWeight: 500 }}>{c}</span>
                                   ))}
                                 </div>
                               </div>
@@ -1308,12 +1308,12 @@ export const Projects: React.FC = () => {
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', padding: '16px 20px', gap: '14px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>
                           Associated Branches ({projectBranches.length})
                         </span>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                           {branchesLocked && (
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{lockReason}</span>
+                            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{lockReason}</span>
                           )}
                           <div
                             aria-disabled={branchesLocked || undefined}
@@ -1335,7 +1335,7 @@ export const Projects: React.FC = () => {
                           title={branchesLocked ? lockReason : undefined}
                           style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px', opacity: branchesLocked ? 0.55 : 1 }}
                         >
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                          <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
                             ADD BRANCH MANUALLY{branchesLocked ? ` — ${lockReason.toUpperCase()}` : ''}
                           </span>
                           {/*
@@ -1346,7 +1346,7 @@ export const Projects: React.FC = () => {
                             exist. Said plainly, and only when some are genuinely absent.
                           */}
                           {branchShortfall && (
-                            <div style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', fontSize: '11.5px', lineHeight: 1.5, color: 'var(--text-secondary)', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '7px 9px' }}>
+                            <div style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', fontSize: 'var(--text-2xs)', lineHeight: 1.5, color: 'var(--text-secondary)', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '7px 9px' }}>
                               <AlertTriangle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
                               <span>
                                 {branchShortfall.reason ? (
@@ -1370,20 +1370,20 @@ export const Projects: React.FC = () => {
                           )}
                           <input type="text" value={branchSearch} onChange={e => setBranchSearch(e.target.value)} disabled={branchesLocked}
                             placeholder={branchesLocked ? 'Branch list is fixed for this project' : 'Type branch name or code to search...'}
-                            style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px', cursor: branchesLocked ? 'not-allowed' : 'text' }} />
+                            style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-xs)', cursor: branchesLocked ? 'not-allowed' : 'text' }} />
                           {!branchesLocked && branchSearch.trim() && (
                             <div style={{ maxHeight: '120px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', padding: '4px' }}>
                               {suggestions.length === 0 ? (
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '6px', textAlign: 'center' }}>No matching unassociated branches found.</div>
+                                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '6px', textAlign: 'center' }}>No matching unassociated branches found.</div>
                               ) : (
                                 suggestions.slice(0, 10).map((b: any) => (
-                                  <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', fontSize: '11px' }}>
+                                  <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', fontSize: 'var(--text-2xs)' }}>
                                     <div>
                                       <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{b.name}</span>
                                       <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>({b.solId ?? '—'})</span>
                                     </div>
                                     {canManage && <button type="button" onClick={() => { void handleAddBranch(b.id); setBranchSearch(''); }}
-                                      style={{ padding: '2px 8px', fontSize: '10px', background: 'var(--accent-primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
+                                      style={{ padding: '2px 8px', fontSize: 'var(--text-3xs)', background: 'var(--accent-primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
                                       + Add
                                     </button>}
                                   </div>
@@ -1397,19 +1397,19 @@ export const Projects: React.FC = () => {
                       {projectBranches.length === 0 ? (
                         <div style={{ border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)', padding: '30px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
                           <FileSpreadsheet size={24} style={{ margin: '0 auto 8px', opacity: 0.5 }} />
-                          <p style={{ fontSize: '12px', margin: 0 }}>No branches selected for audit yet.</p>
-                          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Search above to add manually, or upload an Excel file.</p>
+                          <p style={{ fontSize: 'var(--text-xs)', margin: 0 }}>No branches selected for audit yet.</p>
+                          <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px' }}>Search above to add manually, or upload an Excel file.</p>
                         </div>
                       ) : (
                         <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           {projectBranches.map((pb: any) => (
-                            <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '8px 10px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--accent-secondary)' }}>
+                            <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--text-xs)', padding: '8px 10px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--accent-secondary)' }}>
                               <div>
                                 <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</div>
-                                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch?.city}, {pb.branch?.state}</div>
+                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch?.city}, {pb.branch?.state}</div>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span className="badge" style={{ fontSize: '10px', padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{branchStatusLabel(pb.status)}</span>
+                                <span className="badge" style={{ fontSize: 'var(--text-3xs)', padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{branchStatusLabel(pb.status)}</span>
                                 {canManage && (detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
                                   <button type="button" aria-label="Remove branch" onClick={() => handleRemoveBranch(pb.id)}
                                     style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1430,7 +1430,7 @@ export const Projects: React.FC = () => {
                     {/* Lifecycle Progress */}
                     {detail.status !== ProjectStatus.CANCELLED && (
                       <div>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '10px' }}>Lifecycle</span>
+                        <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '10px' }}>Lifecycle</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
                           {LIFECYCLE_STEPS.map((step, i) => {
                             const currentIdx = LIFECYCLE_INDEX[detail.status];
@@ -1445,7 +1445,7 @@ export const Projects: React.FC = () => {
                                   transition: 'background 0.3s',
                                 }} />
                                 <span style={{
-                                  fontSize: '8px', fontWeight: isActive ? 700 : 400,
+                                  fontSize: 'var(--text-3xs)', fontWeight: isActive ? 700 : 400,
                                   color: isActive ? 'var(--accent-primary)' : isPast ? 'var(--text-secondary)' : 'var(--text-muted)',
                                   whiteSpace: 'nowrap',
                                 }}>
@@ -1460,15 +1460,15 @@ export const Projects: React.FC = () => {
 
                     {/* Lifecycle Transitions */}
                     <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Transitions</span>
+                      <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '8px' }}>Transitions</span>
                       {!canManage ? (
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>You have read-only access to projects.</span>
+                        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontStyle: 'italic' }}>You have read-only access to projects.</span>
                       ) : CAN_TRANSITION[detail.status] ? (
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                           {TRANSITIONS[detail.status]?.map(target => (
                             <button key={target} onClick={() => handleTransition(target)}
                               style={{
-                                padding: '6px 12px', fontSize: '11px', borderRadius: 'var(--radius-sm)',
+                                padding: '6px 12px', fontSize: 'var(--text-2xs)', borderRadius: 'var(--radius-sm)',
                                 background: target === ProjectStatus.CANCELLED ? 'var(--status-cancelled-bg)' : 'rgba(216,174,71,0.08)',
                                 border: `1px solid ${target === ProjectStatus.CANCELLED ? 'var(--status-cancelled-bg)' : 'rgba(216,174,71,0.3)'}`,
                                 color: target === ProjectStatus.CANCELLED ? 'var(--danger)' : 'var(--accent-primary)',
@@ -1479,22 +1479,22 @@ export const Projects: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No transitions available for this status.</span>
+                        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontStyle: 'italic' }}>No transitions available for this status.</span>
                       )}
                     </div>
 
                     {/* Actions */}
                     <div style={{ display: 'flex', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: 'auto' }}>
-                      <button onClick={() => navigate(`/planning?projectId=${detail.id}`)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
+                      <button onClick={() => navigate(`/planning?projectId=${detail.id}`)} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: 'var(--text-xs)' }}>
                         <ExternalLink size={13} /> Planning Workspace
                       </button>
                       {canManage && (
-                        <button onClick={openEdit} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px' }}>
+                        <button onClick={openEdit} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: 'var(--text-xs)' }}>
                           <Edit2 size={13} /> Edit
                         </button>
                       )}
                       {canDelete && (
-                        <button onClick={() => { setConfirmText(''); setShowDeleteConfirm(true); }} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '12px', border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                        <button onClick={() => { setConfirmText(''); setShowDeleteConfirm(true); }} className="btn btn-secondary" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: 'var(--text-xs)', border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                           <Trash2 size={13} /> Delete
                         </button>
                       )}
@@ -1503,7 +1503,7 @@ export const Projects: React.FC = () => {
                 )}
 
                 {/* Metadata */}
-                <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '16px', fontSize: '10px', color: 'var(--text-muted)', marginTop: 'auto', background: 'var(--bg-surface-2)' }}>
+                <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '16px', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 'auto', background: 'var(--bg-surface-2)' }}>
                   <span>Created: {new Date(detail.createdAt).toLocaleDateString()}</span>
                   <span>Updated: {new Date(detail.updatedAt).toLocaleDateString()}</span>
                 </div>
@@ -1515,7 +1515,7 @@ export const Projects: React.FC = () => {
             ) : (
               <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '60px 20px' }}>
                 <Building2 size={36} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
-                <p style={{ fontSize: '13px' }}>Select a project to view details.</p>
+                <p style={{ fontSize: 'var(--text-sm)' }}>Select a project to view details.</p>
               </div>
             )}
           </div>
@@ -1535,23 +1535,23 @@ export const Projects: React.FC = () => {
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
               Just a name and a client to get started — a project number is assigned automatically, and you can add branches, dates, scope and required skills later.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project name *</label>
+              <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Project name *</label>
               <input autoFocus type="text" value={quickForm.name} onChange={(e) => setQuickForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. Gold Audit — Q3"
                 style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Client *</label>
+              <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Client *</label>
               <Select value={quickForm.clientId} onChange={(v) => setQuickForm(f => ({ ...f, clientId: v }))}
                 options={clients.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` }))}
                 placeholder="Select client..." style={{ width: '100%' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Priority</label>
+              <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Priority</label>
               <Select value={quickForm.priority} onChange={(v) => setQuickForm(f => ({ ...f, priority: v as Priority }))}
                 options={Object.values(Priority).map(pr => ({ value: pr, label: pr }))} style={{ width: '100%' }} />
             </div>
@@ -1580,10 +1580,10 @@ export const Projects: React.FC = () => {
       >
         {detail && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            <p style={{ fontSize: 'var(--text-base)', color: 'var(--text-secondary)' }}>
               Are you sure you want to delete <b>{detail.name}</b> ({detail.projectNumber})? This action cannot be undone and will soft-delete all associated branches, assignments, assessments, documents, and query threads.
             </p>
-            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               Please type the project number <b>{detail.projectNumber}</b> to confirm:
             </p>
             <input

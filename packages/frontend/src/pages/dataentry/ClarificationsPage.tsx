@@ -78,22 +78,22 @@ const ClarificationCard: React.FC<{ row: ClarificationRow; onOpen: () => void }>
       style={{ ...card, textAlign: 'left', cursor: 'pointer', display: 'flex', gap: 12, alignItems: 'flex-start', borderLeft: `3px solid ${row.slaOverdue ? 'var(--danger)' : row.awaiting === 'US' ? 'var(--warning)' : 'var(--border-color)'}` }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
-          <strong style={{ fontSize: 13, color: 'var(--text-primary)' }}>{row.branchName ?? 'Unknown branch'}</strong>
-          {row.targetField && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>About: {row.targetField}</span>}
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--text-muted)' }}>
+          <strong style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)' }}>{row.branchName ?? 'Unknown branch'}</strong>
+          {row.targetField && <span style={{ fontSize: 'var(--text-2xs)', padding: '1px 7px', borderRadius: 999, background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>About: {row.targetField}</span>}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             <User size={11} /> {row.assayerName ?? '—'}{row.assayerCode ? ` · ${row.assayerCode}` : ''}
           </span>
         </div>
-        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.queryText}</div>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.queryText}</div>
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 4 }}>
           Asked {fmtWhen(row.createdAt)}{row.lastMessageAt ? ` · last message ${fmtWhen(row.lastMessageAt)}` : ''}
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: sla.tone }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', fontWeight: 700, color: sla.tone }}>
           {row.slaOverdue ? <AlertTriangle size={11} /> : <Clock size={11} />} {sla.text}
         </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--accent)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-xs)', color: 'var(--accent)' }}>
           Open case <ArrowRight size={12} />
         </span>
       </div>
@@ -174,7 +174,7 @@ export const ClarificationsPage: React.FC = () => {
           return (
             <button key={v.key} onClick={() => setView(v.key)}
               style={{
-                padding: '6px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+                padding: '6px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
                 background: active ? 'var(--accent)' : 'transparent',
                 color: active ? '#fff' : 'var(--text-secondary)',
                 border: `1px solid ${active ? 'var(--accent)' : 'var(--border-color)'}`,
@@ -186,7 +186,7 @@ export const ClarificationsPage: React.FC = () => {
       </div>
 
       {loading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading clarifications…</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading clarifications…</div>
       ) : error != null ? (
         /* A red line reading "Could not load the clarification list. <sentence>" said the right
            thing, in the wrong shape: no way to tell a refusal from an outage, and no Retry on the
@@ -205,15 +205,15 @@ export const ClarificationsPage: React.FC = () => {
                     background: active ? 'var(--bg-card)' : 'transparent',
                     border: `1px solid ${active ? (t.tone ?? 'var(--accent)') : 'var(--border-color)'}`,
                   }}>
-                  <span style={{ fontSize: 20, fontWeight: 700, color: n > 0 ? (t.tone ?? 'var(--text-primary)') : 'var(--text-muted)' }}>{n}</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{t.label}</span>
+                  <span style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: n > 0 ? (t.tone ?? 'var(--text-primary)') : 'var(--text-muted)' }}>{n}</span>
+                  <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.label}</span>
                 </button>
               );
             })}
           </div>
 
           {shown.length === 0 ? (
-            <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>
+            <div style={{ ...card, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
               {filter === 'US'
                 ? 'Nothing is waiting on you. When an assayer answers a clarification, it moves here so the desk can act on it.'
                 : filter === 'ASSAYER'
@@ -225,7 +225,7 @@ export const ClarificationsPage: React.FC = () => {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {truncated && (
-                <div style={{ fontSize: 11.5, color: 'var(--warning)', lineHeight: 1.45 }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', lineHeight: 1.45 }}>
                   Showing the {shown.length} most urgent of {counted(counts[filter], 'question')}. Clear these and the rest move up —
                   they are ordered by reply deadline, soonest first.
                 </div>
@@ -239,7 +239,7 @@ export const ClarificationsPage: React.FC = () => {
       ) : (
         /* By auditor: one row per person, expand to see and clear their open questions together. */
         groups.length === 0 ? (
-          <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>
+          <div style={{ ...card, color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
             No auditor has open clarifications right now. When the desk raises a question, or an assayer's reply is still
             being worked, the auditor shows up here so you can settle everything with them in one call.
           </div>
@@ -259,15 +259,15 @@ export const ClarificationsPage: React.FC = () => {
                     {isOpen ? <ChevronDown size={16} color="var(--text-muted)" /> : <ChevronRight size={16} color="var(--text-muted)" />}
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
                       <User size={14} color="var(--text-muted)" />
-                      <strong style={{ fontSize: 14, color: 'var(--text-primary)' }}>{g.assayerName ?? 'Unassigned'}</strong>
-                      {g.assayerCode && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>· {g.assayerCode}</span>}
+                      <strong style={{ fontSize: 'var(--text-base)', color: 'var(--text-primary)' }}>{g.assayerName ?? 'Unassigned'}</strong>
+                      {g.assayerCode && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>· {g.assayerCode}</span>}
                     </span>
                     {g.overdueCount > 0 && (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700, color: 'var(--danger)' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--danger)' }}>
                         <AlertTriangle size={12} /> {counted(g.overdueCount, 'overdue')}
                       </span>
                     )}
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 700, color: 'var(--text-secondary)' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)' }}>
                       <Phone size={12} /> {counted(g.openCount, 'open question')}
                     </span>
                   </button>

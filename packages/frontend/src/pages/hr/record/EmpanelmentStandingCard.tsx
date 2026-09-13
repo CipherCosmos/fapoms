@@ -49,10 +49,10 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Building2 size={16} style={{ color: 'var(--accent)' }} />
           <div>
-            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
               Client Bank Empanelments
             </span>
-            <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <span style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               Client-specific dispatch authorization
             </span>
           </div>
@@ -65,7 +65,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
               background: 'none',
               border: 'none',
               color: 'var(--accent)',
-              fontSize: '12px',
+              fontSize: 'var(--text-xs)',
               cursor: 'pointer',
               textDecoration: 'underline',
               padding: 0,
@@ -77,7 +77,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
       </div>
 
       {empanelments.length === 0 ? (
-        <div style={{ padding: '12px', background: 'var(--bg-surface-2)', borderRadius: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+        <div style={{ padding: '12px', background: 'var(--bg-surface-2)', borderRadius: '6px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           No client empanelments recorded on file. Add client standings under Vetting to enable partner-specific dispatch.
         </div>
       ) : (
@@ -100,7 +100,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
                   borderRadius: '6px',
                   background: 'var(--bg-surface-2)',
                   border: '1px solid var(--border-color)',
-                  fontSize: '12px',
+                  fontSize: 'var(--text-xs)',
                   flexWrap: 'wrap',
                   gap: '6px',
                 }}
@@ -108,7 +108,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <strong>{e.client?.name || 'Unknown client'}</strong>
                   {e.client?.clientCode && (
-                    <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                       ({e.client.clientCode})
                     </span>
                   )}
@@ -123,7 +123,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
                       gap: '4px',
                       padding: '2px 8px',
                       borderRadius: '999px',
-                      fontSize: '11px',
+                      fontSize: 'var(--text-2xs)',
                       fontWeight: 700,
                       background: tone.bg,
                       color: tone.fg,
@@ -142,7 +142,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
                       <span
                         data-testid={`hard-block-indicator-${rowKey}`}
                         title="This standing is permanently hard-blocked by policy and cannot be overridden by operators or supervisors."
-                        style={{ fontSize: '11px', color: 'var(--danger)', fontWeight: 600 }}
+                        style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 600 }}
                       >
                         Non-overridable
                       </span>
@@ -155,7 +155,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
                           background: 'none',
                           border: 'none',
                           color: 'var(--accent)',
-                          fontSize: '11.5px',
+                          fontSize: 'var(--text-2xs)',
                           cursor: 'pointer',
                           textDecoration: 'underline',
                           padding: 0,
@@ -175,7 +175,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
       {hardBlocked.length > 0 && (
         <div
           data-testid="hard-block-explanation"
-          style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.4, borderTop: '1px dashed var(--border-hair)', paddingTop: '6px' }}
+          style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.4, borderTop: '1px dashed var(--border-hair)', paddingTop: '6px' }}
         >
           <strong>Policy Notice:</strong> Standing is final and hard-blocked by policy. Restricted client standings (rejected, terminated, expired, suspended) are strictly non-overridable. No operator or supervisor bypass is permitted.
         </div>

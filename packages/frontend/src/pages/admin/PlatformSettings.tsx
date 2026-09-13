@@ -349,7 +349,7 @@ export const PlatformSettings: React.FC = () => {
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <Toggle checked={!!value} disabled={disabled} label={s.label} onChange={(next) => save(s, next)} />
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{value ? 'On' : 'Off'}</span>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{value ? 'On' : 'Off'}</span>
         </div>
       );
     }
@@ -407,12 +407,12 @@ export const PlatformSettings: React.FC = () => {
         />
         {/* Advisory only — see `formatWarning`. Never disables the Save button above. */}
         {warning && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--warning)' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-2xs)', color: 'var(--warning)' }}>
             <AlertTriangle size={11} aria-hidden /> {warning}
           </span>
         )}
         {cronHint && (
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{cronHint}</span>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{cronHint}</span>
         )}
       </div>
     );
@@ -438,7 +438,7 @@ export const PlatformSettings: React.FC = () => {
                   label={
                     <span style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
                       {s.label}
-                      {s.unit && <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 500 }}>({s.unit})</span>}
+                      {s.unit && <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 500 }}>({s.unit})</span>}
                       {sourceNote(s)}
                     </span>
                   }
@@ -459,7 +459,7 @@ export const PlatformSettings: React.FC = () => {
                           className="btn btn-primary"
                           disabled={saving === s.key}
                           onClick={() => save(s, drafts[s.key])}
-                          style={{ padding: '6px 12px', fontSize: '11.5px', whiteSpace: 'nowrap' }}
+                          style={{ padding: '6px 12px', fontSize: 'var(--text-2xs)', whiteSpace: 'nowrap' }}
                         >
                           {saving === s.key ? 'Saving…' : 'Save'}
                         </button>
@@ -488,7 +488,7 @@ export const PlatformSettings: React.FC = () => {
       />
 
       {!canEdit && (
-        <div className="glass-card" style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', color: 'var(--text-secondary)' }}>
+        <div className="glass-card" style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           <Info size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
           You can see how the platform is configured. Changing it is limited to super administrators.
         </div>
@@ -511,7 +511,7 @@ export const PlatformSettings: React.FC = () => {
                   border: 'none',
                   background: active ? 'rgba(216,174,71,0.10)' : 'transparent',
                   color: active ? 'var(--accent)' : 'var(--text-secondary)',
-                  fontSize: '12.5px', fontWeight: active ? 700 : 500,
+                  fontSize: 'var(--text-xs)', fontWeight: active ? 700 : 500,
                 }}
               >
                 <Icon size={14} style={{ flexShrink: 0 }} />
@@ -549,16 +549,16 @@ export const PlatformSettings: React.FC = () => {
                   <button
                     className="btn btn-secondary" disabled={testing || !testTo || !emailStatus?.enabled}
                     onClick={sendTest}
-                    style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}
                   >
                     <Send size={13} /> {testing ? 'Sending…' : 'Send test'}
                   </button>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                     The only way to know the credentials work is to use them.
                   </span>
                   <Link
                     to="/admin/notifications"
-                    style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginLeft: 'auto' }}
+                    style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginLeft: 'auto' }}
                   >
                     Which events send email →
                   </Link>
@@ -575,7 +575,7 @@ export const PlatformSettings: React.FC = () => {
             >
               <button
                 className="btn btn-secondary" disabled={runningDigest} onClick={runDigest}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}
               >
                 <Send size={13} /> {runningDigest ? 'Queueing…' : 'Run it now'}
               </button>
@@ -610,9 +610,9 @@ export const PlatformSettings: React.FC = () => {
             {loadFailed(settingsQuery) ? (
               <LoadFailure style={{ margin: '14px' }} loads={[{ label: 'the platform settings', query: settingsQuery }]} />
             ) : isLoading ? (
-              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
+              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
             ) : inGroup.length === 0 ? (
-              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
                 Nothing is configurable in this section.
               </div>
             ) : (
@@ -633,7 +633,7 @@ export const PlatformSettings: React.FC = () => {
           )}
 
           {activeGroup === 'fees' && (
-            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '0 4px' }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '0 4px' }}>
               <Info size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
               <span>
                 These are the last resort. An assayer's contracted fee and a client's rate card both win over them,
@@ -643,7 +643,7 @@ export const PlatformSettings: React.FC = () => {
             </div>
           )}
           {activeGroup === 'billing' && (
-            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '0 4px' }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '0 4px' }}>
               <Info size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
               <span>
                 Applies to payables and claims created from now on. Every payable records the rate it was booked at,

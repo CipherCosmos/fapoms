@@ -103,7 +103,7 @@ export const BranchListPanel: React.FC<{
       <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)' }}>
         <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         <input type="text" placeholder="Search branches..." value={searchTerm} onChange={e => onSearchTermChange(e.target.value)}
-          style={{ flex: 1, background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
+          style={{ flex: 1, background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-xs)' }} />
       </div>
       {bulkEnabled && selectableBranches.length > 0 && (
         <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '7px', background: 'var(--bg-surface-2)' }}>
@@ -126,7 +126,7 @@ export const BranchListPanel: React.FC<{
             The wording is scoped on purpose: this ticks the branches the search and filters are
             currently showing, not every branch in the project.
           */}
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
             {allSelectableSelected
               ? `All ${selectableBranches.length} shown selected — click to clear`
               : `Select all ${selectableBranches.length} unassigned shown`}
@@ -137,12 +137,12 @@ export const BranchListPanel: React.FC<{
         {/* Failure is decided before both loading and emptiness, because it is indistinguishable
             from either once the rows have defaulted to `[]`. */}
         {failure ? failure : loading ? (
-          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>
+          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
             <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
             <div>Loading branches…</div>
           </div>
         ) : branches.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>No branches in this project yet. Add branches to the project before visits can be planned for them.</div>
+          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>No branches in this project yet. Add branches to the project before visits can be planned for them.</div>
         ) : branches.map(pb => {
           const isSelected = pb.id === selectedBranchId;
           const isAssigned = !!pb.assignment;
@@ -188,12 +188,12 @@ export const BranchListPanel: React.FC<{
                     aria-label={`Select ${pb.branch.name} for bulk assignment`}
                   />
                 )}
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pb.branch.name}</div>
-                <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{pb.branch.name}</div>
+                <span style={{ fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: '4px', background: badgeBg, color: badgeColor, fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {statusLabel}
                 </span>
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>
                   {pb.branch.city}, {pb.branch.state}
                   {pb.packetCount != null && (
@@ -206,7 +206,7 @@ export const BranchListPanel: React.FC<{
                   )}
                 </span>
                 {pb.assignment?.assayer?.displayName && (
-                  <span style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
+                  <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent)', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
                 )}
               </div>
             </div>

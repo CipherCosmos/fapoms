@@ -14,7 +14,7 @@ const CLIENT_TYPES = Object.values(ClientType);
 const PRIORITIES = Object.values(Priority);
 
 const Label: React.FC<{ text: string; required?: boolean }> = ({ text, required }) => (
-  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
+  <label style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
     {text} {required && <span style={{ color: 'var(--danger)' }}>*</span>}
   </label>
 );
@@ -83,7 +83,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Section 1: General Identity */}
         <div>
-          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>General Identity</h4>
+          <h4 style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>General Identity</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {/* The last hand-typed code on the platform. Branches, projects and assayers all
@@ -118,7 +118,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
 
         {/* Section 2: Address */}
         <div>
-          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Address</h4>
+          <h4 style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Address</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             {/* Pincode first and geo-backed, same as the branch form: picking a result fills
                 district, city and state in one go instead of asking for all four separately. */}
@@ -169,7 +169,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
 
         {/* Section 3: Contact Details */}
         <div>
-          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Contact Information</h4>
+          <h4 style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Contact Information</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Contact Person" />
@@ -192,7 +192,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
 
         {/* Section 4: Financials & Preferences */}
         <div>
-          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Financials & Preferences</h4>
+          <h4 style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Financials & Preferences</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Priority" />

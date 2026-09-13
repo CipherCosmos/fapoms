@@ -474,7 +474,7 @@ export const Select: React.FC<{
                 style={{
                   width: '100%',
                   padding: '6px 8px 6px 28px',
-                  fontSize: '12.5px',
+                  fontSize: 'var(--text-xs)',
                   background: 'var(--bg-input)',
                   border: '1px solid var(--border-color)',
                   borderRadius: 'var(--radius-sm)',
@@ -493,7 +493,7 @@ export const Select: React.FC<{
             style={{ overflowY: 'auto', padding: '4px' }}
           >
             {filtered.length === 0 ? (
-              <div style={{ padding: '16px 10px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
+              <div style={{ padding: '16px 10px', textAlign: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                 No matches
               </div>
             ) : (
@@ -534,9 +534,9 @@ export const Select: React.FC<{
                     >
                       {o.icon && <span style={{ display: 'flex', flexShrink: 0 }}>{o.icon}</span>}
                       <span style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.label}</div>
+                        <div style={{ fontSize: 'var(--text-xs)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.label}</div>
                         {o.sublabel && (
-                          <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 400, marginTop: '1px' }}>{o.sublabel}</div>
+                          <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 400, marginTop: '1px' }}>{o.sublabel}</div>
                         )}
                       </span>
                       {isSelected && <Check size={13} style={{ flexShrink: 0 }} />}

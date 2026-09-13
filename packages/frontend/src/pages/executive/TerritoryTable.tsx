@@ -72,8 +72,8 @@ export const TerritoryTable: React.FC<{
 
               <button onClick={() => onSelectState(isSel ? null : t.state)}
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0, flex: 1, minWidth: 150, color: 'var(--text-primary)' }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{t.state}</div>
-                <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>{t.state}</div>
+                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
                   {t.branches} branches · {t.assayers} assayers
                   {t.avgNearestAssayerKm !== null && <> · avg {t.avgNearestAssayerKm}km to nearest</>}
                 </div>
@@ -85,7 +85,7 @@ export const TerritoryTable: React.FC<{
                 <div style={{ height: 5, background: 'var(--bg-tertiary)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{ width: `${(t.packets / maxPackets) * 100}%`, height: '100%', background: meta.color }} />
                 </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{t.packets.toLocaleString('en-IN')} packets</div>
+                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 2 }}>{t.packets.toLocaleString('en-IN')} packets</div>
               </div>
 
               <Metric label="Demand" value={`${t.demandAssayerDays}d`} />
@@ -98,7 +98,7 @@ export const TerritoryTable: React.FC<{
               <Metric label="Value" value={money(t.pipelineValue)} />
 
               <span title={meta.meaning} style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700,
+                display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-3xs)', fontWeight: 700,
                 padding: '3px 9px', borderRadius: 'var(--radius-sm)',
                 background: `${meta.color}22`, color: meta.color, whiteSpace: 'nowrap',
               }}>{meta.icon}{meta.label}</span>
@@ -106,11 +106,11 @@ export const TerritoryTable: React.FC<{
 
             {open && (
               <div style={{ borderTop: '1px solid var(--border-color)', background: 'var(--bg-primary)', padding: '8px 12px 10px 38px' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 6 }}>
+                <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 6 }}>
                   Districts · {meta.meaning}
                 </div>
                 {t.districts.map((d) => (
-                  <div key={d.district} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 11.5, flexWrap: 'wrap' }}>
+                  <div key={d.district} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 'var(--text-2xs)', flexWrap: 'wrap' }}>
                     <span style={{ flex: 1, minWidth: 120, fontWeight: 600 }}>{d.district}</span>
                     <span style={{ color: 'var(--text-muted)' }}>{d.branches} br</span>
                     <span style={{ color: 'var(--text-muted)' }}>{d.packets.toLocaleString('en-IN')} pkt</span>
@@ -133,7 +133,7 @@ export const TerritoryTable: React.FC<{
 
 const Metric: React.FC<{ label: string; value: string; color?: string }> = ({ label, value, color }) => (
   <div style={{ minWidth: 62 }}>
-    <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', fontWeight: 600 }}>{label}</div>
-    <div style={{ fontSize: 12.5, fontWeight: 700, color: color ?? 'var(--text-primary)' }}>{value}</div>
+    <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', fontWeight: 600 }}>{label}</div>
+    <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: color ?? 'var(--text-primary)' }}>{value}</div>
   </div>
 );

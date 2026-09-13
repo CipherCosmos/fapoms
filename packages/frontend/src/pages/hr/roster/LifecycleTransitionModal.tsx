@@ -89,7 +89,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
             className="btn btn-secondary"
             onClick={onClose}
             disabled={busy}
-            style={{ fontSize: '12.5px', padding: '7px 14px' }}
+            style={{ fontSize: 'var(--text-xs)', padding: '7px 14px' }}
           >
             Cancel
           </button>
@@ -99,7 +99,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
             onClick={handleConfirm}
             disabled={busy || (needsReason && !reason.trim())}
             style={{
-              fontSize: '12.5px',
+              fontSize: 'var(--text-xs)',
               padding: '7px 16px',
               fontWeight: 600,
               background: isDestructive ? 'var(--danger)' : undefined,
@@ -113,13 +113,13 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div>
-          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+          <div style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--text-primary)' }}>
             {assayerName}{' '}
-            <span style={{ fontFamily: 'monospace', fontSize: '12.5px', color: 'var(--text-muted)' }}>
+            <span style={{ fontFamily: 'monospace', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               ({assayerCode})
             </span>
           </div>
-          <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
             Current stage:{' '}
             <strong style={{ color: 'var(--text-primary)' }}>
               {assayerLifecycleLabel(currentStatus)}
@@ -136,7 +136,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
           <AlertBanner type="error">
             <div>
               <strong>Immediate Suspension Consequences:</strong>
-              <ul style={{ margin: '4px 0 0', paddingLeft: '18px', fontSize: '12px', lineHeight: 1.5 }}>
+              <ul style={{ margin: '4px 0 0', paddingLeft: '18px', fontSize: 'var(--text-xs)', lineHeight: 1.5 }}>
                 <li>Mobile application sign-in is revoked immediately.</li>
                 <li>GPS on-site field check-in is blocked.</li>
                 <li>
@@ -153,7 +153,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
           <AlertBanner type="error">
             <div>
               <strong>Permanent Departure Consequences:</strong>
-              <ul style={{ margin: '4px 0 0', paddingLeft: '18px', fontSize: '12px', lineHeight: 1.5 }}>
+              <ul style={{ margin: '4px 0 0', paddingLeft: '18px', fontSize: 'var(--text-xs)', lineHeight: 1.5 }}>
                 <li>All open and in-flight audit assignments are <strong>automatically cancelled</strong>.</li>
                 <li>Active client bank empanelments are <strong>automatically closed</strong>.</li>
                 <li>Departure dates are stamped on the permanent employment record.</li>
@@ -169,7 +169,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
               padding: '10px 12px',
               borderRadius: '6px',
               background: 'var(--bg-muted, rgba(128,128,128,0.08))',
-              fontSize: '12.5px',
+              fontSize: 'var(--text-xs)',
               color: 'var(--text-secondary)',
               lineHeight: 1.5,
             }}
@@ -183,7 +183,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <label
               htmlFor="lifecycle-reason-select"
-              style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}
+              style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}
             >
               Reason for this move <span style={{ color: 'var(--danger)' }}>*</span>
             </label>
@@ -219,7 +219,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
                   aria-label="Specific reason"
                   style={{
                     padding: '8px 10px',
-                    fontSize: '12.5px',
+                    fontSize: 'var(--text-xs)',
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-page)',
@@ -232,7 +232,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
                   <div
                     aria-live="polite"
                     style={{
-                      fontSize: 11.5,
+                      fontSize: 'var(--text-2xs)',
                       textAlign: 'right',
                       color: reason.length >= LIFECYCLE_REASON_MAX_LENGTH ? 'var(--danger)' : 'var(--text-muted)',
                     }}
@@ -248,7 +248,7 @@ export const LifecycleTransitionModal: React.FC<LifecycleTransitionModalProps> =
         )}
 
         {errorMsg && (
-          <div style={{ color: 'var(--danger)', fontSize: '12px', fontWeight: 500 }}>
+          <div style={{ color: 'var(--danger)', fontSize: 'var(--text-xs)', fontWeight: 500 }}>
             {errorMsg}
           </div>
         )}

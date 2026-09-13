@@ -42,7 +42,7 @@ const cardStyle: React.CSSProperties = {
 // (`--bg-card`), which is the same colour as `--bg-page` in the dark themes — so the box read
 // as part of the card rather than as something to type into.
 const numberInputStyle: React.CSSProperties = {
-  width: '100%', padding: '7px 9px', fontSize: '13px', fontFamily: 'monospace',
+  width: '100%', padding: '7px 9px', fontSize: 'var(--text-sm)', fontFamily: 'monospace',
   background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', outline: 'none',
 };
@@ -105,7 +105,7 @@ const Scans: React.FC<{
               target="_blank"
               rel="noopener noreferrer"
               title={name}
-              style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'var(--accent-primary)', fontSize: '12px' }}
+              style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'var(--accent-primary)', fontSize: 'var(--text-xs)' }}
             >
               {url && isImage(key) ? (
                 <img
@@ -172,13 +172,13 @@ const REJECTION_LABELS: Record<string, string> = {
 // colour as `--bg-page` in the dark themes, so a field at the page colour disappeared into the
 // dialog around it.
 const modalFieldStyle: React.CSSProperties = {
-  width: '100%', padding: '8px 10px', fontSize: '13px', fontFamily: 'inherit',
+  width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)', fontFamily: 'inherit',
   background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', outline: 'none',
   boxSizing: 'border-box',
 };
 const modalLabelStyle: React.CSSProperties = {
-  display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px',
+  display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px',
 };
 
 /**
@@ -336,14 +336,14 @@ const PrintedDetails: React.FC<{
   requirement: string;
 }> = ({ prints, value, onChange, requirement }) => (
   <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
-    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+    <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)' }}>
       What the document says
     </div>
     {PRINTED_KEYS.filter(([, flag]) => prints[flag]).map(([key]) => (
       <div key={key}>
         <label
           htmlFor={`printed-${requirement}-${key}`}
-          style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '3px' }}
+          style={{ display: 'block', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '3px' }}
         >
           {PRINTED_LABELS[key]}
         </label>
@@ -504,8 +504,8 @@ const RequirementRow: React.FC<{
     <div style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 180px', minWidth: 0 }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{doc.label}</div>
-          <div style={{ fontSize: '12px', color: scans > 0 ? 'var(--success)' : 'var(--text-muted)', marginTop: '2px' }}>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{doc.label}</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: scans > 0 ? 'var(--success)' : 'var(--text-muted)', marginTop: '2px' }}>
             {scans === 0
               ? 'Nothing scanned yet'
               : `${scans} ${scans === 1 ? 'page' : 'pages'} on file${verified ? ' · checked against the original' : ''}`}
@@ -519,7 +519,7 @@ const RequirementRow: React.FC<{
         <label
           className="btn btn-secondary"
           style={{
-            fontSize: '12px', padding: '6px 12px', cursor: uploading ? 'wait' : 'pointer',
+            fontSize: 'var(--text-xs)', padding: '6px 12px', cursor: uploading ? 'wait' : 'pointer',
             display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto',
             outline: dragOver ? '2px dashed var(--accent)' : undefined, outlineOffset: '2px',
           }}
@@ -562,12 +562,12 @@ const RequirementRow: React.FC<{
         <div style={{ marginTop: '10px' }}>
           <label
             htmlFor={`docnum-${doc.requirement}`}
-            style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}
+            style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}
           >
             Number printed on it
           </label>
           {covered && (
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: '4px' }}>
               On file: <span style={{ fontFamily: 'monospace' }}>{onFile}</span> — kept in full and
               encrypted, shown here as its last few digits. Leave the box empty to keep it.
             </div>
@@ -581,7 +581,7 @@ const RequirementRow: React.FC<{
             style={numberInputStyle}
           />
           {!number.trim() && !covered && (
-            <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginTop: '4px' }}>
               Without a number nobody can confirm this document against the original later, so the
               scan on its own will not get this person into a client&rsquo;s branch.
             </div>
@@ -613,7 +613,7 @@ const RequirementRow: React.FC<{
 
           {doc.id && (number.trim() || onFile) && scans > 0 && (
             verified ? (
-              <div style={{ fontSize: '12px', color: 'var(--success)', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <Check size={13} aria-hidden /> Checked against the original.
                 {doc.holderName && <span style={{ color: 'var(--text-muted)' }}>Reads “{doc.holderName}”.</span>}
               </div>
@@ -623,7 +623,7 @@ const RequirementRow: React.FC<{
                   type="button"
                   onClick={() => onVerify(doc, printed)}
                   className="btn btn-secondary"
-                  style={{ fontSize: '12px', padding: '6px 12px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
                   <ShieldCheck size={13} aria-hidden /> I have checked this against the original
                 </button>
@@ -638,7 +638,7 @@ const RequirementRow: React.FC<{
                   type="button"
                   onClick={() => onReject(doc)}
                   className="btn btn-ghost"
-                  style={{ fontSize: '12px', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}
+                  style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}
                 >
                   Send it back
                 </button>
@@ -647,7 +647,7 @@ const RequirementRow: React.FC<{
           )}
 
           {doc.verificationStatus === 'REJECTED' && (
-            <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '8px' }}>
               {/* `humanize()` rather than the raw value, so an enum this screen does not recognise
                   yet still reads as words — "Number mismatch", never "NUMBER_MISMATCH" — instead
                   of a shouting placeholder the previous fallback would have shown verbatim. */}
@@ -660,7 +660,7 @@ const RequirementRow: React.FC<{
 
       <Scans documentId={doc.id} filePaths={doc.filePaths} label={doc.label} onChanged={onChanged} />
       {rowError && (
-        <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px' }}>{rowError}</div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '8px' }}>{rowError}</div>
       )}
     </div>
   );
@@ -672,12 +672,12 @@ const GroupHeading: React.FC<{ icon: React.ReactNode; title: string; note: strin
   <div style={{ marginBottom: '10px' }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
       <span style={{ color: 'var(--text-muted)', display: 'inline-flex' }}>{icon}</span>
-      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
-      <span style={{ fontSize: '12px', color: done === total ? 'var(--success)' : 'var(--text-muted)' }}>
+      <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
+      <span style={{ fontSize: 'var(--text-xs)', color: done === total ? 'var(--success)' : 'var(--text-muted)' }}>
         {done} of {total} scanned
       </span>
     </div>
-    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{note}</div>
+    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{note}</div>
   </div>
 );
 
@@ -825,7 +825,7 @@ export const DocumentsStep: React.FC<{
     );
   }
   if (dossierError) return <AlertBanner type="error" message={dossierError} />;
-  if (!dossier) return <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Reading their file…</div>;
+  if (!dossier) return <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Reading their file…</div>;
 
   const scanned = (rows: DossierDocument[]) => rows.filter((r) => r.filePaths.length > 0).length;
 
@@ -847,7 +847,7 @@ export const DocumentsStep: React.FC<{
         />
       )}
       {verifyError && <AlertBanner type="error" message={verifyError} onClose={() => setVerifyError(null)} />}
-      <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
         Nothing on this page is required to finish. Scan what the person has brought with them; the
         rest can be added any time from their record, by you or by them if they later get the app.
       </div>
@@ -882,7 +882,7 @@ export const DocumentsStep: React.FC<{
         </div>
       </div>
 
-      <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
         <Check size={13} /> Every scan is filed against the person the moment you choose it — there
         is no separate save on this page.
       </div>

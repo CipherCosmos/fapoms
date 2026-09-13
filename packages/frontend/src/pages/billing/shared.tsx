@@ -49,7 +49,7 @@ export const assayerInvoiceStatusLabel = (s: AssayerInvoiceStatus): string =>
 export const Pill: React.FC<{ tone: string; children: React.ReactNode; title?: string }> = ({ tone, children, title }) => (
   <span title={title} style={{
     display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 'var(--radius-sm)',
-    background: `color-mix(in srgb, ${tone} 13%, transparent)`, color: tone, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+    background: `color-mix(in srgb, ${tone} 13%, transparent)`, color: tone, fontSize: 'var(--text-2xs)', fontWeight: 600, whiteSpace: 'nowrap',
   }}>{children}</span>
 );
 
@@ -85,7 +85,7 @@ export const Card: React.FC<{ title?: React.ReactNode; actions?: React.ReactNode
   <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: 16, ...style }}>
     {(title || actions) && (
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        {title && <h3 style={{ fontSize: 13.5, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{title}</h3>}
+        {title && <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{title}</h3>}
         {actions}
       </div>
     )}
@@ -94,27 +94,27 @@ export const Card: React.FC<{ title?: React.ReactNode; actions?: React.ReactNode
 );
 
 export const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>{children}</div>
+  <div style={{ fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>{children}</div>
 );
 
 export const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>{children}</div>
+  <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>{children}</div>
 );
 
 export const fmtDate = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
 export const inputStyle: React.CSSProperties = {
-  padding: '7px 10px', fontSize: 13, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+  padding: '7px 10px', fontSize: 'var(--text-sm)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
   borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none',
 };
 
 export const th: React.CSSProperties = {
-  textAlign: 'left', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)',
+  textAlign: 'left', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)',
   fontWeight: 700, padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap',
 };
 export const td: React.CSSProperties = {
-  padding: '9px 10px', fontSize: 12.5, color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-hair, var(--border-color))',
+  padding: '9px 10px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-hair, var(--border-color))',
   verticalAlign: 'middle',
 };
 export const tdNum: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };

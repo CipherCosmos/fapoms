@@ -256,7 +256,7 @@ export const ExpenseReview: React.FC = () => {
       render: (c) => (
         <div>
           <div style={{ fontWeight: 600 }}>{c.assayer?.displayName ?? '—'}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{c.assayer?.assayerCode ?? ''}</div>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{c.assayer?.assayerCode ?? ''}</div>
         </div>
       ),
     },
@@ -361,8 +361,8 @@ export const ExpenseReview: React.FC = () => {
         <div />
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{claims.length} pending</div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>{formatRupees(totalPending)}</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{claims.length} pending</div>
+            <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>{formatRupees(totalPending)}</div>
           </div>
           <button type="button" onClick={() => void load()} disabled={loading} title="Refresh" style={btnStyle('var(--text-muted)')}>
             <RefreshCw size={15} /> Refresh
@@ -375,7 +375,7 @@ export const ExpenseReview: React.FC = () => {
           {/* The number on the button is the number that will change — the ticked claims that
               are on screen — and anything ticked but not shown is named rather than silently
               included or silently dropped. */}
-          <span style={{ fontSize: 13, fontWeight: 600 }}>
+          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
             {picked.rows.length} selected · {formatRupees(pickedTotal)}
           </span>
           <button
@@ -390,10 +390,10 @@ export const ExpenseReview: React.FC = () => {
             Clear selection
           </button>
           {/* Rejecting is per claim on purpose: the reason is written for that assayer. */}
-          <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             Rejecting stays one claim at a time, so each assayer gets a reason written for their claim.
           </span>
-          {hiddenNote && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{hiddenNote}</span>}
+          {hiddenNote && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{hiddenNote}</span>}
         </div>
       )}
 
@@ -438,7 +438,7 @@ export const ExpenseReview: React.FC = () => {
           </div>
         }
       >
-        <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--text-muted)' }}>
+        <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
           {rejecting ? `${rejecting.assayer?.displayName ?? 'Assayer'} — ${formatRupees(Number(rejecting.amount || 0))} (${EXPENSE_CATEGORY_LABELS[rejecting.category] ?? rejecting.category})` : ''}
         </p>
         {rejecting?.category === 'TRAVEL_KM' && rejecting.assignmentId && (
@@ -446,7 +446,7 @@ export const ExpenseReview: React.FC = () => {
             <TravelEvidence assignmentId={rejecting.assignmentId} />
           </div>
         )}
-        <label style={{ fontSize: 13, fontWeight: 600 }}>Reason (required)</label>
+        <label style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Reason (required)</label>
         <div style={{ marginTop: 6 }}>
           <Select
             value={rejectPreset}
@@ -467,7 +467,7 @@ export const ExpenseReview: React.FC = () => {
             placeholder="Explain why this claim is being rejected — the assayer will see this."
             style={{
               width: '100%', marginTop: 8, padding: 10, borderRadius: 8, resize: 'vertical',
-              border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 13,
+              border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 'var(--text-sm)',
             }}
           />
         )}
@@ -485,7 +485,7 @@ export const ExpenseReview: React.FC = () => {
           </div>
         }
       >
-        <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--text-muted)' }}>
+        <p style={{ margin: '0 0 10px', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
           {inspecting
             ? `${inspecting.assayer?.displayName ?? 'Assayer'} — ${formatRupees(Number(inspecting.amount || 0))} claimed on ${inspecting.assignment?.assignmentNumber ?? 'this assignment'}`
             : ''}
@@ -500,7 +500,7 @@ export const ExpenseReview: React.FC = () => {
 
 function btnStyle(color: string): React.CSSProperties {
   return {
-    display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', fontSize: 12.5, fontWeight: 600,
+    display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', fontSize: 'var(--text-xs)', fontWeight: 600,
     color, background: 'transparent', border: `1px solid ${color}`, borderRadius: 8, cursor: 'pointer',
   };
 }

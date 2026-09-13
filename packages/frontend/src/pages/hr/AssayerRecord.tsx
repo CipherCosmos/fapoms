@@ -663,8 +663,8 @@ export const AssayerRecord: React.FC<{
      */
     if (profileLoad === 'absent') {
       return (
-        <div data-testid="assayer-record-missing" style={{ padding: '24px', background: 'var(--bg-card)', borderRadius: '12px', color: 'var(--text-secondary)', fontSize: '13.5px' }}>
-          <strong style={{ display: 'block', marginBottom: '6px', color: 'var(--text-primary)', fontSize: '15px' }}>No such person</strong>
+        <div data-testid="assayer-record-missing" style={{ padding: '24px', background: 'var(--bg-card)', borderRadius: '12px', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
+          <strong style={{ display: 'block', marginBottom: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-md)' }}>No such person</strong>
           There is no record on this roster with that reference. It may have been removed, or the
           link may have been mistyped or gone stale.
         </div>
@@ -686,7 +686,7 @@ export const AssayerRecord: React.FC<{
             type="button"
             onClick={() => { setErr(null); setAttempt((n) => n + 1); }}
             style={{
-              marginTop: '12px', padding: '7px 14px', fontSize: '13px', cursor: 'pointer',
+              marginTop: '12px', padding: '7px 14px', fontSize: 'var(--text-sm)', cursor: 'pointer',
               background: 'var(--bg-secondary)', color: 'var(--text-primary)',
               border: '1px solid var(--border-color)', borderRadius: '7px',
             }}
@@ -734,15 +734,15 @@ export const AssayerRecord: React.FC<{
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                <h2 style={{ margin: 0, fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)' }}>
                   {a.displayName}
                 </h2>
-                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-muted)' }}>
+                <span style={{ fontFamily: 'monospace', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                   {a.assayerCode}
                 </span>
                 <span
                   style={{
-                    fontSize: '11px',
+                    fontSize: 'var(--text-2xs)',
                     fontWeight: 600,
                     padding: '2px 8px',
                     borderRadius: '999px',
@@ -753,13 +753,13 @@ export const AssayerRecord: React.FC<{
                   {assayerLifecycleLabel(a.lifecycleStatus)}
                 </span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', fontSize: '12.5px', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
                 {a.city && <span>{a.city}, {a.state}</span>}
                 {a.phone && <span>{a.phone}</span>}
                 {a.email && <span>{a.email}</span>}
               </div>
               {onboardingNextStep(a) && (
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '4px' }}>
                   Next: they are {onboardingNextStep(a)}.
                 </div>
               )}
@@ -768,15 +768,15 @@ export const AssayerRecord: React.FC<{
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
               {canManage && (editing ? (
                 <>
-                  <button onClick={saveEdit} disabled={savingEdit} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <button onClick={saveEdit} disabled={savingEdit} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <CheckCircle2 size={12} /> {savingEdit ? 'Saving…' : 'Save changes'}
                   </button>
-                  <button onClick={cancelEdit} disabled={savingEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px' }}>
+                  <button onClick={cancelEdit} disabled={savingEdit} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 10px' }}>
                     Cancel
                   </button>
                 </>
               ) : (
-                <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                   <Edit2 size={12} /> Edit
                 </button>
               ))}
@@ -785,7 +785,7 @@ export const AssayerRecord: React.FC<{
                   onClick={() => setDeleteModalOpen(true)}
                   className="btn btn-secondary"
                   title="Delete assayer profile"
-                  style={{ fontSize: '12px', padding: '6px 10px', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '5px' }}
+                  style={{ fontSize: 'var(--text-xs)', padding: '6px 10px', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '5px' }}
                 >
                   <Trash2 size={12} /> Delete
                 </button>
@@ -796,18 +796,18 @@ export const AssayerRecord: React.FC<{
                   disabled={idCardBusy}
                   className="btn btn-secondary"
                   title="Download a templated ID card as a PDF"
-                  style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                  style={{ fontSize: 'var(--text-xs)', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}
                 >
                   <Download size={12} /> {idCardBusy ? 'Preparing…' : 'Download ID Card'}
                 </button>
               )}
               {a.phone && (
-                <a href={`tel:${a.phone}`} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
+                <a href={`tel:${a.phone}`} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
                   <Phone size={12} /> Call
                 </a>
               )}
               {a.email && (
-                <a href={`mailto:${a.email}`} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
+                <a href={`mailto:${a.email}`} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
                   <Mail size={12} /> Email
                 </a>
               )}
@@ -826,7 +826,7 @@ export const AssayerRecord: React.FC<{
                 onClick={() => setTab(t.key)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: '5px', padding: '10px 12px',
-                  fontSize: '12px', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
+                  fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
                   whiteSpace: 'nowrap', flexShrink: 0,
                   color: on ? 'var(--accent-primary)' : 'var(--text-muted)',
                   borderBottom: `2px solid ${on ? 'var(--accent-primary)' : 'transparent'}`,
@@ -864,10 +864,10 @@ export const AssayerRecord: React.FC<{
               {/* Warnings & Gaps */}
               {a.workDoneBySomeoneElse && (
                 <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: 'var(--text-xs)' }}>
                     <AlertTriangle size={14} /> Their work is being done by somebody else
                   </div>
-                  <div style={{ margin: '7px 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  <div style={{ margin: '7px 0 0', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                     The roster records that audits under this code are attended by a member of staff, a relative or a friend — not by the person empanelled here. Resolve this before planning any further work on this code.
                   </div>
                 </div>
@@ -875,19 +875,19 @@ export const AssayerRecord: React.FC<{
 
               {missing.length > 0 && (
                 <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--warning)', fontWeight: 700, fontSize: '12.5px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--warning)', fontWeight: 700, fontSize: 'var(--text-xs)' }}>
                     <AlertTriangle size={14} /> {counted(missing.length, 'required field')} missing
                   </div>
-                  <ul style={{ margin: '7px 0 0', paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  <ul style={{ margin: '7px 0 0', paddingLeft: '20px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                     {missing.map((f) => <li key={String(f.key)}>{f.label} — blocks {f.why.toLowerCase()}</li>)}
                   </ul>
                   {alsoIncomplete.length > 0 && (
-                    <div style={{ marginTop: '7px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    <div style={{ marginTop: '7px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                       {counted(alsoIncomplete.length, 'other field is', 'other fields are')} also empty — {alsoIncomplete.map((f) => f.label.toLowerCase()).join(', ')}. Nothing is blocked by them.
                     </div>
                   )}
                   {canManage && !editing && (
-                    <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
+                    <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '5px 10px', marginTop: '9px' }}>
                       Fill them in
                     </button>
                   )}
@@ -940,14 +940,14 @@ export const AssayerRecord: React.FC<{
                   {dossierGlance && (
                     <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '12px 16px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Banks &amp; standing</span>
-                        <button type="button" onClick={() => setTab('vetting')} style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                        <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Banks &amp; standing</span>
+                        <button type="button" onClick={() => setTab('vetting')} style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: 'var(--text-xs)', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
                           Manage standings
                         </button>
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
                         {dossierGlance.empanelments.length === 0 && (
-                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                             No bank standings recorded yet — they will appear here after vetting or a roster import.
                           </span>
                         )}
@@ -956,7 +956,7 @@ export const AssayerRecord: React.FC<{
                           return (
                             <span key={e.id} title={e.statusReason ?? undefined} style={{
                               display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px',
-                              borderRadius: '999px', fontSize: '12px', fontWeight: 600,
+                              borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 600,
                               background: tone.bg,
                               color: 'var(--text-primary)', border: '1px solid var(--border-color)',
                             }}>
@@ -967,7 +967,7 @@ export const AssayerRecord: React.FC<{
                             </span>
                           );
                         })}
-                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: 'auto', display: 'inline-flex', gap: '12px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginLeft: 'auto', display: 'inline-flex', gap: '12px', flexWrap: 'wrap' }}>
                           <span title="Their code in the vault system. Blank simply means they have not been given one.">
                             Vault system code: <b>{a.vstsCode || 'none'}</b>
                           </span>
@@ -998,7 +998,7 @@ export const AssayerRecord: React.FC<{
                     <ArrowRightLeft size={11} /> What happens next
                   </div>
                   {onboardingNextStep(a) && (
-                    <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
                       Onboarding is not finished — they are {onboardingNextStep(a)}.
                     </div>
                   )}
@@ -1053,19 +1053,19 @@ export const AssayerRecord: React.FC<{
                   {credential ? (
                     <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'var(--status-active-bg)', border: '1px solid var(--success)' }}>
                       {credential.username && (
-                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: '6px' }}>
                           They sign in as <code style={{ fontWeight: 700, userSelect: 'all' }}>{credential.username}</code>
                         </div>
                       )}
-                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: '4px' }}>
                         Temporary password — read it to the assayer now, it will not be shown again:
                       </div>
-                      <code style={{ fontSize: '16px', fontWeight: 700, letterSpacing: '0.02em', color: 'var(--success)', userSelect: 'all' }}>{credential.password}</code>
-                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                      <code style={{ fontSize: 'var(--text-md)', fontWeight: 700, letterSpacing: '0.02em', color: 'var(--success)', userSelect: 'all' }}>{credential.password}</code>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '5px' }}>
                         They will be asked to choose their own at next sign-in.
                       </div>
                       {credential.canSignInNow === false && (
-                        <div style={{ marginTop: '8px', display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--warning)', lineHeight: 1.5 }}>
+                        <div style={{ marginTop: '8px', display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: 'var(--text-xs)', color: 'var(--warning)', lineHeight: 1.5 }}>
                           <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
                           <span>
                             {(a && SIGN_IN_CLOSED_REASON[a.lifecycleStatus as AssayerLifecycleStatus])
@@ -1074,23 +1074,23 @@ export const AssayerRecord: React.FC<{
                         </div>
                       )}
                       {credential.canSignInNow !== false && credential.accessScope === 'REGISTRATION_ONLY' && (
-                        <div style={{ marginTop: '8px', display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        <div style={{ marginTop: '8px', display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                           <Info size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
                           <span>
                             They can sign in with this straight away, but only to finish their own registration — uploading their papers and their own details. The rest of the app opens once their joining checks are signed off.
                           </span>
                         </div>
                       )}
-                      <button onClick={() => setCredential(null)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
+                      <button onClick={() => setCredential(null)} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '5px 10px', marginTop: '9px' }}>
                         I have read it out
                       </button>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                      <button onClick={issueAppAccess} disabled={!!issuing} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <button onClick={issueAppAccess} disabled={!!issuing} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                         <KeyRound size={13} /> {issuing === 'invite' ? 'Creating…' : 'Give them app access'}
                       </button>
-                      <button onClick={resetPassword} disabled={!!issuing} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <button onClick={resetPassword} disabled={!!issuing} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                         <KeyRound size={13} /> {issuing === 'reset' ? 'Resetting…' : 'Reset password'}
                       </button>
                     </div>
@@ -1144,7 +1144,7 @@ export const AssayerRecord: React.FC<{
                   footer={canManage && (editing || geoNeedsFixing(a.geoSource)) ? (
                     <>
                       {geoNeedsFixing(a.geoSource) && (
-                        <div style={{ fontSize: '12px', color: 'var(--warning)', lineHeight: 1.5 }}>
+                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', lineHeight: 1.5 }}>
                           {coordinates(a)
                             ? 'This pin is a stand-in, not their home — it can be tens of kilometres out, so distance filtering and travel costs based on it will be wrong.'
                             : 'No home location has been recorded, so this person is left out of every distance-based search.'}
@@ -1188,7 +1188,7 @@ export const AssayerRecord: React.FC<{
                   flash={flashGroup}
                   title="Who they are"
                   footer={(
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                       Aadhaar and PAN are kept in full and encrypted. Screens show the last few digits only; showing the whole number is a deliberate click, and each one goes into the audit log with your name and the time.
                     </div>
                   )}
@@ -1227,26 +1227,26 @@ export const AssayerRecord: React.FC<{
                   background: 'var(--status-pending-bg)',
                   border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '12.5px', color: 'var(--warning)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: 'var(--text-xs)', color: 'var(--warning)' }}>
                     <AlertTriangle size={14} /> No bank details — cannot be paid
                   </div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '4px' }}>
                     The rates below decide what this assayer earns; the account they are paid into is on their record, under Financial.
                   </div>
                   {canManage && (
-                    <button onClick={() => { startEdit(); setFlashGroup('financial'); }} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
+                    <button onClick={() => { startEdit(); setFlashGroup('financial'); }} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '5px 10px', marginTop: '9px' }}>
                       Add bank details
                     </button>
                   )}
                 </div>
               ) : (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '12px' }}>
                   Paid into account {maskedIdentifier(a.bankAccountNumber)} · IFSC {a.ifscCode}
                 </div>
               )}
               {canManage && (
                 <button onClick={() => setPayModal({ open: true, profile: null })}
-                  className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 12px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '7px 12px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <CreditCard size={13} /> Add pay structure
                 </button>
               )}
@@ -1255,12 +1255,12 @@ export const AssayerRecord: React.FC<{
                 empty="No pay structure recorded — this assayer cannot be billed or paid until one exists."
                 render={(c: any) => (
                   <div key={c.id} style={{ padding: '11px 0', borderBottom: '1px solid var(--border-hair)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--text-xs)' }}>
                       <div>
                         <strong>{money(c.baseFee)} base</strong>
                         {c.currency && <span style={{ color: 'var(--text-muted)', marginLeft: '5px' }}>{c.currency}</span>}
                         <span style={{
-                          marginLeft: '7px', fontSize: '12px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
+                          marginLeft: '7px', fontSize: 'var(--text-xs)', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
                           background: c.__state === 'current' ? 'var(--status-active-bg)' : 'var(--bg-surface-2)',
                           color: c.__state === 'current' ? 'var(--success)' : c.__state === 'future' ? 'var(--accent)' : 'var(--text-muted)',
                         }}>
@@ -1268,7 +1268,7 @@ export const AssayerRecord: React.FC<{
                         </span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                           {fmtDate(c.effectiveStartDate || c.startDate)} → {c.effectiveEndDate ? fmtDate(c.effectiveEndDate) : 'open'}
                         </span>
                         {canManage && (
@@ -1283,7 +1283,7 @@ export const AssayerRecord: React.FC<{
                         )}
                       </div>
                     </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
                       {money(c.hourlyRate)}/hr · {money(c.dailyRate)}/day · travel {money(c.travelReimbursement)}
                       {Number(c.accommodationAllowance) > 0 && <> · stay {money(c.accommodationAllowance)}</>}
                       {Number(c.mealAllowance) > 0 && <> · meals {money(c.mealAllowance)}</>}
@@ -1326,7 +1326,7 @@ export const AssayerRecord: React.FC<{
               empty="Nothing recorded for this assayer yet. Status changes, assignments and HR updates will be listed here."
               render={(h: any) => (
                 <div key={h.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-hair)' }}>
-                  <div style={{ fontSize: '12.5px' }}>
+                  <div style={{ fontSize: 'var(--text-xs)' }}>
                     {activityEventLabel(h.eventType)}
                     {(h.previousState || h.newState) && (
                       <> — {assayerLifecycleLabel(h.previousState)} → <strong>{assayerLifecycleLabel(h.newState)}</strong></>
@@ -1335,7 +1335,7 @@ export const AssayerRecord: React.FC<{
                   <div style={{ ...label, marginTop: '4px' }}>
                     {h.performedByName ?? 'system'} · {fmtWhen(h.occurredAt)}
                   </div>
-                  {h.remarks && <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '3px' }}>{h.remarks}</div>}
+                  {h.remarks && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '3px' }}>{h.remarks}</div>}
                 </div>
               )}
             />
@@ -1421,11 +1421,11 @@ const StageStep: React.FC<{
           onClick={asking ? onConfirm : onPress}
           disabled={busy || (asking && !reason.trim())}
           className={primary ? 'btn btn-primary' : 'btn btn-secondary'}
-          style={{ fontSize: '12px', padding: primary ? '8px 14px' : '6px 12px', whiteSpace: 'nowrap' }}
+          style={{ fontSize: 'var(--text-xs)', padding: primary ? '8px 14px' : '6px 12px', whiteSpace: 'nowrap' }}
         >
           {busy ? 'Moving…' : buttonLabel}
         </button>
-        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5, flex: '1 1 220px' }}>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5, flex: '1 1 220px' }}>
           {explainer}
         </span>
       </div>
@@ -1457,14 +1457,14 @@ const StageStep: React.FC<{
                   placeholder="e.g. no longer available for work in their area"
                   aria-label="Reason, in your own words"
                   style={{
-                    padding: '7px 10px', fontSize: '12px', borderRadius: '6px',
+                    padding: '7px 10px', fontSize: 'var(--text-xs)', borderRadius: '6px',
                     background: 'var(--bg-page)', color: 'inherit',
                     border: `1px solid ${reason.trim() ? 'var(--border-color)' : 'var(--warning)'}`,
                   }}
                 />
               )}
             </div>
-            <button onClick={onCancel} disabled={busy} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+            <button onClick={onCancel} disabled={busy} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
               Cancel
             </button>
           </div>
@@ -1522,7 +1522,7 @@ interface EditCtx {
 }
 
 const inlineControl: React.CSSProperties = {
-  width: '100%', padding: '5px 8px', fontSize: '12.5px', boxSizing: 'border-box',
+  width: '100%', padding: '5px 8px', fontSize: 'var(--text-xs)', boxSizing: 'border-box',
   background: 'var(--bg-surface)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: '6px', outline: 'none',
 };
@@ -1629,9 +1629,9 @@ const IfscInlineControl: React.FC<{ val: string; onChange: (v: string) => void; 
         onChange={(e) => onChange(e.target.value)}
         onBlur={() => { void handleBlur(); }}
       />
-      {busy && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Looking up…</div>}
+      {busy && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>Looking up…</div>}
       {!busy && info && (
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
           {info.bankName}
           {info.branchName ? ` — ${info.branchName}` : ''}
           {info.city ? `, ${info.city}` : ''}
@@ -1684,7 +1684,7 @@ const Facts: React.FC<{ rows: Fact[]; edit?: EditCtx }> = ({ rows, edit }) => {
         return (
           <div key={k}>
             <dt style={label}>{k}</dt>
-            <dd style={{ margin: '2px 0 0', fontSize: '12.5px' }}>
+            <dd style={{ margin: '2px 0 0', fontSize: 'var(--text-xs)' }}>
               {editable ? (
                 <InlineField
                   fieldKey={recordKey as string}
@@ -1722,7 +1722,7 @@ const List: React.FC<{ rows: any[] | undefined; empty: string; render: (r: any) 
   rows, empty, render,
 }) => {
   if (rows === undefined) return <SkeletonList rows={3} height={52} />;
-  if (rows.length === 0) return <div style={{ color: 'var(--text-muted)', fontSize: '12.5px', padding: '18px 0' }}>{empty}</div>;
+  if (rows.length === 0) return <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', padding: '18px 0' }}>{empty}</div>;
   return <>{rows.map(render)}</>;
 };
 

@@ -54,7 +54,7 @@ export const RosterSegmentTabs: React.FC<RosterSegmentTabsProps> = ({
                 gap: '6px',
                 padding: '6px 12px',
                 borderRadius: '20px',
-                fontSize: '12.5px',
+                fontSize: 'var(--text-xs)',
                 fontWeight: isSelected ? 600 : 500,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -71,7 +71,7 @@ export const RosterSegmentTabs: React.FC<RosterSegmentTabsProps> = ({
               <span>{segment.label}</span>
               <span
                 style={{
-                  fontSize: '11px',
+                  fontSize: 'var(--text-2xs)',
                   fontWeight: 700,
                   padding: '1px 6px',
                   borderRadius: '10px',
@@ -89,7 +89,7 @@ export const RosterSegmentTabs: React.FC<RosterSegmentTabsProps> = ({
       {activeSegment.hint && (
         <div
           style={{
-            fontSize: '12.5px',
+            fontSize: 'var(--text-xs)',
             color: 'var(--text-secondary)',
             lineHeight: 1.5,
             padding: '8px 12px',

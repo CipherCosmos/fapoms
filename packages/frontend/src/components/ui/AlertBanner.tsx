@@ -25,7 +25,7 @@ export const AlertBanner: React.FC<{
         alignItems: 'center',
         gap: '8px',
         padding: '8px 16px',
-        fontSize: '12.5px',
+        fontSize: 'var(--text-xs)',
         background: bg,
         border: `1px solid ${border}`,
         borderRadius: 'var(--radius-sm)',

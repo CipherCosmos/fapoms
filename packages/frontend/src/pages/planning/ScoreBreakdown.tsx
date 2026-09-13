@@ -77,7 +77,7 @@ export const ScoreBreakdown: React.FC<{
 
   const pill = (k: string, v: number, good: boolean) => (
     <span key={k} title={`${SCORE_DIMENSION_LABELS[k]}: ${Math.round(v)}/100${basis(k)}`}
-      style={{ fontSize: '9.5px', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', whiteSpace: 'nowrap',
+      style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, padding: '1px 5px', borderRadius: '4px', whiteSpace: 'nowrap',
         background: good ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)',
         color: good ? 'var(--success)' : 'var(--danger)' }}>
       {SCORE_DIMENSION_LABELS[k]} {Math.round(v)}
@@ -125,11 +125,11 @@ export const ScoreBreakdown: React.FC<{
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+      <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
         {reasonLine}{weakLine}.
       </div>
       <details>
-        <summary style={{ cursor: 'pointer', userSelect: 'none', fontSize: '10px', fontWeight: 600, color: 'var(--accent)' }}>
+        <summary style={{ cursor: 'pointer', userSelect: 'none', fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--accent)' }}>
           Why this match?
         </summary>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>

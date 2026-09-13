@@ -17,12 +17,12 @@ import { ImportPhase, ImportReport, ImportSummary, summariseImport } from './use
 const RowNotes: React.FC<{ notes: { row: number; reason: string }[]; limit: number }> = ({ notes, limit }) => (
   <ul style={{ margin: '6px 0 0', paddingLeft: 18, display: 'grid', gap: 2 }}>
     {notes.slice(0, limit).map((n) => (
-      <li key={n.row} style={{ fontSize: 13, lineHeight: 1.45 }}>
+      <li key={n.row} style={{ fontSize: 'var(--text-sm)', lineHeight: 1.45 }}>
         <strong>Row {n.row}</strong> — {n.reason}
       </li>
     ))}
     {notes.length > limit && (
-      <li style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+      <li style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
         …and {notes.length - limit} more.
       </li>
     )}
@@ -78,7 +78,7 @@ export function ImportProgressPanel<TReport = ImportReport>({
         }}
       >
         <div style={{ color, flexShrink: 0, marginTop: 1 }}>{icon}</div>
-        <div style={{ flex: 1, minWidth: 0, fontSize: 14, lineHeight: 1.5 }}>{body}</div>
+        <div style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-base)', lineHeight: 1.5 }}>{body}</div>
         {dismissible && (
           <button
             type="button"
@@ -150,7 +150,7 @@ export function ImportProgressPanel<TReport = ImportReport>({
             <div className="import-progress-indeterminate" style={{ height: '100%', width: '35%', borderRadius: 4, background: 'var(--primary)' }} />
           </div>
 
-          <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-muted)' }}>
+          <div style={{ marginTop: 6, fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
             Working — this can take a while for a large file, and does not need this page kept open.
           </div>
           <style>{`
@@ -200,7 +200,7 @@ export function ImportProgressPanel<TReport = ImportReport>({
           <div style={{ width: `${pct}%`, height: '100%', background: 'var(--primary)', transition: 'width 400ms ease' }} />
         </div>
 
-        <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+        <div style={{ marginTop: 6, fontSize: 'var(--text-sm)', color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
           {total > 0 ? `${done} of ${total} rows` : 'Starting…'}
           {state.progress && (state.progress.created > 0 || state.progress.updated > 0) && (
             <> — {state.progress.created} created, {state.progress.updated} updated</>
@@ -233,12 +233,12 @@ export function ImportProgressPanel<TReport = ImportReport>({
       <div style={{ marginTop: 2 }}>{summary.text}</div>
 
       {(summary.notes ?? []).map((note, i) => (
-        <div key={i} style={{ marginTop: 6, fontSize: 13, color: 'var(--text-muted)' }}>{note}</div>
+        <div key={i} style={{ marginTop: 6, fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>{note}</div>
       ))}
 
       {(summary.sections ?? []).map((section) => (
         <details key={section.label} style={{ marginTop: 8 }}>
-          <summary style={{ cursor: 'pointer', fontSize: 13 }}>{section.label}</summary>
+          <summary style={{ cursor: 'pointer', fontSize: 'var(--text-sm)' }}>{section.label}</summary>
           <RowNotes notes={section.rows} limit={20} />
         </details>
       ))}

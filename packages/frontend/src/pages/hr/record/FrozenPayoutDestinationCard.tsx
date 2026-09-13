@@ -35,17 +35,17 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Lock size={16} style={{ color: 'var(--text-secondary)' }} />
           <div>
-            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
               FROZEN DISBURSEMENT DESTINATION
             </span>
-            <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <span style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               Frozen snapshot captured at payable approval
             </span>
           </div>
         </div>
         <span
           style={{
-            fontSize: '11px',
+            fontSize: 'var(--text-2xs)',
             fontWeight: 700,
             padding: '2px 8px',
             borderRadius: '999px',
@@ -71,7 +71,7 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
             gap: '10px',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--text-xs)' }}>
             <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
               {activePayable.payableNumber}
             </span>
@@ -85,17 +85,17 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
               gap: '8px',
-              fontSize: '12px',
+              fontSize: 'var(--text-xs)',
             }}
           >
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block' }}>Destination Bank</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Destination Bank</span>
               <strong style={{ color: 'var(--text-primary)' }}>
                 {activePayable.destinationBankName || '—'}
               </strong>
             </div>
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block' }}>Account Number</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Account Number</span>
               <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
                 {activePayable.destinationBankAccountNumber
                   ? `••••${activePayable.destinationBankAccountNumber.slice(-4)}`
@@ -103,13 +103,13 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
               </strong>
             </div>
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block' }}>Destination IFSC</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Destination IFSC</span>
               <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
                 {activePayable.destinationIfsc || '—'}
               </strong>
             </div>
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block' }}>Beneficiary</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Beneficiary</span>
               <strong style={{ color: 'var(--text-primary)' }}>
                 {activePayable.destinationAccountHolderName || '—'}
               </strong>
@@ -117,14 +117,14 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
           </div>
 
           {activePayable.approvedAt && (
-            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', borderTop: '1px dashed var(--border-hair)', paddingTop: '6px' }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', borderTop: '1px dashed var(--border-hair)', paddingTop: '6px' }}>
               Frozen upon approval on {fmtDate(activePayable.approvedAt)}
               {activePayable.payoutEvidenceVersionId && ' (bound to verified KYC passbook)'}
             </div>
           )}
         </div>
       ) : (
-        <div style={{ padding: '14px', background: 'var(--bg-surface-2)', borderRadius: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+        <div style={{ padding: '14px', background: 'var(--bg-surface-2)', borderRadius: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           No approved payables currently on file. When an assayer payable is approved for disbursement, its destination bank account will be frozen here and become immutable.
         </div>
       )}
@@ -132,7 +132,7 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
       {/* Safety Notice: Mutating Live Profile does NOT change Frozen Payables */}
       <div
         style={{
-          fontSize: '11.5px',
+          fontSize: 'var(--text-2xs)',
           color: 'var(--text-muted)',
           display: 'flex',
           alignItems: 'flex-start',

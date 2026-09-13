@@ -47,7 +47,7 @@ export const ConflictModal: React.FC<ConflictModalProps> = ({
               type="button"
               onClick={onDiscard}
               className="btn btn-secondary"
-              style={{ fontSize: '13px', padding: '7px 14px' }}
+              style={{ fontSize: 'var(--text-sm)', padding: '7px 14px' }}
             >
               Discard My Changes
             </button>
@@ -60,7 +60,7 @@ export const ConflictModal: React.FC<ConflictModalProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
-              fontSize: '13px',
+              fontSize: 'var(--text-sm)',
               padding: '7px 14px',
             }}
           >
@@ -71,7 +71,7 @@ export const ConflictModal: React.FC<ConflictModalProps> = ({
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <p style={{ margin: 0, fontSize: '13.5px', lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)', lineHeight: 1.5, color: 'var(--text-secondary)' }}>
           {message}
         </p>
 
@@ -81,7 +81,7 @@ export const ConflictModal: React.FC<ConflictModalProps> = ({
             background: 'var(--status-pending-bg)',
             border: '1px solid var(--status-pending-border)',
             borderRadius: 'var(--radius-sm)',
-            fontSize: '12.5px',
+            fontSize: 'var(--text-xs)',
             color: 'var(--text-primary)',
           }}
         >
@@ -97,7 +97,7 @@ export const ConflictModal: React.FC<ConflictModalProps> = ({
                 background: 'transparent',
                 border: 'none',
                 color: 'var(--accent-primary)',
-                fontSize: '12.5px',
+                fontSize: 'var(--text-xs)',
                 fontWeight: 600,
                 cursor: 'pointer',
                 display: 'inline-flex',
@@ -120,7 +120,7 @@ export const ConflictModal: React.FC<ConflictModalProps> = ({
                   borderRadius: 'var(--radius-sm)',
                   background: 'var(--bg-surface-2)',
                   padding: '8px',
-                  fontSize: '12px',
+                  fontSize: 'var(--text-xs)',
                 }}
               >
                 {diffEntries.map(([field, vals]) => (

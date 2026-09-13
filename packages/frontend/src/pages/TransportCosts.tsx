@@ -319,12 +319,12 @@ export const TransportCostsSection: React.FC = () => {
       {/* The section card above carries the heading and the description; this row is the controls. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-muted)', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', cursor: 'pointer' }}>
             <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
             Show retired
           </label>
           {canManage && (
-            <button onClick={openCreate} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+            <button onClick={openCreate} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
               <Plus size={14} /> Add Rate
             </button>
           )}
@@ -335,7 +335,7 @@ export const TransportCostsSection: React.FC = () => {
       {success && <AlertBanner type="success">{success}</AlertBanner>}
 
       {inactiveSeedCount > 0 && !showRetired && (
-        <div className="glass-card" style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', color: 'var(--text-secondary)', border: '1px solid var(--accent-primary)' }}>
+        <div className="glass-card" style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', border: '1px solid var(--accent-primary)' }}>
           <Info size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
           <span>
             {inactiveSeedCount} seeded starter rate{inactiveSeedCount === 1 ? ' is' : 's are'} waiting inactive — tick “Show retired”,
@@ -348,20 +348,20 @@ export const TransportCostsSection: React.FC = () => {
       <div className="glass-card" style={{ padding: '18px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
           <Calculator size={16} style={{ color: 'var(--accent)' }} />
-          <span style={{ fontSize: '14px', fontWeight: 700 }}>Journey estimator</span>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: 'var(--text-base)', fontWeight: 700 }}>Journey estimator</span>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             — the same resolution an offer uses, so what you see here is what the desk is recommended
           </span>
         </div>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             One-way distance (km)
             <input
               type="number" min={1} value={estKm} onChange={(e) => setEstKm(e.target.value)}
-              style={{ width: '120px', padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}
+              style={{ width: '120px', padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             State
             <Select
               value={estState} onChange={setEstState}
@@ -370,7 +370,7 @@ export const TransportCostsSection: React.FC = () => {
               style={{ minWidth: '180px' }}
             />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             Region (used when no state)
             <span title={estState ? 'The region follows the chosen state' : undefined} style={{ display: 'contents' }}>
               <Select
@@ -393,9 +393,9 @@ export const TransportCostsSection: React.FC = () => {
             {loadFailed(estimateQuery) ? (
               <LoadFailure loads={[{ label: 'the journey estimate', query: estimateQuery }]} />
             ) : estimating ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Calculating…</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Calculating…</div>
             ) : !estimate || estimate.options.length === 0 ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
                 <Info size={13} />
                 No active transport rate covers this place — offers there fall back to the client contract's per-km formula.
               </div>
@@ -418,30 +418,30 @@ export const TransportCostsSection: React.FC = () => {
                       background: isRec ? 'rgba(216,174,71,0.08)' : 'transparent',
                       opacity: ruledOut ? 0.55 : 1,
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', fontWeight: 700 }}>
                         {o.modeLabel}
-                        {isRec && <span style={{ fontSize: '9px', fontWeight: 800, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: '4px', padding: '1px 5px' }}>RECOMMENDED</span>}
-                        {ruledOut && <span style={{ fontSize: '9px', fontWeight: 800, color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '1px 5px' }}>NOT SUITABLE</span>}
+                        {isRec && <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: '4px', padding: '1px 5px' }}>RECOMMENDED</span>}
+                        {ruledOut && <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '1px 5px' }}>NOT SUITABLE</span>}
                         {o.preferred && !isRec && !ruledOut && <Star size={11} style={{ color: 'var(--text-muted)' }} />}
                       </div>
                       {timeText && (
-                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
                           {timeText}{o.timeSource === 'RATE_CARD_ESTIMATE' ? ' (est.)' : ''}
                         </div>
                       )}
                       {ruledOut && o.whyNot && (
-                        <div style={{ fontSize: '10px', color: 'var(--warning)', marginTop: '2px' }}>{o.whyNot}</div>
+                        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--warning)', marginTop: '2px' }}>{o.whyNot}</div>
                       )}
                       {isRec && o.reason && (
-                        <div style={{ fontSize: '10px', color: 'var(--accent)', marginTop: '2px' }}>{o.reason}</div>
+                        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent)', marginTop: '2px' }}>{o.reason}</div>
                       )}
-                      <div style={{ fontSize: '17px', fontWeight: 800, color: isRec ? 'var(--accent)' : 'var(--text-primary)', marginTop: '2px' }}>
+                      <div style={{ fontSize: 'var(--text-lg)', fontWeight: 800, color: isRec ? 'var(--accent)' : 'var(--text-primary)', marginTop: '2px' }}>
                         {formatRupees(o.roundTripCost)}
                       </div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
                         round trip · {formatRupees(o.oneWayCost)} one way
                       </div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
                         {formatRupees(o.baseFare)} + {o.perKmRate}/km · {SCOPE_LABEL[o.scopeType as TransportRate['scopeType']] ?? o.scopeType}{o.scopeValue ? ` (${o.scopeValue})` : ''}
                       </div>
                     </div>
@@ -460,7 +460,7 @@ export const TransportCostsSection: React.FC = () => {
         ) : isLoading ? (
           <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
         ) : visibleRates.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
             No {showRetired ? '' : 'active '}transport rates yet.
             {canManage ? ' Add one, or tick “Show retired” to review the seeded starters.' : ''}
           </div>
@@ -485,25 +485,25 @@ export const TransportCostsSection: React.FC = () => {
                   <tr key={r.id} style={{ opacity: r.isActive ? 1 : 0.55 }}>
                     <td style={{ fontWeight: 600 }}>{travelModeLabel(r.mode)}</td>
                     <td>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{SCOPE_LABEL[r.scopeType]}</span>
+                      <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{SCOPE_LABEL[r.scopeType]}</span>
                       {r.scopeType !== 'NATIONAL' && <span> · {scopeDisplay(r)}</span>}
                     </td>
                     <td style={{ textAlign: 'right' }}>{formatRupees(Number(r.baseFare))}</td>
                     <td style={{ textAlign: 'right' }}>₹{Number(r.perKmRate)}</td>
                     <td>{r.isPreferred ? <Star size={13} style={{ color: 'var(--accent)' }} /> : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
-                    <td style={{ fontSize: '12px' }}>
+                    <td style={{ fontSize: 'var(--text-xs)' }}>
                       {r.effectiveFrom}{r.effectiveTo ? ` → ${r.effectiveTo}` : ' →'}
                     </td>
                     <td>
                       <span style={{
-                        fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px',
+                        fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '2px 8px', borderRadius: '10px',
                         background: r.isActive ? 'rgba(52,168,83,0.12)' : 'var(--border-hair)',
                         color: r.isActive ? 'var(--success, #34a853)' : 'var(--text-muted)',
                       }}>
                         {r.isActive ? 'ACTIVE' : 'RETIRED'}
                       </span>
                     </td>
-                    <td style={{ fontSize: '11px', color: 'var(--text-muted)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.notes ?? ''}>
+                    <td style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.notes ?? ''}>
                       {r.notes ?? '—'}
                     </td>
                     {canManage && (
@@ -522,7 +522,7 @@ export const TransportCostsSection: React.FC = () => {
             </table>
           </div>
         )}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', marginTop: '12px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', alignItems: 'center' }}>
           <Info size={12} />
           <span>
             Resolution per mode: a State rate beats a Region rate beats a National one. “Preferred” marks the mode whose cost
@@ -536,13 +536,13 @@ export const TransportCostsSection: React.FC = () => {
         <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Transport Rate' : 'Add Transport Rate'}>
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Mode of transport
                 <Select value={form.mode} onChange={(v) => set({ mode: v })}
                   options={TRAVEL_MODE_ORDER.map((m) => ({ value: m, label: travelModeLabel(m) }))}
                 />
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Applies to
                 <Select value={form.scopeType} onChange={(v) => set({ scopeType: v as TransportRate['scopeType'], scopeValue: '' })}
                   options={[
@@ -555,7 +555,7 @@ export const TransportCostsSection: React.FC = () => {
             </div>
 
             {form.scopeType === 'REGION' && (
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Region
                 <Select value={form.scopeValue} onChange={(v) => set({ scopeValue: v })}
                   placeholder="Select region…"
@@ -564,7 +564,7 @@ export const TransportCostsSection: React.FC = () => {
               </label>
             )}
             {form.scopeType === 'STATE' && (
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 State
                 <Select value={form.scopeValue} onChange={(v) => set({ scopeValue: v })}
                   placeholder="Select state…"
@@ -574,48 +574,48 @@ export const TransportCostsSection: React.FC = () => {
             )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Base fare (₹) — the cost of setting out at all
                 <input type="number" min={0} step="0.01" value={form.baseFare} onChange={(e) => set({ baseFare: e.target.value })}
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Rate per km (₹)
                 <input type="number" min={0} step="0.01" value={form.perKmRate} onChange={(e) => set({ perKmRate: e.target.value })} required
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Effective from
                 <input type="date" value={form.effectiveFrom} onChange={(e) => set({ effectiveFrom: e.target.value })} required
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Effective to (blank = open-ended)
                 <input type="date" value={form.effectiveTo} onChange={(e) => set({ effectiveTo: e.target.value })}
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-primary)', cursor: 'pointer' }}>
               <input type="checkbox" checked={form.isPreferred} onChange={(e) => set({ isPreferred: e.target.checked })} />
               Preferred mode for this scope — its cost becomes the offer's recommended travel
             </label>
 
             {editingId && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-primary)', cursor: 'pointer' }}>
                 <input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} />
                 Active — prices new offers. Untick to retire (seeded starters arrive unticked; activating them is the deliberate act).
               </label>
             )}
 
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               Notes — why this rate is what it is
               <textarea value={form.notes} onChange={(e) => set({ notes: e.target.value })} rows={2}
                 placeholder="e.g. State transport fare revision, April 2026"
-                style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px', resize: 'vertical' }} />
+                style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)', resize: 'vertical' }} />
             </label>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>

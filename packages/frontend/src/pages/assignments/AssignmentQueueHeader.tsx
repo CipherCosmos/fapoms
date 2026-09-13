@@ -118,7 +118,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
             <button
               onClick={refetchList}
               className="btn btn-secondary"
-              style={{ padding: '3px 10px', fontSize: '11px' }}
+              style={{ padding: '3px 10px', fontSize: 'var(--text-2xs)' }}
             >
               Retry
             </button>
@@ -158,7 +158,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                 alignItems: 'center',
                 gap: '6px',
                 padding: '6px 12px',
-                fontSize: '12px',
+                fontSize: 'var(--text-xs)',
                 fontWeight: 700,
                 borderRadius: 'var(--radius-full)',
                 minHeight: '36px',
@@ -196,7 +196,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
         >
           <span
             style={{
-              fontSize: '10.5px',
+              fontSize: 'var(--text-3xs)',
               color: 'var(--text-muted)',
               fontWeight: 700,
               letterSpacing: '0.3px',
@@ -213,7 +213,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                 className="btn btn-secondary"
                 style={{
                   padding: '4px 10px',
-                  fontSize: '11px',
+                  fontSize: 'var(--text-2xs)',
                   fontWeight: 700,
                   borderRadius: 'var(--radius-full)',
                   border: isActive ? '1.5px solid var(--accent)' : '1px solid var(--border-color)',
@@ -248,7 +248,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              fontSize: '13px',
+              fontSize: 'var(--text-sm)',
               fontWeight: 700,
               color: 'var(--warning)',
             }}
@@ -277,7 +277,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                 }}
                 style={{
                   marginLeft: 'auto',
-                  fontSize: '11px',
+                  fontSize: 'var(--text-2xs)',
                   fontWeight: 700,
                   color: 'var(--accent)',
                 }}
@@ -316,7 +316,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                   }}
                 >
                   <span
-                    style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)' }}
+                    style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)' }}
                   >
                     {issue.categoryLabel || issue.category || 'Issue'} ·{' '}
                     {issue.branchName || issue.assignmentNumber || issue.assignmentId.slice(0, 8)}
@@ -325,7 +325,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                         title={`${count} reports on this assignment — showing the newest`}
                         style={{
                           marginLeft: '6px',
-                          fontSize: '10px',
+                          fontSize: 'var(--text-3xs)',
                           fontWeight: 800,
                           padding: '1px 7px',
                           borderRadius: '8px',
@@ -338,7 +338,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                     )}
                   </span>
                   <span
-                    style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}
+                    style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}
                   >
                     {issue.assayerName || 'Assayer'} ·{' '}
                     {new Date(issue.reportedAt).toLocaleString('en-IN', {
@@ -350,7 +350,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                   </span>
                 </div>
                 {issue.note && (
-                  <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
                     {issue.note}
                   </span>
                 )}
@@ -377,7 +377,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
           placeholder="Search this page by ID, project, assayer, branch..."
           iconSize={16}
         />
-        <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
           Showing: <strong style={{ color: 'var(--text-secondary)' }}>{currentViewLabel}</strong>
         </span>
       </div>

@@ -31,10 +31,10 @@ const FACTOR_META: Record<MfaFactor, { label: string; blurb: string; Icon: typeo
   SMS: { label: 'Text message (SMS)', blurb: 'A one-time code texted to your phone when you sign in.', Icon: MessageSquare },
 };
 
-const labelStyle: React.CSSProperties = { fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' };
+const labelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' };
 const inputStyle: React.CSSProperties = {
   padding: '10px 14px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: '14px', outline: 'none',
+  borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: 'var(--text-base)', outline: 'none',
 };
 
 /** Group a base32 setup key into 4-char blocks so it can be typed into an authenticator by hand. */
@@ -174,7 +174,7 @@ export const MfaPanel: React.FC = () => {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
         <Loader2 size={16} className="spin" /> Loading your 2FA settings…
       </div>
     );
@@ -195,10 +195,10 @@ export const MfaPanel: React.FC = () => {
           {anyActive ? <ShieldCheck size={20} /> : <ShieldAlert size={20} />}
         </div>
         <div>
-          <h4 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+          <h4 style={{ fontSize: 'var(--text-md)', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
             Two-step verification (2FA)
           </h4>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '4px 0 0', maxWidth: 560 }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '4px 0 0', maxWidth: 560 }}>
             {anyActive
               ? 'Your account asks for a second factor after your password. Add more than one so you are never locked out.'
               : 'Add a second step at sign-in so a stolen password is not enough to get into your account.'}
@@ -214,14 +214,14 @@ export const MfaPanel: React.FC = () => {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <KeyRound size={16} style={{ color: 'var(--accent-primary)' }} />
-            <strong style={{ fontSize: 14, color: 'var(--text-primary)' }}>Save your recovery codes</strong>
+            <strong style={{ fontSize: 'var(--text-base)', color: 'var(--text-primary)' }}>Save your recovery codes</strong>
           </div>
-          <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: '0 0 12px' }}>
             Each code works <strong>once</strong>, to sign in if you lose your device. This is the only time they are shown.
           </p>
           <div style={{
             display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8,
-            fontFamily: 'var(--font-mono, monospace)', fontSize: 13.5, marginBottom: 14,
+            fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-sm)', marginBottom: 14,
           }}>
             {recoveryCodes.map((c) => (
               <span key={c} style={{
@@ -231,10 +231,10 @@ export const MfaPanel: React.FC = () => {
             ))}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={copyRecovery} className="btn btn-ghost" style={{ gap: 8, fontSize: 13 }}>
+            <button onClick={copyRecovery} className="btn btn-ghost" style={{ gap: 8, fontSize: 'var(--text-sm)' }}>
               {copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Copied' : 'Copy all'}
             </button>
-            <button onClick={() => setRecoveryCodes(null)} className="btn btn-primary" style={{ gap: 8, fontSize: 13, fontWeight: 600 }}>
+            <button onClick={() => setRecoveryCodes(null)} className="btn btn-primary" style={{ gap: 8, fontSize: 'var(--text-sm)', fontWeight: 600 }}>
               <Check size={15} /> I’ve saved these
             </button>
           </div>
@@ -257,22 +257,22 @@ export const MfaPanel: React.FC = () => {
                 <meta.Icon size={20} style={{ color: on ? 'var(--success, #22c55e)' : 'var(--text-muted)', flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{meta.label}</span>
-                    {on && <span className="badge" style={{ fontSize: 10.5, background: 'var(--status-active-bg, rgba(34,197,94,0.14))', color: 'var(--success, #22c55e)' }}>ON</span>}
+                    <span style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--text-primary)' }}>{meta.label}</span>
+                    {on && <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'var(--status-active-bg, rgba(34,197,94,0.14))', color: 'var(--success, #22c55e)' }}>ON</span>}
                   </div>
-                  <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: '3px 0 0' }}>{meta.blurb}</p>
+                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: '3px 0 0' }}>{meta.blurb}</p>
                 </div>
                 <div style={{ flexShrink: 0 }}>
                   {on ? (
-                    <button onClick={() => removeFactor(factor)} className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5, color: 'var(--danger, #ef4444)' }}>
+                    <button onClick={() => removeFactor(factor)} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)', color: 'var(--danger, #ef4444)' }}>
                       <Trash2 size={14} /> Turn off
                     </button>
                   ) : open ? (
-                    <button onClick={closeFlow} className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+                    <button onClick={closeFlow} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                       <X size={14} /> Cancel
                     </button>
                   ) : (
-                    <button onClick={() => startFlow(factor)} disabled={busy} className="btn btn-primary" style={{ gap: 6, fontSize: 12.5, fontWeight: 600 }}>
+                    <button onClick={() => startFlow(factor)} disabled={busy} className="btn btn-primary" style={{ gap: 6, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
                       Set up
                     </button>
                   )}
@@ -286,7 +286,7 @@ export const MfaPanel: React.FC = () => {
 
                   {flow.factor === 'TOTP' && flow.phase === 'setup' && (
                     <>
-                      <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+                      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
                         Open your authenticator app (Google Authenticator, Authy, 1Password…), choose
                         <strong> Add account → Scan a QR code</strong>, and point it at this code. Then enter the
                         6-digit code it shows.
@@ -294,22 +294,22 @@ export const MfaPanel: React.FC = () => {
                       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                         {flow.otpauthUri && <QrCode value={flow.otpauthUri} size={196} />}
                         <div style={{ flex: 1, minWidth: 220 }}>
-                          <p style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', margin: '2px 0 6px' }}>
+                          <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)', margin: '2px 0 6px' }}>
                             Can’t scan? Enter this key by hand
                           </p>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                             <code style={{
-                              fontFamily: 'var(--font-mono, monospace)', fontSize: 14, letterSpacing: 1,
+                              fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-base)', letterSpacing: 1,
                               background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
                               borderRadius: 'var(--radius-sm, 6px)', padding: '8px 12px', color: 'var(--text-primary)',
                               wordBreak: 'break-all',
                             }}>{groupSecret(flow.secret || '')}</code>
                             <button
                               onClick={async () => { try { await navigator.clipboard.writeText(flow.secret || ''); toast({ type: 'success', message: 'Setup key copied.' }); } catch { /* ignore */ } }}
-                              className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}
+                              className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}
                             ><Copy size={14} /> Copy key</button>
                           </div>
-                          <p style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '8px 0 0' }}>
+                          <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '8px 0 0' }}>
                             Account name <em>FAPOMS</em>. Time-based (TOTP), 6 digits.
                           </p>
                         </div>
@@ -329,7 +329,7 @@ export const MfaPanel: React.FC = () => {
                   )}
 
                   {flow.phase === 'code' && (
-                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+                    <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
                       We sent a code to <strong>{flow.sentTo}</strong>. Enter it below.
                     </p>
                   )}
@@ -342,7 +342,7 @@ export const MfaPanel: React.FC = () => {
                         value={flow.code} placeholder="000000" maxLength={8}
                         onChange={(e) => setFlow({ ...flow, code: e.target.value })}
                         onKeyDown={(e) => { if (e.key === 'Enter') void confirmCode(); }}
-                        style={{ ...inputStyle, letterSpacing: 4, fontSize: 18, textAlign: 'center' }}
+                        style={{ ...inputStyle, letterSpacing: 4, fontSize: 'var(--text-lg)', textAlign: 'center' }}
                       />
                     </div>
                   )}
@@ -360,7 +360,7 @@ export const MfaPanel: React.FC = () => {
                     {flow.phase === 'code' && flow.factor !== 'TOTP' && (
                       <button
                         onClick={() => (flow.factor === 'SMS' ? sendSms() : startFlow('EMAIL'))}
-                        disabled={busy} className="btn btn-ghost" style={{ fontSize: 12.5 }}
+                        disabled={busy} className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }}
                       >Resend code</button>
                     )}
                   </div>
@@ -374,11 +374,11 @@ export const MfaPanel: React.FC = () => {
       {/* Recovery codes management (only once a factor is active) */}
       {anyActive && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', paddingTop: 4 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
             <KeyRound size={13} style={{ verticalAlign: -2, marginRight: 6 }} />
             Recovery codes remaining: <strong style={{ color: 'var(--text-primary)' }}>{status?.recoveryCodesRemaining ?? 0}</strong>
           </div>
-          <button onClick={regenerate} className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+          <button onClick={regenerate} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} /> Regenerate recovery codes
           </button>
         </div>

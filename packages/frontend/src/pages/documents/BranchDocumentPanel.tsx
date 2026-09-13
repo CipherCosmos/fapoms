@@ -124,7 +124,7 @@ export const BranchDocumentPanel: React.FC<{
 
       {neverPrepared.length > 0 && stageFilter !== 'NEVER_PREPARED' && (
         <div style={{ background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', padding: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontWeight: 700, fontSize: 'var(--text-sm)', marginBottom: 8 }}>
             <AlertTriangle size={15} />
             {neverPreparedTotal} branch{neverPreparedTotal === 1 ? '' : 'es'} confirmed with no paperwork prepared at all
             {/* The list below is capped. Say so, rather than showing 50 under a heading that
@@ -136,9 +136,9 @@ export const BranchDocumentPanel: React.FC<{
             )}
           </div>
           {neverPrepared.map((b) => (
-            <div key={b.projectBranchId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', fontSize: 12.5, flexWrap: 'wrap', gap: 6 }}>
+            <div key={b.projectBranchId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', fontSize: 'var(--text-xs)', flexWrap: 'wrap', gap: 6 }}>
               <span><strong>{b.branchName}</strong> <span style={{ color: 'var(--text-muted)' }}>· {b.projectName}</span></span>
-              <span style={{ fontSize: 11.5, color: 'var(--danger)', fontWeight: 600 }}>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 600 }}>
                 {b.daysUntilAudit != null && b.daysUntilAudit < 0
                   ? `audit was ${Math.abs(b.daysUntilAudit)} day(s) ago — nothing to send yet`
                   : `audit in ${b.daysUntilAudit} day(s) — no packet uploaded`}
@@ -154,17 +154,17 @@ export const BranchDocumentPanel: React.FC<{
           <input
             value={search} onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search by branch, client or project…"
-            style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13 }}
+            style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
           />
         </div>
         {/* The search runs on the server, so there is a round-trip to acknowledge. Without this
             the box looks unresponsive while 40k branches are being filtered. */}
-        {loading && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Searching…</span>}
+        {loading && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Searching…</span>}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {rows.length === 0 && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
             {loading ? 'Searching…' : 'No branches match this filter.'}
           </div>
         )}
@@ -185,13 +185,13 @@ export const BranchDocumentPanel: React.FC<{
               >
                 {isOpen ? <ChevronDown size={15} color="var(--text-muted)" /> : <ChevronRight size={15} color="var(--text-muted)" />}
                 <div style={{ flex: 1, minWidth: 160 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 700 }}>{b.branchName}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>{b.branchName}</div>
+                  <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                     {b.clientName} · {b.projectName}{b.solId ? ` · ${b.solId}` : ''}
                   </div>
                 </div>
                 {b.scheduledDate && (
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Audit {fmtDate(b.scheduledDate)}</span>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Audit {fmtDate(b.scheduledDate)}</span>
                 )}
                 {/* One chip per known file type — filled if present, dim if not, and
                     an empty chip for an ops-uploaded type doubles as its upload button. */}
@@ -203,7 +203,7 @@ export const BranchDocumentPanel: React.FC<{
                       if (!UPLOADABLE_TYPES.has(t)) {
                         return (
                           <span key={t} title={`${meta.label}: not applicable yet`} style={{
-                            fontSize: 10, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
+                            fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: 'var(--radius-sm)',
                             background: 'transparent', border: '1px dashed var(--border-color)', color: 'var(--text-muted)',
                           }}>{meta.short}</span>
                         );
@@ -223,7 +223,7 @@ export const BranchDocumentPanel: React.FC<{
                     const stage = STAGE_META[latest.status] ?? { label: latest.status, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
                     return (
                       <span key={t} title={`${meta.label}: ${stage.label}${docs.length > 1 ? ` (${docs.length} files)` : ''}`} style={{
-                        fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
+                        fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
                         background: stage.bg, color: stage.color,
                       }}>{meta.short}{docs.length > 1 ? ` ×${docs.length}` : ''}</span>
                     );
@@ -235,7 +235,7 @@ export const BranchDocumentPanel: React.FC<{
                 <div style={{ borderTop: '1px solid var(--border-color)', padding: '10px 14px 14px 39px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {TYPE_ORDER.filter((t) => b.documentsByType[t]?.length).map((t) => (
                     <div key={t}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 5 }}>
+                      <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 5 }}>
                         {TYPE_META[t].label}
                       </div>
                       {b.documentsByType[t].map((d) => {
@@ -248,8 +248,8 @@ export const BranchDocumentPanel: React.FC<{
                         return (
                           <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 0', flexWrap: 'wrap' }}>
                             <FileText size={13} color={stage.color} style={{ flexShrink: 0 }} />
-                            <span style={{ fontSize: 12, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.fileName}</span>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 'var(--radius-sm)', background: stage.bg, color: stage.color, whiteSpace: 'nowrap' }}>
+                            <span style={{ fontSize: 'var(--text-xs)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.fileName}</span>
+                            <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '2px 8px', borderRadius: 'var(--radius-sm)', background: stage.bg, color: stage.color, whiteSpace: 'nowrap' }}>
                               {stage.label}
                             </span>
                             {d.trail?.dispatchedAt && (
@@ -258,17 +258,17 @@ export const BranchDocumentPanel: React.FC<{
                               </span>
                             )}
                             {d.status === 'UPLOADED' && !isReturn && (
-                              <button onClick={() => withActing(d.id, () => onDispatch([d.id]))} disabled={busy || rowBusy} className="btn btn-primary" style={{ padding: '3px 9px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <button onClick={() => withActing(d.id, () => onDispatch([d.id]))} disabled={busy || rowBusy} className="btn btn-primary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <Send size={10} /> {rowBusy ? '…' : 'Send'}
                               </button>
                             )}
                             {canMarkReceived && (
-                              <button onClick={() => withActing(d.id, () => onMarkReceived(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--success)', borderColor: 'var(--status-completed-bg)' }}>
+                              <button onClick={() => withActing(d.id, () => onMarkReceived(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--success)', borderColor: 'var(--status-completed-bg)' }}>
                                 <Inbox size={11} /> {rowBusy ? '…' : 'Mark Received'}
                               </button>
                             )}
                             {canSendToOcr && (
-                              <button onClick={() => withActing(d.id, () => onSendToOcr(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
+                              <button onClick={() => withActing(d.id, () => onSendToOcr(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
                                 <ArrowRightCircle size={11} /> {rowBusy ? '…' : 'Send to OCR'}
                               </button>
                             )}
@@ -281,7 +281,7 @@ export const BranchDocumentPanel: React.FC<{
                                 onFile={(file) => withActing(d.id, () => onUploadExcel(d.assessmentId!, file))}
                               />
                             )}
-                            <button onClick={() => onDownload(d.id)} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 11 }}>
+                            <button onClick={() => onDownload(d.id)} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)' }}>
                               Download
                             </button>
                           </div>
@@ -290,7 +290,7 @@ export const BranchDocumentPanel: React.FC<{
                     </div>
                   ))}
                   {b.documentCount === 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: gapFlag ? 'var(--danger)' : 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 'var(--text-xs)', color: gapFlag ? 'var(--danger)' : 'var(--text-muted)' }}>
                       <Clock size={13} />
                       {gapFlag
                         ? 'Audit is confirmed but no paperwork has been uploaded for this branch yet — use the chips above to add it.'
@@ -317,12 +317,12 @@ export const BranchDocumentPanel: React.FC<{
 
 const StageChip: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string; bg: string }> = ({ active, onClick, label, count, color, bg }) => (
   <button onClick={onClick} style={{
-    padding: '6px 11px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 11.5, fontWeight: 600,
+    padding: '6px 11px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-2xs)', fontWeight: 600,
     background: active ? bg : 'transparent', color: active ? color : 'var(--text-secondary)',
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 6,
   }}>
     {label}
-    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--text-primary)' : 'var(--text-muted)', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>{count}</span>
+    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--text-primary)' : 'var(--text-muted)', borderRadius: 8, padding: '1px 6px', fontSize: 'var(--text-3xs)', fontWeight: 700 }}>{count}</span>
   </button>
 );
 
@@ -335,11 +335,11 @@ const UploadChip: React.FC<{ label: string; title: string; busy: boolean; onFile
   <label
     title={`${title} — ${UPLOAD_LIMIT_HINT}`}
     style={variant === 'button' ? {
-      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', fontSize: 11, fontWeight: 600,
+      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', fontSize: 'var(--text-2xs)', fontWeight: 600,
       background: 'var(--status-completed-bg)', color: 'var(--success)', border: '1px solid var(--status-completed-bg)',
       borderRadius: 'var(--radius-sm)', cursor: busy ? 'wait' : 'pointer',
     } : {
-      display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
+      display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: 'var(--radius-sm)',
       background: 'var(--status-pending-bg)', border: '1px dashed var(--accent-primary)', color: 'var(--accent-primary)',
       cursor: busy ? 'wait' : 'pointer', fontWeight: 600,
     }}

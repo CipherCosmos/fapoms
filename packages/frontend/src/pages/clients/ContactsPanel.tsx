@@ -22,11 +22,11 @@ const Field: React.FC<{
   required?: boolean; type?: string; placeholder?: string; tel?: boolean;
 }> = ({ id, label, value, onChange, required, type, placeholder, tel }) => (
   <div>
-    <label htmlFor={id} style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 3, fontWeight: 500 }}>
+    <label htmlFor={id} style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: 3, fontWeight: 500 }}>
       {label}{required && <span style={{ color: 'var(--danger)', marginLeft: 2 }}>*</span>}
     </label>
     <div style={{ position: 'relative' }}>
-      {tel && <span aria-hidden style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 12, pointerEvents: 'none' }}>+91</span>}
+      {tel && <span aria-hidden style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', pointerEvents: 'none' }}>+91</span>}
       <StyledInput
         id={id}
         type={tel ? 'tel' : type || 'text'}
@@ -100,28 +100,28 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>Contacts ({contacts.length})</span>
-        <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Contacts ({contacts.length})</span>
+        <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Plus size={12} /> Add
         </button>
       </div>
 
       {isLoading ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
       ) : contacts.length === 0 ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
           No contacts registered
         </div>
       ) : (
         contacts.map((c) => (
           <div key={c.id} style={{ padding: 12, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>
+              <div style={{ fontWeight: 600, fontSize: 'var(--text-base)' }}>
                 {c.name}
-                {c.isPrimary && <span style={{ fontSize: 10, color: 'var(--accent-secondary)', fontWeight: 700, marginLeft: 6 }}>PRIMARY</span>}
+                {c.isPrimary && <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent-secondary)', fontWeight: 700, marginLeft: 6 }}>PRIMARY</span>}
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{c.designation}{c.department ? ` • ${c.department}` : ''}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{c.designation}{c.department ? ` • ${c.department}` : ''}</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Mail size={11} /> {c.email}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Phone size={11} /> {c.phone}</span>
               </div>
@@ -144,7 +144,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
             <Field id="client-contact-phone" label="Phone" required tel value={form.phone} placeholder="9876543210" onChange={(v) => setForm((f) => ({ ...f, phone: v.replace(/\D/g, '') }))} />
             <Field id="client-contact-designation" label="Designation" value={form.designation} placeholder="e.g. Relationship Manager" onChange={(v) => setForm((f) => ({ ...f, designation: v }))} />
             <Field id="client-contact-department" label="Department" value={form.department} placeholder="e.g. Operations" onChange={(v) => setForm((f) => ({ ...f, department: v }))} />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={form.isPrimary} onChange={(e) => setForm((f) => ({ ...f, isPrimary: e.target.checked }))} /> Primary contact
             </label>
           </div>

@@ -332,7 +332,7 @@ export { money } from '../../utils/money';
  * do not caption the same kind of thing at two different sizes.
  */
 export const fieldLabelStyle: CSSProperties = {
-  fontSize: '12px', fontWeight: 700, textTransform: 'uppercase',
+  fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 

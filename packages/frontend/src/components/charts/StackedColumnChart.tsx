@@ -37,7 +37,7 @@ export const StackedColumnChart: React.FC<{
           {legend.map((l) => (
             <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ width: 9, height: 9, borderRadius: 2, background: l.color, flexShrink: 0 }} />
-              <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{l.label}</span>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{l.label}</span>
             </div>
           ))}
         </div>
@@ -61,7 +61,7 @@ export const StackedColumnChart: React.FC<{
                   position: 'absolute', bottom: '100%', marginBottom: 6, zIndex: 5,
                   background: 'var(--bg-elevated)', border: '1px solid var(--border-color)',
                   borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-md)',
-                  padding: '7px 10px', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none',
+                  padding: '7px 10px', fontSize: 'var(--text-2xs)', whiteSpace: 'nowrap', pointerEvents: 'none',
                 }}>
                   <strong style={{ color: 'var(--text-primary)' }}>{d.label}</strong>
                   {d.segments.filter((s) => s.value > 0).map((s) => (
@@ -75,7 +75,7 @@ export const StackedColumnChart: React.FC<{
                 </div>
               )}
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4, height: 14 }}>
+              <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4, height: 14 }}>
                 {total > 0 ? total : ''}
               </div>
 
@@ -101,7 +101,7 @@ export const StackedColumnChart: React.FC<{
               </div>
 
               <div style={{ borderTop: '1px solid var(--border-color)', width: '100%', marginTop: 2 }} />
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 5, textAlign: 'center', lineHeight: 1.3 }}>
+              <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 5, textAlign: 'center', lineHeight: 1.3 }}>
                 {d.label}
               </div>
             </div>

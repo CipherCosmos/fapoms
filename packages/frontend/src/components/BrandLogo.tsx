@@ -31,10 +31,12 @@ const HEIGHTS: Record<NonNullable<BrandLogoProps['size']>, number> = {
   lg: 60,
 };
 
+/* On the type scale, `sm` and `md` land on the same step — the support line is already at the
+   smallest legible size at both, and the mark beside it is what changes. */
 const SUB_SIZES: Record<NonNullable<BrandLogoProps['size']>, string> = {
-  sm: '8.5px',
-  md: '9.5px',
-  lg: '11px',
+  sm: 'var(--text-3xs)',
+  md: 'var(--text-3xs)',
+  lg: 'var(--text-2xs)',
 };
 
 export const BrandLogo: React.FC<BrandLogoProps> = ({

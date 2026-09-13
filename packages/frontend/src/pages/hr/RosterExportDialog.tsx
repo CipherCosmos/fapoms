@@ -112,7 +112,7 @@ export const RosterExportDialog: React.FC<{
       maxHeight="86vh"
       footer={(
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             {counted(selected.length, 'column')} × {counted(rows.length, 'person', 'people')}
           </span>
           {/*
@@ -125,7 +125,7 @@ export const RosterExportDialog: React.FC<{
             disabled={excelBusy}
             className="btn btn-secondary"
             title="Pay rates and assignment counts live outside this screen — the server builds those into a two-sheet Excel workbook for everyone."
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '8px 14px', color: 'var(--success)', marginLeft: 'auto' }}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', color: 'var(--success)', marginLeft: 'auto' }}
           >
             <FileSpreadsheet size={13} /> {excelBusy ? 'Preparing…' : 'Full workbook'}
           </button>
@@ -138,27 +138,27 @@ export const RosterExportDialog: React.FC<{
             disabled={pdfBusy}
             className="btn btn-secondary"
             title="The roster as a printable PDF — the same people and columns as the CSV, laid out for paper. Pay rates are not included."
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '8px 14px' }}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}
           >
             <FileText size={13} /> {pdfBusy ? 'Preparing…' : 'PDF'}
           </button>
-          <button onClick={onClose} className="btn btn-secondary" style={{ fontSize: '12.5px', padding: '8px 14px' }}>
+          <button onClick={onClose} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
             Cancel
           </button>
           <button
             onClick={download}
             disabled={selected.length === 0 || rows.length === 0}
             className="btn btn-primary"
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '8px 14px' }}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}
           >
             <Download size={14} /> Download CSV
           </button>
         </div>
       )}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '12.5px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: 'var(--text-xs)' }}>
         <section>
-          <h3 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px' }}>Who goes in the file</h3>
+          <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 6px' }}>Who goes in the file</h3>
           {/*
             "The people on screen" would be a lie by 141: the table draws 200 rows at a time
             behind a "Show more", and the file gets every row the filters leave.
@@ -171,7 +171,7 @@ export const RosterExportDialog: React.FC<{
                 onClick={() => setScope(o.value)}
                 aria-pressed={scope === o.value}
                 style={{
-                  padding: '6px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 600,
+                  padding: '6px 12px', borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 600,
                   cursor: 'pointer',
                   border: `1px solid ${scope === o.value ? 'var(--accent)' : 'var(--border-color)'}`,
                   background: scope === o.value ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
@@ -182,14 +182,14 @@ export const RosterExportDialog: React.FC<{
               </button>
             ))}
           </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
             {activeScope.hint}
           </div>
         </section>
 
         <section>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
-            <h3 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px' }}>Columns</h3>
+            <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 6px' }}>Columns</h3>
             {/*
               Presets live here, beside the boxes they tick, rather than in a section of their
               own — a preset only ticks boxes, so giving it a heading, a row and an explanatory
@@ -202,7 +202,7 @@ export const RosterExportDialog: React.FC<{
                 onClick={() => setSelected(p.columns)}
                 title={`${p.hint} Ticks the boxes below — change anything before you download.`}
                 style={{
-                  padding: '4px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: 600,
+                  padding: '4px 10px', borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 600,
                   cursor: 'pointer', border: '1px solid var(--border-color)',
                   background: 'var(--bg-surface-2)', color: 'var(--text-secondary)',
                 }}
@@ -212,7 +212,7 @@ export const RosterExportDialog: React.FC<{
             ))}
             <button
               onClick={() => setSelected([])}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: 'var(--accent)', padding: 0, marginLeft: 'auto' }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent)', padding: 0, marginLeft: 'auto' }}
             >
               Untick everything
             </button>
@@ -221,7 +221,7 @@ export const RosterExportDialog: React.FC<{
             {EXPORT_COLUMN_GROUPS.map((group) => (
               <div key={group} style={{ flex: '1 1 210px', minWidth: '200px' }}>
                 <div style={{
-                  fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                  fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
                   color: 'var(--text-muted)', marginBottom: '3px',
                 }}>
                   {group}
@@ -234,7 +234,7 @@ export const RosterExportDialog: React.FC<{
                       title={off ? 'Your account is not allowed to read this field, so it would export blank.' : undefined}
                       style={{
                         display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '4px 0',
-                        fontSize: '12px', lineHeight: 1.4,
+                        fontSize: 'var(--text-xs)', lineHeight: 1.4,
                         cursor: off ? 'not-allowed' : 'pointer',
                         color: off ? 'var(--text-muted)' : (c.masked ? 'var(--warning)' : 'var(--text-primary)'),
                       }}
@@ -248,7 +248,7 @@ export const RosterExportDialog: React.FC<{
                       />
                       <span>
                         {c.label}
-                        {off && <span style={{ display: 'block', fontSize: '12px' }}>Not available to your account</span>}
+                        {off && <span style={{ display: 'block', fontSize: 'var(--text-xs)' }}>Not available to your account</span>}
                       </span>
                     </label>
                   );
@@ -270,7 +270,7 @@ export const RosterExportDialog: React.FC<{
           background: 'var(--bg-surface-2)',
         }}>
           <ShieldAlert size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} />
-          <div style={{ fontSize: '12px' }}>
+          <div style={{ fontSize: 'var(--text-xs)' }}>
             <strong style={{ fontWeight: 700 }}>PAN, Aadhaar and bank numbers export covered</strong>{' '}
             (last four characters only) — whole numbers are shown one person at a time on their record.
             {chosenMasked.length > 0 && (

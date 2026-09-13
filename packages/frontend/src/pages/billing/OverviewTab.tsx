@@ -71,17 +71,17 @@ export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices', filter?
       <div>
         <SectionLabel>Needs doing</SectionLabel>
         {todo.length === 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', background: 'var(--status-active-bg)', border: '1px solid var(--success)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: 13 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', background: 'var(--status-active-bg)', border: '1px solid var(--success)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: 'var(--text-sm)' }}>
             <CheckCircle2 size={16} /> Nothing waiting — everything booked, approved, paid and invoiced.
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: 12 }}>
             {todo.map((a) => (
               <div key={a.title} style={{ background: 'var(--bg-secondary)', border: `1px solid color-mix(in srgb, ${a.tone} 25%, transparent)`, borderLeft: `3px solid ${a.tone}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: a.tone, fontSize: 12, fontWeight: 700 }}>{a.icon}{a.title}</div>
-                <div style={{ fontSize: 23, fontWeight: 700, marginTop: 6, fontFamily: 'var(--font-display)' }}>{money(a.amount)}</div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.45 }}>{a.detail}</div>
-                <button onClick={a.go} style={{ marginTop: 9, background: 'transparent', border: 'none', color: a.tone, fontSize: 11.5, fontWeight: 700, cursor: 'pointer', padding: 0 }}>{a.cta} →</button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: a.tone, fontSize: 'var(--text-xs)', fontWeight: 700 }}>{a.icon}{a.title}</div>
+                <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, marginTop: 6, fontFamily: 'var(--font-display)' }}>{money(a.amount)}</div>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.45 }}>{a.detail}</div>
+                <button onClick={a.go} style={{ marginTop: 9, background: 'transparent', border: 'none', color: a.tone, fontSize: 'var(--text-2xs)', fontWeight: 700, cursor: 'pointer', padding: 0 }}>{a.cta} →</button>
               </div>
             ))}
           </div>
@@ -90,7 +90,7 @@ export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices', filter?
 
       {attention.length > 0 && (
         <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={14} style={{ color: 'var(--warning)' }} /> Worth a look ({attention.length})</span>}>
-          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 10 }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: 10 }}>
             Derived from the live rows on every load. Fix the cause and the item disappears — there is nothing to "resolve" here.
           </div>
           <AttentionList items={attention} />
@@ -123,7 +123,7 @@ export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices', filter?
             ['TDS withheld by clients', moneyExact(tax.tdsWithheldByClients)],
             ['TDS withheld from assayers', moneyExact(tax.tdsWithheldFromAssayers)],
           ]} />
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>Revenue and cost above are ex-GST and pre-TDS: what the work earned and what it cost.</div>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 8 }}>Revenue and cost above are ex-GST and pre-TDS: what the work earned and what it cost.</div>
         </Card>
       </div>
 
@@ -160,7 +160,7 @@ export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices', filter?
         <Card title="Recent activity">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {data.recentActivity.map((h) => (
-              <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12, padding: '6px 0', borderBottom: '1px solid var(--border-hair, var(--border-color))' }}>
+              <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 'var(--text-xs)', padding: '6px 0', borderBottom: '1px solid var(--border-hair, var(--border-color))' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>
                   <strong style={{ color: 'var(--text-primary)' }}>{describeAction(h.action)}</strong>
                   {h.fromState && h.toState ? ` · ${h.fromState} → ${h.toState}` : ''}
@@ -197,8 +197,8 @@ export const AttentionList: React.FC<{ items: BillingAttentionItem[] }> = ({ ite
       const tone = ATTENTION_TONE[it.kind];
       const who = [it.assignmentNumber, it.invoiceNumber, it.clientName, it.assayerName].filter(Boolean).join(' · ');
       return (
-        <div key={`${it.kind}-${it.payableId ?? it.entryId ?? it.invoiceId ?? it.assignmentId ?? i}`} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 12.5, padding: '6px 8px', borderLeft: `3px solid ${tone}`, background: `color-mix(in srgb, ${tone} 6%, transparent)`, borderRadius: 'var(--radius-sm)' }}>
-          <span style={{ color: tone, fontWeight: 700, whiteSpace: 'nowrap', fontSize: 11 }}>{ATTENTION_LABEL[it.kind]}</span>
+        <div key={`${it.kind}-${it.payableId ?? it.entryId ?? it.invoiceId ?? it.assignmentId ?? i}`} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 'var(--text-xs)', padding: '6px 8px', borderLeft: `3px solid ${tone}`, background: `color-mix(in srgb, ${tone} 6%, transparent)`, borderRadius: 'var(--radius-sm)' }}>
+          <span style={{ color: tone, fontWeight: 700, whiteSpace: 'nowrap', fontSize: 'var(--text-2xs)' }}>{ATTENTION_LABEL[it.kind]}</span>
           <span style={{ color: 'var(--text-primary)', fontWeight: 600, whiteSpace: 'nowrap' }}>{who || '—'}</span>
           <span style={{ color: 'var(--text-secondary)', flex: 1 }}>{it.detail}</span>
           {it.amount != null && <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{money(it.amount)}</span>}
@@ -210,16 +210,16 @@ export const AttentionList: React.FC<{ items: BillingAttentionItem[] }> = ({ ite
 
 const Big: React.FC<{ icon: React.ReactNode; tone: string; label: string; value: string; sub?: string }> = ({ icon, tone, label, value, sub }) => (
   <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: tone, fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{icon}{label}</div>
-    <div style={{ fontSize: 24, fontWeight: 700, marginTop: 6, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>{value}</div>
-    {sub && <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>{sub}</div>}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: tone, fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{icon}{label}</div>
+    <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, marginTop: 6, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>{value}</div>
+    {sub && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 4 }}>{sub}</div>}
   </div>
 );
 
 const Rows: React.FC<{ rows: Array<[string, string]> }> = ({ rows }) => (
   <div>
     {rows.map(([k, v]) => (
-      <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px dashed var(--border-color)', fontSize: 12.5 }}>
+      <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px dashed var(--border-color)', fontSize: 'var(--text-xs)' }}>
         <span style={{ color: 'var(--text-muted)' }}>{k}</span>
         <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{v}</span>
       </div>

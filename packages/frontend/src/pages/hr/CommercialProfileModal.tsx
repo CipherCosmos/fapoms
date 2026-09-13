@@ -272,7 +272,7 @@ export const CommercialProfileModal: React.FC<{
           </Field>
         </div>
       ))}
-      <div style={{ flexBasis: '100%', fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+      <div style={{ flexBasis: '100%', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
         {OTHER_RATES_NOTE}
       </div>
       <Field title="Currency">

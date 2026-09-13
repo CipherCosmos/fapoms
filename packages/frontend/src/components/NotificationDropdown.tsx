@@ -412,7 +412,7 @@ export const NotificationDropdown: React.FC = () => {
               alignItems: 'center',
               justifyContent: 'center',
               padding: '0 4px',
-              fontSize: '10px',
+              fontSize: 'var(--text-3xs)',
               fontWeight: 800,
               color: '#FFFFFF',
               border: '2px solid var(--bg-secondary)',
@@ -456,7 +456,7 @@ export const NotificationDropdown: React.FC = () => {
                 background: 'var(--bg-surface-2)',
               }}
             >
-              <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>
+              <span style={{ fontWeight: 700, fontSize: 'var(--text-base)', color: 'var(--text-primary)' }}>
                 Notifications
               </span>
               {unreadCount > 0 && (
@@ -470,7 +470,7 @@ export const NotificationDropdown: React.FC = () => {
                     border: 'none',
                     color: 'var(--accent-primary)',
                     cursor: 'pointer',
-                    fontSize: '11.5px',
+                    fontSize: 'var(--text-2xs)',
                     fontWeight: 600,
                     padding: '2px 4px',
                   }}
@@ -487,7 +487,7 @@ export const NotificationDropdown: React.FC = () => {
                     padding: '30px 16px',
                     textAlign: 'center',
                     color: 'var(--text-muted)',
-                    fontSize: '12px',
+                    fontSize: 'var(--text-xs)',
                   }}
                 >
                   Loading notifications…
@@ -505,8 +505,8 @@ export const NotificationDropdown: React.FC = () => {
                   }}
                 >
                   <Bell size={28} style={{ opacity: 0.4 }} />
-                  <span style={{ fontSize: '13px', fontWeight: 600 }}>All caught up!</span>
-                  <span style={{ fontSize: '11px' }}>No unread notifications to show.</span>
+                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>All caught up!</span>
+                  <span style={{ fontSize: 'var(--text-2xs)' }}>No unread notifications to show.</span>
                 </div>
               ) : (
                 notifications.map((n) => {
@@ -546,7 +546,7 @@ export const NotificationDropdown: React.FC = () => {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{
-                            fontSize: '12.5px',
+                            fontSize: 'var(--text-xs)',
                             fontWeight: n.isRead ? 600 : 700,
                             color: 'var(--text-primary)',
                             marginBottom: '2px',
@@ -556,7 +556,7 @@ export const NotificationDropdown: React.FC = () => {
                         </div>
                         <div
                           style={{
-                            fontSize: '11.5px',
+                            fontSize: 'var(--text-2xs)',
                             color: 'var(--text-secondary)',
                             lineHeight: '1.4',
                             overflow: 'hidden',
@@ -566,7 +566,7 @@ export const NotificationDropdown: React.FC = () => {
                         >
                           {n.message}
                         </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
                           {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </div>
@@ -586,13 +586,13 @@ export const NotificationDropdown: React.FC = () => {
             <div style={{ borderTop: '1px solid var(--border-color)', padding: '9px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
               <button
                 onClick={() => { setOpen(false); void navigate('/notifications'); }}
-                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: 'var(--accent)' }}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--accent)' }}
               >
                 View all
               </button>
               <button
                 onClick={() => { setOpen(false); void navigate('/notifications?tab=preferences'); }}
-                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', color: 'var(--text-muted)', marginLeft: 'auto' }}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}
               >
                 Choose what reaches me
               </button>

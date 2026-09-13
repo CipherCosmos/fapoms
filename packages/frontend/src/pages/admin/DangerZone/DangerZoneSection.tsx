@@ -42,7 +42,7 @@ const DomainChips: React.FC<{ request: DestructiveActionRequest; domains: WipeDo
         <span
           key={key}
           style={{
-            fontSize: '11px', fontWeight: 700, padding: '2px 9px', borderRadius: '10px',
+            fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '2px 9px', borderRadius: '10px',
             border: '1px solid var(--border-color)', color: 'var(--text-secondary)',
             background: 'var(--bg-secondary)',
           }}
@@ -189,7 +189,7 @@ export const DangerZoneSection: React.FC = () => {
       {confirmDialog}
       <div
         className="glass-card"
-        style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--danger)', border: '1px solid rgba(216,71,71,0.35)' }}
+        style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: 'var(--text-xs)', color: 'var(--danger)', border: '1px solid rgba(216,71,71,0.35)' }}
       >
         <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: '1px' }} />
         <span>
@@ -201,10 +201,10 @@ export const DangerZoneSection: React.FC = () => {
       {/* ── The current request, whatever state it is in ─────────────────── */}
       {activeRequest && activeRequest.status === DestructiveActionRequestStatus.REQUESTED && (
         <div className="glass-card" style={{ padding: '14px 16px', border: '1px solid var(--warning)' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', fontWeight: 700, color: 'var(--warning)' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--warning)' }}>
             <Hourglass size={15} /> Waiting for an Admin&apos;s approval
           </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: 1.6 }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: 1.6 }}>
             Requested {new Date(activeRequest.requestedAt).toLocaleString()}. An administrator has to
             approve it on the Approvals page before anything can be executed; the domains below are
             frozen while the request stands.
@@ -213,7 +213,7 @@ export const DangerZoneSection: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
             <button
               className="btn btn-secondary"
-              style={{ padding: '6px 14px', fontSize: '12px' }}
+              style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }}
               disabled={withdraw.isPending}
               onClick={async () => {
                 const ok = await confirm({
@@ -233,10 +233,10 @@ export const DangerZoneSection: React.FC = () => {
 
       {activeRequest && activeRequest.status === DestructiveActionRequestStatus.APPROVED && (
         <div className="glass-card" style={{ padding: '14px 16px', border: '1px solid var(--success, #34a853)' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', fontWeight: 700, color: 'var(--success, #34a853)' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--success, #34a853)' }}>
             <CheckCircle2 size={15} /> Approved — you can execute this wipe
           </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: 1.6 }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: 1.6 }}>
             Approved by {activeRequest.decidedByName ?? 'an administrator'}
             {activeRequest.decidedAt ? ` on ${new Date(activeRequest.decidedAt).toLocaleString()}` : ''}.
             {activeRequest.expiresAt && (
@@ -256,11 +256,11 @@ export const DangerZoneSection: React.FC = () => {
           className="glass-card"
           style={{ padding: '14px 16px', border: `1px solid ${noticeExpired ? 'var(--border-color)' : 'var(--danger)'}` }}
         >
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13px', fontWeight: 700, color: noticeExpired ? 'var(--text-secondary)' : 'var(--danger)' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: 'var(--text-sm)', fontWeight: 700, color: noticeExpired ? 'var(--text-secondary)' : 'var(--danger)' }}>
             <XCircle size={15} />
             {noticeExpired ? 'The approval ran out before the wipe was executed' : 'Your wipe request was rejected'}
           </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: 1.6 }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: 1.6 }}>
             {noticeExpired ? (
               <>Approvals stay executable for a limited window and this one was not used in time. Nothing was deleted. File a fresh request if the wipe is still wanted.</>
             ) : (
@@ -276,7 +276,7 @@ export const DangerZoneSection: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
             <button
               className="btn btn-secondary"
-              style={{ padding: '6px 14px', fontSize: '12px' }}
+              style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }}
               onClick={() => setDismissedId(notice.id)}
             >
               Start a new request
@@ -294,11 +294,11 @@ export const DangerZoneSection: React.FC = () => {
         }
       >
         {isLoading ? (
-          <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
+          <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
         ) : isError ? (
-          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: '13px' }}>
+          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
             <div>Couldn&apos;t load what can be cleared. {userMessage(error)}</div>
-            <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: '12px' }} onClick={() => refetch()}>Try again</button>
+            <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }} onClick={() => refetch()}>Try again</button>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -328,12 +328,12 @@ export const DangerZoneSection: React.FC = () => {
                     style={{ marginTop: '2px', cursor: locked ? 'not-allowed' : 'pointer' }}
                   />
                   <div>
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', gap: '7px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', gap: '7px', alignItems: 'center', flexWrap: 'wrap' }}>
                       {d.label}
                       {d.requiresKeepList && <Pill tone="warning">Keeps accounts you choose</Pill>}
                       {d.requiresBillingConfirmation && <Pill tone="warning">Extra confirmation</Pill>}
                     </div>
-                    <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px', lineHeight: 1.5, maxWidth: '62ch' }}>
+                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px', lineHeight: 1.5, maxWidth: '62ch' }}>
                       {d.description}
                     </div>
                   </div>
@@ -350,13 +350,13 @@ export const DangerZoneSection: React.FC = () => {
               className="btn btn-primary"
               disabled={selectedKeys.length === 0}
               onClick={() => setModal('request')}
-              style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 16px', fontSize: '12.5px' }}
+              style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 16px', fontSize: 'var(--text-xs)' }}
             >
               <Send size={14} /> Request wipe…
             </button>
           )}
           {activeRequest?.status === DestructiveActionRequestStatus.REQUESTED && (
-            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               Execution unlocks once an administrator approves the request above.
             </span>
           )}
@@ -364,7 +364,7 @@ export const DangerZoneSection: React.FC = () => {
             <button
               className="btn btn-primary"
               onClick={() => setModal('execute')}
-              style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 16px', fontSize: '12.5px' }}
+              style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 16px', fontSize: 'var(--text-xs)' }}
             >
               <Trash2 size={14} /> Execute approved wipe…
             </button>

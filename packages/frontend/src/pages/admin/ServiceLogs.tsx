@@ -324,7 +324,7 @@ export const ServiceLogs: React.FC = () => {
             title={s.description}
             style={{
               display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999,
-              cursor: 'pointer', fontSize: 13,
+              cursor: 'pointer', fontSize: 'var(--text-sm)',
               border: `1px solid ${service === s.service ? 'var(--primary)' : 'var(--border-color)'}`,
               background: service === s.service ? 'var(--primary)' : 'transparent',
               color: service === s.service ? '#fff' : 'var(--text-primary)',
@@ -361,7 +361,7 @@ export const ServiceLogs: React.FC = () => {
           ))}
         </select>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-sm)' }}>
           Lines
           <input
             type="number" min={1} max={LOG_TAIL_MAX} value={tail}
@@ -412,13 +412,13 @@ export const ServiceLogs: React.FC = () => {
 
       {/* Notices that explain an empty or short result before it reads as a bug. */}
       {!live && history.data?.truncated && (
-        <div style={{ ...card, padding: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+        <div style={{ ...card, padding: 10, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           Showing the most recent {history.data.lines.length} matching lines — older ones exist beyond this window.
           Raise “Lines” or narrow the range to see further back.
         </div>
       )}
       {!live && current && !current.running && (
-        <div style={{ ...card, padding: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+        <div style={{ ...card, padding: 10, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           <strong>{current.label}</strong> is not running ({current.state}). You are reading what it left behind.
         </div>
       )}
@@ -429,7 +429,7 @@ export const ServiceLogs: React.FC = () => {
         style={{
           ...card, flex: 1, minHeight: 280, overflow: 'auto', padding: 12,
           background: 'var(--bg-code, #0b0f19)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          fontSize: 12.5, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          fontSize: 'var(--text-xs)', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         }}
       >
         {history.isLoading && !live && <span style={{ color: 'var(--text-secondary)' }}>Loading…</span>}
@@ -442,7 +442,7 @@ export const ServiceLogs: React.FC = () => {
           </span>
         )}
         {lines.map((line, i) => (
-          <div key={i} style={{ color: line.stream === 'stderr' ? 'var(--danger, #f87171)' : 'var(--text-code, #d6deeb)' }}>
+          <div key={i} style={{ color: line.stream === 'stderr' ? 'var(--danger, #f87171)' : 'var(--text-primary)' }}>
             {line.ts && <span style={{ opacity: 0.5 }}>{line.ts.replace('T', ' ').replace(/\.\d+Z$/, '')} </span>}
             {stripAnsi(line.text)}
           </div>
@@ -470,15 +470,15 @@ const CommandLineHelp: React.FC<{ service: string; tail: number }> = ({ service,
 
   return (
     <details style={{ ...card, padding: 12 }}>
-      <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+      <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)' }}>
         <Terminal size={16} /> Fetch these logs from a terminal
       </summary>
-      <p style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         Sign in, then take the token from <code>localStorage.fapoms_token</code> in your browser
         console and export it as <code>FAPOMS_TOKEN</code>. Add <code>&amp;q=search+text</code> to
         filter, or <code>&amp;download=1</code> to save a file. It expires with your session.
       </p>
-      <pre style={{ background: 'var(--bg-code, #0b0f19)', padding: 12, borderRadius: 8, overflowX: 'auto', fontSize: 12 }}>
+      <pre style={{ background: 'var(--bg-code, #0b0f19)', padding: 12, borderRadius: 8, overflowX: 'auto', fontSize: 'var(--text-xs)' }}>
         {cmd}
       </pre>
       <button

@@ -70,7 +70,7 @@ export const AssayerRecordPage: React.FC = () => {
           }
         }}
         style={{
-          display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px',
+          display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)',
           color: 'var(--text-muted)', textDecoration: 'none', width: 'fit-content',
         }}
       >

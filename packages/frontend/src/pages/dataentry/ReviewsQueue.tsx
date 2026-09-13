@@ -196,12 +196,12 @@ export const ReviewsQueue: React.FC = () => {
         {STATUS_TABS.map((t) => (
           <button key={t.key || 'all'} onClick={() => setStatus(t.key)}
             className={status === t.key ? 'btn btn-primary' : 'btn btn-secondary'}
-            style={{ fontSize: '12px', padding: '6px 12px', width: 'auto' }}>
+            style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', width: 'auto' }}>
             {t.label}
           </button>
         ))}
         {isHead && status === 'HUMAN_REVIEW' && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: unroutedOnly ? 'var(--danger)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', color: unroutedOnly ? 'var(--danger)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
             {/* "Routed" was the pipeline's word for the reviewer having been chosen. */}
             <input type="checkbox" checked={unroutedOnly} onChange={toggleUnrouted} /> Only ones nobody is checking yet
           </label>
@@ -209,12 +209,12 @@ export const ReviewsQueue: React.FC = () => {
         <span style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 10px' }}>
           <Search size={13} style={{ color: 'var(--text-muted)' }} />
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search branch / code…"
-            style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: '12.5px', width: '170px' }} />
+            style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 'var(--text-xs)', width: '170px' }} />
         </span>
       </div>
 
       {err && (
-        <div style={{ padding: '9px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '12.5px', display: 'flex', gap: '7px', alignItems: 'center' }}>
+        <div style={{ padding: '9px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: 'var(--text-xs)', display: 'flex', gap: '7px', alignItems: 'center' }}>
           <AlertTriangle size={14} /> {err}
         </div>
       )}
@@ -222,7 +222,7 @@ export const ReviewsQueue: React.FC = () => {
       {loadErr != null && <LoadFailure loads={[{ label: 'the review queue', query: caughtLoad(loadErr, load) }]} />}
 
       {showBulk && (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '12px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: 'var(--text-xs)' }}>
           <span style={{ color: 'var(--text-muted)' }}>{counted(selectedIds.length, 'report')} ticked</span>
           {hiddenNote && <span style={{ color: 'var(--warning)' }}>{hiddenNote}</span>}
           {/*
@@ -237,30 +237,30 @@ export const ReviewsQueue: React.FC = () => {
               so a reason the list hasn't seen yet is still one keystroke away, same as before. */}
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the decision (required to send back)"
             list="rework-note-suggestions"
-            style={{ flex: '1 1 220px', padding: '6px 10px', fontSize: '12px', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }} />
+            style={{ flex: '1 1 220px', padding: '6px 10px', fontSize: 'var(--text-xs)', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }} />
           <datalist id="rework-note-suggestions">
             {CORRECTION_NOTE_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
           </datalist>
           <button onClick={() => bulkDecide('APPROVED')} disabled={selectedIds.length === 0 || busy === '__bulk__'} className="btn btn-primary"
-            style={{ fontSize: '11.5px', padding: '6px 12px', width: 'auto' }}>
+            style={{ fontSize: 'var(--text-2xs)', padding: '6px 12px', width: 'auto' }}>
             {busy === '__bulk__' ? 'Saving…' : 'Approve selected'}
           </button>
           <button onClick={() => bulkDecide('CORRECTION_REQUIRED')} disabled={selectedIds.length === 0 || busy === '__bulk__' || !note.trim()} className="btn btn-secondary"
             title={!note.trim() ? 'Add a note saying what needs correcting' : undefined}
-            style={{ fontSize: '11.5px', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}>
+            style={{ fontSize: 'var(--text-2xs)', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}>
             Send back for rework
           </button>
         </div>
       )}
 
       {msg && (
-        <div style={{ padding: '8px 12px', borderRadius: '7px', fontSize: '12px', background: msg.type === 'success' ? 'var(--status-pending-bg)' : 'var(--status-cancelled-bg)', color: msg.type === 'success' ? 'var(--success)' : 'var(--danger)' }}>
+        <div style={{ padding: '8px 12px', borderRadius: '7px', fontSize: 'var(--text-xs)', background: msg.type === 'success' ? 'var(--status-pending-bg)' : 'var(--status-cancelled-bg)', color: msg.type === 'success' ? 'var(--success)' : 'var(--danger)' }}>
           {msg.text}
         </div>
       )}
 
       <section style={{ ...deskCard, padding: 0, overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-xs)' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
               {showBulk && <th style={{ width: '34px' }} />}
@@ -297,10 +297,10 @@ export const ReviewsQueue: React.FC = () => {
                   )}
                   <td style={{ padding: '9px 14px' }}>
                     <div style={{ fontWeight: 600 }}>{branch?.name ?? 'Branch'}</div>
-                    <div style={{ ...deskLabel, fontSize: '10px' }}>{branch?.solId ?? '—'}</div>
+                    <div style={{ ...deskLabel, fontSize: 'var(--text-3xs)' }}>{branch?.solId ?? '—'}</div>
                   </td>
                   <td style={{ padding: '9px 14px' }}>
-                    <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: tone, border: `1px solid ${tone}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: tone, border: `1px solid ${tone}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
                       {validationStatusLabel(c.status)}
                     </span>
                   </td>
@@ -323,7 +323,7 @@ export const ReviewsQueue: React.FC = () => {
                   </td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', textAlign: 'right' }}>
                     <button onClick={() => navigate(`/data-entry/case/${c.projectBranchId}`)} className="btn btn-secondary"
-                      style={{ fontSize: '11.5px', padding: '5px 10px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                       <FileText size={12} /> {isHead && c.status === 'HUMAN_REVIEW' ? 'Review' : 'Open'}
                     </button>
                   </td>
@@ -334,13 +334,13 @@ export const ReviewsQueue: React.FC = () => {
         </table>
       </section>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         <span>{total} case{total === 1 ? '' : 's'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <button className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '4px 10px', width: 'auto' }}
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
             disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>{page} / {totalPages}</span>
-          <button className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '4px 10px', width: 'auto' }}
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
             disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
         </span>
       </div>

@@ -25,7 +25,7 @@ export const Pagination: React.FC<{
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: 13,
+    fontSize: 'var(--text-sm)',
   };
   const disabled: React.CSSProperties = { opacity: 0.35, cursor: 'not-allowed' };
 
@@ -35,7 +35,7 @@ export const Pagination: React.FC<{
         <button disabled={page <= 1} style={{ ...btn, ...(page <= 1 ? disabled : {}) }} onClick={() => page > 1 && onPageChange(page - 1)} aria-label="Previous page">
           ‹
         </button>
-        <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+        <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
           Page <b style={{ color: 'var(--text-primary)' }}>{page}</b> of{' '}
           <b style={{ color: 'var(--text-primary)' }}>{Math.max(1, totalPages)}</b>
         </span>
@@ -44,7 +44,7 @@ export const Pagination: React.FC<{
         </button>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
           {from}–{to} of {total}
         </span>
         {onPageSizeChange && (

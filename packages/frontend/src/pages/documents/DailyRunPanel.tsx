@@ -234,15 +234,15 @@ export const DailyRunPanel: React.FC<{
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Date picker — the run is identified by its audit date, not a version number. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>Audit date</label>
+        <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', fontWeight: 600 }}>Audit date</label>
         <input
           type="date" value={auditDate} onChange={(e) => setAuditDate(e.target.value)}
-          style={{ padding: '7px 10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13 }}
+          style={{ padding: '7px 10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
         />
-        <button onClick={() => setAuditDate(tomorrowISO())} className="btn btn-secondary" style={{ fontSize: 11.5, padding: '6px 11px' }}>
+        <button onClick={() => setAuditDate(tomorrowISO())} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '6px 11px' }}>
           Tomorrow
         </button>
-        {loading && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading…</span>}
+        {loading && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Loading…</span>}
       </div>
 
       {/* Step 1 — the client's file for this date. */}
@@ -251,21 +251,21 @@ export const DailyRunPanel: React.FC<{
         border: `1px solid ${run?.batch ? 'var(--border-color)' : 'var(--status-cancelled-bg)'}`,
         borderRadius: 'var(--radius-md)', padding: 15,
       }}>
-        <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)', marginBottom: 9 }}>
+        <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)', marginBottom: 9 }}>
           Step 1 · Client customer master file
         </div>
         {run?.batch ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <CheckCircle2 size={17} color="var(--success)" />
             <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{run.batch.fileName}</div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{run.batch.fileName}</div>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 v{run.batch.versionNumber} · {run.batch.totalRows} rows · {run.batch.uniqueAccounts} accounts
                 {run.batch.duplicateAccounts > 0 && <span style={{ color: 'var(--warning)' }}> · {run.batch.duplicateAccounts} duplicates</span>}
                 {' · '}covers {s?.inBatch} of {s?.scheduledBranches} scheduled branches
               </div>
             </div>
-            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: 'var(--status-completed-bg)', color: 'var(--success)' }}>
+            <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: 'var(--status-completed-bg)', color: 'var(--success)' }}>
               {run.batch.status}
             </span>
           </div>
@@ -273,8 +273,8 @@ export const DailyRunPanel: React.FC<{
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, flexWrap: 'wrap' }}>
             <AlertTriangle size={17} color="var(--danger)" />
             <div style={{ flex: 1, minWidth: 220 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger)' }}>No client data received for this date</div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--danger)' }}>No client data received for this date</div>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Nothing can be generated until the client sends the customer master file for {auditDate}.
               </div>
             </div>
@@ -282,7 +282,7 @@ export const DailyRunPanel: React.FC<{
           </div>
         )}
         {s && s.unexpectedBranchesInBatch > 0 && (
-          <div style={{ marginTop: 9, fontSize: 11.5, color: 'var(--warning)' }}>
+          <div style={{ marginTop: 9, fontSize: 'var(--text-2xs)', color: 'var(--warning)' }}>
             {counted(s.unexpectedBranchesInBatch, 'branch', 'branches')} in the client file are not scheduled for this date.
           </div>
         )}
@@ -297,36 +297,36 @@ export const DailyRunPanel: React.FC<{
           border: `1px solid ${recon.accepted ? 'var(--status-pending-bg)' : 'var(--status-cancelled-bg)'}`,
           borderRadius: 'var(--radius-md)', padding: 13,
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: recon.accepted ? 'var(--warning)' : 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: recon.accepted ? 'var(--warning)' : 'var(--danger)', fontWeight: 700, fontSize: 'var(--text-sm)', marginBottom: 6 }}>
             <AlertTriangle size={15} />
             {recon.accepted
               ? `Accepted with exceptions — ${counted(recon.unmatchedCount, 'account row')} matched no branch`
               : 'Batch rejected — nothing was generated'}
           </div>
           {!recon.accepted && recon.blockReason && (
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>{recon.blockReason}</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8 }}>{recon.blockReason}</div>
           )}
           {recon.unmatchedCount > 0 && (
             <>
-              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginBottom: 6 }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', marginBottom: 6 }}>
                 These {counted(recon.unmatchedCount, 'account row')} matched no branch — fix the branch code in the file, or ignore them and generate the rest.
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 {recon.unmatchedAccounts.map((u, i) => (
-                  <div key={`${u.accountNumber}-${i}`} style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                  <div key={`${u.accountNumber}-${i}`} style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
                     <strong>{u.accountNumber}</strong>
                     {u.solId ? ` · ${u.solId}` : ''} — {u.reason}
                   </div>
                 ))}
               </div>
               {recon.unmatchedCount > recon.unmatchedAccounts.length && (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 4 }}>
                   …and {counted(recon.unmatchedCount - recon.unmatchedAccounts.length, 'more row')} not listed.
                 </div>
               )}
             </>
           )}
-          <button onClick={() => setRecon(null)} style={{ marginTop: 8, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer', padding: 0 }}>
+          <button onClick={() => setRecon(null)} style={{ marginTop: 8, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
             Dismiss
           </button>
         </div>
@@ -334,7 +334,7 @@ export const DailyRunPanel: React.FC<{
 
       {/* Step 2 — the branches, each with its one next action. */}
       {run && run.branches.length === 0 && (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
           No branches are scheduled for {auditDate}.
         </div>
       )}
@@ -342,13 +342,13 @@ export const DailyRunPanel: React.FC<{
       {run && run.branches.length > 0 && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 9, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
               Step 2 · {run.branches.length} branch{run.branches.length === 1 ? '' : 'es'} scheduled for this date
             </div>
             {s && s.toGenerate > 0 && (
               <label style={{
                 marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '5px 12px', fontSize: 11.5, fontWeight: 600,
+                padding: '5px 12px', fontSize: 'var(--text-2xs)', fontWeight: 600,
                 background: 'var(--status-pending-bg)', color: 'var(--accent-primary)',
                 border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)',
                 cursor: acting.has('bulk') ? 'wait' : 'pointer',
@@ -366,16 +366,16 @@ export const DailyRunPanel: React.FC<{
 
           {unmatched.length > 0 && (
             <div style={{ background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--warning)', fontWeight: 700, fontSize: 12.5, marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--warning)', fontWeight: 700, fontSize: 'var(--text-xs)', marginBottom: 6 }}>
                 <AlertTriangle size={14} />
                 {unmatched.length} file(s) could not be matched to a branch — upload these individually below
               </div>
               {unmatched.map((u) => (
-                <div key={u.fileName} style={{ fontSize: 11.5, color: 'var(--text-secondary)', padding: '2px 0' }}>
+                <div key={u.fileName} style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', padding: '2px 0' }}>
                   <strong>{u.fileName}</strong> — {u.reason}
                 </div>
               ))}
-              <button onClick={() => setUnmatched([])} style={{ marginTop: 6, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer', padding: 0 }}>
+              <button onClick={() => setUnmatched([])} style={{ marginTop: 6, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
                 Dismiss
               </button>
             </div>
@@ -391,8 +391,8 @@ export const DailyRunPanel: React.FC<{
                   padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
                 }}>
                   <div style={{ flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{b.branchName}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{b.branchName}</div>
+                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                       {b.inBatch
                         ? `${b.customerCount} customers · ${b.packetCount} packets`
                         : 'not in the client file'}
@@ -401,7 +401,7 @@ export const DailyRunPanel: React.FC<{
                   </div>
 
                   <span title={meta.hint} style={{
-                    fontSize: 10.5, fontWeight: 700, padding: '3px 9px', borderRadius: 'var(--radius-sm)',
+                    fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '3px 9px', borderRadius: 'var(--radius-sm)',
                     background: meta.bg, color: meta.color, whiteSpace: 'nowrap',
                   }}>{meta.label}</span>
 
@@ -411,23 +411,23 @@ export const DailyRunPanel: React.FC<{
                   )}
                   {b.nextAction === 'DISPATCH' && b.pdf && canDispatch && (
                     <button onClick={() => withActing(b.projectBranchId, () => onDispatch([b.pdf!.id]))} disabled={busy}
-                      className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5 }}>
                       <Send size={11} /> {busy ? '…' : 'Send'}
                     </button>
                   )}
                   {b.nextAction === 'AWAITING_ASSAYER_RETURN' && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-muted)' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                       <Clock size={12} /> waiting
                     </span>
                   )}
                   {b.nextAction === 'SEND_TO_OCR' && b.pdf && canSendToOcr && (
                     <button onClick={() => withActing(b.projectBranchId, () => onSendToOcr(b.pdf!.id))} disabled={busy}
-                      className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent)', borderColor: 'var(--status-pending-bg)' }}>
+                      className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent)', borderColor: 'var(--status-pending-bg)' }}>
                       <ArrowRightCircle size={11} /> {busy ? '…' : 'Send to OCR'}
                     </button>
                   )}
                   {b.pdf && (
-                    <button onClick={() => onDownload(b.pdf!.id)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11.5 }}>
+                    <button onClick={() => onDownload(b.pdf!.id)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
                       Download
                     </button>
                   )}
@@ -443,7 +443,7 @@ export const DailyRunPanel: React.FC<{
 
 const FileUploadButton: React.FC<{ label: string; busy: boolean; onFile: (f: File) => void }> = ({ label, busy, onFile }) => (
   <label title={UPLOAD_LIMIT_HINT} style={{
-    display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', fontSize: 11.5, fontWeight: 600,
+    display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', fontSize: 'var(--text-2xs)', fontWeight: 600,
     background: 'var(--status-pending-bg)', color: 'var(--accent-primary)', border: '1px solid var(--status-pending-bg)',
     borderRadius: 'var(--radius-sm)', cursor: busy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
   }}>

@@ -28,19 +28,19 @@ export const NotFound: React.FC<{ landing: string }> = ({ landing }) => {
   const { pathname } = useLocation();
   return (
     <div style={{ maxWidth: 520, margin: '18vh auto', padding: '0 24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-      <h2 style={{ margin: '0 0 10px', fontSize: 19, color: 'var(--text-primary)' }}>
+      <h2 style={{ margin: '0 0 10px', fontSize: 'var(--text-xl)', color: 'var(--text-primary)' }}>
         That page doesn’t exist
       </h2>
-      <p style={{ margin: '0 0 18px', fontSize: 13.5, lineHeight: 1.6 }}>
+      <p style={{ margin: '0 0 18px', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
         Nothing is published at{' '}
         {/* The path they actually asked for, kept verbatim: it is the one detail worth reporting,
             and React escapes it, so a crafted URL renders as text rather than as markup. */}
-        <code style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 4, padding: '1px 5px', fontSize: 12.5, wordBreak: 'break-all' }}>
+        <code style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 4, padding: '1px 5px', fontSize: 'var(--text-xs)', wordBreak: 'break-all' }}>
           {pathname}
         </code>
         . It may have moved, or the link may have been mistyped or gone stale.
       </p>
-      <Link to={landing} style={{ fontSize: 13.5, color: 'var(--accent-primary)', textDecoration: 'none', fontWeight: 500 }}>
+      <Link to={landing} style={{ fontSize: 'var(--text-sm)', color: 'var(--accent-primary)', textDecoration: 'none', fontWeight: 500 }}>
         Back to your home page
       </Link>
     </div>

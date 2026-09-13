@@ -24,7 +24,11 @@ import { FilterBar } from '../../components/ui';
  * and the search box appear there too, even though they are not part of this panel.
  */
 
-const FONT = { small: '12px', body: '12.5px', heading: '13px' };
+/**
+ * Two sizes, both off the scale in `index.css`. `small` and `body` used to be 12px and 12.5px —
+ * a half-pixel apart, which is not a distinction anybody can see, so they are one size now.
+ */
+const FONT = { body: 'var(--text-xs)', heading: 'var(--text-sm)' };
 
 /**
  * One tick box with its count. The count is the option's whole value: it says whether to bother —
@@ -51,7 +55,7 @@ const ChoiceRow: React.FC<{
       {label}
     </span>
     {count >= 0 && (
-      <span style={{ fontSize: FONT.small, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+      <span style={{ fontSize: FONT.body, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
         {count}
       </span>
     )}
@@ -103,7 +107,7 @@ const FilterBlock: React.FC<{
       }}
     >
       <legend style={{
-        fontSize: FONT.small, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+        fontSize: FONT.body, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
         color: 'var(--text-muted)', padding: 0, marginBottom: '4px',
       }}>
         {def.label}
@@ -112,7 +116,7 @@ const FilterBlock: React.FC<{
         )}
       </legend>
       {def.hint && (
-        <div style={{ fontSize: FONT.small, color: 'var(--text-muted)', lineHeight: 1.45, marginBottom: '5px' }}>
+        <div style={{ fontSize: FONT.body, color: 'var(--text-muted)', lineHeight: 1.45, marginBottom: '5px' }}>
           {def.hint}
         </div>
       )}
@@ -120,7 +124,7 @@ const FilterBlock: React.FC<{
       {def.kind === 'date' ? (
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           {(['from', 'to'] as const).map((half) => (
-            <label key={half} style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: FONT.small, color: 'var(--text-muted)' }}>
+            <label key={half} style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: FONT.body, color: 'var(--text-muted)' }}>
               {half === 'from' ? 'From' : 'To'}
               <input
                 type="date"
@@ -146,7 +150,7 @@ const FilterBlock: React.FC<{
                 placeholder={`Find a ${def.label.toLowerCase()}…`}
                 aria-label={`Find a value under ${def.label}`}
                 style={{
-                  width: '100%', boxSizing: 'border-box', padding: '4px 6px 4px 22px', fontSize: FONT.small,
+                  width: '100%', boxSizing: 'border-box', padding: '4px 6px 4px 22px', fontSize: FONT.body,
                   borderRadius: '6px', border: '1px solid var(--border-color)',
                   background: 'var(--bg-page)', color: 'inherit', outline: 'none',
                 }}
@@ -164,7 +168,7 @@ const FilterBlock: React.FC<{
               />
             ))}
             {matching.length === 0 && (
-              <span style={{ fontSize: FONT.small, color: 'var(--text-muted)' }}>Nothing matches that.</span>
+              <span style={{ fontSize: FONT.body, color: 'var(--text-muted)' }}>Nothing matches that.</span>
             )}
           </div>
           {matching.length > SHOWN_BEFORE_MORE && (
@@ -172,7 +176,7 @@ const FilterBlock: React.FC<{
               onClick={() => setExpanded((v) => !v)}
               style={{
                 background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer',
-                fontSize: FONT.small, fontWeight: 600, color: 'var(--accent)',
+                fontSize: FONT.body, fontWeight: 600, color: 'var(--accent)',
               }}
             >
               {expanded ? 'Show fewer' : `Show all ${matching.length}`}
@@ -226,14 +230,14 @@ export const RosterFilterPanel: React.FC<{
       background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: FONT.small, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        <span style={{ fontSize: FONT.body, color: 'var(--text-muted)', lineHeight: 1.5 }}>
           Tick as many as you like. Options under one heading widen the list; separate headings
           narrow it. The number beside each option is how many people it would leave.
         </span>
         <button
           onClick={onClearAll}
           className="btn btn-secondary"
-          style={{ fontSize: FONT.small, padding: '5px 10px', marginLeft: 'auto' }}
+          style={{ fontSize: FONT.body, padding: '5px 10px', marginLeft: 'auto' }}
         >
           Clear every filter
         </button>
@@ -261,7 +265,7 @@ export const RosterFilterPanel: React.FC<{
               {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               {group.label}
               {chosenHere > 0 && (
-                <span style={{ fontSize: FONT.small, fontWeight: 600, color: 'var(--accent)' }}>
+                <span style={{ fontSize: FONT.body, fontWeight: 600, color: 'var(--accent)' }}>
                   · {chosenHere} chosen
                 </span>
               )}
@@ -308,7 +312,7 @@ export const AppliedFilterBar: React.FC<{
 
   return (
     <FilterBar style={{ padding: '8px 10px' }}>
-      <span style={{ fontSize: FONT.small, fontWeight: 700, color: 'var(--text-muted)' }}>
+      <span style={{ fontSize: FONT.body, fontWeight: 700, color: 'var(--text-muted)' }}>
         Showing {shown} of {counted(total, 'person', 'people')}:
       </span>
       {applied.map((pill) => (
@@ -320,7 +324,7 @@ export const AppliedFilterBar: React.FC<{
           style={{
             display: 'inline-flex', alignItems: 'center', gap: '5px',
             padding: '5px 10px', borderRadius: '999px', cursor: 'pointer',
-            fontSize: FONT.small, fontWeight: 600,
+            fontSize: FONT.body, fontWeight: 600,
             border: '1px solid color-mix(in srgb, var(--accent) 40%, transparent)',
             background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
             color: 'var(--accent)',
@@ -334,7 +338,7 @@ export const AppliedFilterBar: React.FC<{
         onClick={onClearAll}
         style={{
           background: 'none', border: 'none', cursor: 'pointer', padding: '3px 4px',
-          fontSize: FONT.small, fontWeight: 700, color: 'var(--text-secondary)', textDecoration: 'underline',
+          fontSize: FONT.body, fontWeight: 700, color: 'var(--text-secondary)', textDecoration: 'underline',
         }}
       >
         Clear all

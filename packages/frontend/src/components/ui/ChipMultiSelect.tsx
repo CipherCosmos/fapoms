@@ -93,7 +93,7 @@ export const ChipMultiSelect: React.FC<ChipMultiSelectProps> = ({
           style={{
             width: '100%', padding: '7px 9px', marginBottom: '6px', background: 'var(--bg-primary)',
             border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)',
-            fontSize: '12px', boxSizing: 'border-box',
+            fontSize: 'var(--text-xs)', boxSizing: 'border-box',
           }}
         />
       )}
@@ -116,7 +116,7 @@ export const ChipMultiSelect: React.FC<ChipMultiSelectProps> = ({
               disabled={disabled}
               aria-pressed={isSelected}
               style={{
-                padding: '4px 8px', borderRadius: '4px', fontSize: '11px', border: 'none',
+                padding: '4px 8px', borderRadius: '4px', fontSize: 'var(--text-2xs)', border: 'none',
                 cursor: disabled ? 'not-allowed' : 'pointer',
                 backgroundColor: isSelected ? 'var(--accent)' : 'var(--bg-tertiary)',
                 color: isSelected ? 'var(--on-accent)' : 'var(--text-primary)',
@@ -126,9 +126,9 @@ export const ChipMultiSelect: React.FC<ChipMultiSelectProps> = ({
             </button>
           );
         })}
-        {allOptions.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{emptyText}</span>}
+        {allOptions.length === 0 && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{emptyText}</span>}
         {allOptions.length > 0 && visible.length === 0 && (
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{noMatchText}</span>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{noMatchText}</span>
         )}
       </div>
     </div>

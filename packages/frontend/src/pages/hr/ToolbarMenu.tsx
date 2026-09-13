@@ -51,7 +51,7 @@ export const ToolbarMenu: React.FC<{
         className="btn btn-secondary"
         aria-haspopup="menu"
         aria-expanded={open}
-        style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}
+        style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 12px' }}
       >
         {icon}
         {label}
@@ -98,9 +98,9 @@ export const MenuAction: React.FC<{
   >
     {icon && <span style={{ color: tone ?? 'var(--text-muted)', marginTop: '1px' }}>{icon}</span>}
     <span>
-      <span style={{ display: 'block', fontSize: '12.5px', fontWeight: 600 }}>{label}</span>
+      <span style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600 }}>{label}</span>
       {hint && (
-        <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+        <span style={{ display: 'block', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.45 }}>
           {hint}
         </span>
       )}

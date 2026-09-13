@@ -16,7 +16,7 @@ const CLIENT_TYPES = Object.values(ClientType);
 const PRIORITIES = Object.values(Priority);
 
 const Label: React.FC<{ text: string; required?: boolean }> = ({ text, required }) => (
-  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
+  <label style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' }}>
     {text} {required && <span style={{ color: 'var(--danger)' }}>*</span>}
   </label>
 );
@@ -89,7 +89,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Section 1: General Identity */}
         <div>
-          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>General Identity</h4>
+          <h4 style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>General Identity</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Legal Name" required />
@@ -130,7 +130,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
 
         {/* Section 2: Contact Information */}
         <div>
-          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Contact Details</h4>
+          <h4 style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Contact Details</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Contact Person" />
@@ -199,7 +199,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
                   color: 'var(--text-primary)',
                   outline: 'none',
                   resize: 'vertical',
-                  fontSize: '13px',
+                  fontSize: 'var(--text-sm)',
                 }}
               />
             </div>
@@ -208,7 +208,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
 
         {/* Section 3: Financials & Registration */}
         <div>
-          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Financials & Registration</h4>
+          <h4 style={{ fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Financials & Registration</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Registration Number" />
@@ -220,7 +220,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
               {/* Advisory, shown while the field still has focus of the operator's attention —
                   never a reason to refuse a save. The column has always held either shape. */}
               {taxIdHint(form.taxId) && (
-                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>{taxIdHint(form.taxId)}</span>
+                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>{taxIdHint(form.taxId)}</span>
               )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gridColumn: '1 / -1' }}>

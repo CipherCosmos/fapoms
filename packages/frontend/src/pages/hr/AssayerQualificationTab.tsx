@@ -31,13 +31,13 @@ const toneFor = (n: number | null): string =>
 
 /** "This number was set by a person." Written once, because two lists on this tab say it. */
 const adjustedChip: React.CSSProperties = {
-  fontSize: '12px', fontWeight: 700, color: 'var(--warning)',
+  fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)',
   textTransform: 'uppercase', letterSpacing: '.04em',
 };
 
 const ScoreChip: React.FC<{ value: number | null; small?: boolean }> = ({ value, small }) => (
   <span style={{
-    fontWeight: 800, fontSize: small ? '13px' : '22px', color: toneFor(value),
+    fontWeight: 800, fontSize: small ? 'var(--text-sm)' : 'var(--text-xl)', color: toneFor(value),
     fontVariantNumeric: 'tabular-nums',
   }}>
     {value == null ? '—' : value}
@@ -179,28 +179,28 @@ export const AssayerQualificationTab: React.FC<{
       {/* ── Overall ── */}
       <div style={{ ...card, display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
         <div style={{ textAlign: 'center', minWidth: '110px' }}>
-          <div style={{ fontSize: '40px', fontWeight: 800, color: toneFor(overall.effective), lineHeight: 1 }}>
+          <div style={{ fontSize: 'var(--text-3xl)', fontWeight: 800, color: toneFor(overall.effective), lineHeight: 1 }}>
             {overall.effective == null ? '—' : overall.effective}
           </div>
           <div style={{ ...label, marginTop: '4px' }}>Overall / 100</div>
         </div>
-        <div style={{ flex: 1, minWidth: '220px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+        <div style={{ flex: 1, minWidth: '220px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           {overall.effective == null
             ? 'Not yet assessed — nothing scoreable is on file. Scores appear as vetting, documents and work history are recorded.'
             : overall.override
               ? <>Adjusted from a computed {overall.computed ?? '—'} by {overall.override.setByName ?? 'staff'}: “{overall.override.reason}”
-                  {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(overall.override!.id, 'overall')} style={{ marginLeft: '8px', fontSize: '12px', padding: '2px 8px' }}><RotateCcw size={11} /> Clear</button>}
+                  {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(overall.override!.id, 'overall')} style={{ marginLeft: '8px', fontSize: 'var(--text-xs)', padding: '2px 8px' }}><RotateCcw size={11} /> Clear</button>}
                 </>
               : 'Computed live from identity verification, record completeness, background checks, references, credentials and work history. Weights are set under Administration → Platform Settings → Assayer qualification.'}
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           {canManage && (
-            <button className="btn btn-secondary" disabled={busy} onClick={() => setOverride('overall')} style={{ fontSize: '12px', display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <button className="btn btn-secondary" disabled={busy} onClick={() => setOverride('overall')} style={{ fontSize: 'var(--text-xs)', display: 'flex', gap: '6px', alignItems: 'center' }}>
               <SlidersHorizontal size={13} /> Override
             </button>
           )}
           {canManage && (
-            <button className="btn btn-primary" disabled={busy} onClick={printProfile} style={{ fontSize: '12px', display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <button className="btn btn-primary" disabled={busy} onClick={printProfile} style={{ fontSize: 'var(--text-xs)', display: 'flex', gap: '6px', alignItems: 'center' }}>
               <Printer size={13} /> Print profile
             </button>
           )}
@@ -213,7 +213,7 @@ export const AssayerQualificationTab: React.FC<{
           {data.dimensions.map((d: DimensionScoreView) => (
             <div key={d.key}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 600, flex: 1 }}>{d.label}</div>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, flex: 1 }}>{d.label}</div>
                 {d.override && (
                   <span title={`Computed ${d.computed ?? '—'} · adjusted by ${d.override.setByName ?? 'staff'}: ${d.override.reason}`}
                         style={adjustedChip}>
@@ -241,7 +241,7 @@ export const AssayerQualificationTab: React.FC<{
                 )}
               </div>
               <div style={{ margin: '5px 0 3px' }}><Bar pct={d.effective ?? 0} tone={toneFor(d.effective)} /></div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                 {d.effective == null ? 'Not yet assessed — ' : ''}{d.basis.join(' · ')}
               </div>
             </div>
@@ -259,7 +259,7 @@ export const AssayerQualificationTab: React.FC<{
               <div key={pt.client.id} style={{ borderBottom: '1px solid var(--border-hair)', padding: '8px 0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}
                      onClick={() => setOpenPartner(openPartner === pt.client.id ? null : pt.client.id)}>
-                  <div style={{ flex: 1, fontSize: '13px', fontWeight: 600 }}>{pt.client.name}</div>
+                  <div style={{ flex: 1, fontSize: 'var(--text-sm)', fontWeight: 600 }}>{pt.client.name}</div>
                   {pt.barred && <StatusBadge label="Barred by client" color="var(--danger)" bg="var(--status-cancelled-bg)" variant="pill" />}
                   {!pt.barred && pt.standing && (
                     /*
@@ -289,7 +289,7 @@ export const AssayerQualificationTab: React.FC<{
                     />
                   )}
                   {pt.standingCap != null && !pt.barred && (
-                    <span style={{ fontSize: '12px', color: 'var(--warning)' }} title={pt.standingReason ?? undefined}>capped at {pt.standingCap}</span>
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)' }} title={pt.standingReason ?? undefined}>capped at {pt.standingCap}</span>
                   )}
                   {/* The same word, the same way it is written against a dimension six lines up —
                       it was shouting in capitals here and lower case there. */}
@@ -308,7 +308,7 @@ export const AssayerQualificationTab: React.FC<{
                   )}
                 </div>
                 {openPartner === pt.client.id && (
-                  <div style={{ padding: '8px 0 4px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  <div style={{ padding: '8px 0 4px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                     {pt.gaps.length === 0
                       ? 'Nothing outstanding for this partner.'
                       : (<>
@@ -320,7 +320,7 @@ export const AssayerQualificationTab: React.FC<{
                     {pt.override && (
                       <div style={{ marginTop: '6px', color: 'var(--warning)' }}>
                         Adjusted to {pt.override.value} by {pt.override.setByName ?? 'staff'}: “{pt.override.reason}”
-                        {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(pt.override!.id, pt.client.name)} style={{ marginLeft: '8px', fontSize: '12px', padding: '2px 8px' }}>Clear</button>}
+                        {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(pt.override!.id, pt.client.name)} style={{ marginLeft: '8px', fontSize: 'var(--text-xs)', padding: '2px 8px' }}>Clear</button>}
                       </div>
                     )}
                   </div>

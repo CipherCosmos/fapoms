@@ -32,7 +32,7 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
   return (
   <section style={card}>
     <div style={{ ...label, marginBottom: '4px' }}>Workforce audit trail</div>
-    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px' }}>
+    <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '0 0 12px' }}>
       Every change to a person's record, in order, with who made it.
     </p>
     {d.activity.length === 0 ? (
@@ -51,7 +51,7 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
           style={{ marginBottom: '10px', maxWidth: '340px' }}
         />
         {q && (
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>
             Showing {rows.length} of {d.activity.length} recent changes.
           </div>
         )}
@@ -68,11 +68,11 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
             key: 'when',
             header: 'When',
             render: (a) => (
-              <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}><Clock size={11} /> {fmtWhen(a.occurredAt)}</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}><Clock size={11} /> {fmtWhen(a.occurredAt)}</span>
             ),
           },
           { key: 'who', header: 'Assayer', render: (a) => <strong>{a.displayName}</strong> },
-          { key: 'event', header: 'Event', render: (a) => <span style={{ fontSize: '12px' }}>{activityEventLabel(a.eventType)}</span> },
+          { key: 'event', header: 'Event', render: (a) => <span style={{ fontSize: 'var(--text-xs)' }}>{activityEventLabel(a.eventType)}</span> },
           {
             key: 'change',
             header: 'Change',
@@ -80,7 +80,7 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
             // because the fallback is a free-text remark, which is a sentence rather than a value.
             wrap: true,
             render: (a) => (a.previousState || a.newState
-              ? <span style={{ fontSize: '12px' }}>{assayerLifecycleLabel(a.previousState)} → <strong>{assayerLifecycleLabel(a.newState)}</strong></span>
+              ? <span style={{ fontSize: 'var(--text-xs)' }}>{assayerLifecycleLabel(a.previousState)} → <strong>{assayerLifecycleLabel(a.newState)}</strong></span>
               : <>{a.remarks ?? '—'}</>),
           },
           { key: 'by', header: 'By', render: (a) => <>{a.performedBy ?? 'system'}</> },

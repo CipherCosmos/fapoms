@@ -45,7 +45,7 @@ const STATUS_STYLE: Record<DestructiveActionRequestStatus, { label: string; fg: 
 const StatusPill: React.FC<{ status: DestructiveActionRequestStatus }> = ({ status }) => {
   const s = STATUS_STYLE[status];
   return (
-    <span style={{ fontSize: '10px', fontWeight: 800, letterSpacing: '0.03em', padding: '2px 8px', borderRadius: '10px', background: s.bg, color: s.fg, whiteSpace: 'nowrap' }}>
+    <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, letterSpacing: '0.03em', padding: '2px 8px', borderRadius: '10px', background: s.bg, color: s.fg, whiteSpace: 'nowrap' }}>
       {s.label}
     </span>
   );
@@ -58,7 +58,7 @@ const DomainChips: React.FC<{ request: DestructiveActionRequest }> = ({ request 
       <span
         key={key}
         style={{
-          fontSize: '11px', fontWeight: 700, padding: '2px 9px', borderRadius: '10px',
+          fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '2px 9px', borderRadius: '10px',
           border: '1px solid var(--border-color)', color: 'var(--text-secondary)',
           background: 'var(--bg-secondary)',
         }}
@@ -170,10 +170,10 @@ export const Approvals: React.FC = () => {
     <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: '10px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
             {r.requestedByName ?? 'A developer'} wants to wipe {r.domainKeys.length} domain{r.domainKeys.length === 1 ? '' : 's'}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
             <Clock size={12} /> Requested {new Date(r.requestedAt).toLocaleString()} · about {totalRows(r).toLocaleString()} rows in total
           </div>
         </div>
@@ -189,19 +189,19 @@ export const Approvals: React.FC = () => {
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="Why not — the developer reads this"
-                style={{ flex: '1 1 260px', padding: '7px 10px', fontSize: '12.5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none' }}
+                style={{ flex: '1 1 260px', padding: '7px 10px', fontSize: 'var(--text-xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none' }}
               />
               <button
                 className="btn btn-primary"
                 disabled={rejectReason.trim().length === 0 || reject.isPending}
                 onClick={() => reject.mutate({ id: r.id, reason: rejectReason.trim() })}
-                style={{ background: 'var(--danger)', border: 'none', padding: '7px 14px', fontSize: '12px' }}
+                style={{ background: 'var(--danger)', border: 'none', padding: '7px 14px', fontSize: 'var(--text-xs)' }}
               >
                 {reject.isPending ? 'Rejecting…' : 'Reject request'}
               </button>
               <button
                 className="btn btn-secondary"
-                style={{ padding: '7px 12px', fontSize: '12px' }}
+                style={{ padding: '7px 12px', fontSize: 'var(--text-xs)' }}
                 onClick={() => { setRejectingId(null); setRejectReason(''); }}
               >
                 Keep it pending
@@ -211,7 +211,7 @@ export const Approvals: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button
                 className="btn btn-secondary"
-                style={{ padding: '7px 14px', fontSize: '12px' }}
+                style={{ padding: '7px 14px', fontSize: 'var(--text-xs)' }}
                 onClick={() => { setRejectingId(r.id); setRejectReason(''); }}
               >
                 Reject…
@@ -220,7 +220,7 @@ export const Approvals: React.FC = () => {
                 className="btn btn-primary"
                 disabled={approve.isPending}
                 onClick={() => onApprove(r)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', fontSize: '12px' }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', fontSize: 'var(--text-xs)' }}
               >
                 <CheckCircle2 size={13} /> Approve…
               </button>
@@ -234,12 +234,12 @@ export const Approvals: React.FC = () => {
   const DecidedRow: React.FC<{ r: DestructiveActionRequest }> = ({ r }) => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', padding: '11px 2px', borderBottom: '1px solid var(--border-hair, var(--border-color))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ fontSize: '12.5px', color: 'var(--text-primary)', fontWeight: 600 }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', fontWeight: 600 }}>
           {r.requestedByName ?? 'A developer'} · {r.domainKeys.map(prettyDomain).join(', ')}
         </div>
         <StatusPill status={r.status} />
       </div>
-      <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
         Requested {new Date(r.requestedAt).toLocaleString()}
         {r.decidedAt && <> · decided by {r.decidedByName ?? 'an administrator'} {new Date(r.decidedAt).toLocaleString()}</>}
         {r.status === DestructiveActionRequestStatus.REJECTED && r.decisionReason && <> — “{r.decisionReason}”</>}
@@ -259,7 +259,7 @@ export const Approvals: React.FC = () => {
       />
 
       {!canDecide && (
-        <div style={{ ...card, display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        <div style={{ ...card, display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
           <Info size={15} style={{ flexShrink: 0, marginTop: '1px', color: 'var(--text-muted)' }} />
           <span>
             You can read this queue, but approvals need the Admin role held directly — implication
@@ -270,16 +270,16 @@ export const Approvals: React.FC = () => {
       )}
 
       {isLoading ? (
-        <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
+        <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
       ) : queueFailed ? (
-        <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: '13px' }}>
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
           <div>Couldn&apos;t load the approval queue. {userMessage(error)}</div>
-          <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: '12px' }} onClick={() => refetch()}>Try again</button>
+          <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }} onClick={() => refetch()}>Try again</button>
         </div>
       ) : (
         <>
           {pending.length === 0 ? (
-            <div style={{ ...card, display: 'flex', alignItems: 'center', gap: '9px', color: 'var(--success, #34a853)', fontWeight: 700, fontSize: '13.5px' }}>
+            <div style={{ ...card, display: 'flex', alignItems: 'center', gap: '9px', color: 'var(--success, #34a853)', fontWeight: 700, fontSize: 'var(--text-sm)' }}>
               <ShieldCheck size={17} /> Nothing is waiting for a decision.
             </div>
           ) : (
@@ -290,7 +290,7 @@ export const Approvals: React.FC = () => {
 
           {decided.length > 0 && (
             <div style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 700, marginBottom: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: 'var(--text-sm)', fontWeight: 700, marginBottom: '4px' }}>
                 <Trash2 size={14} style={{ color: 'var(--text-muted)' }} /> Recently decided
               </div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>

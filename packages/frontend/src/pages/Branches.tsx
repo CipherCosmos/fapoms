@@ -551,9 +551,9 @@ export const Branches: React.FC = () => {
                 <Icon size={22} />
               </div>
               <div>
-                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>{card.label}</span>
-                <h4 style={{ fontSize: '24px', fontWeight: 800, margin: '2px 0', color: 'var(--text-primary)' }}>{card.value}</h4>
-                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', display: 'block', lineHeight: 1.3 }}>{card.note}</span>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', fontWeight: 500 }}>{card.label}</span>
+                <h4 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, margin: '2px 0', color: 'var(--text-primary)' }}>{card.value}</h4>
+                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', display: 'block', lineHeight: 1.3 }}>{card.note}</span>
               </div>
             </div>
           );
@@ -572,25 +572,25 @@ export const Branches: React.FC = () => {
           {/* Toolbar */}
           <div className="glass-card" style={{ padding: '14px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-              <label style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Client</label>
+              <label style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Client</label>
               <Select value={selectedClientId} onChange={setSelectedClientId}
                 options={clients.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` }))}
                 style={{ minWidth: '160px' }}
               />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-              <label style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Excel Import</label>
-              <label className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: branchImport.busy ? 'not-allowed' : 'pointer', fontSize: '13px', opacity: branchImport.busy ? 0.7 : 1 }}>
+              <label style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Excel Import</label>
+              <label className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: branchImport.busy ? 'not-allowed' : 'pointer', fontSize: 'var(--text-sm)', opacity: branchImport.busy ? 0.7 : 1 }}>
                 <Upload size={14} /> {branchImport.busy ? 'Importing…' : 'Import Excel'}
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={branchImport.busy} style={{ display: 'none' }} />
               </label>
             </div>
             <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name or SOL ID..." compact style={{ minWidth: '180px' }} />
-            <button onClick={() => setShowFilters(!showFilters)} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button onClick={() => setShowFilters(!showFilters)} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Filter size={13} /> Filters <ChevronDown size={12} style={{ transform: showFilters ? 'rotate(180deg)' : '' }} />
             </button>
             {canManage && (
-              <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Plus size={14} /> Add Branch
               </button>
             )}
@@ -599,8 +599,8 @@ export const Branches: React.FC = () => {
           {/* Advanced Filters */}
           {showFilters && (
             <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>} value={riskFilter} onChange={setRiskFilter} options={[{ value: 'ALL', label: 'All risk levels' }, ...RISK_CATEGORIES.map(r => ({ value: r, label: riskCategoryLabel(r) }))]} compact />
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              <FilterSelect label={<span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>} value={riskFilter} onChange={setRiskFilter} options={[{ value: 'ALL', label: 'All risk levels' }, ...RISK_CATEGORIES.map(r => ({ value: r, label: riskCategoryLabel(r) }))]} compact />
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Region, zone and state are set in the header's scope filter.
               </span>
               {(() => {
@@ -609,7 +609,7 @@ export const Branches: React.FC = () => {
                 return (
                   <button type="button" onClick={() => { setRiskFilter('ALL'); }}
                     title="Clear all filters"
-                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: '11px', fontWeight: 600, color: 'var(--accent)', background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--accent)', background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                     <X size={12} /> Clear {activeCount}
                   </button>
                 );
@@ -650,21 +650,21 @@ export const Branches: React.FC = () => {
                     <tr key={b.id || b.solId || ''}
                       onClick={() => { void loadBranchDetail(b); selectBranch(b.id); }}
                       style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(216,174,71,0.08)' : undefined }}>
-                      <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                      <td style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
                         {b.solId ?? '—'}
                       </td>
-                      <td style={{ fontWeight: 600, fontSize: '14px' }}>{b.name}</td>
-                      <td style={{ fontSize: '13px' }}>{b.city}, {b.state}</td>
-                      <td style={{ fontSize: '13px' }}>{regionLabel(b.region)}</td>
+                      <td style={{ fontWeight: 600, fontSize: 'var(--text-base)' }}>{b.name}</td>
+                      <td style={{ fontSize: 'var(--text-sm)' }}>{b.city}, {b.state}</td>
+                      <td style={{ fontSize: 'var(--text-sm)' }}>{regionLabel(b.region)}</td>
                       <td>
                         <StatusBadge label={riskCategoryLabel(b.riskCategory)} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
                       </td>
-                      <td style={{ fontSize: '12px' }}>{branchTypeLabel(b.branchType)}</td>
+                      <td style={{ fontSize: 'var(--text-xs)' }}>{branchTypeLabel(b.branchType)}</td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '4px' }}>
                           {canManage && <>
-                            <button aria-label="Edit branch" onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
-                            {canDelete && <button aria-label="Delete branch" onClick={() => handleDelete(b)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--danger)' }}><Trash2 size={11} /></button>}
+                            <button aria-label="Edit branch" onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: 'var(--text-2xs)' }}><Edit2 size={11} /></button>
+                            {canDelete && <button aria-label="Delete branch" onClick={() => handleDelete(b)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: 'var(--text-2xs)', color: 'var(--danger)' }}><Trash2 size={11} /></button>}
                           </>}
                         </div>
                       </td>
@@ -690,13 +690,13 @@ export const Branches: React.FC = () => {
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>{branchDetail.solId ?? '—'}</span>
-                  <h4 style={{ fontSize: '16px', fontWeight: 700, margin: '2px 0' }}>{branchDetail.name}</h4>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>{branchDetail.solId ?? '—'}</span>
+                  <h4 style={{ fontSize: 'var(--text-md)', fontWeight: 700, margin: '2px 0' }}>{branchDetail.name}</h4>
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   {canManage && <>
-                    <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
-                    <button onClick={() => setShowContactModal(true)} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: 'var(--text-2xs)' }}><Edit2 size={11} /></button>
+                    <button onClick={() => setShowContactModal(true)} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Plus size={11} /> Contact
                     </button>
                   </>}
@@ -704,7 +704,7 @@ export const Branches: React.FC = () => {
               </div>
 
               {/* Info Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', padding: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: 'var(--text-xs)', padding: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
                 <InfoRow label="SOL ID" value={branchDetail.solId || '-'} />
                 <InfoRow label="Branch Type" value={branchTypeLabel(branchDetail.branchType)} />
                 <InfoRow label="Region" value={regionLabel(branchDetail.region)} />
@@ -730,12 +730,12 @@ export const Branches: React.FC = () => {
                       <GeoPrecisionBadge source={branchDetail.geoSource} matchedName={branchDetail.geoMatchedName} />
                       <a href={`https://www.openstreetmap.org/?mlat=${branchDetail.latitude}&mlon=${branchDetail.longitude}#map=17/${branchDetail.latitude}/${branchDetail.longitude}`}
                         target="_blank" rel="noopener noreferrer"
-                        style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
+                        style={{ fontSize: 'var(--text-2xs)', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
                         <Map size={14} /> Check on the map
                       </a>
                     </div>
                     {branchDetail.geoMatchedName && (
-                      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                      <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
                         Matched: {branchDetail.geoMatchedName}
                       </div>
                     )}
@@ -758,35 +758,35 @@ export const Branches: React.FC = () => {
 
               {/* Contacts */}
               <div>
-                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <h5 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Phone size={13} /> Contacts ({branchDetail.contacts?.length || 0})
                 </h5>
                 {(!branchDetail.contacts || branchDetail.contacts.length === 0) ? (
-                  <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No contacts added yet.</div>
+                  <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No contacts added yet.</div>
                 ) : branchDetail.contacts.map(c => (
-                  <div key={c.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
+                  <div key={c.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)', marginBottom: '8px' }}>
                     <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{c.name} {c.isPrimary && <span style={{ fontSize: '10px', color: 'var(--accent-secondary)' }}>(Primary contact)</span>}</span>
+                      <span>{c.name} {c.isPrimary && <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent-secondary)' }}>(Primary contact)</span>}</span>
                     </div>
                     <div style={{ color: 'var(--text-muted)' }}>{c.designation}{c.department && ` • ${c.department}`}</div>
-                    <div style={{ color: 'var(--text-secondary)', display: 'flex', gap: '10px', fontSize: '11px', marginTop: '2px' }}><span>{c.email}</span><span>{c.phone}</span></div>
+                    <div style={{ color: 'var(--text-secondary)', display: 'flex', gap: '10px', fontSize: 'var(--text-2xs)', marginTop: '2px' }}><span>{c.email}</span><span>{c.phone}</span></div>
                   </div>
                 ))}
               </div>
 
               {/* Documents */}
               <div>
-                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <h5 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <FileText size={13} /> Documents ({branchDetail.documents?.length || 0})
                 </h5>
                 {(!branchDetail.documents || branchDetail.documents.length === 0) ? (
-                  <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No documents saved for this branch yet.</div>
+                  <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No documents saved for this branch yet.</div>
                 ) : branchDetail.documents.map(d => (
-                  <div key={d.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
+                  <div key={d.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)', marginBottom: '8px' }}>
                     <div style={{ fontWeight: 600 }}>{d.fileName}</div>
                     {/* The category is stored as an enum (BRANCH_LIST); rendering it raw put a SCREAMING_SNAKE
                           word under a filename the clerk had just uploaded themselves. */}
-                    <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{auditDocumentTypeLabel(d.category)} • {(d.fileSize / 1024).toFixed(1)} KB{d.remarks && ` • ${d.remarks}`}</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>{auditDocumentTypeLabel(d.category)} • {(d.fileSize / 1024).toFixed(1)} KB{d.remarks && ` • ${d.remarks}`}</div>
                   </div>
                 ))}
               </div>
@@ -794,7 +794,7 @@ export const Branches: React.FC = () => {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', color: 'var(--text-muted)' }}>
               <Building2 size={40} style={{ opacity: 0.4, marginBottom: '12px' }} />
-              <span style={{ fontSize: '13px' }}>Select a branch to view details</span>
+              <span style={{ fontSize: 'var(--text-sm)' }}>Select a branch to view details</span>
             </div>
           )}
         </div>
@@ -992,7 +992,7 @@ export const BranchFormModal: React.FC<{
 
   const field = (label: string, key: keyof BranchFormData, opts?: { type?: string; required?: boolean; full?: boolean; options?: {value: string; label: string}[]; placeholder?: string; hint?: string; geo?: 'city' | 'district' | 'pincode'; onChange?: (v: string) => void }) => (
     <div key={key} style={opts?.full ? { gridColumn: '1 / -1' } : {}}>
-      <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>{label}{opts?.required && ' *'}</label>
+      <label style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>{label}{opts?.required && ' *'}</label>
       {opts?.options ? (
         <Select value={form[key]} onChange={opts.onChange ?? set(key)}
           placeholder={opts?.placeholder || 'Select...'}
@@ -1012,9 +1012,9 @@ export const BranchFormModal: React.FC<{
         />
       ) : (
         <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => (opts?.onChange ?? set(key))(e.target.value)} required={opts?.required} placeholder={opts?.placeholder}
-          style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
+          style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)' }} />
       )}
-      {opts?.hint && <span style={{ display: 'block', fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>{opts.hint}</span>}
+      {opts?.hint && <span style={{ display: 'block', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>{opts.hint}</span>}
     </div>
   );
 
@@ -1075,14 +1075,14 @@ export const BranchFormModal: React.FC<{
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
+        <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
         {field('Client', 'clientId', { options: clientOptions.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` })), required: true })}
         {field('Branch Name', 'name', { required: true })}
         {/* SOL ID is the single branch identifier. It comes off the client's own SOL register and
             is mandatory — there is no auto-allocation. */}
         {field('SOL ID', 'solId', { required: true, placeholder: 'e.g. 12345', full: true })}
 
-        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
+        <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
         {/* Pincode first, and deliberately so: it is the one thing on a branch letterhead that
             identifies the place, and picking a result fills district, city and state with it.
             State is the only mandatory one — it sets the region, zone and holiday calendar the
@@ -1095,13 +1095,13 @@ export const BranchFormModal: React.FC<{
         {/* Same postal-directory check the wizard shows under its own pincode box: advisory, and
             never a reason this form refuses to save. */}
         {addrLookup && (
-          <span style={{ gridColumn: '1 / -1', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}>
             <Loader size={12} /> Checking the pincode against the postal directory…
           </span>
         )}
         {addrNote && (
           <div style={{
-            gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px',
+            gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)',
             padding: '6px 8px', borderRadius: 'var(--radius-sm)',
             background: addrNote.blocking ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
             color: addrNote.blocking ? 'var(--danger)' : 'var(--warning)',
@@ -1110,7 +1110,7 @@ export const BranchFormModal: React.FC<{
           </div>
         )}
 
-        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT & RISK</span>
+        <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT & RISK</span>
         {field('Phone', 'phone', { placeholder: 'e.g. +91-22-12345678' })}
         {/* One input for one idea. The score is derived from the band and shown read-only here;
             it stays directly editable under Advanced for a branch with a real scored assessment. */}
@@ -1123,19 +1123,19 @@ export const BranchFormModal: React.FC<{
         <button
           type="button"
           onClick={() => setShowAdvanced(v => !v)}
-          style={{ gridColumn: '1 / -1', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '12px', fontWeight: 600 }}
+          style={{ gridColumn: '1 / -1', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: 'var(--text-xs)', fontWeight: 600 }}
         >
           <ChevronDown size={13} style={{ transform: showAdvanced ? 'rotate(180deg)' : '' }} />
           {showAdvanced ? 'Hide advanced details' : 'Advanced details (zone, competencies, dates)'}
         </button>
 
         {showAdvanced && <>
-          <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
+          <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
           {field('Branch Type', 'branchType', { options: keepRecorded(form.branchType, BRANCH_TYPES.map(t => ({ value: t, label: branchTypeLabel(t) }))) })}
           {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
           {field('Email', 'email', { type: 'email', full: true })}
 
-          <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>PLANNING GEOGRAPHY</span>
+          <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>PLANNING GEOGRAPHY</span>
           {/* Region is derived from state on the server (`resolveRegion`) and always has been —
               the picker used to sit in the everyday form under the label "Derived from state",
               which is a field asking to be left alone. It stays here, and only here, for the
@@ -1159,7 +1159,7 @@ export const BranchFormModal: React.FC<{
           })}
           {field('Zone', 'zoneId', { options: zoneOptions, full: true })}
 
-          <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>
+          <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>
           {field('Complexity', 'complexity', { options: keepRecorded(form.complexity, COMPLEXITIES.map(c => ({ value: c, label: branchComplexityLabel(c) }))), onChange: setComplexity })}
           {field('Est. Duration (hours)', 'estimatedDurationHours', {
             type: 'number',
@@ -1171,9 +1171,9 @@ export const BranchFormModal: React.FC<{
           })}
 
           <div style={{ gridColumn: '1 / -1' }}>
-            <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Required Competencies</label>
+            <label style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Required Competencies</label>
             {competencyOptions === null ? (
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading competencies…</span>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Loading competencies…</span>
             ) : competencyOptions.length > 0 ? (
               /* Picked, never typed: a typo here used to invent a competency no assayer holds,
                  which silently made the branch unmatchable during planning. The shared picker
@@ -1249,23 +1249,23 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
           { label: 'Department', val: department, set: setDepartment, placeholder: 'e.g. Operations' },
         ].map(f => (
           <div key={f.label}>
-            <label htmlFor={`branch-contact-${f.label}`} style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>
+            <label htmlFor={`branch-contact-${f.label}`} style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>
               {f.label}{f.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
             </label>
             <div style={{ position: 'relative' }}>
-              {f.tel && <span aria-hidden style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>}
+              {f.tel && <span aria-hidden style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', pointerEvents: 'none' }}>+91</span>}
               <input id={`branch-contact-${f.label}`} placeholder={f.placeholder} type={f.tel ? 'tel' : f.type || 'text'} inputMode={f.tel ? 'numeric' : undefined}
                 value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
-                style={{ width: '100%', boxSizing: 'border-box', padding: '8px', paddingLeft: f.tel ? '38px' : '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
+                style={{ width: '100%', boxSizing: 'border-box', padding: '8px', paddingLeft: f.tel ? '38px' : '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)' }} />
             </div>
           </div>
         ))}
         <div style={{ gridColumn: '1 / -1' }}>
-          <label htmlFor="branch-contact-notes" style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Notes</label>
+          <label htmlFor="branch-contact-notes" style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Notes</label>
           <textarea id="branch-contact-notes" placeholder="Anything worth remembering about this contact" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-            style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', resize: 'vertical' }} />
+            style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)', resize: 'vertical' }} />
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} /> Primary contact
         </label>
       </div>

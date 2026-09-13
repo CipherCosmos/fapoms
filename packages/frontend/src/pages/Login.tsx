@@ -53,7 +53,7 @@ const STYLES = `
 .lg-input {
   width: 100%; box-sizing: border-box; padding: 12px 14px;
   background: var(--bg-secondary); border: 1px solid var(--border-color);
-  border-radius: var(--radius-md); color: var(--text-primary); font-size: 14px;
+  border-radius: var(--radius-md); color: var(--text-primary); font-size: var(--text-base);
   outline: none; transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 .lg-input:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(216,174,71,0.18); }
@@ -255,12 +255,12 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
           <div style={{ position: 'relative', zIndex: 1, maxWidth: 460 }}>
             <h1 style={{
-              fontFamily: 'var(--font-display)', fontSize: 38, lineHeight: 1.15, fontWeight: 800,
+              fontFamily: 'var(--font-display)', fontSize: 'var(--text-3xl)', lineHeight: 1.15, fontWeight: 800,
               color: 'var(--text-primary)', margin: '0 0 14px',
             }}>
               Field audit operations,<br />under one record.
             </h1>
-            <p style={{ color: 'var(--text-secondary)', fontSize: 15, lineHeight: 1.6, margin: '0 0 36px' }}>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-md)', lineHeight: 1.6, margin: '0 0 36px' }}>
               Plan the work, send the right assayer, capture what they find, and keep the evidence
               together — from the branch visit to the signed report.
             </p>
@@ -277,10 +277,10 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     <Icon size={18} />
                   </div>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)', marginBottom: 3 }}>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--text-base)', color: 'var(--text-primary)', marginBottom: 3 }}>
                       {title}
                     </div>
-                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
                       {body}
                     </div>
                   </div>
@@ -289,7 +289,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             </div>
           </div>
 
-          <div style={{ position: 'relative', zIndex: 1, fontSize: 12, color: 'var(--text-secondary)' }}>
+          <div style={{ position: 'relative', zIndex: 1, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
             Sumeru Global · Field Audit Operations
           </div>
         </aside>
@@ -300,12 +300,12 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             {/* Shown only where the left panel is not: on a phone this is the only branding. */}
             <div style={{ marginBottom: 28 }} className="lg-compact-brand">
               <h2 style={{
-                fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800,
+                fontFamily: 'var(--font-display)', fontSize: 'var(--text-2xl)', fontWeight: 800,
                 color: 'var(--text-primary)', margin: '0 0 6px',
               }}>
                 {challenge ? 'Verify it’s you' : 'Sign in'}
               </h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: 0 }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-base)', margin: 0 }}>
                 {challenge ? 'One more step — enter your second-factor code to finish signing in.' : 'Use the account your administrator issued you.'}
               </p>
             </div>
@@ -325,7 +325,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                   border: '1px solid rgba(216, 174, 71, 0.35)',
                   color: 'var(--text-primary)',
                   padding: '12px 14px', borderRadius: 'var(--radius-md)',
-                  fontSize: 13, lineHeight: 1.5, display: 'flex', alignItems: 'flex-start', gap: 10,
+                  fontSize: 'var(--text-sm)', lineHeight: 1.5, display: 'flex', alignItems: 'flex-start', gap: 10,
                 }}>
                   <Clock size={16} style={{ flexShrink: 0, marginTop: 1, color: 'var(--accent-primary)' }} />
                   <span>
@@ -354,7 +354,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     background: 'rgba(239, 68, 68, 0.12)',
                     border: '1px solid rgba(239, 68, 68, 0.3)',
                     color: '#ef4444', padding: '12px 14px', borderRadius: 'var(--radius-md)',
-                    fontSize: 13, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 10,
+                    fontSize: 'var(--text-sm)', lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 10,
                   }}>
                     <AlertTriangle size={16} style={{ flexShrink: 0 }} />
                     <span>{error}</span>
@@ -363,7 +363,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                <label htmlFor="lg-username" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                <label htmlFor="lg-username" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-secondary)' }}>
                   Username or email
                 </label>
                 <input
@@ -382,7 +382,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                <label htmlFor="lg-password" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                <label htmlFor="lg-password" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-secondary)' }}>
                   Password
                 </label>
                 <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
@@ -414,7 +414,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 disabled={isLoading}
                 className="btn btn-primary"
                 style={{
-                  padding: '13px', fontWeight: 600, fontSize: 15, marginTop: 6, width: '100%',
+                  padding: '13px', fontWeight: 600, fontSize: 'var(--text-md)', marginTop: 6, width: '100%',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
                 }}
               >
@@ -445,7 +445,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     <div style={{
                       background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)',
                       color: '#ef4444', padding: '12px 14px', borderRadius: 'var(--radius-md)',
-                      fontSize: 13, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 10,
+                      fontSize: 'var(--text-sm)', lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 10,
                     }}>
                       <AlertTriangle size={16} style={{ flexShrink: 0 }} />
                       <span>{error}</span>
@@ -455,26 +455,26 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
                 {/* How to get a code, given the factors this account has. */}
                 {challenge.factors.includes('TOTP') && (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
                     <Smartphone size={16} style={{ flexShrink: 0, marginTop: 1, color: 'var(--accent-primary)' }} />
                     <span>Open your authenticator app and enter the 6-digit code it shows.</span>
                   </div>
                 )}
                 {mfaSentTo && (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
                     <Mail size={16} style={{ flexShrink: 0, marginTop: 1, color: 'var(--accent-primary)' }} />
                     <span>We sent a code to <strong style={{ color: 'var(--text-primary)' }}>{mfaSentTo}</strong>. Enter it below.</span>
                   </div>
                 )}
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                  <label htmlFor="lg-mfa-code" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  <label htmlFor="lg-mfa-code" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-secondary)' }}>
                     Verification code
                   </label>
                   <input
                     id="lg-mfa-code"
                     className="lg-input"
-                    style={{ letterSpacing: 6, fontSize: 20, textAlign: 'center' }}
+                    style={{ letterSpacing: 6, fontSize: 'var(--text-xl)', textAlign: 'center' }}
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     autoFocus
@@ -483,7 +483,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     placeholder="000000"
                     maxLength={14}
                   />
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                     You can also enter one of your recovery codes.
                   </span>
                 </div>
@@ -493,7 +493,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                   disabled={mfaBusy || mfaCode.trim().length < 6}
                   className="btn btn-primary"
                   style={{
-                    padding: '13px', fontWeight: 600, fontSize: 15, marginTop: 2, width: '100%',
+                    padding: '13px', fontWeight: 600, fontSize: 'var(--text-md)', marginTop: 2, width: '100%',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
                   }}
                 >
@@ -510,13 +510,13 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
                     {challenge.factors.includes('EMAIL') && (
                       <button type="button" disabled={mfaBusy} onClick={() => sendMfaCode(challenge.id, 'EMAIL')}
-                        className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+                        className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                         <Mail size={14} /> {mfaSentTo ? 'Resend email code' : 'Email me a code'}
                       </button>
                     )}
                     {challenge.factors.includes('SMS') && (
                       <button type="button" disabled={mfaBusy} onClick={() => sendMfaCode(challenge.id, 'SMS')}
-                        className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+                        className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                         <MessageSquare size={14} /> {mfaSentTo ? 'Resend text code' : 'Text me a code'}
                       </button>
                     )}
@@ -524,7 +524,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 )}
 
                 <button type="button" onClick={cancelMfa} className="btn btn-ghost"
-                  style={{ fontSize: 12.5, color: 'var(--text-muted)', alignSelf: 'center' }}>
+                  style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', alignSelf: 'center' }}>
                   Use a different account
                 </button>
               </form>
@@ -538,7 +538,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             */}
             {!challenge && import.meta.env.DEV && (
               <div style={{ marginTop: 26, paddingTop: 18, borderTop: '1px dashed var(--border-color)' }}>
-                <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10, textAlign: 'center' }}>
+                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 10, textAlign: 'center' }}>
                   Quick demo login (development only)
                 </p>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -547,9 +547,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     (`infrastructure/database/seed.ts`): admin, admin2, manager, executive, validator —
                     all on `admin123`.
                   */}
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('admin', 'admin123')} style={{ fontSize: 11, padding: '4px 10px' }}>Super Admin</button>
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('manager', 'admin123')} style={{ fontSize: 11, padding: '4px 10px' }}>Ops Manager</button>
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('validator', 'admin123')} style={{ fontSize: 11, padding: '4px 10px' }}>Validator</button>
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('admin', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Super Admin</button>
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('manager', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Ops Manager</button>
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDemoAccount('validator', 'admin123')} style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Validator</button>
                 </div>
               </div>
             )}

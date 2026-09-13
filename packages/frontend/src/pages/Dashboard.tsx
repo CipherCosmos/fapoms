@@ -260,10 +260,10 @@ export const Dashboard: React.FC = () => {
               background: 'color-mix(in srgb, var(--accent) 13%, transparent)', flexShrink: 0,
             }}><ActivityIcon size={20} /></span>
             <div style={{ minWidth: 0 }}>
-              <h2 style={{ fontSize: 26, fontWeight: 800, margin: 0, fontFamily: 'var(--font-display)', lineHeight: 1.1, letterSpacing: '-0.3px' }}>
+              <h2 style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, margin: 0, fontFamily: 'var(--font-display)', lineHeight: 1.1, letterSpacing: '-0.3px' }}>
                 Operations
               </h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '3px 0 0', lineHeight: 1.45 }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', margin: '3px 0 0', lineHeight: 1.45 }}>
                 {data?.focus ?? 'What needs doing, what’s at risk, and where the book stands.'}
               </p>
             </div>
@@ -272,7 +272,7 @@ export const Dashboard: React.FC = () => {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {updatedAt && (
             <span title="Figures refresh automatically" style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600,
+              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-2xs)', fontWeight: 600,
               color: 'var(--text-muted)', padding: '6px 12px', borderRadius: 'var(--radius-full)',
               background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)',
             }}>
@@ -281,12 +281,12 @@ export const Dashboard: React.FC = () => {
             </span>
           )}
           <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all })}
-            className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} className={isFetching ? 'dash-spin' : undefined} /> Refresh
           </button>
           {canSeeCommandCenter && (
             <button onClick={() => navigate('/executive-map')} className="btn btn-primary"
-              style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600 }}>
+              style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
               <Map size={14} /> Command Center <ArrowRight size={13} />
             </button>
           )}
@@ -317,22 +317,22 @@ export const Dashboard: React.FC = () => {
          * support call for a decision somebody had made on purpose. This says what is true, and
          * offers the one thing that does help: the page they can use.
          */
-        <div style={{ padding: 14, background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)', borderRadius: 'var(--radius-md)', color: 'var(--text-secondary)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div style={{ padding: 14, background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)', borderRadius: 'var(--radius-md)', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, lineHeight: 1.5 }}>
             <Lock size={15} style={{ flexShrink: 0 }} />
             These figures are not part of your access. They cover work across every project, and
             your account has not been given that. Ask an administrator if you need it.
           </span>
           {landing !== '/dashboard' && (
-            <button onClick={() => navigate(landing)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>
+            <button onClick={() => navigate(landing)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
               Go to my start page
             </button>
           )}
         </div>
       ) : (
-        <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><AlertTriangle size={15} /> Could not load the operational snapshot.</span>
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}>Retry</button>
+          <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)' }}>Retry</button>
         </div>
       ))}
 
@@ -349,7 +349,7 @@ export const Dashboard: React.FC = () => {
           <div>
             <SectionLabel icon={<AlertTriangle size={13} />}>Needs attention</SectionLabel>
             {data.attention.length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 17px', background: 'var(--status-active-bg)', border: '1px solid color-mix(in srgb, var(--success) 40%, transparent)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: 13, fontWeight: 500 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 17px', background: 'var(--status-active-bg)', border: '1px solid color-mix(in srgb, var(--success) 40%, transparent)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: 'var(--text-sm)', fontWeight: 500 }}>
                 <CheckCircle2 size={17} /> Nothing blocked. No audits at risk, no paperwork waiting, nothing unbilled.
               </div>
             ) : (
@@ -365,17 +365,17 @@ export const Dashboard: React.FC = () => {
                         border: `1px solid color-mix(in srgb, ${c} 30%, transparent)`, borderLeft: `3px solid ${c}`,
                         borderRadius: 'var(--radius-md)', padding: '14px 16px', color: 'var(--text-primary)',
                       }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: c, fontSize: 11.5, fontWeight: 700 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: c, fontSize: 'var(--text-2xs)', fontWeight: 700 }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 'var(--radius-sm)', background: `color-mix(in srgb, ${c} 15%, transparent)` }}>
                           <AlertTriangle size={13} />
                         </span>
                         {a.label}
                         <ArrowRight size={13} style={{ marginLeft: 'auto', opacity: 0.55 }} />
                       </div>
-                      <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, fontFamily: 'var(--font-display)', lineHeight: 1, letterSpacing: '-0.3px' }}>
+                      <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, marginTop: 8, fontFamily: 'var(--font-display)', lineHeight: 1, letterSpacing: '-0.3px' }}>
                         {a.isMoney ? money(a.count) : a.count}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.45 }}>{a.detail}</div>
+                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.45 }}>{a.detail}</div>
                     </button>
                   );
                 })}
@@ -397,23 +397,23 @@ export const Dashboard: React.FC = () => {
                   ) : dueSoon.map((d) => (
                     <div key={d.projectBranchId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: '1px solid var(--border-hair)', flexWrap: 'wrap' }}>
                       <span style={{
-                        fontSize: 10.5, fontWeight: 700, minWidth: 58, textAlign: 'center',
+                        fontSize: 'var(--text-3xs)', fontWeight: 700, minWidth: 58, textAlign: 'center',
                         padding: '2px 7px', borderRadius: 'var(--radius-sm)',
                         background: d.daysAway === 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-tertiary)',
                         color: d.daysAway === 0 ? 'var(--danger)' : 'var(--text-secondary)',
                       }}>
                         {d.daysAway === 0 ? 'today' : d.daysAway === 1 ? 'tomorrow' : `${d.daysAway}d`}
                       </span>
-                      <span style={{ flex: 1, minWidth: 130, fontSize: 12.5 }}>
+                      <span style={{ flex: 1, minWidth: 130, fontSize: 'var(--text-xs)' }}>
                         <strong>{d.branchName}</strong>
                         <span style={{ color: 'var(--text-muted)' }}> · {d.district}</span>
                       </span>
                       {d.blocker ? (
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warning)', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--warning)', whiteSpace: 'nowrap' }}>
                           {BLOCKER_TEXT[d.blocker]}
                         </span>
                       ) : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: 'var(--success)' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--success)' }}>
                           <CheckCircle2 size={11} /> ready
                         </span>
                       )}
@@ -502,17 +502,17 @@ export const Dashboard: React.FC = () => {
                 {data.projects.map((p) => (
                   <button type="button" key={p.id} className="dash-project" style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer', borderRadius: 'var(--radius-sm)' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 13, fontWeight: 700 }}>
-                        {p.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontFamily: 'var(--font-mono, monospace)', fontSize: 11 }}>{p.projectNumber}</span>
+                      <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>
+                        {p.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-2xs)' }}>{p.projectNumber}</span>
                       </span>
-                      <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                         {p.clientName} · <strong style={{ color: 'var(--text-primary)' }}>{p.progressPct}%</strong> audited
                       </span>
                     </div>
                     <div style={{ height: 7, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-full)', overflow: 'hidden', margin: '7px 0 5px' }}>
                       <div style={{ width: `${p.progressPct}%`, height: '100%', borderRadius: 'var(--radius-full)', background: p.progressPct < 34 ? 'var(--warning)' : 'var(--gradient-neon, var(--success))', transition: 'width 0.5s cubic-bezier(0.4,0,0.2,1)' }} />
                     </div>
-                    <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 14, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
                       <span><Layers size={10} style={{ display: 'inline', verticalAlign: '-1px' }} /> {p.totalBranches} branches</span>
                       <span>{p.packets.toLocaleString('en-IN')} packets</span>
                       <span>{p.audited} audited</span>
@@ -530,11 +530,11 @@ export const Dashboard: React.FC = () => {
               <SectionLabel icon={<ActivityIcon size={13} />}>Recent activity</SectionLabel>
               <div className="glass-card" style={{ padding: 16, maxHeight: 240, overflowY: 'auto' }}>
                 {data.activities.map((a) => (
-                  <div key={a.id} style={{ display: 'flex', gap: 10, padding: '6px 0', fontSize: 12, alignItems: 'baseline' }}>
+                  <div key={a.id} style={{ display: 'flex', gap: 10, padding: '6px 0', fontSize: 'var(--text-xs)', alignItems: 'baseline' }}>
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-secondary)', flexShrink: 0, transform: 'translateY(-1px)' }} />
                     <span style={{ fontWeight: 600, minWidth: 0 }}>{activityEventLabel(a.action)}</span>
                     {a.detail && <span style={{ color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.detail}</span>}
-                    <span style={{ color: 'var(--text-muted)', fontSize: 10.5, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-3xs)', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
                       {new Date(a.occurredAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
                     </span>
                   </div>
@@ -575,14 +575,14 @@ const KpiTile: React.FC<{ kpi: Kpi }> = ({ kpi }) => {
           width: 34, height: 34, borderRadius: 'var(--radius-md)', color: c,
           background: `color-mix(in srgb, ${c} 14%, transparent)`,
         }}>{kpi.icon}</span>
-        <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', lineHeight: 1.25 }}>
+        <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', lineHeight: 1.25 }}>
           {kpi.label}
         </span>
       </div>
-      <div style={{ fontSize: 27, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1.05, letterSpacing: '-0.3px' }}>
+      <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1.05, letterSpacing: '-0.3px' }}>
         {kpi.value}
       </div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.4 }}>{kpi.sub}</div>
+      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.4 }}>{kpi.sub}</div>
     </button>
   );
 };
@@ -595,7 +595,7 @@ const ChartCard: React.FC<{ title: string; icon?: React.ReactNode; action?: Reac
   <div className="glass-card" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 15, height: '100%' }}>
     <div className="dash-card-head">
       {icon && <span className="dash-card-head__chip">{icon}</span>}
-      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
+      <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
       {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
     </div>
     <div style={{ display: center ? 'flex' : 'block', justifyContent: 'center', flex: 1 }}>{children}</div>
@@ -608,17 +608,17 @@ const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?
     border: '1px solid var(--border-hair)', borderLeft: `3px solid ${color}`,
     borderRadius: 'var(--radius-md)', padding: '13px 15px', color: 'var(--text-primary)',
   }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 700 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-3xs)', textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 700 }}>
       <span style={{ color }}>{icon}</span>{label}
     </div>
-    <div style={{ fontSize: 20, fontWeight: 800, marginTop: 5, fontFamily: 'var(--font-display)' }}>{value}</div>
-    {sub && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
+    <div style={{ fontSize: 'var(--text-xl)', fontWeight: 800, marginTop: 5, fontFamily: 'var(--font-display)' }}>{value}</div>
+    {sub && <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
   </button>
 );
 
 const SectionLabel: React.FC<{ icon?: React.ReactNode; children: React.ReactNode }> = ({ icon, children }) => (
   <div className="dash-sec">
-    <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)' }}>
+    <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)' }}>
       {icon && <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{icon}</span>}
       {children}
     </span>
@@ -627,7 +627,7 @@ const SectionLabel: React.FC<{ icon?: React.ReactNode; children: React.ReactNode
 );
 
 const EmptyLine: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>{children}</div>
+  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>{children}</div>
 );
 
 /**

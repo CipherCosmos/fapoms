@@ -157,23 +157,23 @@ export const DocumentControlPanel: React.FC<{
       {/* Overdue paperwork blocks field work outright, so it leads. */}
       {data.blockingFieldWork.length > 0 && (
         <div style={{ background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', padding: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontWeight: 700, fontSize: 'var(--text-sm)', marginBottom: 8 }}>
             <AlertTriangle size={15} />
             {data.blockingFieldWork.length} audit{data.blockingFieldWork.length === 1 ? '' : 's'} blocked — paperwork never sent
           </div>
           {data.blockingFieldWork.map((d) => (
             <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '6px 0', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12.5 }}>
+              <span style={{ fontSize: 'var(--text-xs)' }}>
                 <strong>{d.branchName ?? 'Unknown branch'}</strong>
                 <span style={{ color: 'var(--text-muted)' }}> · {d.fileName}</span>
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 11.5, color: 'var(--danger)', fontWeight: 600 }}>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 600 }}>
                   {d.daysUntilAudit != null && d.daysUntilAudit < 0
                     ? `audit was ${Math.abs(d.daysUntilAudit)} day(s) ago`
                     : 'audit due today'}
                 </span>
-                <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 11.5 }}>
+                <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
                   Send now
                 </button>
               </span>
@@ -208,7 +208,7 @@ export const DocumentControlPanel: React.FC<{
           <input
             value={search} onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search by branch, client, project or file…"
-            style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13 }}
+            style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
           />
         </div>
         {selectable.length > 0 && (
@@ -222,14 +222,14 @@ export const DocumentControlPanel: React.FC<{
               for (const r of selectable) { if (allShownTicked) next.delete(r.id); else next.add(r.id); }
               return next;
             })}
-            className="btn btn-secondary" style={{ fontSize: 12, padding: '7px 12px' }}
+            className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '7px 12px' }}
           >
             {selectable.every((r) => selected.has(r.id)) ? `Clear the ${selectable.length} shown` : `Select all ${selectable.length} unsent shown`}
           </button>
         )}
         {dispatchableIds.length > 0 && (
           <>
-            <button onClick={dispatchSelected} disabled={busy} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '7px 13px' }}>
+            <button onClick={dispatchSelected} disabled={busy} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', padding: '7px 13px' }}>
               <Send size={13} /> {busy ? `Sending ${dispatchableIds.length}…` : `Send ${dispatchableIds.length} to assayers`}
             </button>
             {/*
@@ -244,21 +244,21 @@ export const DocumentControlPanel: React.FC<{
               selection it previously said "Sending…" and looked dead.
             */}
             {busy && (
-              <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Releasing {dispatchableIds.length} document{dispatchableIds.length === 1 ? '' : 's'} in one go — the list refreshes when it is done.
               </span>
             )}
           </>
         )}
         {hiddenNote && (
-          <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{hiddenNote}</span>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{hiddenNote}</span>
         )}
       </div>
 
       {/* Document list — branch first, because that is how paperwork is discussed. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {rows.length === 0 && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
             No documents match this filter. Clear it to see every document for this project.
           </div>
         )}
@@ -276,32 +276,32 @@ export const DocumentControlPanel: React.FC<{
                 </button>
                 <FileText size={15} style={{ color: meta.color, flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 170 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{d.branchName ?? 'Unlinked document'}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{d.branchName ?? 'Unlinked document'}</div>
+                  <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                     {d.fileName} · {auditDocumentTypeLabel(d.type)} · {fmtSize(d.fileSize)}
                   </div>
                 </div>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 110 }}>{d.clientName ?? '—'}</span>
-                <span style={{ padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', minWidth: 110 }}>{d.clientName ?? '—'}</span>
+                <span style={{ padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: meta.bg, color: meta.color, fontSize: 'var(--text-2xs)', fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {meta.label}
                 </span>
                 {d.status === 'UPLOADED' && (
-                  <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5 }}>
                     <Send size={11} /> Send
                   </button>
                 )}
-                <button onClick={() => onDownload(d.id)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11.5 }}>
+                <button onClick={() => onDownload(d.id)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
                   Download
                 </button>
               </div>
 
               {open && (
                 <div style={{ borderTop: '1px solid var(--border-color)', padding: '12px 13px 13px 46px', background: 'var(--bg-primary)' }}>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 9 }}>
+                  <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: 9 }}>
                     Transport trail
                   </div>
                   <Trail trail={d.trail} />
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
+                  <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 10 }}>
                     {d.projectName && <>Project: {d.projectName} · </>}
                     {d.solId && <>SOL ID: {d.solId} · </>}
                     {d.scheduledDate && <>Audit date: {new Date(d.scheduledDate).toLocaleDateString()}</>}
@@ -348,14 +348,14 @@ const Trail: React.FC<{ trail: DocRow['trail'] }> = ({ trail }) => {
               ? <CheckCircle2 size={13} color="var(--success)" style={{ marginTop: 1, flexShrink: 0 }} />
               : <Clock size={13} color="var(--text-muted)" style={{ marginTop: 1, flexShrink: 0 }} />}
             <div style={{ minWidth: 0 }}>
-              <span style={{ fontSize: 12, color: done ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: done ? 600 : 400 }}>
+              <span style={{ fontSize: 'var(--text-xs)', color: done ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: done ? 600 : 400 }}>
                 {s.label}
               </span>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>
+              <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 8 }}>
                 {done ? fmtDate(s.at) : '—'}
               </span>
               {s.note && (
-                <div style={{ fontSize: 10.5, color: done ? 'var(--text-muted)' : 'var(--warning)', marginTop: 1 }}>{s.note}</div>
+                <div style={{ fontSize: 'var(--text-3xs)', color: done ? 'var(--text-muted)' : 'var(--warning)', marginTop: 1 }}>{s.note}</div>
               )}
             </div>
           </div>
@@ -367,15 +367,15 @@ const Trail: React.FC<{ trail: DocRow['trail'] }> = ({ trail }) => {
 
 const Stage: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string; bg: string }> = ({ active, onClick, label, count, color, bg }) => (
   <button onClick={onClick} style={{
-    padding: '7px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+    padding: '7px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
     background: active ? bg : 'transparent', color: active ? color : 'var(--text-secondary)',
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,
   }}>
     {label}
-    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--text-primary)' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>{count}</span>
+    <span style={{ background: active ? color : 'var(--bg-tertiary)', color: active ? 'var(--text-primary)' : 'var(--text-muted)', borderRadius: 9, padding: '1px 7px', fontSize: 'var(--text-2xs)', fontWeight: 700 }}>{count}</span>
   </button>
 );
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)', marginBottom: 9 }}>{children}</div>
+  <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)', marginBottom: 9 }}>{children}</div>
 );

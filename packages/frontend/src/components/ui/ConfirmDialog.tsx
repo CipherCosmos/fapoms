@@ -215,13 +215,13 @@ export const useConfirm = (): {
         </>
       }
     >
-      <div style={{ fontSize: '13px', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+      <div style={{ fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
         {pending?.message}
       </div>
       {reversibleNote && (
         <div
           style={{
-            fontSize: '12px',
+            fontSize: 'var(--text-xs)',
             fontWeight: 600,
             color: pending?.reversible === false ? 'var(--danger)' : 'var(--text-muted)',
           }}
@@ -231,7 +231,7 @@ export const useConfirm = (): {
       )}
       {pending?.reasonPrompt && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+          <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
             {pending.reasonPrompt.label}
           </label>
           <textarea
@@ -241,7 +241,7 @@ export const useConfirm = (): {
             rows={3}
             autoFocus
             style={{
-              padding: '9px 11px', fontSize: '13px', borderRadius: '8px', resize: 'vertical',
+              padding: '9px 11px', fontSize: 'var(--text-sm)', borderRadius: '8px', resize: 'vertical',
               background: 'var(--bg-input)', color: 'inherit',
               border: '1px solid var(--border-color)', outline: 'none', lineHeight: 1.5,
             }}
@@ -250,7 +250,7 @@ export const useConfirm = (): {
       )}
       {phrase && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+          <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
             To continue, type <strong style={{ color: 'var(--text-primary)' }}>{phrase}</strong> below.
           </label>
           <StyledInput

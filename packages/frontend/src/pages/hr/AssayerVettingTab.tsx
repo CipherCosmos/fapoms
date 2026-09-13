@@ -378,7 +378,7 @@ const Attachments: React.FC<{
                   }}
                 />
               ) : (
-                <span style={{ fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                <span style={{ fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                   <Paperclip size={11} /> {url ? 'Open' : 'Loading…'}
                 </span>
               )}
@@ -418,7 +418,7 @@ const UploadButton: React.FC<{
     photocopy they are holding does not scan a table for the word "Attach".
   */
   <label
-    style={{ color: 'var(--primary)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+    style={{ color: 'var(--primary)', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
     title={`Upload a PDF or a photo of the ${documentLabel}`}
   >
     <Paperclip size={11} style={{ verticalAlign: '-1px' }} /> Upload scan
@@ -444,7 +444,7 @@ const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => 
     onChange={(e) => onChange(e.target.value)}
     aria-label={`Which office holds the signed ${documentLabel}`}
     style={{
-      padding: '4px 7px', fontSize: '12px', background: 'var(--bg-surface)',
+      padding: '4px 7px', fontSize: 'var(--text-xs)', background: 'var(--bg-surface)',
       color: value ? 'var(--text-primary)' : 'var(--text-muted)',
       border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'inherit',
     }}
@@ -569,7 +569,7 @@ const PrintedDetailsModal: React.FC<{
     >
       {wanted.map(([key]) => (
         <div key={key}>
-          <label htmlFor={`vetting-printed-${key}`} style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
+          <label htmlFor={`vetting-printed-${key}`} style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
             {PRINTED_FIELD_LABELS[key]}
           </label>
           <input
@@ -578,7 +578,7 @@ const PrintedDetailsModal: React.FC<{
             value={values[key] ?? ''}
             onChange={(e) => setValues({ ...values, [key]: e.target.value })}
             style={{
-              width: '100%', padding: '8px 10px', fontSize: '13px',
+              width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)',
               background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
               border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
               outline: 'none', boxSizing: 'border-box',
@@ -1314,7 +1314,7 @@ export const AssayerVettingTab: React.FC<{
           <div style={{ marginTop: '6px' }}>
             {data.openIssues.map((i) => (
               <div key={i.id} style={{ marginBottom: '3px' }}>
-                <code style={{ fontSize: '12px' }}>{i.sourceColumn}</code>{' — '}
+                <code style={{ fontSize: 'var(--text-xs)' }}>{i.sourceColumn}</code>{' — '}
                 {i.reason} Original text: “{i.rawValue}”.
               </div>
             ))}
@@ -1347,7 +1347,7 @@ export const AssayerVettingTab: React.FC<{
           the verdict rather than after: a clerk opening this card with nothing recorded yet
           should not have to guess where the scan they are holding goes.
         */}
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
           The signed report itself is attached as a document —{' '}
           {onGoToDocuments ? (
             <LinkButton onClick={onGoToDocuments}>open Documents → Background verification report</LinkButton>
@@ -1378,22 +1378,22 @@ export const AssayerVettingTab: React.FC<{
               </div>
             </div>
             {check.riskGrade && (
-              <div><div style={label}>Risk</div><div style={{ fontSize: '13px' }}>{RISK_LABELS[check.riskGrade] ?? humanizeEnum(check.riskGrade)}</div></div>
+              <div><div style={label}>Risk</div><div style={{ fontSize: 'var(--text-sm)' }}>{RISK_LABELS[check.riskGrade] ?? humanizeEnum(check.riskGrade)}</div></div>
             )}
             {check.cibilBand && (
               <div>
                 <div style={label}>Credit</div>
-                <div style={{ fontSize: '13px' }}>
+                <div style={{ fontSize: 'var(--text-sm)' }}>
                   {CIBIL_LABELS[check.cibilBand] ?? humanizeEnum(check.cibilBand)}
                   {check.cibilScore ? ` (${check.cibilScore})` : ''}
                 </div>
               </div>
             )}
-            <div><div style={label}>Checked</div><div style={{ fontSize: '13px' }}>{fmtDate(check.checkedOn) || '—'}</div></div>
+            <div><div style={label}>Checked</div><div style={{ fontSize: 'var(--text-sm)' }}>{fmtDate(check.checkedOn) || '—'}</div></div>
             {check.findings && (
               <div style={{ flexBasis: '100%' }}>
                 <div style={label}>Findings</div>
-                <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>{check.findings}</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{check.findings}</div>
               </div>
             )}
           </div>
@@ -1438,7 +1438,7 @@ export const AssayerVettingTab: React.FC<{
         {check && (
           <div style={{
             marginTop: '12px', display: 'flex', gap: '7px', alignItems: 'flex-start',
-            fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5,
+            fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5,
           }}>
             <Lock size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
             <span>
@@ -1503,7 +1503,7 @@ export const AssayerVettingTab: React.FC<{
                     return (
                       <span
                         data-testid="hard-block-tag"
-                        style={{ fontSize: '11px', color: 'var(--danger)', fontWeight: 500 }}
+                        style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 500 }}
                         title="This client standing is hard-blocked by policy and cannot be overridden by any user"
                       >
                         Hard-blocked
@@ -1532,12 +1532,12 @@ export const AssayerVettingTab: React.FC<{
           it at all, which read as no obstacle whatsoever.
         */}
         {unplannable.refused && (
-          <div style={{ marginTop: '10px', fontSize: '12px', color: STANDING_STANCE_TONE.refused.fg }}>
+          <div style={{ marginTop: '10px', fontSize: 'var(--text-xs)', color: STANDING_STANCE_TONE.refused.fg }}>
             Not to be planned for {unplannable.refused} — that decision has been taken.
           </div>
         )}
         {unplannable.notReady && (
-          <div style={{ marginTop: '10px', fontSize: '12px', color: STANDING_STANCE_TONE.notReady.fg }}>
+          <div style={{ marginTop: '10px', fontSize: 'var(--text-xs)', color: STANDING_STANCE_TONE.notReady.fg }}>
             Not plannable for {unplannable.notReady} yet either. Nobody has refused them; planning
             offers work only where the standing is Active or Recommended, so they are passed over
             until this one is.
@@ -1592,7 +1592,7 @@ export const AssayerVettingTab: React.FC<{
                 render: (r: typeof data.references[number]) => (
                   <RowActions>
                     {r.checkedAt
-                      ? <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Called</span>
+                      ? <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>Called</span>
                       : <LinkButton onClick={() => markChecked(r)}>Record call</LinkButton>}
                     <LinkButton
                       onClick={() => setEditor({
@@ -1648,7 +1648,7 @@ export const AssayerVettingTab: React.FC<{
               key: 'number',
               header: 'Number',
               render: (d) => (d.documentNumber
-                ? <code style={{ fontSize: '12px' }}>{d.documentNumber}</code>
+                ? <code style={{ fontSize: 'var(--text-xs)' }}>{d.documentNumber}</code>
                 : <span style={{ color: 'var(--text-muted)' }}>—</span>),
             },
             {

@@ -77,16 +77,16 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>Contracts ({contracts.length})</span>
-        <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Contracts ({contracts.length})</span>
+        <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
           <Plus size={12} /> Add
         </button>
       </div>
 
       {isLoading ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
       ) : contracts.length === 0 ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
           No contracts registered
         </div>
       ) : (
@@ -96,10 +96,10 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
             <div key={c.id} style={{ padding: 12, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{c.title}</div>
+                  <div style={{ fontWeight: 600, fontSize: 'var(--text-base)' }}>{c.title}</div>
                   <StatusBadge size="sm" label={contractStatusLabel(c.status)} color={colors.color} bg={colors.bg} />
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 4 }}>
                   {c.contractNumber} • {c.value ? `₹${c.value.toLocaleString()}` : 'N/A'} • {new Date(c.effectiveFrom).toLocaleDateString()} — {c.effectiveTo ? new Date(c.effectiveTo).toLocaleDateString() : 'Open'}
                 </div>
               </div>
@@ -149,10 +149,10 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
 /** Label above, optional one-line hint below — the pattern the client modals already use. */
 const Field: React.FC<{ label: string; htmlFor: string; required?: boolean; hint?: string; children: React.ReactNode }> = ({ label, htmlFor, required, hint, children }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-    <label htmlFor={htmlFor} style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+    <label htmlFor={htmlFor} style={{ fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
       {label}{required && <span style={{ color: 'var(--danger)' }}> *</span>}
     </label>
     {children}
-    {hint && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{hint}</span>}
+    {hint && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{hint}</span>}
   </div>
 );

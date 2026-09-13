@@ -20,7 +20,7 @@ export const KycReadinessCard: React.FC<KycReadinessCardProps> = ({
   void handleReview;
   if (!dossier) {
     return (
-      <div style={{ padding: '14px', background: 'var(--bg-surface-1)', borderRadius: '10px', border: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--text-muted)' }}>
+      <div style={{ padding: '14px', background: 'var(--bg-surface-1)', borderRadius: '10px', border: '1px solid var(--border-color)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
         Loading compliance records…
       </div>
     );
@@ -36,24 +36,24 @@ export const KycReadinessCard: React.FC<KycReadinessCardProps> = ({
 
   const getStatusBadge = (status: string | null, hasFile: boolean) => {
     if (!hasFile) {
-      return <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>No scan</span>;
+      return <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>No scan</span>;
     }
     if (status === 'VERIFIED') {
       return (
-        <span style={{ color: 'var(--success)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11.5px' }}>
+        <span style={{ color: 'var(--success)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-2xs)' }}>
           <CheckCircle2 size={12} /> Verified
         </span>
       );
     }
     if (status === 'REJECTED') {
       return (
-        <span style={{ color: 'var(--danger)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11.5px' }}>
+        <span style={{ color: 'var(--danger)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-2xs)' }}>
           <XCircle size={12} /> Rejected
         </span>
       );
     }
     return (
-      <span style={{ color: 'var(--warning)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11.5px' }}>
+      <span style={{ color: 'var(--warning)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-2xs)' }}>
         <Clock size={12} /> Pending review
       </span>
     );
@@ -75,7 +75,7 @@ export const KycReadinessCard: React.FC<KycReadinessCardProps> = ({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <ShieldCheck size={16} style={{ color: 'var(--accent)' }} />
-          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
             Compliance &amp; KYC Verification
           </span>
         </div>
@@ -83,7 +83,7 @@ export const KycReadinessCard: React.FC<KycReadinessCardProps> = ({
           <button
             type="button"
             onClick={() => onNavigateTab('documents')}
-            style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+            style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: 'var(--text-xs)', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
           >
             All documents
           </button>
@@ -91,7 +91,7 @@ export const KycReadinessCard: React.FC<KycReadinessCardProps> = ({
       </div>
 
       {/* Overview Stat Counters */}
-      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', fontSize: '12px' }}>
+      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', fontSize: 'var(--text-xs)' }}>
         <span style={{ color: 'var(--success)', fontWeight: 600 }}>{verifiedCount} verified</span>
         <span style={{ color: 'var(--text-muted)' }}>·</span>
         <span style={{ color: pendingCount > 0 ? 'var(--warning)' : 'var(--text-muted)', fontWeight: pendingCount > 0 ? 600 : 400 }}>
@@ -122,14 +122,14 @@ export const KycReadinessCard: React.FC<KycReadinessCardProps> = ({
                 padding: '8px 10px',
                 background: 'var(--bg-surface-2)',
                 borderRadius: '6px',
-                fontSize: '12px',
+                fontSize: 'var(--text-xs)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <FileText size={14} style={{ color: 'var(--text-muted)' }} />
                 <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{d.label}</span>
                 {hasFile && (
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                     ({verLabel})
                   </span>
                 )}
@@ -141,7 +141,7 @@ export const KycReadinessCard: React.FC<KycReadinessCardProps> = ({
       </div>
 
       {rejectedCount > 0 && (
-        <div style={{ padding: '8px 10px', borderRadius: '6px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ padding: '8px 10px', borderRadius: '6px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <AlertTriangle size={13} style={{ flexShrink: 0 }} />
           <span>Rejected document(s) must be replaced and re-reviewed before full clearance.</span>
         </div>

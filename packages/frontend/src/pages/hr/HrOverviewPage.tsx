@@ -48,11 +48,11 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
                 <AlertTriangle size={15} style={{ color: s.fg, flexShrink: 0, marginTop: '2px' }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '3px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: s.bg, color: s.fg }}>{s.label}</span>
-                    <span style={{ ...label, fontSize: '12px' }}>{actionAreaLabel(a.area)}</span>
+                    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: s.bg, color: s.fg }}>{s.label}</span>
+                    <span style={{ ...label, fontSize: 'var(--text-xs)' }}>{actionAreaLabel(a.area)}</span>
                   </div>
-                  <div style={{ fontSize: '13px', fontWeight: 600 }}>{a.title}</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{a.detail}</div>
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{a.title}</div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{a.detail}</div>
                 </div>
               </button>
             );
@@ -120,7 +120,7 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
       what the number means.
     */}
     {attrition.unaccounted && (
-      <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '-6px' }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '-6px' }}>
         {attrition.unaccounted}
       </div>
     )}

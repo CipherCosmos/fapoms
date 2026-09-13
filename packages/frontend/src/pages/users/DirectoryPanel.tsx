@@ -442,7 +442,7 @@ export const DirectoryPanel: React.FC = () => {
           { value: 'SUSPENDED', label: 'Suspended' },
           { value: 'LOCKED', label: 'Locked' },
         ]} />
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} shown</span>
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} shown</span>
         <div style={{ marginLeft: 'auto' }}>
           <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
             <span>Add User</span>
@@ -453,8 +453,8 @@ export const DirectoryPanel: React.FC = () => {
       <div>
         <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
           <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: '15px', fontWeight: 600 }}>Accounts</span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length}</span>
+            <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>Accounts</span>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length}</span>
           </div>
 
           {selectedIds.size > 0 && (
@@ -463,7 +463,7 @@ export const DirectoryPanel: React.FC = () => {
               padding: '10px 24px', borderBottom: '1px solid var(--border-color)',
               background: 'var(--status-pending-bg)',
             }}>
-              <strong style={{ fontSize: '13px' }}>{selectedIds.size} selected</strong>
+              <strong style={{ fontSize: 'var(--text-sm)' }}>{selectedIds.size} selected</strong>
               <ToggleRight size={13} style={{ color: 'var(--text-muted)' }} />
               <Select
                 value={bulkStatus}
@@ -475,20 +475,20 @@ export const DirectoryPanel: React.FC = () => {
                 placeholder="Set status…"
                 compact
               />
-              <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+              <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                 {bulkBusy ? 'Applying…' : 'Apply'}
               </button>
-              <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
+              <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
             </div>
           )}
 
           {bulkReport && (
-            <div style={{ margin: '10px 24px 0', padding: '12px 14px', borderRadius: '8px', fontSize: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
+            <div style={{ margin: '10px 24px 0', padding: '12px 14px', borderRadius: '8px', fontSize: 'var(--text-xs)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
                 <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
                 <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
                 {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
-                <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+                <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
               </div>
               {bulkReport.skipped.length > 0 && (
                 <div style={{ marginTop: '6px' }}>
@@ -496,7 +496,7 @@ export const DirectoryPanel: React.FC = () => {
                   {bulkReport.skipped.map((s) => (
                     <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
                       <span>{displayNameFor(s.id)}</span>
-                      <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {userStatusLabel(s.current)}: {s.reason}</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>— {userStatusLabel(s.current)}: {s.reason}</span>
                     </div>
                   ))}
                 </div>
@@ -508,7 +508,7 @@ export const DirectoryPanel: React.FC = () => {
                       can act on. The directory is already in memory, so name the person. */}
                   {bulkReport.failed.map((f) => (
                     <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                      <span>{displayNameFor(f.id)}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                      <span>{displayNameFor(f.id)}</span><span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>— {f.reason}</span>
                     </div>
                   ))}
                 </div>
@@ -527,11 +527,11 @@ export const DirectoryPanel: React.FC = () => {
                     <input type="checkbox" checked={selectedIds.size > 0 && selectedIds.size === filteredUsers.length}
                       onChange={(e) => setSelectedIds(e.target.checked ? new Set(filteredUsers.map((u) => u.id)) : new Set())} style={{ cursor: 'pointer' }} />
                   </th>
-                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'left', fontSize: '12px', color: 'var(--text-muted)' }}>User</th>
-                  <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: '12px', color: 'var(--text-muted)' }}>Roles</th>
-                  <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: '12px', color: 'var(--text-muted)' }}>Last Login</th>
-                  <th style={{ padding: '12px 24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>Status</th>
-                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'right', fontSize: '12px', color: 'var(--text-muted)' }}>Actions</th>
+                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'left', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>User</th>
+                  <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Roles</th>
+                  <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Last Login</th>
+                  <th style={{ padding: '12px 24px', textAlign: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Status</th>
+                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'right', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -548,7 +548,7 @@ export const DirectoryPanel: React.FC = () => {
                           : searchText || filterStatus !== 'ALL' ? 'No users match your filters' : 'No users yet'}
                       </span>
                       {usersLoadError == null && !(searchText || filterStatus !== 'ALL') && (
-                        <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ marginTop: 6, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ marginTop: 6, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
                           <UserPlus size={13} /> Add User
                         </button>
                       )}
@@ -570,26 +570,26 @@ export const DirectoryPanel: React.FC = () => {
                             {u.firstName[0]}{u.lastName[0]}
                           </div>
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <div style={{ fontSize: 'var(--text-base)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                               {u.displayName}
-                              {self && <span style={{ fontSize: '10px', color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
+                              {self && <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
                               {locked && <span title={`${u.failedLoginAttempts} failed attempt(s)`}><Lock size={12} style={{ color: 'var(--danger)' }} /></span>}
                             </div>
-                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>@{u.username} · {u.email}</div>
+                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>@{u.username} · {u.email}</div>
                           </div>
                         </div>
                       </td>
                       <td style={{ padding: '14px 24px' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                           {u.roles.map((r) => (
-                            <span key={r.id} style={{ fontSize: '10px', background: 'var(--status-pending-bg)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
+                            <span key={r.id} style={{ fontSize: 'var(--text-3xs)', background: 'var(--status-pending-bg)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
                               {roleLabel(r.name)}
                             </span>
                           ))}
-                          {u.roles.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No roles assigned</span>}
+                          {u.roles.length === 0 && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>No roles assigned</span>}
                         </div>
                       </td>
-                      <td style={{ padding: '14px 24px', fontSize: '12.5px', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '14px 24px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Clock size={11} style={{ opacity: 0.6 }} /> {fmtRelative(u.lastLoginAt)}</span>
                       </td>
                       <td style={{ padding: '14px 24px', textAlign: 'center' }}>
@@ -601,11 +601,11 @@ export const DirectoryPanel: React.FC = () => {
                         >
                           {u.status === 'ACTIVE' ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
                         </button>
-                        <div style={{ fontSize: '9.5px', color: STATUS_TONE[u.status] ?? 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>{userStatusLabel(u.status)}</div>
+                        <div style={{ fontSize: 'var(--text-3xs)', color: STATUS_TONE[u.status] ?? 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>{userStatusLabel(u.status)}</div>
                       </td>
                       <td style={{ padding: '14px 24px', textAlign: 'right' }}>
                         <button onClick={() => startEditUser(u)}
-                          style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', color: 'var(--accent-secondary)', padding: '6px 12px', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: '12px', fontWeight: 500 }}>
+                          style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', color: 'var(--accent-secondary)', padding: '6px 12px', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 500 }}>
                           Edit / Map
                         </button>
                       </td>
@@ -629,7 +629,7 @@ export const DirectoryPanel: React.FC = () => {
         title={editingUser ? (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <Shield size={16} style={{ color: 'var(--accent-primary)' }} />
-            Edit {editingUser.displayName}{editingSelf && <span style={{ fontSize: 11, color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
+            Edit {editingUser.displayName}{editingSelf && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
           </span>
         ) : ''}
       >
@@ -639,11 +639,11 @@ export const DirectoryPanel: React.FC = () => {
               {isLocked(editingUser) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '16px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled)' }}>
                   <Lock size={15} style={{ color: 'var(--danger)', flexShrink: 0 }} />
-                  <div style={{ flex: 1, fontSize: '12px' }}>
+                  <div style={{ flex: 1, fontSize: 'var(--text-xs)' }}>
                     <strong style={{ color: 'var(--danger)' }}>Locked out</strong> — {editingUser.failedLoginAttempts} failed login attempt(s).
                   </div>
                   <button type="button" onClick={handleUnlock} disabled={unlocking} className="btn btn-secondary"
-                    style={{ fontSize: '11.5px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}>
+                    style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}>
                     <LockOpen size={12} /> {unlocking ? 'Unlocking…' : 'Unlock'}
                   </button>
                 </div>
@@ -663,7 +663,7 @@ export const DirectoryPanel: React.FC = () => {
                       const isChecked = editRoleIds.includes(r.id);
                       const lockedSelfAdmin = editingSelf && r.name === 'ADMIN' && isChecked;
                       return (
-                        <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', cursor: lockedSelfAdmin ? 'not-allowed' : 'pointer', opacity: lockedSelfAdmin ? 0.6 : 1 }}
+                        <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: 'var(--text-sm)', cursor: lockedSelfAdmin ? 'not-allowed' : 'pointer', opacity: lockedSelfAdmin ? 0.6 : 1 }}
                           title={lockedSelfAdmin ? 'You cannot remove your own Super Administrator role' : undefined}>
                           <input type="checkbox" checked={isChecked} disabled={lockedSelfAdmin}
                             onChange={() => setEditRoleIds(isChecked ? editRoleIds.filter((id) => id !== r.id) : [...editRoleIds, r.id])} />
@@ -677,7 +677,7 @@ export const DirectoryPanel: React.FC = () => {
 
                 <div>
                   <label className="form-label" style={{ marginBottom: '4px', display: 'block' }}>Operational Regions</label>
-                  <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                  <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>
                     Confines this account to its territory on the operations desks (planning, assignments,
                     scheduling, branches, map). Leave all unticked for national desks — HR, data entry,
                     validation, finance — which see every region.
@@ -686,7 +686,7 @@ export const DirectoryPanel: React.FC = () => {
                     {REGION_ORDER.map((r) => {
                       const isChecked = editRegions.includes(r);
                       return (
-                        <label key={r} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+                        <label key={r} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
                           <input type="checkbox" checked={isChecked}
                             onChange={() => setEditRegions(isChecked ? editRegions.filter((v) => v !== r) : [...editRegions, r])} />
                           <span>{REGION_LABELS[r]}</span>
@@ -695,7 +695,7 @@ export const DirectoryPanel: React.FC = () => {
                     })}
                   </div>
                   {editRegions.length > 0 && (
-                    <p style={{ fontSize: '11.5px', color: 'var(--warning)', marginTop: '6px' }}>
+                    <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', marginTop: '6px' }}>
                       Restricted account: the server will refuse this user data outside{' '}
                       {editRegions.map((r) => REGION_LABELS[r as Region] ?? r).join(', ')}.
                     </p>
@@ -709,7 +709,7 @@ export const DirectoryPanel: React.FC = () => {
                       <label className="form-label" style={{ marginBottom: '4px', display: 'block' }}>
                         Client{needsClient && <span style={{ color: 'var(--danger)' }}> *</span>}
                       </label>
-                      <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                      <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>
                         Which bank or NBFC this account belongs to. Required whenever Client User is
                         one of the roles above — an account with that role and no client assigned
                         cannot read anything at all, by design, rather than seeing every client's data.
@@ -735,22 +735,22 @@ export const DirectoryPanel: React.FC = () => {
               <div style={{ marginTop: '20px', paddingTop: '18px', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                   <KeyRound size={15} style={{ color: 'var(--warning)' }} />
-                  <span style={{ fontSize: '13px', fontWeight: 600 }}>Reset Password</span>
+                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Reset Password</span>
                 </div>
-                <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '10px' }}>
                   Sets a new password immediately — there is no email flow, so share it with {editingUser.displayName} directly.
                 </p>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input type="text" className="form-input" placeholder="New password (min 8 characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ flex: 1 }} />
                   <button type="button" onClick={handleResetPassword} disabled={resetting || newPassword.length < 8}
-                    className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                    className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
                     {resetting ? 'Resetting…' : 'Reset'}
                   </button>
                 </div>
               </div>
 
               <div style={{ marginTop: '20px', paddingTop: '18px', borderTop: '1px solid var(--border-color)' }}>
-                <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Recent Activity</div>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: '8px' }}>Recent Activity</div>
                 <UserActivityList userId={editingUser.id} />
               </div>
           </div>
@@ -779,11 +779,11 @@ export const DirectoryPanel: React.FC = () => {
               <label className="form-label" htmlFor="new-user-username">Username</label>
               <input id="new-user-username" type="text" className="form-input" value={username}
                 onChange={(e) => { setUsernameEdited(true); setUsername(e.target.value); }} required />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
                 {usernameEdited ? 'You are setting this yourself.' : 'Taken from the email address — change it only if you need something different.'}
               </div>
             </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
               The initial password is generated by the server when the account is created, and shown
               to you once on the next screen. Nobody has to invent one, and it is never stored
               anywhere it can be read back.
@@ -798,7 +798,7 @@ export const DirectoryPanel: React.FC = () => {
                 {roles.map((r) => {
                   const isChecked = selectedRoleIds.includes(r.id);
                   return (
-                    <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                    <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', cursor: 'pointer' }}>
                       <input type="checkbox" checked={isChecked} onChange={() => setSelectedRoleIds(isChecked ? selectedRoleIds.filter((id) => id !== r.id) : [...selectedRoleIds, r.id])} />
                       <span>{roleLabel(r.name)}</span>
                     </label>
@@ -813,7 +813,7 @@ export const DirectoryPanel: React.FC = () => {
                   <label className="form-label" style={{ marginBottom: '4px', display: 'block' }}>
                     Client{needsClient && <span style={{ color: 'var(--danger)' }}> *</span>}
                   </label>
-                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                  <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>
                     Which bank or NBFC this account belongs to. Required whenever Client User is one
                     of the roles above — that role cannot read anything at all until this is set.
                   </p>
@@ -843,7 +843,7 @@ export const DirectoryPanel: React.FC = () => {
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ fontSize: '13px' }}>
+            <div style={{ fontSize: 'var(--text-sm)' }}>
               {issuedCredential.displayName} can now sign in as <strong>{issuedCredential.username}</strong>.
             </div>
             <div>
@@ -853,14 +853,14 @@ export const DirectoryPanel: React.FC = () => {
                 <input id="issued-password" type="text" className="form-input" value={issuedCredential.password} readOnly
                   onFocus={(e) => e.currentTarget.select()}
                   style={{ flex: 1, fontFamily: 'var(--font-mono, monospace)' }} />
-                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}
                   onClick={() => { navigator.clipboard?.writeText(issuedCredential.password).then(() => setPasswordCopied(true)).catch(() => setPasswordCopied(false)); }}>
                   {passwordCopied ? 'Copied' : 'Copy'}
                 </button>
               </div>
             </div>
             <AlertBanner type="error" message="Copy this now — it will not be shown again. The server does not keep a readable copy, so if it is lost the only way forward is a password reset from the account's own panel." />
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               They will be asked to choose their own password the first time they sign in, and cannot
               reach the rest of the application until they do.
             </div>
@@ -874,7 +874,7 @@ export const DirectoryPanel: React.FC = () => {
 const Kpi: React.FC<{ icon: React.ReactNode; tone: string; value: React.ReactNode; label: string }> = ({ icon, tone, value, label }) => (
   <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
     <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'var(--status-pending-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: tone }}>{icon}</div>
-    <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{value}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{label}</div></div>
+    <div><div style={{ fontSize: 'var(--text-xl)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{value}</div><div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{label}</div></div>
   </div>
 );
 

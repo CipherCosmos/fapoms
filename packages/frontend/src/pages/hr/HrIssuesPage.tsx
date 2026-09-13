@@ -27,8 +27,8 @@ export const HrIssuesPage: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
       <div>
-        <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>Review queue</h2>
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: '760px' }}>
+        <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: 0 }}>Review queue</h2>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: '760px' }}>
           Everything the system found but would not decide for you: cells the roster import could
           not read, and failing checks on live records. Nothing was guessed and nothing was changed
           automatically — each one waits here until somebody decides what should happen to it.
@@ -36,7 +36,7 @@ export const HrIssuesPage: React.FC = () => {
       </div>
 
       {!loading && !failed && openCount > 0 && (
-        <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
           {counted(openCount, 'problem is', 'problems are')} open.{' '}
           {canManage
             ? <>Open a person to correct their record, or decide a whole group at once where the same

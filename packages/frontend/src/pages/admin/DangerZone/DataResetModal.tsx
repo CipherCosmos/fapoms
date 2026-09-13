@@ -232,11 +232,11 @@ export const DataResetModal: React.FC<{
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', color: 'var(--success, #34a853)' }}>
             <CheckCircle2 size={18} />
-            <span style={{ fontSize: '13px', fontWeight: 600 }}>Done.</span>
+            <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Done.</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '240px', overflowY: 'auto' }}>
             {Object.entries(result.removed).map(([table, count]) => (
-              <div key={table} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-secondary)', padding: '4px 0', borderBottom: '1px solid var(--border-hair, var(--border-color))' }}>
+              <div key={table} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '4px 0', borderBottom: '1px solid var(--border-hair, var(--border-color))' }}>
                 <span>{table}</span>
                 <span style={{ fontWeight: 700 }}>{Number(count).toLocaleString()} removed</span>
               </div>
@@ -252,7 +252,7 @@ export const DataResetModal: React.FC<{
             something to pass on, not something to type.
           */}
           {result.backup ? (
-            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.65 }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.65 }}>
               A backup was saved on the server first, named <b>{result.backup.filename}</b> ({Math.round(result.backup.sizeBytes / 1024)} KB).
               <div style={{ marginTop: '6px' }}>
                 The records listed above are no longer in the system, and nothing in this app can
@@ -262,7 +262,7 @@ export const DataResetModal: React.FC<{
               </div>
             </div>
           ) : (
-            <div style={{ fontSize: '11.5px', color: 'var(--danger)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.65 }}>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.65 }}>
               No backup was taken. The records listed above are gone and nothing in this app can
               bring them back. If they are needed, contact whoever runs the server — recovery
               would depend on a separate backup of their own, taken before this wipe.
@@ -287,7 +287,7 @@ export const DataResetModal: React.FC<{
       <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
         {/* Domains — editable while composing a request, frozen while executing an approval. */}
         <div>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+          <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
             Domains
             {isExecute && (
               <span style={{ fontWeight: 500, color: 'var(--text-muted)', marginLeft: '7px' }}>
@@ -306,7 +306,7 @@ export const DataResetModal: React.FC<{
                   onClick={() => toggleDomain(d.key)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 11px', borderRadius: '16px',
-                    fontSize: '11.5px', fontWeight: 600, cursor: isExecute ? 'default' : 'pointer',
+                    fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: isExecute ? 'default' : 'pointer',
                     border: `1px solid ${checked ? 'var(--danger)' : 'var(--border-color)'}`,
                     background: checked ? 'rgba(216,71,71,0.12)' : 'transparent',
                     color: checked ? 'var(--danger)' : 'var(--text-secondary)',
@@ -321,7 +321,7 @@ export const DataResetModal: React.FC<{
 
         {/* What filing a request actually does — said before the button that does it. */}
         {!isExecute && (
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.6 }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.6 }}>
             <ShieldCheck size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
             <span>
               Nothing is deleted now. This files a request an administrator has to approve; once
@@ -336,18 +336,18 @@ export const DataResetModal: React.FC<{
         {selectedKeys.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {previewLoading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '12px', color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                 <Loader2 size={13} className="spin" /> Checking what this would touch…
               </div>
             )}
 
             {hasBlockingConflicts && (
               <div style={{ border: '1px solid var(--danger)', background: 'rgba(216,71,71,0.08)', borderRadius: '8px', padding: '12px' }}>
-                <div style={{ display: 'flex', gap: '7px', alignItems: 'center', fontSize: '12.5px', fontWeight: 700, color: 'var(--danger)' }}>
+                <div style={{ display: 'flex', gap: '7px', alignItems: 'center', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--danger)' }}>
                   <AlertTriangle size={14} /> This can't be wiped as selected
                 </div>
                 {preview!.restrictConflicts.map((c, i) => (
-                  <div key={i} style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px' }}>
+                  <div key={i} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '6px' }}>
                     <b>{c.affectedRowCount.toLocaleString()}</b> row(s) in <b>{tableToDomainLabel[c.child] ?? c.child}</b> still
                     reference <b>{tableToDomainLabel[c.parent] ?? c.parent}</b> — also select{' '}
                     <b>{tableToDomainLabel[c.child] ?? c.child}</b>, or unselect the domain that owns {tableToDomainLabel[c.parent] ?? c.parent}.
@@ -358,10 +358,10 @@ export const DataResetModal: React.FC<{
 
             {hasUnresolvedImplied && (
               <div style={{ border: '1px solid var(--warning)', background: 'rgba(216,120,71,0.08)', borderRadius: '8px', padding: '12px' }}>
-                <div style={{ display: 'flex', gap: '7px', alignItems: 'center', fontSize: '12.5px', fontWeight: 700, color: 'var(--warning)' }}>
+                <div style={{ display: 'flex', gap: '7px', alignItems: 'center', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)' }}>
                   <AlertTriangle size={14} /> This selection also clears data you haven't selected
                 </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {preview!.impliedDomains.map((key) => (
                     <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                       <span><b>{domainByKey[key]?.label ?? key}</b> — cascades from what's already selected.</span>
@@ -369,9 +369,9 @@ export const DataResetModal: React.FC<{
                         // The approved payload is frozen, so it cannot be widened here: the data
                         // has changed underneath the approval, and the honest path is a fresh
                         // request naming everything the wipe now touches.
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0 }}>needs a fresh request</span>
+                        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>needs a fresh request</span>
                       ) : (
-                        <button type="button" className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => addDomain(key)}>
+                        <button type="button" className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }} onClick={() => addDomain(key)}>
                           Add to selection
                         </button>
                       )}
@@ -382,7 +382,7 @@ export const DataResetModal: React.FC<{
             )}
 
             {!previewLoading && (preview?.setNullEffects.length ?? 0) > 0 && (
-              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'flex', gap: '7px', alignItems: 'flex-start' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'flex', gap: '7px', alignItems: 'flex-start' }}>
                 <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: '1px' }} />
                 <span>
                   {preview!.setNullEffects.map((e, i) => (
@@ -399,7 +399,7 @@ export const DataResetModal: React.FC<{
 
         {/* Billing extra confirmation — an execution-time acknowledgement, not a request field */}
         {isExecute && includesBilling && (
-          <label style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px', color: 'var(--text-secondary)', padding: '10px', border: '1px solid var(--warning)', borderRadius: '8px', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '10px', border: '1px solid var(--warning)', borderRadius: '8px', cursor: 'pointer' }}>
             <input
               type="checkbox"
               checked={billingConfirmed}
@@ -413,7 +413,7 @@ export const DataResetModal: React.FC<{
         {/* Users keep-list — chosen at execution time; the request only freezes the domains */}
         {isExecute && includesUsers && (
           <div>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+            <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
               Accounts to keep <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>— everyone else is removed</span>
             </div>
             {/* This is the one place on the whole admin surface where an incomplete account list
@@ -433,7 +433,7 @@ export const DataResetModal: React.FC<{
             />
             <div style={{ maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
               {usersLoading ? (
-                <div style={{ padding: '16px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>Loading accounts…</div>
+                <div style={{ padding: '16px', textAlign: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Loading accounts…</div>
               ) : (
                 filteredUsers.map((u) => {
                   const isSelf = u.id === currentUserId;
@@ -445,10 +445,10 @@ export const DataResetModal: React.FC<{
                     >
                       <input type="checkbox" checked={keep} disabled={isSelf} onChange={() => toggleKeepUser(u.id)} style={{ cursor: isSelf ? 'not-allowed' : 'pointer' }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
                           {u.displayName || u.username} {isSelf && <Pill tone="accent">You — always kept</Pill>}
                         </div>
-                        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{u.email} {roleNames(u) && `· ${roleNames(u)}`}</div>
+                        <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>{u.email} {roleNames(u) && `· ${roleNames(u)}`}</div>
                       </div>
                     </label>
                   );
@@ -460,7 +460,7 @@ export const DataResetModal: React.FC<{
 
         {/* Backup checkbox and typed confirmation — execution only; a request destroys nothing */}
         {isExecute && (
-          <label style={{ display: 'flex', gap: '9px', alignItems: 'center', fontSize: '12.5px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', gap: '9px', alignItems: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <input type="checkbox" checked={takeBackupFirst} onChange={(e) => setTakeBackupFirst(e.target.checked)} style={{ cursor: 'pointer' }} />
             Take a backup before wiping
           </label>
@@ -468,7 +468,7 @@ export const DataResetModal: React.FC<{
 
         {isExecute && (
           <div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: '6px' }}>
               Type <b>{CONFIRMATION_PHRASE}</b> to confirm:
             </div>
             <input

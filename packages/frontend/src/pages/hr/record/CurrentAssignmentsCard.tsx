@@ -78,14 +78,14 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Briefcase size={16} style={{ color: 'var(--text-secondary)' }} />
-          <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-secondary)' }}>
+          <h3 style={{ margin: 0, fontSize: 'var(--text-sm)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-secondary)' }}>
             Current Work & Commitments
           </h3>
         </div>
         <SafeLink
           to={`/assignments?assayerId=${encodeURIComponent(assayerId)}`}
           style={{
-            fontSize: '12px',
+            fontSize: 'var(--text-xs)',
             color: 'var(--accent-primary)',
             textDecoration: 'none',
             display: 'inline-flex',
@@ -101,7 +101,7 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
       </div>
 
       {loading ? (
-        <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '12px 0' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '12px 0' }}>
           Loading active assignments…
         </div>
       ) : inFlight.length === 0 ? (
@@ -112,7 +112,7 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
             background: 'var(--bg-surface-2)',
             border: '1px dashed var(--border-hair)',
             textAlign: 'center',
-            fontSize: '12.5px',
+            fontSize: 'var(--text-xs)',
             color: 'var(--text-muted)',
           }}
         >
@@ -147,7 +147,7 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
                       to={`/assignments?id=${encodeURIComponent(asn.id)}`}
                       style={{
                         fontWeight: 600,
-                        fontSize: '12.5px',
+                        fontSize: 'var(--text-xs)',
                         fontFamily: 'monospace',
                         color: 'var(--accent-primary)',
                         textDecoration: 'none',
@@ -157,13 +157,13 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
                       {asn.assignmentNumber || asn.id.slice(0, 8)}
                     </SafeLink>
                     {projectName && (
-                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                         · {projectName}
                       </span>
                     )}
                   <span
                     style={{
-                      fontSize: '11px',
+                      fontSize: 'var(--text-2xs)',
                       fontWeight: 600,
                       padding: '2px 8px',
                       borderRadius: '999px',
@@ -174,7 +174,7 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
                   </span>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '11.5px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     <MapPin size={12} />
                     <span>{branchName}</span>

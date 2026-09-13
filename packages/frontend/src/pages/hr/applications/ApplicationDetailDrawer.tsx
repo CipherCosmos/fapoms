@@ -20,12 +20,12 @@ import type { AssayerApplicationDetail } from './HrApplicationsPage';
  */
 const TERM_INPUT: React.CSSProperties = {
   padding: '8px 10px', background: 'var(--bg-input)', border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-sm, 6px)', color: 'var(--text-primary)', fontSize: '13px',
+  borderRadius: 'var(--radius-sm, 6px)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)',
   width: '100%', boxSizing: 'border-box', outline: 'none',
 };
 
 const SECTION_LABEL: React.CSSProperties = {
-  fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)',
+  fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)',
   textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px',
 };
 
@@ -226,11 +226,11 @@ export const ApplicationDetailDrawer: React.FC<{
                   onClick={handleResend}
                   disabled={busy}
                   title="Mint a fresh registration link. Any earlier link stops working."
-                  style={{ fontSize: '12px', padding: '8px 14px', marginRight: 'auto' }}
+                  style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', marginRight: 'auto' }}
                 >
                   {app.email ? 'Resend link' : 'Get link'}
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={handleRequestInfo} disabled={busy} style={{ fontSize: '12px', padding: '8px 14px' }}>
+                <button type="button" className="btn btn-secondary" onClick={handleRequestInfo} disabled={busy} style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                   Request info
                 </button>
                 {/* `.btn-danger` carries no rule in index.css (see ConfirmDialog.tsx's own danger
@@ -240,16 +240,16 @@ export const ApplicationDetailDrawer: React.FC<{
                   className="btn btn-primary"
                   onClick={handleReject}
                   disabled={busy}
-                  style={{ fontSize: '12px', padding: '8px 14px', background: 'var(--danger)', borderColor: 'var(--danger)' }}
+                  style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', background: 'var(--danger)', borderColor: 'var(--danger)' }}
                 >
                   Reject
                 </button>
-                <button type="button" className="btn btn-primary" onClick={handleApprove} disabled={busy} style={{ fontSize: '12px', padding: '8px 14px' }}>
+                <button type="button" className="btn btn-primary" onClick={handleApprove} disabled={busy} style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                   {busy ? 'Working…' : 'Approve'}
                 </button>
               </>
             ) : (
-              <button type="button" className="btn btn-secondary" onClick={onClose} style={{ fontSize: '12px', padding: '8px 14px' }}>
+              <button type="button" className="btn btn-secondary" onClick={onClose} style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                 Close
               </button>
             )
@@ -259,7 +259,7 @@ export const ApplicationDetailDrawer: React.FC<{
         {loadFailed(detailQuery) ? (
           <LoadFailure loads={[{ label: 'this application', query: detailQuery }]} />
         ) : !detail || !app ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
         ) : (
           <>
             {actionError && (
@@ -296,7 +296,7 @@ export const ApplicationDetailDrawer: React.FC<{
                   {detail?.invitedMobile && (
                     /* The candidate's confirmed number wins — they know their own. HR's interview
                        number is shown beside it so a mismatch is a decision, not a silent swap. */
-                    <div style={{ color: 'var(--warning, var(--text-muted))', fontSize: '12px', marginTop: '2px' }}>
+                    <div style={{ color: 'var(--warning, var(--text-muted))', fontSize: 'var(--text-xs)', marginTop: '2px' }}>
                       Interview record had {detail.invitedMobile}
                     </div>
                   )}
@@ -315,7 +315,7 @@ export const ApplicationDetailDrawer: React.FC<{
               <div>
                 {app.address || '—'}
                 {(app.city || app.state || app.pincode) && (
-                  <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '2px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginTop: '2px' }}>
                     {[app.city, app.state, app.pincode].filter(Boolean).join(', ')}
                   </div>
                 )}
@@ -352,14 +352,14 @@ export const ApplicationDetailDrawer: React.FC<{
             {(detail?.gaps?.length ?? 0) > 0 && (
               <div>
                 <div style={SECTION_LABEL}>Still missing</div>
-                <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12.5px', color: 'var(--text-secondary)' }}>
+                <ul style={{ margin: 0, paddingLeft: '18px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                   {detail!.gaps.map((g) => (
                     <li key={g.key} style={{ marginBottom: '3px' }}>
                       <strong>{g.label}</strong> — {g.blocks.toLowerCase()}
                     </li>
                   ))}
                 </ul>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '6px' }}>
                   None of these stops the approval. Each one stops the thing it names, until it is
                   filled in on their record.
                 </div>
@@ -430,7 +430,7 @@ export const ApplicationDetailDrawer: React.FC<{
                     />
                   </Field>
                 </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '6px' }}>
                   Filed as part of the approval. Anything left blank stays blank on their record and
                   is listed above as a gap.
                 </div>
@@ -451,11 +451,11 @@ export const ApplicationDetailDrawer: React.FC<{
             )}
 
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>
+              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>
                 Documents submitted
               </div>
               {detail.documents.length === 0 ? (
-                <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No documents uploaded yet.</div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>No documents uploaded yet.</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {detail.documents.map((doc) => (
@@ -464,7 +464,7 @@ export const ApplicationDetailDrawer: React.FC<{
                       style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         padding: '8px 12px', borderRadius: '7px', background: 'var(--bg-surface)',
-                        border: '1px solid var(--border-hair)', fontSize: '12.5px',
+                        border: '1px solid var(--border-hair)', fontSize: 'var(--text-xs)',
                       }}
                     >
                       <span>{humanizeStatus(doc.requirement)}</span>

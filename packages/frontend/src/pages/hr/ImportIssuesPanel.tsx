@@ -129,7 +129,7 @@ const WriterTag: React.FC<{ fromScan: boolean }> = ({ fromScan }) => (
   <span
     title={fromScan ? 'Found by the standing data-integrity scan on a live record' : 'A cell the roster import could not read'}
     style={{
-      fontSize: '11px', fontWeight: 700, padding: '1px 7px', borderRadius: '999px', whiteSpace: 'nowrap',
+      fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '1px 7px', borderRadius: '999px', whiteSpace: 'nowrap',
       border: '1px solid var(--border-color)', color: 'var(--text-muted)', flexShrink: 0,
     }}
   >
@@ -139,7 +139,7 @@ const WriterTag: React.FC<{ fromScan: boolean }> = ({ fromScan }) => (
 
 const CountBadge: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <span style={{
-    fontSize: '12px', fontWeight: 700, padding: '1px 7px', borderRadius: '9px', whiteSpace: 'nowrap',
+    fontSize: 'var(--text-xs)', fontWeight: 700, padding: '1px 7px', borderRadius: '9px', whiteSpace: 'nowrap',
     background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums',
     flexShrink: 0,
   }}>
@@ -180,7 +180,7 @@ const ResolveForm: React.FC<{
         onClick={() => onClose(text)}
         disabled={busy}
         className="btn btn-primary"
-        style={{ fontSize: '12px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}
+        style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}
       >
         <Check size={13} /> {busy ? 'Closing…' : closeLabel}
       </button>
@@ -226,7 +226,7 @@ const PersonPills: React.FC<{ issues: Issue[]; onOpen: (i: Issue) => void }> = (
           title={`Open ${who}'s record to correct it`}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: '4px',
-            padding: '5px 10px', fontSize: '12px', fontWeight: 600,
+            padding: '5px 10px', fontSize: 'var(--text-xs)', fontWeight: 600,
             background: 'var(--bg-surface)', color: 'var(--primary)',
             border: '1px solid var(--border-color)', borderRadius: '999px', cursor: 'pointer',
           }}
@@ -234,7 +234,7 @@ const PersonPills: React.FC<{ issues: Issue[]; onOpen: (i: Issue) => void }> = (
           {who} <ExternalLink size={11} />
         </button>
       ) : (
-        <span key={i.id} style={{ padding: '5px 10px', fontSize: '12px', color: 'var(--text-muted)' }}>{who}</span>
+        <span key={i.id} style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{who}</span>
       );
     })}
   </div>
@@ -280,11 +280,11 @@ const ProblemDetail: React.FC<{
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{problemTitle(group)}</span>
+        <span style={{ fontSize: 'var(--text-base)', fontWeight: 700, color: 'var(--text-primary)' }}>{problemTitle(group)}</span>
         <WriterTag fromScan={group.fromScan} />
         <CountBadge>{counted(group.issues.length, 'person', 'people')}</CountBadge>
       </div>
-      <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
         {/*
           A scan finding says something different about each person it names — one has no date
           of birth, another has one that makes them nine years old — so the first row's
@@ -322,7 +322,7 @@ const ProblemDetail: React.FC<{
           )}
         </>
       ) : (
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           Closing these needs the workforce-management role, so they are shown here to read rather than to clear.
         </div>
       )}
@@ -373,7 +373,7 @@ const PersonDetail: React.FC<{
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
+        <span style={{ fontSize: 'var(--text-base)', fontWeight: 700, color: 'var(--text-primary)' }}>
           {person.code}{person.name ? ` — ${person.name}` : ''}
         </span>
         <CountBadge>{counted(person.issues.length, 'open issue')}</CountBadge>
@@ -385,7 +385,7 @@ const PersonDetail: React.FC<{
             style={{
               display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'none',
               border: 'none', cursor: 'pointer', padding: '5px 4px',
-              color: 'var(--accent)', fontSize: '12px', fontWeight: 600,
+              color: 'var(--accent)', fontSize: 'var(--text-xs)', fontWeight: 600,
             }}
           >
             Open record <ExternalLink size={11} />
@@ -399,7 +399,7 @@ const PersonDetail: React.FC<{
             <li
               key={i.id}
               style={{
-                display: 'flex', gap: '8px', alignItems: 'baseline', fontSize: '12.5px',
+                display: 'flex', gap: '8px', alignItems: 'baseline', fontSize: 'var(--text-xs)',
                 padding: '7px 10px', borderRadius: '7px', background: 'var(--bg-surface-2)',
               }}
             >
@@ -433,7 +433,7 @@ const PersonDetail: React.FC<{
           )}
         </>
       ) : (
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           Closing these needs the workforce-management role, so they are shown here to read rather than to clear.
         </div>
       )}
@@ -576,7 +576,7 @@ export const ImportIssuesPanel: React.FC<{
         style={{
           display: 'flex', alignItems: 'center', gap: '8px', width: '100%', textAlign: 'left',
           padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer',
-          color: 'var(--text-primary)', fontSize: '13px',
+          color: 'var(--text-primary)', fontSize: 'var(--text-sm)',
         }}
       >
         {openCount > 0
@@ -603,7 +603,7 @@ export const ImportIssuesPanel: React.FC<{
                 {issues.length < openCount ? ` — showing ${issues.length} of ${openCount}` : ''}.
               </strong>
               <br />
-              <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                 {groups.length === 1 ? 'One distinct problem' : `${groups.length} distinct problems`}
                 {/* The grouping below only ever sees the page of rows that arrived — the same
                     shortfall the headline above admits to. "3 distinct problems" over a capped
@@ -640,7 +640,7 @@ export const ImportIssuesPanel: React.FC<{
                   aria-pressed={on}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: '6px',
-                    padding: '6px 12px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
+                    padding: '6px 12px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
                     borderRadius: '7px',
                     border: `1px solid ${on ? 'var(--accent)' : 'var(--border-color)'}`,
                     background: on ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
@@ -657,7 +657,7 @@ export const ImportIssuesPanel: React.FC<{
               placeholder={view === 'problem' ? 'Find a problem — a check, a column, or the unreadable text…' : 'Find a person — a name, a code, or a problem…'}
               aria-label={view === 'problem' ? 'Find a problem in the review queue' : 'Find a person in the review queue'}
               style={{
-                flex: '1 1 220px', minWidth: '180px', padding: '7px 10px', fontSize: '12.5px',
+                flex: '1 1 220px', minWidth: '180px', padding: '7px 10px', fontSize: 'var(--text-xs)',
                 borderRadius: '7px', border: '1px solid var(--border-color)',
                 background: 'var(--bg-surface)', color: 'var(--text-primary)', outline: 'none',
               }}
@@ -679,7 +679,7 @@ export const ImportIssuesPanel: React.FC<{
                     onClick={() => setWriter(f.key)}
                     aria-pressed={on}
                     style={{
-                      padding: '5px 10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                      padding: '5px 10px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
                       borderRadius: '999px',
                       border: `1px solid ${on ? 'var(--accent)' : 'var(--border-color)'}`,
                       background: on ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
@@ -700,7 +700,7 @@ export const ImportIssuesPanel: React.FC<{
                   title={s === 'biggest' ? 'Biggest groups first' : 'Alphabetical by problem'}
                   style={{
                     background: 'none', border: 'none', cursor: 'pointer', padding: '5px 4px',
-                    fontSize: '12px', fontWeight: 700,
+                    fontSize: 'var(--text-xs)', fontWeight: 700,
                     color: sort === s ? 'var(--accent)' : 'var(--text-muted)',
                     textDecoration: sort === s ? 'underline' : 'none',
                   }}
@@ -712,7 +712,7 @@ export const ImportIssuesPanel: React.FC<{
           )}
 
           {q && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               {view === 'problem'
                 ? (visibleGroups.length === 0
                   ? 'No problem here matches that.'
@@ -740,11 +740,11 @@ export const ImportIssuesPanel: React.FC<{
                         style={rowButtonStyle(on)}
                       >
                         <span style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{ display: 'block', fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {g.column}
                           </span>
                           {!g.fromScan && (
-                            <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <span style={{ display: 'block', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               “{g.rawValue}” — {g.reason}
                             </span>
                           )}
@@ -787,10 +787,10 @@ export const ImportIssuesPanel: React.FC<{
                         style={rowButtonStyle(on)}
                       >
                         <span style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{ display: 'block', fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {p.code}{p.name ? ` — ${p.name}` : ''}
                           </span>
-                          <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span style={{ display: 'block', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {p.issues.slice(0, 2).map((i) => i.sourceSheet === DATA_INTEGRITY_SHEET ? checkTitle(i.sourceColumn) : i.sourceColumn).join(' · ')}
                             {p.issues.length > 2 ? ` · +${p.issues.length - 2} more` : ''}
                           </span>

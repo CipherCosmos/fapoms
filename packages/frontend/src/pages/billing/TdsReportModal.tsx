@@ -55,7 +55,7 @@ export const TdsReportModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
   return (
     <Modal open onClose={onClose} title={<><Percent size={18} /> TDS withheld — PAN-wise report</>} width="820px"
       footer={<>
-        <span style={{ marginRight: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
+        <span style={{ marginRight: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           Section {report?.section ?? '194J'} · TDS deducted from field workers. Amounts are what was already withheld — nothing is recomputed here.
         </span>
         <button type="button" onClick={onClose} className="btn btn-secondary">Close</button>
@@ -64,22 +64,22 @@ export const TdsReportModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
         </button>
       </>}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
           From (booking date)
           <StyledInput type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ width: 170 }} />
         </label>
-        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
           To
           <StyledInput type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ width: 170 }} />
         </label>
         <button onClick={run} disabled={loading} className="btn btn-primary">{loading ? 'Building…' : report ? 'Refresh' : 'Build report'}</button>
-        <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Leave both blank for the whole book.</span>
+        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Leave both blank for the whole book.</span>
       </div>
 
       {report && (
         <div style={{ marginTop: 14 }}>
           {report.rows.length === 0 ? (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
               No TDS withheld in this period.
             </div>
           ) : (
@@ -107,7 +107,7 @@ export const TdsReportModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
                               {/* Say which it is. A masked PAN that looks like a whole one is
                                   worse than no PAN: somebody files it. */}
                               {r.panMasked && (
-                                <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 6 }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', marginLeft: 6 }}>
                                   last 4
                                 </span>
                               )}

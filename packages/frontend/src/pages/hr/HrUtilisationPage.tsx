@@ -135,7 +135,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
                     onClick={() => setWorkloadPosture(f.key)}
                     aria-pressed={on}
                     style={{
-                      padding: '5px 10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                      padding: '5px 10px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
                       borderRadius: '999px',
                       border: `1px solid ${on ? 'var(--accent)' : 'var(--border-color)'}`,
                       background: on ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
@@ -148,7 +148,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
               })}
             </div>
             {(workloadQuery.trim() || workloadPosture !== 'ALL') && (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>
                 Showing {workloadRows.length} of {d.utilisation.utilization.length} people.
               </div>
             )}
@@ -179,7 +179,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
                 key: 'posture',
                 header: 'Status',
                 render: (r) => (
-                  <span style={{ color: workloadTone(r.posture, noWorkYet), fontSize: '12px', fontWeight: 600 }}>
+                  <span style={{ color: workloadTone(r.posture, noWorkYet), fontSize: 'var(--text-xs)', fontWeight: 600 }}>
                     {WORKLOAD_POSTURE[r.posture] ?? r.posture}
                   </span>
                 ),
@@ -249,7 +249,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
           would otherwise look like an error in one of them.
         */}
         {attrition.unaccounted && (
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '12px' }}>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '12px' }}>
             {attrition.unaccounted}
           </div>
         )}
@@ -288,7 +288,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
                 render: (r) => (
                   <span style={{
                     color: r.mode === 'TERMINATED' ? 'var(--danger)' : 'var(--text-muted)',
-                    fontSize: '12px',
+                    fontSize: 'var(--text-xs)',
                     fontWeight: 600,
                   }}>
                     {DEPARTURE_MODE_LABEL[r.mode] ?? assayerLifecycleLabel(r.mode)}

@@ -57,14 +57,14 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {FILTERS.map((f) => (
           <button key={f} onClick={() => changeFilter(f)} style={{
-            padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+            padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
             background: filter === f ? 'var(--status-pending-bg)' : 'transparent', color: filter === f ? 'var(--text-primary)' : 'var(--text-secondary)',
             border: `1px solid ${filter === f ? 'var(--accent-primary)' : 'var(--border-color)'}`,
           }}>
             {f === 'ALL' ? 'All' : assayerInvoiceStatusLabel(f)}
           </button>
         ))}
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>{total} invoice{total === 1 ? '' : 's'}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{total} invoice{total === 1 ? '' : 's'}</span>
       </div>
 
       {/* Failure before emptiness — see the note in PayoutsTab. "Nothing waiting for approval" is
@@ -131,8 +131,8 @@ const CANCEL_ASSAYER_INVOICE_REASONS = [
 
 const AmountRow: React.FC<{ label: string; value: string; strong?: boolean }> = ({ label, value, strong }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px dashed var(--border-color)' }}>
-    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{label}</span>
-    <span style={{ fontSize: 13, fontWeight: strong ? 700 : 600, color: strong ? 'var(--text-primary)' : undefined, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ fontSize: 'var(--text-sm)', fontWeight: strong ? 700 : 600, color: strong ? 'var(--text-primary)' : undefined, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
   </div>
 );
 
@@ -212,7 +212,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
   return (
     <DetailDrawer
       open onClose={onClose} width={680}
-      title={<span><strong style={{ fontSize: 15 }}>{invoice.invoiceNumber}</strong> <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 6 }}>{[invoice.assayerName, invoice.assayerCode].filter(Boolean).join(' · ')}</span></span>}
+      title={<span><strong style={{ fontSize: 'var(--text-md)' }}>{invoice.invoiceNumber}</strong> <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginLeft: 6 }}>{[invoice.assayerName, invoice.assayerCode].filter(Boolean).join(' · ')}</span></span>}
       subtitle={<AssayerInvoiceStatusPill status={invoice.status} />}
       footer={(canApprove || canCancel) ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
@@ -227,7 +227,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
         </div>
       ) : undefined}
     >
-      <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
         Invited {fmtDate(invoice.invitedAt)}
         {invoice.submittedAt && <> · submitted {fmtDate(invoice.submittedAt)}</>}
         {invoice.approvedAt && <> · approved {fmtDate(invoice.approvedAt)}</>}
@@ -235,22 +235,22 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
       </div>
 
       {invoice.status === AssayerInvoiceStatus.INVITED && (
-        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           Waiting on the assayer — this is their first sight of these amounts, and they have not confirmed them yet. Approval opens once they submit.
         </div>
       )}
       {invoice.status === AssayerInvoiceStatus.CANCELLED && invoice.cancelReason && (
-        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>Cancelled: <em>{invoice.cancelReason}</em></div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Cancelled: <em>{invoice.cancelReason}</em></div>
       )}
       {heldLines.length > 0 && invoice.status !== AssayerInvoiceStatus.CANCELLED && (
-        <div style={{ fontSize: 12, color: 'var(--warning)' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)' }}>
           {heldLines.map((l) => l.payableNumber).join(', ')} on hold — the server will refuse approval until the hold is released or this invoice is cancelled.
         </div>
       )}
 
       {cancelOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
-          <div style={{ fontSize: 12.5 }}>
+          <div style={{ fontSize: 'var(--text-xs)' }}>
             Cancelling releases every line back to the unbilled pool, so the work can be invited again once fixed. The assayer&rsquo;s confirmation, if given, is discarded. Say why:
           </div>
           <Select
@@ -274,7 +274,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
       )}
 
       <div>
-        <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>Amounts</h4>
+        <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 4px', color: 'var(--text-primary)' }}>Amounts</h4>
         <AmountRow label="Fees" value={moneyExact(invoice.subtotalBase)} />
         <AmountRow label="Travel" value={moneyExact(invoice.subtotalTravel)} />
         <AmountRow label="TDS withheld" value={`−${moneyExact(invoice.tdsAmount)}`} />
@@ -282,7 +282,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
       </div>
 
       <div>
-        <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>Lines ({invoice.lines.length})</h4>
+        <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>Lines ({invoice.lines.length})</h4>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
@@ -297,7 +297,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
                     <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                       {l.kind === 'EXPENSE' && <Receipt size={12} style={{ color: 'var(--text-muted)' }} />}{l.assignmentNumber ?? l.payableNumber}
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                       {l.kind === 'EXPENSE' ? `Expense reimbursement${l.expenseCategory ? ` · ${l.expenseCategory}` : ''}` : 'Audit fee'}
                     </div>
                   </td>
@@ -317,7 +317,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
         </div>
       </div>
 
-      {invoice.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{invoice.notes}</div>}
+      {invoice.notes && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>{invoice.notes}</div>}
 
       {confirmDialog}
     </DetailDrawer>

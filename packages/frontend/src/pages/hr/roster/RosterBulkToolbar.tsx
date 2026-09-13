@@ -77,11 +77,11 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <strong style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
+        <strong style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)' }}>
           {selectedRows.length} visible selected
         </strong>
         {hiddenNote && (
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>({hiddenNote})</span>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>({hiddenNote})</span>
         )}
       </div>
 
@@ -102,7 +102,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
           compact
         />
       ) : (
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           No common legal stage reachable
         </span>
       )}
@@ -139,7 +139,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
               aria-label="Reason, in your own words"
               style={{
                 padding: '4px 8px',
-                fontSize: '12px',
+                fontSize: 'var(--text-xs)',
                 borderRadius: '4px',
                 border: '1px solid var(--border-color)',
                 background: 'var(--bg-page)',
@@ -155,7 +155,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         onClick={handleApply}
         disabled={!targetStatus || !reason.trim() || busy}
         className="btn btn-primary"
-        style={{ fontSize: '12px', padding: '6px 14px' }}
+        style={{ fontSize: 'var(--text-xs)', padding: '6px 14px' }}
       >
         {busy ? 'Moving…' : 'Apply'}
       </button>
@@ -166,7 +166,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         disabled={appAccessBusy}
         className="btn btn-secondary"
         style={{
-          fontSize: '12px',
+          fontSize: 'var(--text-xs)',
           padding: '6px 12px',
           display: 'inline-flex',
           alignItems: 'center',
@@ -183,7 +183,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         disabled={notifyBusy}
         className="btn btn-secondary"
         style={{
-          fontSize: '12px',
+          fontSize: 'var(--text-xs)',
           padding: '6px 12px',
           display: 'inline-flex',
           alignItems: 'center',
@@ -198,13 +198,13 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         type="button"
         onClick={onClearSelection}
         className="btn btn-secondary"
-        style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}
+        style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}
       >
         Clear selection
       </button>
 
       {targetStatus && STAGE_CONSEQUENCE[targetStatus] && (
-        <div style={{ flexBasis: '100%', fontSize: '12px', color: 'var(--text-secondary)' }}>
+        <div style={{ flexBasis: '100%', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           {STAGE_CONSEQUENCE[targetStatus]} Partial results will be reported; unreachable rows will be skipped safely.
         </div>
       )}

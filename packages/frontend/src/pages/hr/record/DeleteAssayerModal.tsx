@@ -80,7 +80,7 @@ export const DeleteAssayerModal: React.FC<DeleteAssayerModalProps> = ({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--danger)' }}>
             <Trash2 size={18} />
-            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600 }}>
+            <h3 style={{ margin: 0, fontSize: 'var(--text-md)', fontWeight: 600 }}>
               Delete Assayer Record
             </h3>
           </div>
@@ -112,12 +112,12 @@ export const DeleteAssayerModal: React.FC<DeleteAssayerModalProps> = ({
             }}
           >
             <AlertTriangle size={18} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: '2px' }} />
-            <div style={{ fontSize: '12.5px', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', lineHeight: 1.5 }}>
               <strong>Permanent Operational Impact:</strong> Deleting this assayer record will soft-delete the profile, remove them from active rosters and dispatch queues, and revoke system access.
             </div>
           </div>
 
-          <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
             To confirm this destructive action, please type the assayer’s exact name: <strong>{assayerName}</strong>
           </div>
 
@@ -129,7 +129,7 @@ export const DeleteAssayerModal: React.FC<DeleteAssayerModalProps> = ({
             disabled={busy}
             style={{
               padding: '8px 12px',
-              fontSize: '13px',
+              fontSize: 'var(--text-sm)',
               borderRadius: '6px',
               border: '1px solid var(--border-color)',
               background: 'var(--bg-surface)',
@@ -140,7 +140,7 @@ export const DeleteAssayerModal: React.FC<DeleteAssayerModalProps> = ({
           {error && (
             <div
               style={{
-                fontSize: '12px',
+                fontSize: 'var(--text-xs)',
                 color: 'var(--danger)',
                 background: 'color-mix(in srgb, var(--danger) 8%, transparent)',
                 padding: '8px 12px',
@@ -158,7 +158,7 @@ export const DeleteAssayerModal: React.FC<DeleteAssayerModalProps> = ({
               className="btn btn-secondary"
               onClick={onClose}
               disabled={busy}
-              style={{ fontSize: '12.5px', padding: '7px 14px' }}
+              style={{ fontSize: 'var(--text-xs)', padding: '7px 14px' }}
             >
               Cancel
             </button>
@@ -167,7 +167,7 @@ export const DeleteAssayerModal: React.FC<DeleteAssayerModalProps> = ({
               className="btn btn-danger"
               onClick={handleDelete}
               disabled={busy || confirmText.trim() !== assayerName.trim()}
-              style={{ fontSize: '12.5px', padding: '7px 14px', background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+              style={{ fontSize: 'var(--text-xs)', padding: '7px 14px', background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
             >
               {busy ? 'Deleting…' : 'Delete Assayer'}
             </button>

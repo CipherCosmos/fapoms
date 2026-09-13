@@ -179,7 +179,7 @@ export const Modal: React.FC<{
       >
         {title !== undefined && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-            <h4 id={titleId} style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>{title}</h4>
+            <h4 id={titleId} style={{ fontSize: 'var(--text-md)', fontWeight: 700, margin: 0 }}>{title}</h4>
             <button
               type="button"
               onClick={onClose}

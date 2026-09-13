@@ -117,7 +117,7 @@ export const Autocomplete: React.FC<{
         style={{
           padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)',
           borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%',
-          boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px', paddingRight: '30px',
+          boxSizing: 'border-box' as const, outline: 'none', fontSize: 'var(--text-sm)', paddingRight: '30px',
         }}
       />
       {busy && (
@@ -149,14 +149,14 @@ export const Autocomplete: React.FC<{
               onClick={() => pick(r)}
               style={{
                 display: 'flex', gap: '8px', width: '100%', textAlign: 'left', padding: '8px 12px',
-                background: 'none', border: 'none', cursor: 'pointer', fontSize: '12.5px',
+                background: 'none', border: 'none', cursor: 'pointer', fontSize: 'var(--text-xs)',
                 color: 'var(--text-primary)', borderBottom: '1px solid var(--border-hair)',
               }}
             >
               <MapPin size={13} style={{ flex: 'none', marginTop: 1, opacity: 0.6 }} />
               <span style={{ minWidth: 0 }}>
                 <span style={{ display: 'block' }}>{r.label}</span>
-                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
                   {r.type}{r.pincode ? ` · ${r.pincode}` : ''}
                 </span>
               </span>

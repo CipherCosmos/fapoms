@@ -54,7 +54,7 @@ export const RosterNotifyDialog: React.FC<{
       width={480}
       footer={(
         <>
-          <button type="button" onClick={close} disabled={busy} className="btn btn-secondary" style={{ fontSize: '12.5px', padding: '8px 14px' }}>
+          <button type="button" onClick={close} disabled={busy} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
             Cancel
           </button>
           <button
@@ -62,29 +62,29 @@ export const RosterNotifyDialog: React.FC<{
             onClick={() => void send()}
             disabled={busy || !subject.trim() || !body.trim()}
             className="btn btn-primary"
-            style={{ fontSize: '12.5px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
           >
             <Send size={13} /> {busy ? 'Sending…' : `Send to ${selectedRows.length}`}
           </button>
         </>
       )}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12.5px' }}>
-        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: 'var(--text-xs)' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           {names.join(', ')}
           {selectedRows.length > names.length && ` and ${selectedRows.length - names.length} more`}
           {hiddenNote && <div style={{ marginTop: '4px', color: 'var(--text-muted)' }}>{hiddenNote}</div>}
         </div>
 
         <label style={{ display: 'block' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>Subject</div>
+          <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>Subject</div>
           <input
             autoFocus
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
             placeholder="e.g. Update your bank details"
             style={{
-              width: '100%', padding: '8px 10px', fontSize: '13px', boxSizing: 'border-box',
+              width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)', boxSizing: 'border-box',
               background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
               border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm, 6px)', outline: 'none',
             }}
@@ -92,14 +92,14 @@ export const RosterNotifyDialog: React.FC<{
         </label>
 
         <label style={{ display: 'block' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>Message</div>
+          <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>Message</div>
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
             rows={5}
             placeholder="What do you want them to know or do?"
             style={{
-              width: '100%', padding: '8px 10px', fontSize: '13px', boxSizing: 'border-box', resize: 'vertical',
+              width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)', boxSizing: 'border-box', resize: 'vertical',
               background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
               border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm, 6px)', outline: 'none',
             }}
@@ -110,7 +110,7 @@ export const RosterNotifyDialog: React.FC<{
           <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
           <span>
             Also send by email
-            <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <span style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
               Off by default — everyone gets it in-app; tick this to also reach their inbox.
             </span>
           </span>

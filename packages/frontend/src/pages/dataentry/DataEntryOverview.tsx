@@ -268,16 +268,16 @@ export const DataEntryOverview: React.FC = () => {
               return (
                 <div key={b.key} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
                   <button onClick={() => navigate(b.link)}
-                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: b.tone, fontSize: '12.5px', fontWeight: 700, width: 'auto' }}>
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: b.tone, fontSize: 'var(--text-xs)', fontWeight: 700, width: 'auto' }}>
                     {b.label} ({bucket.total}) →
                   </button>
-                  <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                     {items.slice(0, 3).map((i, idx) => (
                       <span key={i.id}>
                         {idx > 0 && ' · '}
                         {i.projectBranchId ? (
                           <button onClick={() => navigate(`/data-entry/case/${i.projectBranchId}`)}
-                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '11.5px', width: 'auto' }}>
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 'var(--text-2xs)', width: 'auto' }}>
                             {i.branchName ?? 'branch'}
                           </button>
                         ) : (i.branchName ?? 'branch')}
@@ -295,8 +295,8 @@ export const DataEntryOverview: React.FC = () => {
 
       {deskIsClear && (
         <section style={{ ...deskCard, borderColor: 'var(--success)' }}>
-          <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--success)' }}>Nothing needs doing right now.</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--success)' }}>Nothing needs doing right now.</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.5 }}>
             {isHead
               ? 'No packet is waiting to be given out, nothing is being typed up, and no report is waiting to be checked or sent. The counts below are all zero because the desk is clear — work appears here as assayers send their audits back.'
               : 'You are holding no packets and nothing has been sent back to you. New work appears here once your head gives you a packet.'}
@@ -348,7 +348,7 @@ export const DataEntryOverview: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '10px' }}>
             <TeamIcon size={14} />
             <span style={{ ...deskLabel, color: 'var(--text-primary)' }}>Team workload</span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>
               What each person is holding right now
             </span>
           </div>
@@ -362,8 +362,8 @@ export const DataEntryOverview: React.FC = () => {
                 <button key={m.id} onClick={() => navigate(`/data-entry/packets?assignedTo=${m.id}`)}
                   style={{ padding: '9px 11px', borderRadius: '8px', border: `1px solid ${stale ? 'var(--danger)' : 'var(--border-hair)'}`, background: 'var(--bg-surface-2)', cursor: 'pointer', textAlign: 'left', color: 'inherit', width: 'auto' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-                    <span style={{ fontSize: '12.5px', fontWeight: 700 }}>{m.name}</span>
-                    <span style={{ ...deskLabel, fontSize: '9px' }}>{roleLabel(m.role)}</span>
+                    <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700 }}>{m.name}</span>
+                    <span style={{ ...deskLabel, fontSize: 'var(--text-3xs)' }}>{roleLabel(m.role)}</span>
                   </div>
                   {/*
                     Every number on this card used to be an icon and a digit — `0 📄 0 ↩ 0 👁 0 ✓` —
@@ -391,9 +391,9 @@ export const DataEntryOverview: React.FC = () => {
                       shouted word it read like a status the system had put them in. "N d OLD" is
                       likewise the age of their oldest untouched packet, not a label on the person.
                     */}
-                    {idle && <span style={{ fontSize: '11px', color: 'var(--success)', fontWeight: 700 }}>Free — can take more work</span>}
+                    {idle && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--success)', fontWeight: 700 }}>Free — can take more work</span>}
                     {stale && (
-                      <span style={{ fontSize: '11px', color: 'var(--danger)', fontWeight: 700 }}>
+                      <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 700 }}>
                         Oldest packet has been with them {counted(m.oldestOpenDays ?? 0, 'day')}
                       </span>
                     )}
@@ -402,7 +402,7 @@ export const DataEntryOverview: React.FC = () => {
               );
             })}
           </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '8px' }}>
             Click a person to see exactly which packets they are holding.
           </div>
         </section>
@@ -412,20 +412,20 @@ export const DataEntryOverview: React.FC = () => {
       {isHead && (
         <section style={deskCard}>
           <div style={{ ...deskLabel, color: 'var(--text-primary)', marginBottom: '8px' }}>Recent activity</div>
-          {activity === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>}
+          {activity === null && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Loading…</div>}
           {/* The list defaults to `[]` on failure, which is the same value as "the desk has done
               nothing". The banner at the top carries the reason; this only has to stop asserting
               the opposite of it. */}
           {activity?.length === 0 && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
               {loadErrors["the desk's recent activity"] != null
                 ? 'The activity list could not be loaded — see the message at the top of this page. This is not saying the desk has been idle.'
                 : 'Nothing has happened on the desk yet. Every packet handed out, typed up, checked or sent to a client will be listed here, newest first.'}
             </div>
           )}
           {activity?.map((a, i) => (
-            <div key={i} style={{ display: 'flex', gap: '9px', padding: '7px 0', borderTop: i > 0 ? '1px solid var(--border-hair)' : 'none', fontSize: '12.5px', alignItems: 'baseline', flexWrap: 'wrap' }}>
-              <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', fontSize: '11.5px' }}>
+            <div key={i} style={{ display: 'flex', gap: '9px', padding: '7px 0', borderTop: i > 0 ? '1px solid var(--border-hair)' : 'none', fontSize: 'var(--text-xs)', alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', fontSize: 'var(--text-2xs)' }}>
                 {new Date(a.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </span>
               {/* An unattributed event is the app itself acting; "System" alone reads like a person's name. */}
@@ -437,13 +437,13 @@ export const DataEntryOverview: React.FC = () => {
               {a.branchName && (
                 a.projectBranchId ? (
                   <button onClick={() => navigate(`/data-entry/case/${a.projectBranchId}`)}
-                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontSize: '12.5px', fontWeight: 600, width: 'auto' }}>
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontSize: 'var(--text-xs)', fontWeight: 600, width: 'auto' }}>
                     {a.branchName}
                   </button>
                 ) : <span style={{ color: 'var(--accent)' }}>{a.branchName}</span>
               )}
               {a.remarks && !isSystemRemark(a.remarks) && (
-                <span style={{ color: 'var(--text-muted)', fontSize: '11.5px', flexBasis: '100%' }}>{a.remarks}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', flexBasis: '100%' }}>{a.remarks}</span>
               )}
             </div>
           ))}
@@ -462,8 +462,8 @@ export const DataEntryOverview: React.FC = () => {
 const MetricWord: React.FC<{
   n: number; one: string; many?: string; tone: string; suffix?: string;
 }> = ({ n, one, many, tone, suffix }) => (
-  <span style={{ fontSize: '11.5px', color: n ? tone : 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
-    <strong style={{ fontSize: '13px', fontWeight: 700 }}>{n}</strong>{' '}
+  <span style={{ fontSize: 'var(--text-2xs)', color: n ? tone : 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+    <strong style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>{n}</strong>{' '}
     {plural(n, one, many)}{suffix ? ` ${suffix}` : ''}
   </span>
 );
@@ -476,7 +476,7 @@ const NumberCard: React.FC<{
   }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: tone ?? 'var(--text-primary)' }}>
       {icon}
-      <span style={{ fontSize: '22px', fontWeight: 700, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{value ?? '…'}</span>
+      <span style={{ fontSize: 'var(--text-xl)', fontWeight: 700, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{value ?? '…'}</span>
     </div>
     <div style={{ ...deskLabel, marginTop: '6px' }}>{caption}</div>
   </button>

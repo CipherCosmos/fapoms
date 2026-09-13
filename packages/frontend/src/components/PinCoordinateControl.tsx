@@ -66,7 +66,7 @@ export const PinCoordinateControl: React.FC<{
       <button
         onClick={() => setOpen(true)}
         className="btn btn-secondary"
-        style={{ marginTop: '6px', padding: '4px 9px', fontSize: '10.5px', display: 'inline-flex', alignItems: 'center', gap: '5px', width: 'auto' }}
+        style={{ marginTop: '6px', padding: '4px 9px', fontSize: 'var(--text-3xs)', display: 'inline-flex', alignItems: 'center', gap: '5px', width: 'auto' }}
       >
         <MapPin size={12} /> Pin the exact location
       </button>
@@ -75,7 +75,7 @@ export const PinCoordinateControl: React.FC<{
 
   return (
     <div style={{ marginTop: '8px', padding: '9px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+      <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginBottom: '6px' }}>
         Find the place on{' '}
         <a href="https://www.openstreetmap.org" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-primary)' }}>
           OpenStreetMap
@@ -91,23 +91,23 @@ export const PinCoordinateControl: React.FC<{
           onKeyDown={(e) => { if (e.key === 'Enter') void submit(); if (e.key === 'Escape') setOpen(false); }}
           placeholder="18.520430, 73.856744"
           aria-label="Exact coordinate as latitude, longitude"
-          style={{ flex: 1, minWidth: '170px', fontSize: '11.5px', fontFamily: 'monospace', padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
+          style={{ flex: 1, minWidth: '170px', fontSize: 'var(--text-2xs)', fontFamily: 'monospace', padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
         />
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void submit(); if (e.key === 'Escape') setOpen(false); }}
           placeholder="Note (optional) — e.g. front door"
-          style={{ flex: 1, minWidth: '150px', fontSize: '11.5px', padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
+          style={{ flex: 1, minWidth: '150px', fontSize: 'var(--text-2xs)', padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
         />
-        <button onClick={submit} disabled={saving || !value.trim()} className="btn btn-primary" style={{ padding: '5px 11px', fontSize: '10.5px', width: 'auto' }}>
+        <button onClick={submit} disabled={saving || !value.trim()} className="btn btn-primary" style={{ padding: '5px 11px', fontSize: 'var(--text-3xs)', width: 'auto' }}>
           {saving ? 'Saving…' : 'Pin here'}
         </button>
-        <button onClick={() => { setOpen(false); setError(null); }} className="btn btn-secondary" style={{ padding: '5px 11px', fontSize: '10.5px', width: 'auto' }}>
+        <button onClick={() => { setOpen(false); setError(null); }} className="btn btn-secondary" style={{ padding: '5px 11px', fontSize: 'var(--text-3xs)', width: 'auto' }}>
           Cancel
         </button>
       </div>
-      {error && <div style={{ fontSize: '10.5px', color: 'var(--danger)', marginTop: '6px' }}>{error}</div>}
+      {error && <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--danger)', marginTop: '6px' }}>{error}</div>}
     </div>
   );
 };

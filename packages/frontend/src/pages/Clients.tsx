@@ -237,7 +237,7 @@ const Clients: React.FC = () => {
       key: 'clientCode',
       header: 'Code',
       sortValue: (r) => r.clientCode,
-      render: (r) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)' }}>{r.clientCode}</span>,
+      render: (r) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{r.clientCode}</span>,
     },
     {
       key: 'displayName',
@@ -248,7 +248,7 @@ const Clients: React.FC = () => {
           <Building2 size={14} style={{ color: 'var(--text-muted)' }} />
           <div>
             <div style={{ fontWeight: 600 }}>{r.displayName}</div>
-            {r.industry && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.industry}</div>}
+            {r.industry && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{r.industry}</div>}
           </div>
         </div>
       ),
@@ -257,7 +257,7 @@ const Clients: React.FC = () => {
       key: 'clientType',
       header: 'Type',
       sortValue: (r) => r.clientType,
-      render: (r) => <span style={{ fontSize: 12 }}>{clientTypeLabel(r.clientType)}</span>,
+      render: (r) => <span style={{ fontSize: 'var(--text-xs)' }}>{clientTypeLabel(r.clientType)}</span>,
     },
     {
       key: 'lifecycleStatus',
@@ -286,7 +286,7 @@ const Clients: React.FC = () => {
       key: 'createdAt',
       header: 'Created',
       sortValue: (r) => r.createdAt,
-      render: (r) => <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(r.createdAt).toLocaleDateString()}</span>,
+      render: (r) => <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{new Date(r.createdAt).toLocaleDateString()}</span>,
     },
   ];
 
@@ -297,11 +297,11 @@ const Clients: React.FC = () => {
         title="Clients"
         subtitle="Client records, contacts, contracts and billing — and whether each one is still active."
         actions={<>
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
             <RefreshCw size={15} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
           {canManage && (
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+            <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
               <Plus size={15} /> Add Client
             </button>
           )}
@@ -322,7 +322,7 @@ const Clients: React.FC = () => {
         <FilterSelect value={clientType} onChange={(v) => setClientType(v)} options={[{ value: '', label: 'All types' }, ...CLIENT_TYPE_FILTERS.map((t) => ({ value: t, label: clientTypeLabel(t) }))]} label="Type" />
         <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={[{ value: '', label: 'All priorities' }, ...PRIORITY_FILTERS.map((p) => ({ value: p, label: priorityLabel(p) }))]} label="Priority" />
         {(status || clientType || priority || debouncedSearch) && (
-          <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} className="btn btn-secondary" style={{ fontSize: 12 }}>Clear</button>
+          <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)' }}>Clear</button>
         )}
       </FilterBar>
 
@@ -337,12 +337,12 @@ const Clients: React.FC = () => {
         }}>
           {/* The count is the number of clients Apply will change — visible ones only — so it can
               never over-promise the way `selectedIds.size` did. */}
-          <strong style={{ fontSize: '13px' }}>{selectedClients.length} selected</strong>
+          <strong style={{ fontSize: 'var(--text-sm)' }}>{selectedClients.length} selected</strong>
           {hiddenNote && (
-            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>{hiddenNote}</span>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{hiddenNote}</span>
           )}
           {selectedClients.length === 0 ? (
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nothing on this page is selected. Clear the filters or go back a page to work on them.</span>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Nothing on this page is selected. Clear the filters or go back a page to work on them.</span>
           ) : bulkTargets.length > 0 ? (
             <>
               <ArrowLeftRight size={13} style={{ color: 'var(--text-muted)' }} />
@@ -353,7 +353,7 @@ const Clients: React.FC = () => {
                 placeholder="Move all to…"
                 compact
               />
-              <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+              <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                 {bulkBusy ? `Applying to ${selectedClients.length}…` : `Apply to ${selectedClients.length}`}
               </button>
               {/*
@@ -370,25 +370,25 @@ const Clients: React.FC = () => {
                 ones had changed. Waiting and reading the report is strictly better.
               */}
               {bulkBusy && (
-                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                   Working through {selectedClients.length} client{selectedClients.length === 1 ? '' : 's'} in one go — the result lists what moved, what was skipped and what failed.
                 </span>
               )}
             </>
           ) : (
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No stage is reachable from the selected clients.</span>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>No stage is reachable from the selected clients.</span>
           )}
-          <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
+          <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
         </div>
       )}
 
       {bulkReport && (
-        <div style={{ padding: '12px 14px', borderRadius: '8px', fontSize: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
+        <div style={{ padding: '12px 14px', borderRadius: '8px', fontSize: 'var(--text-xs)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
           <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
             <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
             <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
             {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
-            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
           </div>
           {bulkReport.skipped.length > 0 && (
             <div style={{ marginTop: '6px' }}>
@@ -396,7 +396,7 @@ const Clients: React.FC = () => {
               {bulkReport.skipped.map((s) => (
                 <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
                   <span style={{ fontWeight: 600 }}>{s.name}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{clientLifecycleLabel(s.current)} — {s.reason}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>{clientLifecycleLabel(s.current)} — {s.reason}</span>
                 </div>
               ))}
             </div>
@@ -406,7 +406,7 @@ const Clients: React.FC = () => {
               <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed — still selected, press Apply again to retry:</div>
               {bulkReport.failed.map((f) => (
                 <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ fontWeight: 600 }}>{f.name}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                  <span style={{ fontWeight: 600 }}>{f.name}</span><span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>— {f.reason}</span>
                 </div>
               ))}
             </div>
@@ -444,23 +444,23 @@ const Clients: React.FC = () => {
              */
             <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
               <Building2 size={34} style={{ color: 'var(--danger)', opacity: 0.5 }} />
-              <div style={{ color: 'var(--text-secondary)', fontSize: 13, fontWeight: 600 }}>Couldn&apos;t load clients</div>
-              <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>This is not saying there are none — the request failed.</div>
-              <button onClick={() => refetch()} className="btn btn-secondary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>Couldn&apos;t load clients</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>This is not saying there are none — the request failed.</div>
+              <button onClick={() => refetch()} className="btn btn-secondary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <RefreshCw size={13} /> Retry
               </button>
             </div>
           ) : (
           <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             <Building2 size={34} style={{ color: 'var(--text-muted)', opacity: 0.4 }} />
-            <div style={{ color: 'var(--text-secondary)', fontSize: 13, fontWeight: 600 }}>No clients found</div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>No clients found</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
               {status || clientType || priority || debouncedSearch
                 ? 'Try adjusting your search or filters.'
                 : 'Add your first client to start booking audits.'}
             </div>
             {!(status || clientType || priority || debouncedSearch) && canManage && (
-              <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Plus size={13} /> Add Client
               </button>
             )}
@@ -470,7 +470,7 @@ const Clients: React.FC = () => {
       />
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{counted(data?.meta.total ?? 0, 'client')}</div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{counted(data?.meta.total ?? 0, 'client')}</div>
         {/*
           The pager only appears when there is somewhere to page to. With two clients on the
           books the footer still read "Page 1 of 1", "1-2 of 2" and "10 / page" — three dead
@@ -527,16 +527,16 @@ const Clients: React.FC = () => {
               // Only link out if the stored value is a real http(s) URL. A `javascript:` value here
               // would otherwise run in this origin on click — see utils/url. Non-URLs show as text.
               safeHttpUrl(selectedClient.website) ? (
-                <a href={safeHttpUrl(selectedClient.website)!} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <a href={safeHttpUrl(selectedClient.website)!} target="_blank" rel="noreferrer" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   <ExternalLink size={12} /> {selectedClient.website}
                 </a>
               ) : (
-                <span style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   <ExternalLink size={12} /> {selectedClient.website}
                 </span>
               )
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, fontSize: 13 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, fontSize: 'var(--text-sm)' }}>
               {[
                 ['Contact Person', selectedClient.contactPerson],
                 ['Email', selectedClient.contactEmail],
@@ -547,7 +547,7 @@ const Clients: React.FC = () => {
                 ['Reg. No.', selectedClient.registrationNumber],
               ].map(([label, value]) => (
                 <div key={label as string} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span>
+                  <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span>
                   <span style={{ color: 'var(--text-primary)' }}>{value || '—'}</span>
                 </div>
               ))}
@@ -594,10 +594,10 @@ const Clients: React.FC = () => {
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            <p style={{ fontSize: 'var(--text-base)', color: 'var(--text-secondary)' }}>
               Are you sure you want to delete <b>{selectedClient.displayName}</b> ({selectedClient.clientCode})? This action cannot be undone and will soft-delete all associated configurations, contacts, contracts, billing parameters, and branches.
             </p>
-            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               Please type the client code <b>{selectedClient.clientCode}</b> to confirm:
             </p>
             <input
@@ -643,7 +643,7 @@ const TabGroup: React.FC<{ active: string; onChange: (t: 'contacts' | 'contracts
             color: active === t.key ? 'var(--accent-primary)' : 'var(--text-muted)',
             fontWeight: active === t.key ? 600 : 400,
             cursor: 'pointer',
-            fontSize: 13,
+            fontSize: 'var(--text-sm)',
           }}
         >
           {t.label}

@@ -53,7 +53,7 @@ export const HBarChart: React.FC<{
                   position: 'absolute', bottom: '100%', left: 0, marginBottom: 6, zIndex: 5,
                   background: 'var(--bg-elevated)', border: '1px solid var(--border-color)',
                   borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-md)',
-                  padding: '6px 10px', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none',
+                  padding: '6px 10px', fontSize: 'var(--text-2xs)', whiteSpace: 'nowrap', pointerEvents: 'none',
                 }}
               >
                 <strong style={{ color: 'var(--text-primary)' }}>{d.label}</strong>
@@ -71,14 +71,14 @@ export const HBarChart: React.FC<{
             >
               <div style={{ width: 128, flexShrink: 0, minWidth: 0 }}>
                 <div style={{
-                  fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+                  fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>
                   {d.label}
                 </div>
                 {d.sublabel && (
                   <div style={{
-                    fontSize: 10, color: 'var(--text-muted)',
+                    fontSize: 'var(--text-3xs)', color: 'var(--text-muted)',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>
                     {d.sublabel}
@@ -97,7 +97,7 @@ export const HBarChart: React.FC<{
               </div>
               <div style={{
                 width: valueColumnWidth, flexShrink: 0, textAlign: 'right',
-                fontSize: 12, fontWeight: 700, color: 'var(--text-primary)',
+                fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)',
                 fontVariantNumeric: 'tabular-nums',
               }}>
                 {d.formattedValue ?? d.value.toLocaleString('en-IN')}

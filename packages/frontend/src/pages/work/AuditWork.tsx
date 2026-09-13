@@ -61,7 +61,7 @@ const QuietNote: React.FC<{ children: React.ReactNode; tone?: 'muted' | 'warning
       borderRadius: 'var(--radius-sm)',
       background: tone === 'warning' ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
       color: tone === 'warning' ? 'var(--warning)' : 'var(--text-muted)',
-      fontSize: '12px',
+      fontSize: 'var(--text-xs)',
     }}
   >
     {children}
@@ -278,7 +278,7 @@ export const AuditWork: React.FC = () => {
                 alignItems: 'center',
                 gap: '6px',
                 padding: '11px 14px',
-                fontSize: '13px',
+                fontSize: 'var(--text-sm)',
                 fontWeight: 600,
                 textDecoration: 'none',
                 whiteSpace: 'nowrap',
@@ -294,7 +294,7 @@ export const AuditWork: React.FC = () => {
 
       <div style={{ paddingTop: '20px' }}>
         {isHandingOver ? (
-          <div style={{ padding: '24px', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <div style={{ padding: '24px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
             Finding where this work has got to…
           </div>
         ) : (

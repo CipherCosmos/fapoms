@@ -48,7 +48,7 @@ const fmtWhen = (d: string) =>
   new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 const label: React.CSSProperties = {
-  fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
+  fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 
@@ -71,7 +71,7 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
       width={520}
       title={
         <>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>{h?.branchName ?? 'Branch history'}</div>
+          <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700 }}>{h?.branchName ?? 'Branch history'}</div>
           <div style={{ ...label, marginTop: 4 }}>
             {h?.solId ?? '—'}{h?.projectName ? ` · ${h.projectName}` : ''}
           </div>
@@ -118,11 +118,11 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
               )}
             </div>
             <div style={{ flex: 1, minWidth: 0, paddingTop: '2px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 600 }}>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
                 {activityEventLabel(e.title)}
               </div>
               {e.from && e.to && (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
                   {/* A timeline entry's from/to is a status on whichever axis the entry
                       came from — STATUS entries carry branch statuses, ASSIGNMENT entries
                       assignment ones. `anyStatusLabel` reads both and still degrades an
@@ -131,7 +131,7 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
                 </div>
               )}
               {e.detail && (
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{e.detail}</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>{e.detail}</div>
               )}
               <div style={{ ...label, marginTop: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <Clock size={10} /> {fmtWhen(e.at)} · {e.actor ?? 'system'} · {meta.label}
@@ -147,12 +147,12 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
 const Fact: React.FC<{ label: string; value: string }> = ({ label: l, value }) => (
   <div>
     <div style={label}>{l.toUpperCase()}</div>
-    <div style={{ fontSize: '13px', fontWeight: 600, marginTop: '2px' }}>{value}</div>
+    <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginTop: '2px' }}>{value}</div>
   </div>
 );
 
 const Muted: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '16px 0', lineHeight: 1.5 }}>{children}</div>
+  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', padding: '16px 0', lineHeight: 1.5 }}>{children}</div>
 );
 
 export default BranchHistoryDrawer;

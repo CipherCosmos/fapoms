@@ -273,34 +273,34 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {(['ALL', 'PENDING', 'APPROVED', 'PAID', 'HELD'] as PayoutFilter[]).map((f) => (
           <button key={f} onClick={() => changeFilter(f)} style={{
-            padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+            padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
             background: filter === f ? 'var(--status-pending-bg)' : 'transparent', color: filter === f ? 'var(--text-primary)' : 'var(--text-secondary)',
             border: `1px solid ${filter === f ? 'var(--accent-primary)' : 'var(--border-color)'}`,
           }}>
             {f === 'ALL' ? 'All' : f === 'HELD' ? 'On hold' : payableStatusLabel(f)}
           </button>
         ))}
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>{total} payout{total === 1 ? '' : 's'}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{total} payout{total === 1 ? '' : 's'}</span>
         {canAct && (
           <button onClick={runInviteAll} disabled={inviteAll.isPending || invoicingDark} className="btn btn-primary"
-            style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5 }}
+            style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}
             title={invoicingDark
               ? 'Assayer invoicing is not enabled on this deployment yet'
               : 'One invoice invitation per assayer with unbilled work — the periodic (~15-day/monthly) billing round'}>
             <Send size={13} /> {inviteAll.isPending ? 'Inviting…' : 'Invite all to invoice'}
           </button>
         )}
-        <button onClick={() => setTdsOpen(true)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5 }}
+        <button onClick={() => setTdsOpen(true)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}
           title="PAN-wise report of TDS withheld from field workers, downloadable as CSV">
           <Percent size={13} /> TDS report
         </button>
-        <Link to="/billing/statement" style={{ fontSize: 12.5, color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Assayer statements →</Link>
+        <Link to="/billing/statement" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Assayer statements →</Link>
       </div>
 
       {/* Rollout gate: the backend answered "not enabled" to an invite. Deployment state, not an
           error — said once, quietly, and the invite buttons above/below stay disabled. */}
       {invoicingDark && (
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '8px 12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '8px 12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
           Assayer invoicing is not enabled on this deployment yet, so invitations cannot be sent.
           Everything else on this tab works as usual; the invite buttons wake up when the
           <code style={{ margin: '0 4px' }}>billing.assayerInvoicingEnabled</code> setting is turned on.
@@ -309,7 +309,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
 
       {canAct && selected.size > 0 && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '10px 14px', background: 'var(--bg-tertiary)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-md)' }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{selected.size} selected</span>
+          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{selected.size} selected</span>
           <button className="btn btn-primary" disabled={!approvable.length || approve.isPending} onClick={runApprove} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <CheckCircle2 size={14} /> Approve {approvable.length ? `(${approvable.length} · ${money(approvable.reduce((s, p) => s + Number(p.totalAmount), 0))})` : ''}
           </button>
@@ -333,7 +333,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
           </button>
           <button className="btn btn-secondary" onClick={() => setSelected(new Set())}>Clear</button>
           {selectedRows.length > approvable.length + payable.length && (
-            <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Held and already-paid rows are skipped.</span>
+            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Held and already-paid rows are skipped.</span>
           )}
         </div>
       )}
@@ -387,7 +387,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                               : eligible.length
                                 ? `Invite ${g.assayerName} to confirm ${eligible.length} unbilled payout${eligible.length === 1 ? '' : 's'} as one invoice`
                                 : 'No eligible payouts on screen — eligible rows are due or approved, not held, not already on an invoice, and not pre-invoicing history'}
-                            style={{ background: 'transparent', border: 'none', cursor: eligible.length && !invoicingDark ? 'pointer' : 'default', color: eligible.length && !invoicingDark ? 'var(--accent)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 600, opacity: eligible.length && !invoicingDark ? 1 : 0.6 }}>
+                            style={{ background: 'transparent', border: 'none', cursor: eligible.length && !invoicingDark ? 'pointer' : 'default', color: eligible.length && !invoicingDark ? 'var(--accent)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', fontWeight: 600, opacity: eligible.length && !invoicingDark ? 1 : 0.6 }}>
                             <Send size={12} /> Invite to invoice
                           </button>
                         )}
@@ -405,7 +405,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                             <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                               {isReimb && <Receipt size={12} style={{ color: 'var(--text-muted)' }} />}{r.assignmentNumber ?? '—'}
                             </div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{isReimb ? 'Expense reimbursement' : r.payableNumber}</div>
+                            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{isReimb ? 'Expense reimbursement' : r.payableNumber}</div>
                           </td>
                           <td style={td}>{[r.clientName, r.branchName].filter(Boolean).join(' · ') || '—'}</td>
                           <td style={td}>
@@ -416,7 +416,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                                  still resolving (or refused), say only that it rides one. */
                               const inv = invoiceById.get(r.assayerInvoiceId!);
                               return (
-                                <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 3, display: 'flex', gap: 5, alignItems: 'center', whiteSpace: 'nowrap' }}
+                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 3, display: 'flex', gap: 5, alignItems: 'center', whiteSpace: 'nowrap' }}
                                   title="This payout rides an assayer invoice. While it is invited or submitted, per-payout Approve is refused — approve or cancel the invoice on the Assayer Invoices tab.">
                                   {inv ? <>{inv.invoiceNumber} <AssayerInvoiceStatusPill status={inv.status} /></> : 'On assayer invoice'}
                                 </div>
@@ -431,7 +431,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                           {canAct && (
                             <td style={{ ...td, whiteSpace: 'nowrap' }}>
                               {r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
-                                <button onClick={() => setHolding(r)} title={r.onHold ? 'Release hold' : 'Put on hold'} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: r.onHold ? 'var(--success)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5 }}>
+                                <button onClick={() => setHolding(r)} title={r.onHold ? 'Release hold' : 'Put on hold'} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: r.onHold ? 'var(--success)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)' }}>
                                   {r.onHold ? <><PlayCircle size={13} /> Release</> : <><PauseCircle size={13} /> Hold</>}
                                 </button>
                               )}
@@ -442,7 +442,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                                 payable is DISBURSED, which PAID/VOIDED already cover here.
                               */}
                               {!isReimb && r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
-                                <button onClick={() => setReopeningRow(r)} title="Reopen the assignment and void this payable" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, marginLeft: 8 }}>
+                                <button onClick={() => setReopeningRow(r)} title="Reopen the assignment and void this payable" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', marginLeft: 8 }}>
                                   <RotateCcw size={13} /> Reopen
                                 </button>
                               )}
@@ -465,7 +465,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
 
       {canReviewClaims && (
         <Card title="Expense claims to review">
-          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 10 }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: 10 }}>
             Approving a claim books it as a payout for the assayer in the same step; it then appears above, due for approval to pay.
           </div>
           <ExpenseReview />
@@ -553,7 +553,7 @@ export const InviteOutcomeSummary: React.FC<{
   const nothingEligible = by('nothing-eligible');
   const failed = by('failed');
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12.5 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 'var(--text-xs)' }}>
       {result.outcomes.length === 0 ? (
         <div style={{ color: 'var(--text-secondary)' }}>No assayer has unbilled work right now — there was nobody to invite.</div>
       ) : (
@@ -604,11 +604,11 @@ const PayModal: React.FC<{
     <Modal open onClose={onClose} title={<><Banknote size={18} /> Pay {payables.length} payout{payables.length === 1 ? '' : 's'}</>} width="520px" asForm
       onSubmit={(e) => { e.preventDefault(); if (!reference.trim()) return; void onPay({ paymentReference: reference.trim(), method, paidDate: paidDate || undefined, notes: notes || undefined }); }}
       footer={<>
-        <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--text-secondary)' }}>Total <strong>{money(total)}</strong> to {assayers} assayer{assayers === 1 ? '' : 's'}</span>
+        <span style={{ marginRight: 'auto', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>Total <strong>{money(total)}</strong> to {assayers} assayer{assayers === 1 ? '' : 's'}</span>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
         <button type="submit" disabled={busy || !reference.trim()} className="btn btn-primary">{busy ? 'Paying…' : 'Record payment'}</button>
       </>}>
-      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         Each payout is paid in full and recorded as a disbursement. One bank reference may cover the whole batch.
       </div>
       <StyledInput placeholder="Bank / UTR reference *" value={reference} onChange={(e) => setReference(e.target.value)} style={{ width: '100%' }} />
@@ -658,14 +658,14 @@ const HoldModal: React.FC<{ row: PayoutRow; busy: boolean; onClose: () => void; 
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
         <button type="submit" disabled={busy || !reasonReady} className="btn btn-primary">{releasing ? 'Release' : 'Hold'}</button>
       </>}>
-      <div style={{ fontSize: 13 }}>
+      <div style={{ fontSize: 'var(--text-sm)' }}>
         <strong>{row.assignmentNumber ?? row.payableNumber}</strong> · {row.assayerName} · {money(Number(r(row.totalAmount)) - Number(r(row.paidAmount)))}
       </div>
       {releasing ? (
-        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>Held for: <em>{row.holdReason}</em>. Releasing lets it be approved and paid again.</div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Held for: <em>{row.holdReason}</em>. Releasing lets it be approved and paid again.</div>
       ) : (
         <>
-          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>A held payout cannot be approved or paid until released. The reason is shown to finance and on the assayer's statement.</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>A held payout cannot be approved or paid until released. The reason is shown to finance and on the assayer's statement.</div>
           <Select
             value={preset}
             onChange={(v) => setPreset(v)}
@@ -701,10 +701,10 @@ const ReopenModal: React.FC<{ row: PayoutRow; busy: boolean; onClose: () => void
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
         <button type="submit" disabled={busy || !ready} className="btn btn-primary">Reopen</button>
       </>}>
-      <div style={{ fontSize: 13 }}>
+      <div style={{ fontSize: 'var(--text-sm)' }}>
         <strong>{row.assignmentNumber ?? row.payableNumber}</strong> · {row.assayerName} · {money(Number(r(row.totalAmount)) - Number(r(row.paidAmount)))}
       </div>
-      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         This puts the assignment back to Accepted and voids this payable — it will not be paid
         until the assignment is completed again. Say why; it goes on the assignment's record.
       </div>

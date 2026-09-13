@@ -97,8 +97,8 @@ export const ViewMark: React.FC = () => {
         background: 'var(--bg-card)',
       }}
     >
-      <div style={{ fontSize: '15px', fontWeight: 600 }}>Marked by the desk</div>
-      <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
+      <div style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>Marked by the desk</div>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginTop: '2px' }}>
         Page {page}
       </div>
     </div>
@@ -119,10 +119,10 @@ export const ViewMark: React.FC = () => {
           }}
         >
           <div style={{ maxWidth: '320px' }}>
-            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px' }}>
+            <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, marginBottom: '8px' }}>
               This link has expired
             </div>
-            <div style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--text-base)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
               Ask the desk to resend it, then open the new link.
             </div>
           </div>
@@ -142,7 +142,7 @@ export const ViewMark: React.FC = () => {
             alignItems: 'center',
             justifyContent: 'center',
             color: 'var(--text-muted)',
-            fontSize: '14px',
+            fontSize: 'var(--text-base)',
           }}
         >
           Opening your document…

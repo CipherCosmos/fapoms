@@ -75,7 +75,7 @@ const PRIORITY_TONE: Record<string, string> = {
 const input: React.CSSProperties = {
   width: '100%', padding: '8px 10px', background: 'var(--bg-secondary)',
   border: '1px solid var(--border-color)', borderRadius: '6px',
-  color: 'var(--text-primary)', fontSize: '13px', boxSizing: 'border-box',
+  color: 'var(--text-primary)', fontSize: 'var(--text-sm)', boxSizing: 'border-box',
 };
 
 export const NotificationAdmin: React.FC = () => {
@@ -215,7 +215,7 @@ export const NotificationAdmin: React.FC = () => {
             */}
           <div className="glass-card" style={{ padding: '11px 14px', display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' }}>
             <Mail size={14} style={{ color: status?.enabled ? 'var(--success, #34a853)' : 'var(--warning)', flexShrink: 0 }} />
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
               {/* "Email is not configured" is a fact about the deployment, and it was printed
                   whenever this read came back empty — including when it never came back at all.
                   A mail setup that is working perfectly was reported as broken. */}
@@ -225,7 +225,7 @@ export const NotificationAdmin: React.FC = () => {
                   ? <>Email is working — sending as <strong>{status.from}</strong>.</>
                   : <>Email is not configured, so nothing marked &ldquo;Email&rdquo; below is actually sent. Notifications still reach the bell.</>}
             </span>
-            <Link to="/admin/settings" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginLeft: 'auto' }}>
+            <Link to="/admin/settings" style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginLeft: 'auto' }}>
               {status?.enabled ? 'Email settings →' : 'Set it up →'}
             </Link>
           </div>
@@ -244,7 +244,7 @@ export const NotificationAdmin: React.FC = () => {
             />
             {/* Three zeroes counted from a catalog that never arrived are three wrong numbers. */}
             {!loadFailed(catalogQuery) && (
-              <div style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <div style={{ marginLeft: 'auto', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 {counts.emailing} emailing · {counts.customised} customised · {counts.disabled} off
               </div>
             )}
@@ -256,7 +256,7 @@ export const NotificationAdmin: React.FC = () => {
             ) : loadingCatalog ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
             ) : types.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
                 No events match what you are filtering on.
               </div>
             ) : (
@@ -275,8 +275,8 @@ export const NotificationAdmin: React.FC = () => {
                     {types.map((t) => (
                       <tr key={t.type} style={{ opacity: t.enabled ? 1 : 0.5 }}>
                         <td>
-                          <div style={{ fontWeight: 600, fontSize: '12px' }}>{t.title}</div>
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          <div style={{ fontWeight: 600, fontSize: 'var(--text-xs)' }}>{t.title}</div>
+                          <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
                             <span>{t.type}</span>
                             <span style={{ color: PRIORITY_TONE[t.priority] }}>{t.priority}</span>
                             {t.overridden.length > 0 && (
@@ -286,7 +286,7 @@ export const NotificationAdmin: React.FC = () => {
                             )}
                           </div>
                         </td>
-                        <td style={{ fontSize: '10px', color: 'var(--text-muted)', maxWidth: '200px' }}>
+                        <td style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', maxWidth: '200px' }}>
                           {[...t.roles, ...(t.special ?? [])].join(', ') || '—'}
                         </td>
                         {CHANNELS.map((c) => (
@@ -335,7 +335,7 @@ export const NotificationAdmin: React.FC = () => {
                 </table>
               </div>
             )}
-            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)', alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', alignItems: 'flex-start' }}>
               <Info size={12} style={{ flexShrink: 0, marginTop: '2px' }} />
               <span>
                 Changes take effect on the next event — no deploy. Events not customised keep following the shipped
@@ -460,13 +460,13 @@ const TemplateEditor: React.FC<{
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', overflowY: 'auto', paddingRight: '4px' }}>
         {type.placeholders.length > 0 && (
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             Available values — click to insert into the title:{' '}
             {type.placeholders.map((p) => (
               <button
                 key={p} onClick={() => insertPlaceholder(setTitle, title, p)}
                 style={{
-                  margin: '2px', padding: '2px 7px', fontSize: '10px', cursor: 'pointer',
+                  margin: '2px', padding: '2px 7px', fontSize: 'var(--text-3xs)', cursor: 'pointer',
                   background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
                   borderRadius: '10px', color: 'var(--accent)',
                 }}
@@ -477,33 +477,33 @@ const TemplateEditor: React.FC<{
           </div>
         )}
 
-        <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
           In-app / push title
           <input value={title} onChange={(e) => setTitle(e.target.value)} style={{ ...input, marginTop: '4px' }} />
         </label>
 
-        <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
           In-app / push body
           <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2}
             style={{ ...input, marginTop: '4px', resize: 'vertical' }} />
         </label>
 
-        <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+        <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
           Click-through route
           <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="/assignments?id=${assignmentId}"
             style={{ ...input, marginTop: '4px' }} />
         </label>
 
         <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Mail size={13} /> Email wording <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '11px' }}>— leave blank to reuse the text above</span>
+          <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Mail size={13} /> Email wording <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>— leave blank to reuse the text above</span>
           </div>
-          <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             Subject
             <input value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)}
               placeholder={type.title} style={{ ...input, marginTop: '4px' }} />
           </label>
-          <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginTop: '10px' }}>
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'block', marginTop: '10px' }}>
             Body — an inbox has room for context a lock screen does not
             <textarea value={emailBody} onChange={(e) => setEmailBody(e.target.value)} rows={4}
               placeholder={type.body} style={{ ...input, marginTop: '4px', resize: 'vertical' }} />
@@ -511,7 +511,7 @@ const TemplateEditor: React.FC<{
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
-          <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             Priority
             <Select
               value={priority}
@@ -520,7 +520,7 @@ const TemplateEditor: React.FC<{
               style={{ ...input, marginTop: '4px' }}
             />
           </label>
-          <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             Why this was changed
             <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Ops asked for branch code in the subject"
               style={{ ...input, marginTop: '4px' }} />
@@ -528,7 +528,7 @@ const TemplateEditor: React.FC<{
         </div>
 
         <div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '6px' }}>
             Recipient roles {type.special?.length ? `(plus ${type.special.join(', ')})` : ''}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
@@ -537,7 +537,7 @@ const TemplateEditor: React.FC<{
                 key={r}
                 onClick={() => setRoles(roles.includes(r) ? roles.filter((x) => x !== r) : [...roles, r])}
                 style={{
-                  padding: '3px 8px', fontSize: '10px', cursor: 'pointer', borderRadius: '10px',
+                  padding: '3px 8px', fontSize: 'var(--text-3xs)', cursor: 'pointer', borderRadius: '10px',
                   background: roles.includes(r) ? 'rgba(216,174,71,0.15)' : 'var(--bg-secondary)',
                   border: `1px solid ${roles.includes(r) ? 'var(--accent)' : 'var(--border-color)'}`,
                   color: roles.includes(r) ? 'var(--accent)' : 'var(--text-muted)',
@@ -551,13 +551,13 @@ const TemplateEditor: React.FC<{
 
         {preview && (
           <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '8px' }}>Preview — with sample values</div>
+            <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, marginBottom: '8px' }}>Preview — with sample values</div>
             <div style={{ padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: '6px', marginBottom: '8px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700 }}>{preview.title}</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{preview.body}</div>
-              {preview.link && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>→ {preview.link}</div>}
+              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700 }}>{preview.title}</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{preview.body}</div>
+              {preview.link && <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '4px' }}>→ {preview.link}</div>}
             </div>
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>As an email:</div>
+            <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginBottom: '4px' }}>As an email:</div>
             <div style={{ border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden' }}>
               <iframe title="Email preview" srcDoc={preview.emailHtml} style={{ width: '100%', height: '260px', border: 'none', background: '#fff' }} />
             </div>

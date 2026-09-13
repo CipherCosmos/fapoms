@@ -31,17 +31,17 @@ import { SENSITIVE_FIELDS, maskedIdentifier, type SensitiveRecordKey } from './a
 export type { SensitiveRecordKey };
 
 const noteStyle: React.CSSProperties = {
-  fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.45, marginTop: '4px',
+  fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.45, marginTop: '4px',
 };
 
 const valueStyle: React.CSSProperties = {
-  fontFamily: 'monospace', fontSize: '12.5px', letterSpacing: '0.02em',
+  fontFamily: 'monospace', fontSize: 'var(--text-xs)', letterSpacing: '0.02em',
 };
 
 const linkButton: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: '4px',
   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-  color: 'var(--accent)', fontSize: '12px', fontWeight: 600,
+  color: 'var(--accent)', fontSize: 'var(--text-xs)', fontWeight: 600,
 };
 
 export const SensitiveValue: React.FC<{
@@ -122,7 +122,7 @@ export const SensitiveValue: React.FC<{
             against this person.{' '}
             <button
               type="button"
-              style={{ ...linkButton, fontSize: '12px' }}
+              style={{ ...linkButton, fontSize: 'var(--text-xs)' }}
               onClick={() => setValue(null)}
             >
               <EyeOff size={11} /> Cover it again
