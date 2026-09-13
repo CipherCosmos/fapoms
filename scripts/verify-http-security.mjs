@@ -19,7 +19,7 @@
  * Run it against a DISPOSABLE deployment. It creates nothing it does not clean up, but it does
  * issue writes, and several probes deliberately attempt privilege escalation:
  *
- *   API=http://127.0.0.1:4099/api/v1 PASSWORD=… node scripts/verify-http-security.mjs
+ *   AC_API=http://127.0.0.1:8080/api/v1 AC_PASSWORD=… node scripts/verify-http-security.mjs
  *
  * The accounts it expects are the seeded ones: `admin` (ADMIN), `manager` (OPERATIONS),
  * `executive` (OPERATIONS), `validator` (DESK_OPERATOR). `manager` is given and then returned
@@ -40,8 +40,8 @@
  */
 import { randomUUID } from 'node:crypto';
 
-const API = process.env.API || 'http://127.0.0.1:4099/api/v1';
-const PASSWORD = process.env.PASSWORD || 'admin123';
+const API = process.env.AC_API || 'http://127.0.0.1:8080/api/v1';
+const PASSWORD = process.env.AC_PASSWORD || 'admin123';
 
 const results = [];
 let group = '';

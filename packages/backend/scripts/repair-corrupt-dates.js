@@ -98,7 +98,7 @@ async function main() {
     port: Number(process.env.DB_PORT || 5432),
     user: process.env.DB_USERNAME || 'fapoms',
     password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME || 'fapoms',
+    database: process.env.DB_DATABASE || 'fapoms',
   });
   await client.connect();
 

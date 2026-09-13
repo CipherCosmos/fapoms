@@ -330,7 +330,10 @@ services:
       DB_DATABASE: ${DB_DATABASE:-fapoms}
       # Leave the roles alone on a cluster whose identities somebody else manages (a managed
       # Postgres where CREATE ROLE is not available to any credential this deployment holds).
-      SKIP_BOOTSTRAP: ${DB_SKIP_BOOTSTRAP:-false}
+      # Same name `provision.ts` reads and `.env.production.example`/`docs/database-roles.md`
+      # both document — a `DB_`-prefixed alias here would silently override an operator's
+      # `SKIP_BOOTSTRAP=true` back to false, since this is the only place that would ever read it.
+      SKIP_BOOTSTRAP: ${SKIP_BOOTSTRAP:-false}
     # The COMPILED module, from the same image the API runs. The image carries `dist` and nothing
     # else — no `src`, no ts-node, no `scripts/` — so a step that shelled out to npm would work on
     # a checkout and fail here, mid-deploy, with the old containers already stopping.

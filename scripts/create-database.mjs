@@ -6,7 +6,7 @@
  * inside a double-quoted `node -e`, at which point the quoting has four levels and the failure
  * mode is a syntax error in a file nobody can run locally. So it is a file.
  *
- *   DB_ADMIN_URL=postgres://user:pw@host:5432/postgres DB_NAME=fapoms_ci node scripts/create-database.mjs
+ *   DB_ADMIN_URL=postgres://user:pw@host:5432/postgres DB_DATABASE=fapoms_ci node scripts/create-database.mjs
  *
  * Idempotent: an existing database is left alone, extensions are `IF NOT EXISTS`. It does NOT
  * create roles or apply grants — that is `db:bootstrap-roles` and `db:harden`, and a job that
@@ -18,15 +18,15 @@ const require = createRequire(import.meta.url);
 const { Client } = require('pg');
 
 const ADMIN_URL = process.env.DB_ADMIN_URL;
-const NAME = process.env.DB_NAME;
+const NAME = process.env.DB_DATABASE;
 
 if (!ADMIN_URL || !NAME) {
-  console.error('DB_ADMIN_URL and DB_NAME are both required.');
+  console.error('DB_ADMIN_URL and DB_DATABASE are both required.');
   process.exit(1);
 }
 if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(NAME)) {
   // Interpolated into `CREATE DATABASE`, which takes no parameters.
-  console.error(`DB_NAME must be a plain identifier, got: ${NAME}`);
+  console.error(`DB_DATABASE must be a plain identifier, got: ${NAME}`);
   process.exit(1);
 }
 

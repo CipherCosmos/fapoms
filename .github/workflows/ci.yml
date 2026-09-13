@@ -183,7 +183,7 @@ jobs:
       # six that do not need a live deployment.
       - name: Self-contained database suites
         env:
-          DB_NAME: fapoms_ci
+          DB_DATABASE: fapoms_ci
         run: node scripts/create-database.mjs
 
       # `--testPathIgnorePatterns` with no value clears the pattern that holds `.db.spec.ts` out of
