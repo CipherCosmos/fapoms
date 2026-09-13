@@ -174,6 +174,15 @@ export const Scheduling: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [assayerWorkload, setAssayerWorkload] = useState<{ count: number; weeklyCapacity?: number; schedules: any[] } | null>(null);
+  /**
+   * Whether the capacity read failed, as opposed to this person having no bookings.
+   *
+   * `catch { setAssayerWorkload(null) }` made those two states the same, and the warning below is
+   * rendered only `{assayerWorkload && …}` — so a failed read did not show a degraded warning, it
+   * REMOVED the "fully booked this week" warning altogether and the desk booked over the top of a
+   * full week with nothing on screen.
+   */
+  const [workloadUnavailable, setWorkloadUnavailable] = useState(false);
   const [selectedSchId, setSelectedSchId] = useState<string | null>(null);
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [rescheduleSchId, setRescheduleSchId] = useState<string | null>(null);
@@ -313,7 +322,11 @@ export const Scheduling: React.FC = () => {
     try {
       const res = await api.request<{ count: number; weeklyCapacity: number; schedules: any[] }>(`/schedules/assayer-workload?assayerId=${assayerId}&date=${date}`);
       setAssayerWorkload(res);
-    } catch { setAssayerWorkload(null); }
+      setWorkloadUnavailable(false);
+    } catch {
+      setAssayerWorkload(null);
+      setWorkloadUnavailable(true);
+    }
   };
 
   const loadDocumentsForSchedule = async (branchId: string) => {
@@ -1228,6 +1241,15 @@ export const Scheduling: React.FC = () => {
               placeholder="— Select Confirmed Offer —"
               style={{ width: '100%' }}
             />
+            {workloadUnavailable && (
+              <div style={{
+                marginTop: '6px', padding: '6px 10px', borderRadius: 'var(--radius-sm, 6px)',
+                fontSize: 'var(--text-xs, 12px)', color: 'var(--warning)',
+                background: 'color-mix(in srgb, var(--warning) 10%, transparent)',
+              }}>
+                Could not check how booked this person already is. Their week may be full.
+              </div>
+            )}
             {assayerWorkload && (() => {
               /**
                * The ceiling comes from the server with the count.

@@ -5,6 +5,7 @@ import { calculateHaversineDistance } from '@fapoms/shared';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { api } from '../services/api';
 import { queryKeys } from '../hooks/queryKeys';
+import { loadFailed } from '../queryClient';
 import { useScope, withScope } from '../context/ScopeContext';
 import { MapLayerControls } from './MapLayerControls';
 import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
@@ -463,7 +464,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   // map are scope-governed routes, and the assayer layer ignoring the header's scope while the
   // branch layer honoured it was the reported "map ignores my filters" bug.
   const { scopeParams, scopeKey } = useScope();
-  const { data: realAssayers = NO_ASSAYERS } = useQuery({
+  const rosterQuery = useQuery({
     queryKey: queryKeys.assayers.mapRoster(scopeKey),
     // The whole (scoped) roster, as pin facts only — `/assayers/map-roster` serves eleven
     // fields plus bank standings and committed-today, not the 78-column record the old
@@ -474,6 +475,15 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     },
     staleTime: 5 * 60_000,
   });
+  const realAssayers = rosterQuery.data ?? NO_ASSAYERS;
+  /**
+   * A map with no assayer pins has two very different causes.
+   *
+   * The roster defaulted to an empty array on failure, so a refused or failed read drew branch
+   * pins and no people — identical to "nobody is available in this scope" on the surface planners
+   * use to choose who goes. The banner below is the difference between the two.
+   */
+  const rosterFailed = loadFailed(rosterQuery);
 
   /**
    * Engine results are exempt from the assayer-layer filters below. These sets identify them;
@@ -1313,6 +1323,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         ? { position: 'fixed' as const, inset: 0, zIndex: 1100, borderRadius: 0, minHeight: 0 }
         : { position: 'relative' as const, flex: fillContainer ? '1' : undefined, minHeight: fillContainer ? 0 : '380px' }),
     }}>
+      {/*
+        Said once, at the top, because the absence of pins is not visible as an absence.
+      */}
+      {rosterFailed && (
+        <div style={{
+          padding: '8px 12px', borderRadius: 'var(--radius-sm, 6px)', fontSize: 'var(--text-xs, 12px)',
+          color: 'var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)',
+        }}>
+          The assayer layer could not be loaded, so nobody is drawn on this map. This is not the
+          same as nobody being available.
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
         <h4 style={{ fontSize: '15px', fontWeight: 600 }}>Geographic Workspace Map</h4>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
