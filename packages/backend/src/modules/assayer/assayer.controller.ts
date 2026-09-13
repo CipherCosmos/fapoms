@@ -2659,10 +2659,16 @@ export class AssayerController {
 
   /**
    * The Appraiser Recruitment spec's Module 8: a templated ID card, generated fresh on every
-   * request — nothing about it is persisted. Expiry is always December 31 of THIS calendar year
-   * (`idCardExpiry`), computed at generation time rather than stored, so the same card downloaded
-   * in different years never carries a stale date. The download itself is what
-   * `@AuditRead` records — there is no separate "who downloaded this" table.
+   * request — nothing about it is persisted, so the same card downloaded in different years never
+   * carries a stale date. The download itself is what `@AuditRead` records — there is no separate
+   * "who downloaded this" table.
+   *
+   * This used to say expiry was "always December 31 of THIS calendar year (`idCardExpiry`)", which
+   * was the spec's rule and is no longer the code's: a card issued on December 31st expired the day
+   * it was printed, so validity became configurable (`id-card.ts:22`). `idCardExpiry` had not
+   * existed anywhere in the codebase for some time either, and the same method said the right thing
+   * eighteen lines lower — see the block inside `downloadIdCard` and `idCardIssuance` for the rule
+   * that actually applies.
    */
   @Get(':assayerId/id-card')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)

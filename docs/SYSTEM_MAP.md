@@ -94,6 +94,31 @@ Four writers reach `lifecycle_status` **without** going through this map: the bu
 `DELETE /assayers/:id` (reaches ARCHIVED from any state), the recovery reset-onboarding-stage, and
 the empanelment upsert. `scripts/acceptance/lifecycle-bypass.mjs` exists to watch all four.
 
+**Application (pre-account)** — `packages/shared/src/assayer-application.ts:15`. Added
+2026-09-12, after this map's previous revision, which is why it was missing here:
+
+```
+(none)              → DRAFT               createInvite, on an interview PASS
+DRAFT               → PENDING_VALIDATION  the candidate submits
+PENDING_VALIDATION ⇄ AWAITING_INFO        HR asks for more; the candidate resumes
+either              → REJECTED            terminal, reason required
+either              → APPROVED            terminal; promotes to an assayers row
+```
+
+**The two machines run in sequence, not in parallel, and the seam is approval.** The application
+owns everything before a person is hired; `AssayerLifecycleStatus` owns everything after. Approval
+is the single crossing — `approve()` calls the same `AssayerService.create` the desk uses, and the
+new record opens at `INVITED`. There is deliberately no pre-account state on the assayer lifecycle:
+a candidate who is never approved never reaches the roster at all.
+
+**One producer.** `createInvite` (`registration-application.service.ts:275`) has exactly one caller
+— `AssayerInterviewService.record()` on a PASS — and `applications.create(` appears once in the
+entire backend. An interview is therefore the only way anybody enters this pipeline, which is the
+answer to "how does somebody come to be in Applications".
+
+See `docs/appraiser-recruitment-spec.md` for the requirement this implements and the three places
+the code departs from it on purpose.
+
 **Assignment** — `packages/backend/src/modules/assignment/assignment.state-machine.ts:6`:
 
 ```
@@ -194,6 +219,7 @@ Recorded because reports cite these numbers, and several are cited wrongly.
 | go-live item 1.0 verifies via `scratchpad/pa/tds-pan.mjs` | that file **is not in the repo**, so the item cannot be executed as written |
 | `scripts/acceptance/README.md` | documents **2 of 15** scripts, with a `DB_PORT` default that disagrees with every script |
 | AC-F20 listed Open | its own cell says fixed, and the code has it |
+| `assayer.controller.ts:2661` — ID-card "expiry is always December 31 of THIS calendar year (`idCardExpiry`)" | **both halves are wrong.** `idCardExpiry` appears nowhere else in the codebase, and validity has been configurable since the December-31st grace rule (`id-card.ts:22`). The same method contradicts itself eighteen lines lower, where its inner comment says validity is "configurable and computed fresh each download" |
 | go-live §0 and §1 say do not go live | **all four blockers were closed after those docs were written** |
 
 Two live definitions that are not what they appear to be:
