@@ -35,6 +35,7 @@ import { hashCode, numericCode, hashesEqual } from '../auth/otp-codes';
 import { assertUploadAllowed, SCAN_UPLOAD_TYPES } from '../document/upload-validation';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
+import type { Readable } from 'stream';
 
 const TOKEN_BYTES = 32;
 const OTP_TTL_SECONDS = 300;
@@ -158,6 +159,23 @@ export interface UpdateApplicationDraftDto {
    * not reach half of it.
    */
   record?: Record<string, unknown>;
+}
+
+/**
+ * What the desk may write when it fills a form in for somebody.
+ *
+ * Everything a candidate can put in their own draft, plus the three groups only a desk decides —
+ * the rate card, the references and the first client standings. Those three are not candidate
+ * answers and never were; they live under `extendedProfile` and `approve()` already knows how to
+ * apply all of them.
+ *
+ * Notably NOT here: consent, the verification code, and submit. Those are the candidate's, and a
+ * desk-filled application still waits for them.
+ */
+export interface StaffApplicationPatch extends UpdateApplicationDraftDto {
+  commercial?: Record<string, unknown>;
+  references?: Array<Record<string, unknown>>;
+  empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
 }
 
 /**
@@ -570,6 +588,18 @@ export class RegistrationApplicationService {
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
     }
+    this.applyDraftPatch(application, patch);
+    return this.applications.save(application);
+  }
+
+  /**
+   * The patch half of a draft save, shared by the token door and the desk door.
+   *
+   * Extracted rather than copied. A desk-side draft was written once before as a verbatim copy of
+   * this loop, and the duplication is most of why it was deleted again a day later: two places
+   * deciding which fields an application may hold is two places to forget one.
+   */
+  private applyDraftPatch(application: AssayerApplicationEntity, patch: UpdateApplicationDraftDto): void {
     for (const key of EDITABLE_DRAFT_FIELDS) {
       const incoming = (patch as Record<string, unknown>)[key];
       if (incoming === undefined) continue;
@@ -577,7 +607,88 @@ export class RegistrationApplicationService {
         key === 'dateOfBirth' && typeof incoming === 'string' ? new Date(incoming) : incoming;
     }
     this.mergeRecordFields(application, patch.record);
-    return this.applications.save(application);
+  }
+
+  /**
+   * The desk filling a candidate's form in for them.
+   *
+   * The second typist, not a second pipeline: the application was still created by an interview
+   * PASS, the candidate still verifies their own number and still accepts the declaration, and
+   * `submit()` is still theirs to press. All this does is save somebody typing — the case where a
+   * candidate is sitting at the desk, or has sent their papers in and cannot use a form.
+   *
+   * Gated on `applicationIsEditableByCandidate`, the SAME predicate the candidate's own door uses,
+   * not merely on "not terminal". Once they submit, the desk stops being able to change what is
+   * being reviewed — otherwise "approve what you read" is not true. `requestMoreInfo` is the way
+   * back: it returns the application to AWAITING_INFO, which is editable again.
+   */
+  async updateStaffDraft(
+    id: string,
+    patch: StaffApplicationPatch,
+    actorUserId: string,
+  ): Promise<AssayerApplicationEntity> {
+    const application = await this.applications.findOne({ where: tenantWhere<AssayerApplicationEntity>({ id }) });
+    if (!application) throw new NotFoundException('Application not found.');
+    if (!applicationIsEditableByCandidate(application.status)) {
+      throw new BadRequestException(
+        'This application has already been submitted, so it is under review rather than being '
+        + 'filled in. Use Request more information to send it back for a change.',
+      );
+    }
+
+    this.stampDeskAuthorship(application, actorUserId);
+    this.applyDraftPatch(application, patch);
+
+    /*
+      The three groups only a desk decides, and the reason this method is worth having.
+
+      `approve()` already knows how to apply all three — `applyExtendedProfile` replays them
+      through the same guarded services the record page uses — and until now NO screen has ever
+      sent one. So every candidate promoted through this pipeline arrived with no rate card and no
+      client standing, which is to say unassignable, until somebody noticed and set them on the
+      record afterwards.
+    */
+    const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
+    if (patch.commercial !== undefined) profile.commercial = patch.commercial;
+    if (patch.references !== undefined) profile.references = patch.references;
+    if (patch.empanelments !== undefined) profile.empanelments = patch.empanelments;
+    application.extendedProfile = profile as never;
+    application.updatedBy = actorUserId;
+
+    const saved = await this.applications.save(application);
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_APPLICATION_DESK_EDITED',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: saved.id,
+      userId: actorUserId,
+      remarks: `Filled in at the HR desk for ${saved.fullName ?? saved.mobile}; approval must come from a different account.`,
+    });
+    return saved;
+  }
+
+  /**
+   * Who typed the substance, recorded so approval can refuse them.
+   *
+   * `createInvite` leaves `createdBy` null — the interview creates the row, nobody has typed
+   * anything into it yet — so the maker is stamped on the first desk touch rather than at
+   * creation. It is never overwritten: a second clerk finishing somebody else's typing does not
+   * take their place as the maker.
+   *
+   * `deskEditors` is the belt to that brace. With one `createdBy`, clerk A could type most of a
+   * form, clerk B one box first, and A would then be free to approve their own work. Every desk
+   * account that has touched it is refused approval. The list rides in `extendedProfile`, which
+   * `applyExtendedProfile` reads by named group and therefore ignores.
+   */
+  private stampDeskAuthorship(application: AssayerApplicationEntity, actorUserId: string): void {
+    const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
+    const editors = new Set<string>(Array.isArray(profile.deskEditors) ? profile.deskEditors as string[] : []);
+    editors.add(actorUserId);
+    application.extendedProfile = { ...profile, deskEditors: [...editors] } as never;
+
+    if (application.source === ApplicationSource.HR_DESK) return;
+    application.source = ApplicationSource.HR_DESK;
+    application.createdBy = actorUserId;
   }
 
   /**
@@ -659,6 +770,80 @@ export class RegistrationApplicationService {
       hint: 'Photograph the document in better light rather than at higher resolution.',
     });
     return this.attachDocumentRow(application, requirement, file);
+  }
+
+  /**
+   * The desk attaching a scan on the candidate's behalf.
+   *
+   * Same gate, same allow-list, same row as the candidate's own upload — only the key differs:
+   * a session instead of a token. Stamps desk authorship for the same reason the draft save does,
+   * because attaching somebody's PAN card for them is typing on their behalf.
+   */
+  async uploadDocumentAsStaff(
+    id: string,
+    requirement: OnboardingDocument,
+    file: { originalname: string; buffer: Buffer; mimetype: string; size: number },
+    actorUserId: string,
+  ): Promise<AssayerApplicationDocumentEntity> {
+    const application = await this.applications.findOne({ where: tenantWhere<AssayerApplicationEntity>({ id }) });
+    if (!application) throw new NotFoundException('Application not found.');
+    if (!applicationIsEditableByCandidate(application.status)) {
+      throw new BadRequestException(
+        'This application has already been submitted. Use Request more information to ask for a '
+        + 'different document.',
+      );
+    }
+    if (!Object.values(OnboardingDocument).includes(requirement)) {
+      throw new BadRequestException('That is not a recognised document type.');
+    }
+    assertUploadAllowed({
+      contentType: file.mimetype,
+      fileName: file.originalname,
+      size: file.size,
+      allowed: SCAN_UPLOAD_TYPES,
+      hint: 'Photograph the document in better light rather than at higher resolution.',
+    });
+    this.stampDeskAuthorship(application, actorUserId);
+    await this.applications.save(application);
+    const row = await this.attachDocumentRow(application, requirement, file);
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_APPLICATION_DOCUMENT_ATTACHED',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: application.id,
+      userId: actorUserId,
+      remarks: `${requirement} attached at the HR desk.`,
+    });
+    return row;
+  }
+
+  /**
+   * One of a candidate's scans, for the reviewer to actually look at.
+   *
+   * Nothing could read these bytes. The review screen listed "3 files" and offered no way to open
+   * one, so HR approved scans sight unseen — and `approve()` hard-refuses an application with no
+   * PHOTOGRAPH, a rule nobody could check the substance of: any file attached under that
+   * requirement satisfied it. The desk uploading documents itself makes that worse, not better.
+   *
+   * Returns the storage key and its type; the controller streams it. Indexed because
+   * `filePaths` is an array — a requirement can carry both sides of an Aadhaar card.
+   */
+  async documentFileKey(
+    id: string,
+    requirement: OnboardingDocument,
+    index: number,
+  ): Promise<{ key: string; fileName: string }> {
+    const application = await this.applications.findOne({ where: tenantWhere<AssayerApplicationEntity>({ id }) });
+    if (!application) throw new NotFoundException('Application not found.');
+    const row = await this.applicationDocuments.findOne({ where: { applicationId: id, requirement } });
+    const key = row?.filePaths?.[index];
+    if (!key) throw new NotFoundException('That document has not been attached.');
+    return { key, fileName: key.split('/').pop() ?? `${requirement}-${index}` };
+  }
+
+  /** The bytes behind a key from `documentFileKey`. Separated so the controller streams, not this. */
+  async openDocumentStream(key: string): Promise<Readable> {
+    return this.storage.getFileStream(key);
   }
 
   /**
@@ -764,6 +949,12 @@ export class RegistrationApplicationService {
     documents: AssayerApplicationDocumentEntity[];
     gaps: Array<{ key: string; label: string; blocks: string }>;
     invitedMobile: string | null;
+    /**
+     * Which scans this candidate is asked for, given the employment category they chose. The
+     * candidate's own door has always been handed this by `hydrate`; the desk needs the same list
+     * to fill the form in for them, and the reviewer needs it to see what is still outstanding.
+     */
+    documentsRequested: OnboardingDocument[];
   }> {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found.');
@@ -780,6 +971,7 @@ export class RegistrationApplicationService {
       documents,
       gaps: this.registrationGaps(application),
       invitedMobile: invitedMobile === application.mobile ? null : invitedMobile,
+      documentsRequested: [...documentsRequestedFor(application.employmentCategory)],
     };
   }
 
@@ -982,6 +1174,45 @@ export class RegistrationApplicationService {
       );
     }
 
+    /**
+     * Maker–checker, before anything is read or merged.
+     *
+     * Deliberately the first thing after the DRAFT check and before `mergeRecordFields` below,
+     * which mutates the entity in place and can itself throw on a bad PAN. A reviewer who may not
+     * act at all should be told that, not handed a validation error about the correction they were
+     * making while doing something they were never allowed to do.
+     *
+     * Only a desk-typed application has a maker: a candidate's own work has none on staff, so the
+     * HR user who sent the invite reviews it freely. `createdBy` is null on every application the
+     * interview created, which is why it is tested rather than assumed.
+     *
+     * `deskEditors` catches the case a single `createdBy` cannot: two clerks sharing the typing,
+     * where whoever touched the form second would otherwise be free to approve the first one's
+     * work.
+     */
+    const deskEditors = Array.isArray((application.extendedProfile as Record<string, unknown> | null)?.deskEditors)
+      ? ((application.extendedProfile as Record<string, unknown>).deskEditors as string[])
+      : [];
+    if (application.source === ApplicationSource.HR_DESK
+      && (application.createdBy === actorUserId || deskEditors.includes(actorUserId))) {
+      await this.auditService.recordEventSafe({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSAYER_APPLICATION_APPROVAL_REFUSED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application.id,
+        userId: actorUserId,
+        remarks: 'Maker–checker: the account that entered this application tried to approve it.',
+      });
+      throw withCode(
+        new ForbiddenException(
+          'You filled this application in, so somebody else has to approve it. Ask another '
+          + 'authorised HR user to review it — the same rule that keeps one person from booking '
+          + 'and approving the same payment.',
+        ),
+        ASSAYER_ERROR_CODES.APPLICATION_MAKER_CHECKER,
+      );
+    }
+
     // Folded into the application BEFORE promotion so the existing applier handles them, rather
     // than a second write path that would have to be kept in step with the first.
     this.mergeRecordFields(application, input?.corrections);
@@ -992,19 +1223,6 @@ export class RegistrationApplicationService {
       application.extendedProfile = profile as never;
     }
 
-    /**
-     * There is no maker–checker here, and that is a statement rather than an omission.
-     *
-     * An application is always the CANDIDATE's own work now. The desk's second intake — a staff
-     * account typing an application on someone's behalf and then approving it — was built beside
-     * the registration wizard, never wired to a screen, and is withdrawn: two desk doors into one
-     * roster is the duplication this pipeline exists to remove. The HR user who sent the invite
-     * reviewing what the candidate filled in IS the review.
-     *
-     * If a desk-typed application ever returns, it brings its own gate back with it: the rule was
-     * `createdBy === actor` refused and audited, and it belongs with whatever re-introduces the
-     * shape it guarded.
-     */
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
 
     /**

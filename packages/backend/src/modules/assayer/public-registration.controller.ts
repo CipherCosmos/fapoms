@@ -31,7 +31,12 @@ class VerifyOtpDto {
   code: string;
 }
 
-class UpdateDraftRequestDto implements UpdateApplicationDraftDto {
+/**
+ * Exported so the desk's own draft route can extend it rather than re-declare it. The two doors
+ * write the same fields to the same row; a second copy of these decorators is a second place for
+ * a length limit to drift.
+ */
+export class UpdateDraftRequestDto implements UpdateApplicationDraftDto {
   @IsOptional() @IsString() @MaxLength(200)
   fullName?: string;
 

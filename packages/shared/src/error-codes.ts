@@ -126,6 +126,15 @@ export const ASSAYER_ERROR_CODES = {
    * never operated the check once.
    */
   BACKGROUND_NOT_CLEAR: 'BACKGROUND_NOT_CLEAR',
+  /**
+   * The account that typed an application in tried to approve it.
+   *
+   * Maker–checker, the rule this product already enforces for money: one person must not be able
+   * to manufacture a reviewed-looking record alone. A candidate's own application has no maker on
+   * staff, so the HR user who sent the invite reviews it freely — this fires only where a desk
+   * account filled the form in on somebody's behalf.
+   */
+  APPLICATION_MAKER_CHECKER: 'APPLICATION_MAKER_CHECKER',
   /** The request claimed a file but carried none. */
   UPLOAD_NO_FILE: 'UPLOAD_NO_FILE',
   /** Over the size ceiling. The message names the limit. */

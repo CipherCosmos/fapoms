@@ -1,5 +1,7 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource } from '@fapoms/shared';
+import {
+  ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource, ASSAYER_ERROR_CODES,
+} from '@fapoms/shared';
 
 import { RegistrationApplicationService, documentsRequestedFor } from './registration-application.service';
 import { runWithRequestContext } from '../../core/context/request-context';
@@ -490,11 +492,22 @@ describe('which documents a candidate is asked for', () => {
 
 describe('who may approve an application', () => {
   /**
-   * Everything in this queue is the candidate's own work, so the HR user who sent the invite is
-   * the reviewer rather than the author. The desk's second intake — a staff account typing an
-   * application and approving it — was withdrawn along with the routes nothing called; the gate
-   * that guarded it is documented in `approve()` for whoever brings that shape back.
+   * Maker–checker, and the distinction it turns on: who typed the substance.
+   *
+   * A candidate's own application has no maker on staff, so the HR user who sent the invite is the
+   * reviewer rather than the author and may approve freely — `createdBy` is null on every
+   * application an interview created, which is why the rule tests it rather than assuming it. A
+   * desk-filled one does have a maker, and that account is refused. The same rule this product
+   * already enforces for money: one person must not be able to manufacture a reviewed-looking
+   * record alone.
    */
+  const deskApplication = (over: Record<string, unknown> = {}) => ({
+    id: 'app-desk', mobile: '9822014455', email: 'c@example.com', fullName: 'Typed By The Desk',
+    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION,
+    organizationId: 'org-1', source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+    ...over,
+  });
+
   it('the inviter may approve — the candidate was the maker', async () => {
     const ctx = makeService({ application: {
       id: 'app-self', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
@@ -505,6 +518,69 @@ describe('who may approve an application', () => {
     await ctx.service.approve('app-self', 'hr-inviter', ['ADMIN']);
 
     expect(ctx.assayerService.create).toHaveBeenCalled();
+  });
+
+  it('refuses the account that typed it in', async () => {
+    const ctx = makeService({ application: deskApplication() });
+    await expect(ctx.service.approve('app-desk', 'hr-maker', ['ADMIN']))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(ctx.assayerService.create).not.toHaveBeenCalled();
+  });
+
+  it('carries the code, so a client can tell this refusal from a permission one', async () => {
+    // `withCode` puts the code on the response body, which is what reaches the browser — not on
+    // the exception object, which does not.
+    const ctx = makeService({ application: deskApplication() });
+    const error = await ctx.service.approve('app-desk', 'hr-maker', ['ADMIN']).catch((e) => e);
+    expect(error.getResponse()).toMatchObject({
+      code: ASSAYER_ERROR_CODES.APPLICATION_MAKER_CHECKER,
+    });
+  });
+
+  it('records the attempt, because a refused approval is a thing that happened', async () => {
+    const ctx = makeService({ application: deskApplication() });
+    await ctx.service.approve('app-desk', 'hr-maker', ['ADMIN']).catch(() => undefined);
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'ASSAYER_APPLICATION_APPROVAL_REFUSED', userId: 'hr-maker' }),
+    );
+  });
+
+  it('lets a different account approve the same application', async () => {
+    const ctx = makeService({ application: deskApplication() });
+    await ctx.service.approve('app-desk', 'hr-checker', ['ADMIN']);
+    expect(ctx.assayerService.create).toHaveBeenCalled();
+  });
+
+  /**
+   * The case a single `createdBy` cannot see. Two clerks share the typing; whoever touched the
+   * form second would otherwise be free to approve the first one's work — or, with the other
+   * ordering, the person who typed almost all of it approves their own.
+   */
+  it('refuses anybody who touched it, not only whoever touched it first', async () => {
+    const ctx = makeService({ application: deskApplication({
+      extendedProfile: { deskEditors: ['hr-maker', 'hr-second'] },
+    }) });
+    await expect(ctx.service.approve('app-desk', 'hr-second', ['ADMIN']))
+      .rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('still refuses on createdBy alone, for an application typed before that list existed', async () => {
+    const ctx = makeService({ application: deskApplication({ extendedProfile: {} }) });
+    await expect(ctx.service.approve('app-desk', 'hr-maker', ['ADMIN']))
+      .rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  /**
+   * Order matters here. The refusal sits before `mergeRecordFields`, which mutates the entity in
+   * place and throws its own message on a bad PAN — so a reviewer doing something they may not do
+   * at all is told that, rather than being handed a validation error about the correction they
+   * were making while doing it.
+   */
+  it('refuses before it looks at the corrections being submitted with the approval', async () => {
+    const ctx = makeService({ application: deskApplication() });
+    await expect(ctx.service.approve('app-desk', 'hr-maker', ['ADMIN'], undefined, {
+      corrections: { panNumber: 'NOT-A-PAN' },
+    })).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 
@@ -1026,5 +1102,125 @@ describe('openApplicationForMobile', () => {
     const ctx = makeService();
     expect(await ctx.service.openApplicationForMobile('  ', 'org-1')).toBeNull();
     expect(ctx.applications.find).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The desk filling a candidate's form in for them — the second typist, not a second pipeline.
+ *
+ * The application is still created by an interview PASS, the candidate still verifies their own
+ * number and accepts the declaration, and Submit is still theirs to press. All this does is save
+ * them typing, for the case where they are sitting at the desk or have sent their papers in.
+ */
+describe('the desk filling in an application', () => {
+  const draft = (over: Record<string, unknown> = {}) => ({
+    id: 'app-1', mobile: '9822014455', fullName: null, status: ApplicationStatus.DRAFT,
+    organizationId: 'org-1', source: ApplicationSource.SELF_SERVICE, createdBy: null,
+    extendedProfile: null, ...over,
+  });
+
+  it('writes the application’s own columns and the record half in one save', async () => {
+    const ctx = makeService({ application: draft() });
+    const saved = await ctx.service.updateStaffDraft('app-1', {
+      fullName: 'Ramesh Kulkarni',
+      city: 'Pune',
+      record: { panNumber: 'ABCDE1234F', bankName: 'State Bank' },
+    }, 'hr-maker');
+
+    expect(saved.fullName).toBe('Ramesh Kulkarni');
+    expect(saved.city).toBe('Pune');
+    expect((saved.extendedProfile as any).fields).toMatchObject({
+      panNumber: 'ABCDE1234F', bankName: 'State Bank',
+    });
+  });
+
+  it('refuses a field registration may not set, rather than storing it quietly', async () => {
+    // The same filter the candidate's door uses. An application is not a back door into columns
+    // the desk cannot set on the record itself.
+    const ctx = makeService({ application: draft() });
+    const saved = await ctx.service.updateStaffDraft('app-1', {
+      record: { panNumber: 'ABCDE1234F', lifecycleStatus: 'ACTIVE', qualificationScore: 100 },
+    }, 'hr-maker');
+    expect((saved.extendedProfile as any).fields).toEqual({ panNumber: 'ABCDE1234F' });
+  });
+
+  it('checks a PAN at the moment it is typed, the same as the candidate’s form does', async () => {
+    const ctx = makeService({ application: draft() });
+    await expect(ctx.service.updateStaffDraft('app-1', { record: { panNumber: 'NOPE' } }, 'hr-maker'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  /**
+   * These three have appliers in `approve()` and, until the desk could send them, no producer at
+   * all — which is why every candidate promoted through this pipeline arrived with no rate card
+   * and no client standing, and could not be given work until somebody noticed.
+   */
+  it('carries the rate card, the references and the first client standings', async () => {
+    const ctx = makeService({ application: draft() });
+    const saved = await ctx.service.updateStaffDraft('app-1', {
+      commercial: { baseFee: 900, currency: 'INR' },
+      references: [{ fullName: 'A Referee', phone: '9811100022' }],
+      empanelments: [{ clientId: 'client-1', status: 'EMPANELLED' }],
+    }, 'hr-maker');
+
+    const profile = saved.extendedProfile as any;
+    expect(profile.commercial).toMatchObject({ baseFee: 900 });
+    expect(profile.references).toHaveLength(1);
+    expect(profile.empanelments[0].clientId).toBe('client-1');
+  });
+
+  it('marks the application as desk-typed, and names who typed it', async () => {
+    const ctx = makeService({ application: draft() });
+    const saved = await ctx.service.updateStaffDraft('app-1', { fullName: 'X' }, 'hr-maker');
+    expect(saved.source).toBe(ApplicationSource.HR_DESK);
+    expect(saved.createdBy).toBe('hr-maker');
+  });
+
+  it('does not hand the maker title to whoever saved second', async () => {
+    const ctx = makeService({ application: draft({
+      source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+    }) });
+    const saved = await ctx.service.updateStaffDraft('app-1', { city: 'Pune' }, 'hr-second');
+    expect(saved.createdBy).toBe('hr-maker');
+    // But the second clerk is remembered, so approval can refuse them too.
+    expect((saved.extendedProfile as any).deskEditors).toContain('hr-second');
+  });
+
+  /**
+   * The same predicate the candidate's own door uses, not merely "not terminal". Once they submit,
+   * what is under review stops changing — otherwise "approve what you read" is not true.
+   * `requestMoreInfo` is the way back: it returns the row to AWAITING_INFO, which is editable.
+   */
+  it('stops once the candidate has submitted', async () => {
+    const ctx = makeService({ application: draft({ status: ApplicationStatus.PENDING_VALIDATION }) });
+    await expect(ctx.service.updateStaffDraft('app-1', { city: 'Pune' }, 'hr-maker'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('is available again after HR asks for more information', async () => {
+    const ctx = makeService({ application: draft({ status: ApplicationStatus.AWAITING_INFO }) });
+    const saved = await ctx.service.updateStaffDraft('app-1', { city: 'Pune' }, 'hr-maker');
+    expect(saved.city).toBe('Pune');
+  });
+
+  it('records that the desk typed it, so the trail says approval must come from elsewhere', async () => {
+    const ctx = makeService({ application: draft() });
+    await ctx.service.updateStaffDraft('app-1', { fullName: 'X' }, 'hr-maker');
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'ASSAYER_APPLICATION_DESK_EDITED', userId: 'hr-maker' }),
+    );
+  });
+
+  it('cannot accept consent or submit on the candidate’s behalf — there is no such field', async () => {
+    const ctx = makeService({ application: draft() });
+    // Sent as keys the shape has no room for: `EDITABLE_DRAFT_FIELDS` does not list either, and
+    // the loop only copies what it lists. The candidate's declaration stays the candidate's.
+    const smuggled = {
+      consentAcceptedAt: new Date(),
+      status: ApplicationStatus.PENDING_VALIDATION,
+    } as unknown as Parameters<typeof ctx.service.updateStaffDraft>[1];
+    const saved = await ctx.service.updateStaffDraft('app-1', smuggled, 'hr-maker');
+    expect(saved.consentAcceptedAt).toBeFalsy();
+    expect(saved.status).toBe(ApplicationStatus.DRAFT);
   });
 });
