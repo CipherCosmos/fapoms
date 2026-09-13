@@ -1558,13 +1558,12 @@ export class AssayerController {
    * hiding it here would let a second profile for the same person be created in a different
    * territory with nothing ever catching it.
    *
-   * PAN and Aadhaar matching are UNIMPLEMENTED on purpose, not silently skipped — both live
-   * behind `encryptedColumn` (field-encryption.ts), so an exact match across encryption can only
-   * be found by decrypting every row on the roster (see `DataIntegrityService.findPhoneMatches`'s
-   * own comment for the full reasoning). That is a cost this route does not pay on every field
-   * blur; callers get an empty match set for those two keys rather than a slower or partial
-   * answer. The two query params are still accepted, both so the contract is stable the day this
-   * changes and so Track 2 can send them today without a 400.
+   * PAN and Aadhaar ARE matched, as of the identifier fingerprints (migration `1798600000000`).
+   * They could not be before: both live behind `encryptedColumn`, which uses a fresh random IV per
+   * call, so two encryptions of one PAN are different bytes and no equality search over the column
+   * can ever match. A keyed digest of the normalised value now sits beside each, indexed, and this
+   * route compares those — the same comparison `AssayerService.create` makes, where the control
+   * had been throwing a confident `DEFINITE_DUPLICATE` message from a branch that could not fire.
    *
    * Declared above `@Get(':id')` for the reason `roster/import-issues` already documents in this
    * file: Nest matches routes in declaration order, and `:id`'s `ParseUUIDPipe` would 400 on the

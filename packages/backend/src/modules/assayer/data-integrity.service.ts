@@ -12,6 +12,7 @@ import { tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
+import { fieldFingerprint } from '../../infrastructure/security/field-encryption';
 
 /**
  * The standing data-integrity scan over the appraiser roster.
@@ -1115,10 +1116,15 @@ export class DataIntegrityService {
 
     if (!targetPhone && !targetPan && !targetAadhaar) return [];
 
+    const targetPanFingerprint = fieldFingerprint(targetPan);
+    const targetAadhaarFingerprint = fieldFingerprint(targetAadhaar);
+
     const selectFields: Array<keyof AssayerEntity> = ['id', 'assayerCode', 'displayName', 'lifecycleStatus'];
     if (targetPhone) selectFields.push('phone', 'alternatePhone');
-    if (targetPan) selectFields.push('panNumber');
-    if (targetAadhaar) selectFields.push('aadhaarNumber');
+    // Both, because the comparison below uses whichever is available: the fingerprint when a key
+    // is configured, the value itself when there is none and the column is plaintext anyway.
+    if (targetPan) selectFields.push('panNumber', 'panFingerprint');
+    if (targetAadhaar) selectFields.push('aadhaarNumber', 'aadhaarFingerprint');
 
     /**
      * Scoped, even though this is only an advisory duplicate check.
@@ -1165,7 +1171,19 @@ export class DataIntegrityService {
         continue;
       }
 
-      if (targetPan && p.panNumber && p.panNumber.trim().toUpperCase() === targetPan) {
+      /**
+       * Compared on the fingerprint, not on the decrypted value.
+       *
+       * Both readings reach the same answer here, because the transformer decrypts on read and
+       * this loop already holds the whole roster. The fingerprint is what lets the SAME question
+       * be asked cheaply everywhere else — `AssayerService.create` could not ask it at all, since
+       * a `WHERE pan_number = …` never matches ciphertext with a fresh IV per row. One rule, one
+       * comparison, rather than an exact match here and a control that cannot fire over there.
+       */
+      const panMatches = targetPanFingerprint
+        ? p.panFingerprint === targetPanFingerprint
+        : Boolean(targetPan && p.panNumber && p.panNumber.trim().toUpperCase() === targetPan);
+      if (panMatches) {
         matches.push({
           id: p.id,
           assayerCode: p.assayerCode,
@@ -1176,11 +1194,10 @@ export class DataIntegrityService {
         continue;
       }
 
-      if (
-        targetAadhaar &&
-        p.aadhaarNumber &&
-        p.aadhaarNumber.replace(/\s+/g, '') === targetAadhaar
-      ) {
+      const aadhaarMatches = targetAadhaarFingerprint
+        ? p.aadhaarFingerprint === targetAadhaarFingerprint
+        : Boolean(targetAadhaar && p.aadhaarNumber && p.aadhaarNumber.replace(/\s+/g, '') === targetAadhaar);
+      if (aadhaarMatches) {
         matches.push({
           id: p.id,
           assayerCode: p.assayerCode,

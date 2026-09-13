@@ -821,3 +821,70 @@ describe('the desk completes the person as it approves', () => {
     expect((await ctx.service.getApplication('app-1')).invitedMobile).toBeNull();
   });
 });
+
+/**
+ * Approving twice must not hire the same person twice.
+ *
+ * Promotion is four steps and only the last one closes the application, so a failure in the middle
+ * left a real assayer on the roster with a consumed code and the application still pending. The
+ * reviewer pressed Approve again and got a second person — or a hard refusal naming a duplicate
+ * they had never knowingly created, with the first record orphaned and the application permanently
+ * un-approvable.
+ */
+describe('approving is safe to repeat', () => {
+  const ready = () => ({
+    id: 'app-77', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
+    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+  });
+
+  it('keys the creation on the application, so a retry returns the same person', async () => {
+    const ctx = makeService({ application: ready() });
+
+    await ctx.service.approve('app-77', 'hr-1', ['ADMIN']);
+
+    expect(ctx.assayerService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ clientRequestId: 'application:app-77' }),
+      'hr-1', 'org-1', ['ADMIN'],
+    );
+  });
+});
+
+/**
+ * A PAN already on the roster must be findable.
+ *
+ * It was not, on any deployment with a key configured: `pan_number` is encrypted with a fresh
+ * random IV per call, so `WHERE pan_number = :pan` matched nothing — while the create path threw a
+ * confident `DEFINITE_DUPLICATE: An assayer with PAN … already exists` from a branch that could not
+ * fire. Aadhaar was never compared at all. Both are the identifiers the candidate is asked for,
+ * uploads a scan of, and has validated at typing time.
+ *
+ * The comparison itself is `AssayerService.create`'s; what this pins is that the fingerprint is
+ * deterministic over the shapes people actually type.
+ */
+describe('the identifiers a candidate gives can be matched against the roster', () => {
+  const { fieldFingerprint, __resetKeyCacheForTests } =
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('../../infrastructure/security/field-encryption');
+
+  beforeEach(() => {
+    process.env.PII_ENCRYPTION_KEY = 'c'.repeat(64);
+    __resetKeyCacheForTests();
+  });
+
+  afterEach(() => {
+    delete process.env.PII_ENCRYPTION_KEY;
+    __resetKeyCacheForTests();
+  });
+
+  it('finds the same person however they typed it', () => {
+    expect(fieldFingerprint('abcde1234f')).toBe(fieldFingerprint(' ABCDE1234F '));
+  });
+
+  it('tells two people apart', () => {
+    expect(fieldFingerprint('ABCDE1234F')).not.toBe(fieldFingerprint('ZZZZZ9999Z'));
+  });
+
+  it('has nothing to say about a blank, so empty columns do not all match each other', () => {
+    expect(fieldFingerprint('')).toBeNull();
+  });
+});

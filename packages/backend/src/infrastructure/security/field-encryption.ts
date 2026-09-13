@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
+import { createCipheriv, createDecipheriv, randomBytes, createHash, createHmac } from 'crypto';
 import { Logger } from '@nestjs/common';
 import type { ValueTransformer } from 'typeorm';
 
@@ -66,6 +66,37 @@ function resolveKey(): Buffer | null {
   }
   keyCache = key;
   return key;
+}
+
+/**
+ * A deterministic fingerprint of an encrypted value, for equality searches only.
+ *
+ * `encryptField` uses a fresh random IV per call, so the same PAN encrypts to different ciphertext
+ * every time and `WHERE pan_number = :pan` matches nothing — ever. That is correct for secrecy and
+ * fatal for the one thing the roster needs from these columns: telling whether this person is
+ * already on it. The duplicate check has carried a `DEFINITE_DUPLICATE: An assayer with PAN … already
+ * exists` branch since it was written, and under encryption it could not fire once. It read, to
+ * anyone auditing it, like a working control.
+ *
+ * So the ciphertext stays as it is, and a keyed hash of the NORMALISED plaintext sits beside it.
+ * Keyed, not plain: an unkeyed hash of a PAN is trivially reversible — the space is small enough to
+ * enumerate — and this column is in every backup. The key is derived from `PII_ENCRYPTION_KEY` with
+ * its own label, so nothing new has to be configured and the fingerprint cannot be computed by
+ * anybody who does not already hold the decryption key.
+ *
+ * Equality only. There is no ordering, no prefix search, and no way back to the value.
+ *
+ * Returns null with no key configured, so a deployment without encryption keeps whatever behaviour
+ * it had rather than silently indexing plaintext.
+ */
+export function fieldFingerprint(plain: string | null | undefined): string | null {
+  const normalised = (plain ?? '').trim().toUpperCase();
+  if (normalised === '') return null;
+  const key = resolveKey();
+  if (!key) return null;
+  return createHmac('sha256', createHash('sha256').update(key).update('fingerprint-v1').digest())
+    .update(normalised)
+    .digest('hex');
 }
 
 export function isEncrypted(value: string): boolean {

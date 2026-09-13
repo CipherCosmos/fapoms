@@ -918,6 +918,17 @@ export class RegistrationApplicationService {
     ].filter((v): v is string => Boolean(v));
 
     const createDto: CreateAssayerDto = {
+      /**
+       * The application id IS the idempotency key.
+       *
+       * Approval is four steps — create the person, re-home their scans, apply the profile and the
+       * terms, then mark the application approved — and only the last one closes it. A failure in
+       * the middle left a real assayer on the roster with a consumed code and an application still
+       * pending, so the reviewer pressed Approve again and got a SECOND person, or a hard refusal
+       * naming a duplicate they had never knowingly created. `AssayerService.create` has carried
+       * an idempotency path for exactly this since it was written, and nothing passed it a key.
+       */
+      clientRequestId: `application:${application.id}`,
       fullName: application.fullName ?? undefined,
       phone: application.mobile,
       email: application.email ?? undefined,

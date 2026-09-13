@@ -1065,9 +1065,18 @@ export class RosterRecordsService {
      * the array without bound every time a person retakes their photo while
      * `assayers.photograph` silently followed the last one anyway.
      */
+    /**
+     * The same key twice is the same file, not a second page.
+     *
+     * Promotion re-homes an application's scans onto the new record by storage key, and that loop
+     * is the step most likely to be repeated: it sits between "the person now exists" and "the
+     * application is marked approved", so a failure anywhere after it leaves a reviewer pressing
+     * Approve again. Appending blindly turned one retry into two copies of every scan.
+     */
+    const alreadyAttached = row.filePaths ?? [];
     row.filePaths = requirement === OnboardingDocument.PHOTOGRAPH
       ? [key]
-      : [...(row.filePaths ?? []), key];
+      : alreadyAttached.includes(key) ? alreadyAttached : [...alreadyAttached, key];
     if (row.softCopyReceived !== true) row.softCopyReceived = true;
 
     /**

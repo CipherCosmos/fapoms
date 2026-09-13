@@ -6,7 +6,7 @@ import {
   EmploymentCategory,
   operationalStatusFor,
 } from '@fapoms/shared';
-import { encryptedColumn } from '../../infrastructure/security/field-encryption';
+import { encryptedColumn, fieldFingerprint } from '../../infrastructure/security/field-encryption';
 
 @Entity('assayers')
 /**
@@ -260,6 +260,25 @@ export class AssayerEntity extends BaseEntity {
   aadhaarNumber: string | null;
 
   /**
+   * Keyed fingerprints of the two identifiers above, for equality searches only.
+   *
+   * The ciphertext uses a fresh random IV per call, so two encryptions of one PAN never compare
+   * equal and the duplicate check could not fire once on any deployment with a key set — while
+   * carrying a message saying it had. These columns are the equality the roster needs, and they
+   * give nothing back: keyed with a value derived from `PII_ENCRYPTION_KEY`, no ordering, no
+   * prefix search, no way to the original.
+   *
+   * Maintained by `@BeforeInsert`/`@BeforeUpdate` below, never typed by anybody.
+   */
+  @Index({ where: '"pan_fingerprint" IS NOT NULL' })
+  @Column({ name: 'pan_fingerprint', type: 'varchar', length: 64, nullable: true })
+  panFingerprint: string | null;
+
+  @Index({ where: '"aadhaar_fingerprint" IS NOT NULL' })
+  @Column({ name: 'aadhaar_fingerprint', type: 'varchar', length: 64, nullable: true })
+  aadhaarFingerprint: string | null;
+
+  /**
    * The bank, plainly. Not derivable from the IFSC without a lookup table we do not have, and
    * the roster records it for 98% of people, so it is a column rather than a join.
    */
@@ -503,6 +522,24 @@ export class AssayerEntity extends BaseEntity {
   @BeforeUpdate()
   deriveOperationalStatus(): void {
     this.status = operationalStatusFor(this.lifecycleStatus) as AssayerStatus;
+  }
+
+  /**
+   * The fingerprints follow the identifiers, on the same write.
+   *
+   * Here rather than in a service because there is more than one writer of these columns — the
+   * record editor, the roster import, promotion's extended-profile applier — and a fingerprint
+   * maintained by some of them is worse than none: the duplicate check would answer "no match"
+   * with confidence for a person who is plainly already on the roster.
+   *
+   * The values in hand are plaintext at this point: the column transformer encrypts on the way to
+   * the database, after the hooks have run.
+   */
+  @BeforeInsert()
+  @BeforeUpdate()
+  deriveIdentifierFingerprints(): void {
+    this.panFingerprint = fieldFingerprint(this.panNumber);
+    this.aadhaarFingerprint = fieldFingerprint(this.aadhaarNumber);
   }
 }
 
