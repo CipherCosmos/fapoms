@@ -414,7 +414,7 @@ function AppMain() {
       if (!res.success) {
         feedback.error(
           tr('assignment.acceptFailedTitle'),
-          serverErrorText(res.error, 'assignment.acceptFailedBody'),
+          serverErrorText(res.error, 'assignment.acceptFailedBody', res.code),
         );
       }
     } finally {
@@ -452,7 +452,7 @@ function AppMain() {
       } else {
         feedback.error(
           tr('assignment.declineFailedTitle'),
-          serverErrorText(res.error, 'assignment.declineFailedBody'),
+          serverErrorText(res.error, 'assignment.declineFailedBody', res.code),
         );
       }
     } finally {
@@ -516,7 +516,7 @@ function AppMain() {
       } else {
         feedback.error(
           tr('assignment.checkInFailedTitle'),
-          serverErrorText(result.error, 'assignment.checkInFailedBody'),
+          serverErrorText(result.error, 'assignment.checkInFailedBody', result.code),
         );
       }
     } finally {
@@ -586,7 +586,7 @@ function AppMain() {
       } else {
         feedback.error(
           tr('assignment.checkOutFailedTitle'),
-          serverErrorText(result.error, 'assignment.checkOutFailedBody'),
+          serverErrorText(result.error, 'assignment.checkOutFailedBody', result.code),
         );
       }
     } finally {
@@ -1232,7 +1232,7 @@ function AppMain() {
             } else {
               feedback.error(
                 tr('expense.failedTitle'),
-                serverErrorText(res.error, 'expense.failedBody'),
+                serverErrorText(res.error, 'expense.failedBody', res.code),
               );
             }
           }}
@@ -1252,7 +1252,7 @@ function AppMain() {
               feedback.success(tr('issue.sentTitle'), tr('issue.sentBody'));
               return true;
             }
-            feedback.error(tr('issue.failedTitle'), serverErrorText(res.error, 'issue.failedBody'));
+            feedback.error(tr('issue.failedTitle'), serverErrorText(res.error, 'issue.failedBody', res.code));
             return false;
           }}
         />
@@ -1274,7 +1274,7 @@ function AppMain() {
             }
             feedback.error(
               tr('availability.failedTitle'),
-              serverErrorText(res.error, 'availability.failedBody'),
+              serverErrorText(res.error, 'availability.failedBody', res.code),
             );
             return false;
           }}

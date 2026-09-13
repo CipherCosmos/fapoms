@@ -61,29 +61,29 @@ export const actionDispatchers: {
   // retry that actually landed the first time is harmless without one.
   CHECK_IN: async (p) => {
     const res = await MobileApiService.checkInBranch(p.assignmentId, p.lat, p.lng, p.accuracy);
-    return { success: res.success, error: res.error, retryable: isRetryableStatus(res.status) };
+    return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
   },
   CHECK_OUT: async (p) => {
     const res = await MobileApiService.checkOutBranch(p.assignmentId, p.lat, p.lng, p.accuracy);
-    return { success: res.success, error: res.error, retryable: isRetryableStatus(res.status) };
+    return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
   },
   ASSIGNMENT_STATUS: async (p) => {
     if (p.op === 'reject') {
       const res = await MobileApiService.rejectAssignment(p.assignmentId, p.reason);
-      return { success: res.success, error: res.error, retryable: isRetryableStatus(res.status) };
+      return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
     }
     // No clientRequestId: every transition an assayer still holds (accept, check-in,
     // in-progress) is idempotent server-side — repeating one is a no-op. The action that needed
     // dedup, the counter-offer, no longer exists in this app.
-    const { ok, status } = await MobileApiService.updateAssignmentStatus(p.assignmentId, p.status, p.notes);
-    return { success: ok, error: ok ? undefined : 'Failed to update assignment status', retryable: isRetryableStatus(status) };
+    const { ok, status, error, code } = await MobileApiService.updateAssignmentStatus(p.assignmentId, p.status, p.notes);
+    return { success: ok, error: ok ? undefined : (error || 'Failed to update assignment status'), code, retryable: isRetryableStatus(status) };
   },
   EXPENSE_CLAIM: async (p, clientRequestId) => {
     const res = await MobileApiService.submitExpense(p.assignmentId, p.expense, clientRequestId);
-    return { success: res.success, error: res.error, retryable: isRetryableStatus(res.status) };
+    return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
   },
   QUERY_MESSAGE: async (p) => {
     const res = await MobileApiService.postQueryMessage(p.queryId, p.body, p.attachments ?? []);
-    return { success: res.success, error: res.error, retryable: isRetryableStatus(res.status) };
+    return { success: res.success, error: res.error, code: res.code, retryable: isRetryableStatus(res.status) };
   },
 };

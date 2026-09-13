@@ -24,12 +24,12 @@ interface AssignmentContextType {
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
-  ) => Promise<{ success: boolean; error?: string }>;
-  rejectAssignment: (assignmentId: string, reason: string) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{ success: boolean; error?: string; code?: string }>;
+  rejectAssignment: (assignmentId: string, reason: string) => Promise<{ success: boolean; error?: string; code?: string }>;
   submitExpense: (
     assignmentId: string,
     expense: { category: 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'; amount: number; description?: string }
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{ success: boolean; error?: string; code?: string }>;
 }
 
 const CACHE_KEY = 'assignments';
@@ -222,7 +222,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const result = await enqueueAndRun('ASSIGNMENT_STATUS', payload, actionDispatchers.ASSIGNMENT_STATUS);
     if (result.success) await loadAssignments();
     if (result.queued) return { success: false, error: t('common.willRetry') };
-    return { success: result.success, error: result.error };
+    return { success: result.success, error: result.error, code: result.code };
   };
 
   const rejectAssignment = async (assignmentId: string, reason: string) => {
@@ -233,7 +233,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     );
     if (result.success) await loadAssignments();
     if (result.queued) return { success: false, error: t('common.willRetry') };
-    return { success: result.success, error: result.error || 'Failed to reject assignment' };
+    return { success: result.success, error: result.error || 'Failed to reject assignment', code: result.code };
   };
 
   const submitExpense = async (
@@ -243,7 +243,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const result = await enqueueAndRun('EXPENSE_CLAIM', { assignmentId, expense }, actionDispatchers.EXPENSE_CLAIM);
     if (result.success) await loadAssignments();
     if (result.queued) return { success: false, error: t('common.willRetry') };
-    return { success: result.success, error: result.error || 'Failed to submit expense' };
+    return { success: result.success, error: result.error || 'Failed to submit expense', code: result.code };
   };
 
   /**

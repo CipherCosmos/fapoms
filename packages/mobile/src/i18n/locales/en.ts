@@ -421,6 +421,12 @@ export const en = {
     lockedOneMinute: 'Too many wrong tries. Try again in 1 minute.',
     lockedMinutes: 'Too many wrong tries. Try again in %{count} minutes.',
     generic: 'That did not work. Please try again.',
+    requestAlreadySent: 'This was already sent with different details. Reload and try again.',
+    assignmentChanged: 'This assignment was changed by someone else. Reload and try again.',
+    assignmentOutOfSync: 'This assignment is out of sync with the server. Reload and try again.',
+    fileNotAccepted: 'That file could not be accepted. Choose a clearer photo or PDF and try again.',
+    fileTypeNotAllowed: 'That file type is not accepted here. Use a photo or PDF.',
+    fileTooLarge: 'That file is too large to send. Use a smaller photo or PDF.',
   },
 
   profile: {

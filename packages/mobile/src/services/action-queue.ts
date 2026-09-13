@@ -63,6 +63,8 @@ export interface QueuedAction<TPayload = any> {
   clientRequestId: string;
   status: ActionStatus;
   error?: string;
+  /** The machine-readable companion to `error`, when the dispatcher's response carried one. */
+  code?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -70,6 +72,8 @@ export interface QueuedAction<TPayload = any> {
 export interface ActionResult {
   success: boolean;
   error?: string;
+  /** The machine-readable companion to `error`, when the dispatcher's response carried one. */
+  code?: string;
   /**
    * Defaults to true when a dispatcher throws (the common case: a thrown error is a transport or
    * timeout failure — `fetchWithAuth` only throws once its own transport retries are exhausted).
@@ -183,7 +187,7 @@ async function mutate(id: string, changes: Partial<QueuedAction>): Promise<void>
 /** Attempt one action now and record the outcome. Shared by the immediate call site and the
  *  background drain, so a manual "do it now" and an automatic retry behave identically. */
 async function attempt(entry: QueuedAction, dispatch: ActionDispatcher): Promise<ActionResult> {
-  await mutate(entry.id, { status: 'SENDING', error: undefined });
+  await mutate(entry.id, { status: 'SENDING', error: undefined, code: undefined });
   let result: ActionResult;
   try {
     result = await dispatch(entry.payload, entry.clientRequestId);
@@ -192,11 +196,11 @@ async function attempt(entry: QueuedAction, dispatch: ActionDispatcher): Promise
   }
 
   if (result.success) {
-    await mutate(entry.id, { status: 'SENT', error: undefined });
+    await mutate(entry.id, { status: 'SENT', error: undefined, code: undefined });
   } else if (result.retryable) {
-    await mutate(entry.id, { status: 'RETRYING', error: result.error });
+    await mutate(entry.id, { status: 'RETRYING', error: result.error, code: result.code });
   } else {
-    await mutate(entry.id, { status: 'ERROR', error: result.error });
+    await mutate(entry.id, { status: 'ERROR', error: result.error, code: result.code });
   }
   return result;
 }

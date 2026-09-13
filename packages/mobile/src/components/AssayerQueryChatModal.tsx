@@ -405,7 +405,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                 actionDispatchers.QUERY_MESSAGE,
               );
               if (!result.success && !result.queued) {
-                feedback.error(tr('queries.scanNotSentTitle'), serverErrorText(result.error, 'queries.scanNotSentBody'));
+                feedback.error(tr('queries.scanNotSentTitle'), serverErrorText(result.error, 'queries.scanNotSentBody', result.code));
                 return;
               }
               setThreadVersion((v) => v + 1);

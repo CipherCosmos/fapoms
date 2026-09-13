@@ -159,7 +159,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
     setSending(false);
 
     if (!result.success && !result.queued) {
-      feedback.error(tr('queries.sendFailedTitle'), serverErrorText(result.error, 'queries.sendFailedBody'));
+      feedback.error(tr('queries.sendFailedTitle'), serverErrorText(result.error, 'queries.sendFailedBody', result.code));
       return;
     }
     if (result.queued) {

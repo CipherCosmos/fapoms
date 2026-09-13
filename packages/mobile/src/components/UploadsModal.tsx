@@ -93,7 +93,7 @@ const UploadRow: React.FC<{
       {failed && (
         <View style={{ gap: t.space.sm }}>
           <AppText variant="small" tone="muted">
-            {tr('uploads.tapRetry', { reason: serverErrorText(upload.error, failedKey) })}
+            {tr('uploads.tapRetry', { reason: serverErrorText(upload.error, failedKey, upload.code) })}
           </AppText>
           <View style={{ flexDirection: 'row', gap: t.space.sm }}>
             <Button label={tr('common.retry')} icon="refresh" onPress={() => onRetry(upload.id)} style={{ flex: 1 }} />

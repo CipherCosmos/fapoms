@@ -120,7 +120,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
       const res = await MobileApiService.changeOwnPassword(currentPassword, newPassword);
       if (!res.success) {
         haptics.error();
-        setError(serverErrorText(res.error, 'password.errFailed'));
+        setError(serverErrorText(res.error, 'password.errFailed', res.code));
         return;
       }
       haptics.success();

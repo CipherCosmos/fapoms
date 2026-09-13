@@ -193,7 +193,7 @@ export const RegistrationChecklistModal: React.FC<RegistrationChecklistModalProp
       }
       const res = await MobileApiService.confirmBaseLocation(assayerId, latitude, longitude);
       if (!res.success) {
-        feedback.error(tr('registration.home.saveFailedTitle'), serverErrorText(res.error, 'registration.home.saveFailedBody'));
+        feedback.error(tr('registration.home.saveFailedTitle'), serverErrorText(res.error, 'registration.home.saveFailedBody', res.code));
         return;
       }
       setPinned(true);

@@ -88,3 +88,46 @@ describe('errors from the server', () => {
     expect(serverErrorText('   ', 'errors.generic')).toBe(en.errors.generic);
   });
 });
+
+/**
+ * The code is checked before the message, so a rewording on the server cannot silently unmap a
+ * failure the way it could when text was the only signal.
+ */
+describe('errors carrying a code', () => {
+  it('translates a code even when the message alone would never have matched', () => {
+    expect(translateServerError('This account is presently inactive.', 'ACCOUNT_INACTIVE'))
+      .toBe(en.errors.accountInactive);
+  });
+
+  it('prefers the code over the message when both are present but disagree', () => {
+    // The message text here would match nothing in EXACT/PATTERNS at all — proving the result
+    // came from the code, not from a lucky text match.
+    expect(translateServerError('Save failed (409)', 'NOT_YOUR_RECORD')).toBe(en.errors.notYourRecord);
+  });
+
+  it('ignores a code this build does not recognise and falls back to the message', () => {
+    expect(translateServerError('Invalid credentials', 'SOME_FUTURE_CODE_NOT_YET_SHIPPED'))
+      .toBe(en.errors.invalidCredentials);
+  });
+
+  it('ignores a non-string code without throwing', () => {
+    expect(translateServerError('Invalid credentials', undefined)).toBe(en.errors.invalidCredentials);
+    expect(translateServerError('Invalid credentials', 42)).toBe(en.errors.invalidCredentials);
+  });
+
+  it('leaves ACCOUNT_LOCKED out of the code table so the minutes are never lost', () => {
+    // If ACCOUNT_LOCKED mapped straight to a flat key, this would lose the "12" the assayer
+    // actually needs — the whole reason a lockout message is matched by CAPTURING, not EXACT.
+    const translated = translateServerError(
+      'Too many incorrect sign-in attempts. Please try again in 12 minutes.',
+      'ACCOUNT_LOCKED',
+    );
+    expect(translated).toBe(en.errors.lockedMinutes.replace('%{count}', '12'));
+  });
+
+  it('serverErrorText threads the code through the same way', () => {
+    expect(serverErrorText('Save failed (409)', 'errors.generic', 'NOT_YOUR_RECORD')).toBe(en.errors.notYourRecord);
+    // Existing call sites that pass no code at all must keep behaving exactly as before.
+    expect(serverErrorText('Save failed (409)', 'errors.generic')).toBe('Save failed (409)');
+  });
+});

@@ -91,8 +91,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
    * server already said something true, and a failure of this call falls back to the original
    * message rather than replacing one unhelpful sentence with a worse one.
    */
-  const explainFailedSignIn = async (identifier: string, rawError: unknown): Promise<string> => {
-    const shown = serverErrorText(rawError, 'login.badCredentials');
+  const explainFailedSignIn = async (identifier: string, rawError: unknown, code?: unknown): Promise<string> => {
+    const shown = serverErrorText(rawError, 'login.badCredentials', code);
     if (!onVerifyIdentity || shown !== tr('errors.invalidCredentials')) return shown;
     try {
       const check: any = await onVerifyIdentity(identifier);
@@ -128,7 +128,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         const res: any = await onLogin(code, password);
         if (res === false || (typeof res === 'object' && res?.success === false)) {
           haptics.error();
-          setErrorMsg(await explainFailedSignIn(code, res?.error));
+          setErrorMsg(await explainFailedSignIn(code, res?.error, res?.code));
         }
       }
     } catch (err: any) {
@@ -150,7 +150,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         const res: any = await onBiometricLogin();
         if (res === false || (typeof res === 'object' && res?.success === false)) {
           haptics.error();
-          setErrorMsg(serverErrorText(res?.error, 'login.biometricFailed'));
+          setErrorMsg(serverErrorText(res?.error, 'login.biometricFailed', res?.code));
         }
       } catch (err: any) {
         haptics.error();

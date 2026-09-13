@@ -80,7 +80,7 @@ export interface DraftPatch {
   record?: Record<string, string | number>;
 }
 
-export type SelfRegResult<T> = { success: true; data: T } | { success: false; error: string };
+export type SelfRegResult<T> = { success: true; data: T } | { success: false; error: string; code?: string };
 
 const TIMEOUT_MS = 20_000;
 
@@ -101,7 +101,7 @@ async function call<T>(path: string, options: RequestInit = {}, timeoutMs = TIME
     const message = Array.isArray(body?.message)
       ? body.message.join(', ')
       : body?.message || `Request failed (${response.status})`;
-    return { success: false, error: message };
+    return { success: false, error: message, code: body?.code };
   } catch (err: any) {
     if (err?.name === 'AbortError') {
       return { success: false, error: 'The request timed out. Check your connection and try again.' };

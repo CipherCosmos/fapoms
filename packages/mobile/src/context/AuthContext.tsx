@@ -73,8 +73,8 @@ interface AuthContextType {
   user: AuthUser | null;
   assayerName: string;
   authenticating: boolean;
-  login: (u: string, p: string) => Promise<{ success: boolean; error?: string }>;
-  biometricLogin: () => Promise<{ success: boolean; error?: string }>;
+  login: (u: string, p: string) => Promise<{ success: boolean; error?: string; code?: string }>;
+  biometricLogin: () => Promise<{ success: boolean; error?: string; code?: string }>;
   verifyIdentity: (identifier: string) => Promise<{
     verified: boolean;
     /** Recognised, but no sign-in has ever been issued for them. See `verifyAssayerIdentity`. */
@@ -348,7 +348,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       return { success: true };
     }
-    return { success: false, error: res.error || 'Authentication failed' };
+    return { success: false, error: res.error || 'Authentication failed', code: res.code };
   };
 
   const biometricLogin = async () => {
@@ -400,7 +400,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
        * expense claim and query answer from any device holding the APK was recorded against
        * that person. For evidence in a bank collateral audit, that destroys chain of custody.
        */
-      return { success: false, error: res.error || 'Please sign in with your Assayer Code and password.' };
+      return { success: false, error: res.error || 'Please sign in with your Assayer Code and password.', code: res.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Biometric login failed.' };
     }

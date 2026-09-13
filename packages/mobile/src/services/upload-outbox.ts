@@ -80,6 +80,8 @@ export interface OutboxUpload {
   progress: number;
   /** Why the last attempt failed, shown to the assayer verbatim. */
   error?: string;
+  /** The machine-readable companion to `error`, when the upload's response carried one. */
+  code?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -360,7 +362,7 @@ export async function processOutbox(
   upload: (
     entry: OutboxUpload,
     onProgress: (percent: number) => void,
-  ) => Promise<{ success: boolean; error?: string }>,
+  ) => Promise<{ success: boolean; error?: string; code?: string }>,
   opts: { onSent?: (entry: OutboxUpload) => void } = {},
 ): Promise<void> {
   if (processing) return;
@@ -379,9 +381,9 @@ export async function processOutbox(
       // rather than trusting the snapshot.
       if (!entry || (entry.status !== 'PENDING' && entry.status !== 'FAILED')) continue;
 
-      await mutate(id, { status: 'SENDING', error: undefined, progress: 0 }, true);
+      await mutate(id, { status: 'SENDING', error: undefined, code: undefined, progress: 0 }, true);
 
-      let result: { success: boolean; error?: string };
+      let result: { success: boolean; error?: string; code?: string };
       try {
         // Progress ticks update the UI but are not written to disk — persisting on every chunk
         // would rewrite the whole file dozens of times per packet, the exact cost the location
@@ -394,11 +396,11 @@ export async function processOutbox(
       }
 
       if (result.success) {
-        await mutate(id, { status: 'SENT', progress: 100, error: undefined }, true);
+        await mutate(id, { status: 'SENT', progress: 100, error: undefined, code: undefined }, true);
         const done = (await load()).find((u) => u.id === id);
         if (done) opts.onSent?.(done);
       } else {
-        await mutate(id, { status: 'FAILED', error: result.error || 'Upload failed' }, true);
+        await mutate(id, { status: 'FAILED', error: result.error || 'Upload failed', code: result.code }, true);
       }
     }
   } finally {

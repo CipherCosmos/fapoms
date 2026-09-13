@@ -42,7 +42,7 @@ export interface UploadOutbox {
 async function sendOne(
   entry: OutboxUpload,
   onProgress: (percent: number) => void,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; code?: string }> {
   if (entry.target.kind === 'REGISTRATION_DOCUMENT') {
     // Not chunked. These are single photographs of a card or a signed form — a few hundred
     // kilobytes against an audit packet's tens of megabytes — so the session handshake the
@@ -66,7 +66,7 @@ async function sendOne(
       assignmentId,
       onProgress,
     );
-    return { success: !!res?.success, error: res?.error };
+    return { success: !!res?.success, error: res?.error, code: res?.code };
   }
   const res = await MobileApiService.uploadCompletedAuditPdf(
     assignmentId,
@@ -74,7 +74,7 @@ async function sendOne(
     { uri: entry.fileUri, base64: entry.base64 },
     assignmentId,
   );
-  return { success: !!res?.success, error: res?.error };
+  return { success: !!res?.success, error: res?.error, code: res?.code };
 }
 
 /**

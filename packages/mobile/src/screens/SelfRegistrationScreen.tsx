@@ -339,7 +339,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     setLoadError(null);
     const res = await SelfRegistrationApi.hydrate(rawToken);
     if (!res.success) {
-      setLoadError(serverErrorText(res.error, 'selfRegistration.loadFailedTitle'));
+      setLoadError(serverErrorText(res.error, 'selfRegistration.loadFailedTitle', res.code));
       setPhase('loadError');
       return;
     }
@@ -369,7 +369,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     const res = await SelfRegistrationApi.requestOtp(token, trimmedPhone);
     setSendingOtp(false);
     if (!res.success) {
-      feedback.error(tr('selfRegistration.otp.sendFailedTitle'), serverErrorText(res.error, 'selfRegistration.otp.sendFailedTitle'));
+      feedback.error(tr('selfRegistration.otp.sendFailedTitle'), serverErrorText(res.error, 'selfRegistration.otp.sendFailedTitle', res.code));
       return;
     }
     setOtpSent(true);
@@ -387,7 +387,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     const res = await SelfRegistrationApi.verifyOtp(token, phone.trim(), code);
     setVerifyingOtp(false);
     if (!res.success) {
-      feedback.error(tr('selfRegistration.otp.verifyFailedTitle'), serverErrorText(res.error, 'selfRegistration.otp.verifyFailedTitle'));
+      feedback.error(tr('selfRegistration.otp.verifyFailedTitle'), serverErrorText(res.error, 'selfRegistration.otp.verifyFailedTitle', res.code));
       return;
     }
     setOtpVerified(true);
@@ -450,7 +450,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     const res = await SelfRegistrationApi.updateDraft(token, cleanDraftPayload(patch));
     setSavingDraft(false);
     if (!res.success) {
-      feedback.error(tr('selfRegistration.form.saveFailedTitle'), serverErrorText(res.error, 'selfRegistration.form.saveFailedTitle'));
+      feedback.error(tr('selfRegistration.form.saveFailedTitle'), serverErrorText(res.error, 'selfRegistration.form.saveFailedTitle', res.code));
       return;
     }
     setApplication(res.data);
@@ -523,7 +523,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     });
     setUploadingRequirement(null);
     if (!res.success) {
-      feedback.error(tr('selfRegistration.documents.uploadFailedTitle'), serverErrorText(res.error, 'selfRegistration.documents.uploadFailedTitle'));
+      feedback.error(tr('selfRegistration.documents.uploadFailedTitle'), serverErrorText(res.error, 'selfRegistration.documents.uploadFailedTitle', res.code));
       return;
     }
     setDocuments((prev) => [...prev.filter((d) => d.requirement !== requirement), res.data]);
@@ -538,7 +538,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     const res = await SelfRegistrationApi.acceptConsent(token, 'v1');
     setSavingConsent(false);
     if (!res.success) {
-      feedback.error(tr('selfRegistration.consent.failedTitle'), serverErrorText(res.error, 'selfRegistration.consent.failedTitle'));
+      feedback.error(tr('selfRegistration.consent.failedTitle'), serverErrorText(res.error, 'selfRegistration.consent.failedTitle', res.code));
       return;
     }
     setApplication(res.data);
@@ -558,13 +558,13 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     const flush = await SelfRegistrationApi.updateDraft(token, cleanDraftPayload(draft));
     if (!flush.success) {
       setSubmitting(false);
-      feedback.error(tr('selfRegistration.submit.failedTitle'), serverErrorText(flush.error, 'selfRegistration.submit.failedTitle'));
+      feedback.error(tr('selfRegistration.submit.failedTitle'), serverErrorText(flush.error, 'selfRegistration.submit.failedTitle', flush.code));
       return;
     }
     const res = await SelfRegistrationApi.submit(token);
     setSubmitting(false);
     if (!res.success) {
-      feedback.error(tr('selfRegistration.submit.failedTitle'), serverErrorText(res.error, 'selfRegistration.submit.failedTitle'));
+      feedback.error(tr('selfRegistration.submit.failedTitle'), serverErrorText(res.error, 'selfRegistration.submit.failedTitle', res.code));
       return;
     }
     setApplication(res.data);

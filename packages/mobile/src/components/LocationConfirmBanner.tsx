@@ -58,7 +58,7 @@ export function LocationConfirmBanner({
       if (!res.success) {
         feedback.error(
           tr('registration.home.saveFailedTitle'),
-          serverErrorText(res.error, 'registration.home.saveFailedBody'),
+          serverErrorText(res.error, 'registration.home.saveFailedBody', res.code),
         );
         return;
       }

@@ -666,7 +666,7 @@ export class MobileApiService {
       }, 20_000);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.success) {
-        return { verified: false, error: serverErrorText(data?.message, 'errors.serverUnreachable') };
+        return { verified: false, error: serverErrorText(data?.message, 'errors.serverUnreachable', data?.code) };
       }
       if (!data.data?.verified) {
         return { verified: false, error: t('login.identifierNotRecognised') };
@@ -699,7 +699,7 @@ export class MobileApiService {
    * prior real password login — the server verifies the stored refresh token, not the
    * biometric prompt itself (that happens on-device, before this is ever called).
    */
-  static async biometricLogin(): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
+  static async biometricLogin(): Promise<{ success: boolean; token?: string; user?: any; error?: string; code?: string }> {
     // Awaited: `getRefreshToken` became async when tokens moved to the OS keystore. Without
     // this the call returned a Promise — truthy, so the guard below passed — and it was
     // serialised into the request body as `{}`. Every refresh failed, so a session died the
@@ -731,13 +731,14 @@ export class MobileApiService {
       return {
         success: false,
         error: data.message || 'Biometric session expired. Please sign in with your password.',
+        code: data.code,
       };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error during biometric login.' };
     }
   }
 
-  static async login(username: string, password: string): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
+  static async login(username: string, password: string): Promise<{ success: boolean; token?: string; user?: any; error?: string; code?: string }> {
     try {
       const response = await this.fetchWithTimeout(`${API_BASE_URL}/auth/login`, {
         method: 'POST',
@@ -764,6 +765,7 @@ export class MobileApiService {
       return {
         success: false,
         error: data.message || 'Invalid credentials or unregistered Assayer Code.',
+        code: data.code,
       };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error connecting to server.' };
@@ -794,21 +796,21 @@ export class MobileApiService {
     }
   }
 
-  static async getAssayerProfile(assayerId: string): Promise<{ success: boolean; data?: any; error?: string }> {
+  static async getAssayerProfile(assayerId: string): Promise<{ success: boolean; data?: any; error?: string; code?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/profile`);
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.success && data.data) {
         return { success: true, data: data.data };
       }
-      return { success: false, error: data.message || 'Failed to fetch assayer profile' };
+      return { success: false, error: data.message || 'Failed to fetch assayer profile', code: data.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error fetching profile' };
     }
   }
 
   /** Returns the authenticated assayer's own profile (used to sync live-sharing state). */
-  static async getSelfProfile(): Promise<{ success: boolean; data?: any; error?: string }> {
+  static async getSelfProfile(): Promise<{ success: boolean; data?: any; error?: string; code?: string }> {
     const id = this.currentUserId;
     if (!id) return { success: false, error: 'Not authenticated' };
     return this.getAssayerProfile(id);
@@ -856,7 +858,7 @@ export class MobileApiService {
   static async setNotificationPreference(
     category: string,
     patch: { inApp?: boolean; push?: boolean; email?: boolean },
-  ): Promise<{ success: boolean; preferences?: NotificationPreference[]; error?: string }> {
+  ): Promise<{ success: boolean; preferences?: NotificationPreference[]; error?: string; code?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/preferences/${category}`, {
         method: 'PUT',
@@ -864,7 +866,7 @@ export class MobileApiService {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.success === false) {
-        return { success: false, error: data?.message || 'Could not save that preference.' };
+        return { success: false, error: data?.message || 'Could not save that preference.', code: data?.code };
       }
       return { success: true, preferences: Array.isArray(data.data) ? data.data : undefined };
     } catch (err: any) {
@@ -898,7 +900,7 @@ export class MobileApiService {
   static async changeOwnPassword(
     currentPassword: string,
     newPassword: string,
-  ): Promise<{ success: boolean; error?: string; reauthRequired?: boolean }> {
+  ): Promise<{ success: boolean; error?: string; reauthRequired?: boolean; code?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/me/change-password`, {
         method: 'POST',
@@ -909,6 +911,7 @@ export class MobileApiService {
         return {
           success: false,
           error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Could not change your password.'),
+          code: data?.code,
         };
       }
 
@@ -974,7 +977,7 @@ export class MobileApiService {
     assayerId: string,
     latitude: number,
     longitude: number,
-  ): Promise<{ success: boolean; error?: string; addressCheck?: AddressCheck }> {
+  ): Promise<{ success: boolean; error?: string; addressCheck?: AddressCheck; code?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/base-location`, {
         method: 'PUT',
@@ -985,6 +988,7 @@ export class MobileApiService {
         return {
           success: false,
           error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Could not save your location.'),
+          code: data?.code,
         };
       }
       return { success: true, addressCheck: data?.data?.addressCheck };
@@ -993,7 +997,7 @@ export class MobileApiService {
     }
   }
 
-  static async updateAssayerProfile(assayerId: string, profileData: any): Promise<{ success: boolean; error?: string }> {
+  static async updateAssayerProfile(assayerId: string, profileData: any): Promise<{ success: boolean; error?: string; code?: string }> {
     const toArray = (v: any): string[] =>
       Array.isArray(v) ? v : String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -1049,6 +1053,7 @@ export class MobileApiService {
         return {
           success: false,
           error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Save failed (${response.status})`),
+          code: data?.code,
         };
       }
       return { success: true };
@@ -1090,9 +1095,9 @@ export class MobileApiService {
   static async rejectAssignment(
     assignmentId: string,
     reason: string,
-  ): Promise<{ success: boolean; error?: string; status?: number }> {
-    const { ok, status } = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
-    return { success: ok, error: ok ? undefined : 'Failed to reject assignment', status };
+  ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
+    const { ok, status, error, code } = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
+    return { success: ok, error: ok ? undefined : (error || 'Failed to reject assignment'), status, code };
   }
 
   /**
@@ -1106,14 +1111,14 @@ export class MobileApiService {
   static async updateAvailability(
     assayerId: string,
     data: { leaves?: { startDate: string; endDate: string }[]; workingHours?: { start: string; end: string } },
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; code?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}`, {
         method: 'PUT',
         body: JSON.stringify(data),
       });
       const body = await response.json().catch(() => ({}));
-      return { success: response.ok && body?.success !== false, error: body?.message };
+      return { success: response.ok && body?.success !== false, error: body?.message, code: body?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error updating availability' };
     }
@@ -1131,14 +1136,14 @@ export class MobileApiService {
     assignmentId: string,
     category: string,
     note?: string,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; code?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/report-issue`, {
         method: 'POST',
         body: JSON.stringify({ category, note: note?.trim() || undefined }),
       });
       const data = await response.json().catch(() => ({}));
-      return { success: response.ok && data?.success !== false, error: data?.message };
+      return { success: response.ok && data?.success !== false, error: data?.message, code: data?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error reporting the issue' };
     }
@@ -1154,14 +1159,14 @@ export class MobileApiService {
     assignmentId: string,
     expense: { category: string; amount: number; description?: string },
     clientRequestId?: string,
-  ): Promise<{ success: boolean; error?: string; status?: number }> {
+  ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/expenses`, {
         method: 'POST',
         body: JSON.stringify(clientRequestId ? { ...expense, clientRequestId } : expense),
       });
       const data = await response.json().catch(() => ({}));
-      return { success: response.ok && data?.success !== false, error: data?.message, status: response.status };
+      return { success: response.ok && data?.success !== false, error: data?.message, status: response.status, code: data?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error submitting expense' };
     }
@@ -1185,7 +1190,7 @@ export class MobileApiService {
     fileUri: string,
     assignmentId?: string,
     onProgress?: (percent: number) => void,
-  ): Promise<{ success: boolean; documentUrl?: string; error?: string; assignmentCompletion?: AssignmentCompletionOutcome }> {
+  ): Promise<{ success: boolean; documentUrl?: string; error?: string; assignmentCompletion?: AssignmentCompletionOutcome; code?: string }> {
     const info = await FileSystem.getInfoAsync(fileUri, { size: true });
     if (!info.exists) return { success: false, error: 'The scanned file is no longer on the device.' };
     const fileSize = (info as any).size as number;
@@ -1343,7 +1348,7 @@ export class MobileApiService {
           assignmentCompletion: data?.assignmentCompletion,
         };
       }
-      return { success: false, error: data?.message || 'The upload could not be finalised.' };
+      return { success: false, error: data?.message || 'The upload could not be finalised.', code: data?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error finalising the upload.' };
     }
@@ -1417,7 +1422,7 @@ export class MobileApiService {
   static async submitInvoiceInvitation(
     assayerId: string,
     clientRequestId: string,
-  ): Promise<{ success: boolean; data?: AssayerInvoiceSummary; error?: string; status?: number }> {
+  ): Promise<{ success: boolean; data?: AssayerInvoiceSummary; error?: string; status?: number; code?: string }> {
     try {
       const response = await this.fetchWithAuth(
         `${API_BASE_URL}/billing-engine/assayers/${assayerId}/invoice-invitation/submit`,
@@ -1427,7 +1432,7 @@ export class MobileApiService {
       if (response.ok && data?.success) {
         return { success: true, data: data.data as AssayerInvoiceSummary, status: response.status };
       }
-      return { success: false, error: data?.message, status: response.status };
+      return { success: false, error: data?.message, status: response.status, code: data?.code };
     } catch (err: any) {
       // No `status` is the caller's signal that the server was never reached — the "connect to
       // submit" case, distinct from a refusal.
@@ -1517,7 +1522,7 @@ export class MobileApiService {
     queryId: string,
     body: string,
     attachments: { url: string; fileName: string; fileType: string }[] = [],
-  ): Promise<{ success: boolean; error?: string; status?: number }> {
+  ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
     try {
       const res = await this.fetchWithAuth(`${API_BASE_URL}/validation-queries/${queryId}/messages`, {
         method: 'POST',
@@ -1525,7 +1530,7 @@ export class MobileApiService {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.success) return { success: true, status: res.status };
-      return { success: false, error: data?.message || 'The message could not be sent.', status: res.status };
+      return { success: false, error: data?.message || 'The message could not be sent.', status: res.status, code: data?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error sending the message.' };
     }
@@ -1602,6 +1607,7 @@ export class MobileApiService {
     /** Why there is nothing to download yet, so the app can say so precisely. */
     readiness?: { state: 'READY' | 'PREPARING' | 'NONE'; message: string; awaitingDispatchCount: number; lastDispatchedAt: string | null };
     error?: string;
+    code?: string;
   }> {
     try {
       // Dispatch-gated view: returns only paperwork operations has actually released,
@@ -1611,7 +1617,7 @@ export class MobileApiService {
       if (response.ok && data.success) {
         return { success: true, data: data.data, readiness: data.meta?.readiness };
       }
-      return { success: false, error: data.message || 'Failed to fetch branch documents' };
+      return { success: false, error: data.message || 'Failed to fetch branch documents', code: data.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error fetching documents' };
     }
@@ -1764,14 +1770,21 @@ export class MobileApiService {
     assignmentId: string,
     status: AssayerAssignment['status'],
     reason?: string,
-  ): Promise<{ ok: boolean; status: number }> {
+  ): Promise<{ ok: boolean; status: number; error?: string; code?: string }> {
     const body: { targetStatus: string; reason?: string } = { targetStatus: status };
     if (reason) body.reason = reason;
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),
     });
-    return { ok: response.ok, status: response.status };
+    if (response.ok) return { ok: true, status: response.status };
+    // Parsed rather than ignored: this route can refuse a transition with a specific,
+    // machine-readable reason (a stale version, a resubmitted idempotency key) — see
+    // `STALE_ASSIGNMENT_VERSION`/`IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST` in
+    // `@fapoms/shared`'s error catalogue — and every caller of this method used to have no way
+    // to show it, or even to tell one refusal from another.
+    const data = await response.json().catch(() => ({}));
+    return { ok: false, status: response.status, error: data?.message, code: data?.code };
   }
 
   /**
@@ -1785,7 +1798,7 @@ export class MobileApiService {
     lng: number,
     accuracy?: number,
     syncToken?: string,
-  ): Promise<{ success: boolean; error?: string; status?: number }> {
+  ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-in`, {
       method: 'POST',
       body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
@@ -1797,6 +1810,7 @@ export class MobileApiService {
       // ("NOT_SCHEDULED_TODAY", "TOO_FAR_FROM_BRANCH") *and* a message explaining what to do;
       // surfacing the code put "TOO_FAR_FROM_BRANCH" in the assayer's toast.
       error: resData.message || resData.error,
+      code: resData.code,
       status: response.status,
     };
   }
@@ -1817,7 +1831,7 @@ export class MobileApiService {
     lng: number,
     accuracy?: number,
     syncToken?: string,
-  ): Promise<{ success: boolean; error?: string; status?: number }> {
+  ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-out`, {
       method: 'POST',
       body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
@@ -1827,6 +1841,7 @@ export class MobileApiService {
       success: response.ok && resData.success !== false,
       // The sentence, not the code — same reasoning as check-in above.
       error: resData.message || resData.error,
+      code: resData.code,
       status: response.status,
     };
   }
@@ -1952,7 +1967,7 @@ export class MobileApiService {
   static async uploadRegistrationDocument(
     requirement: string,
     file: { uri?: string; name?: string; type?: string; blob?: any },
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; code?: string }> {
     const id = this.currentUserId;
     if (!id) return { success: false, error: 'You are not signed in.' };
     try {
@@ -1981,7 +1996,7 @@ export class MobileApiService {
       // The server's own words where it has any — it explains the size ceiling and the accepted
       // file types far better than a generic failure, and a worker who photographed a document
       // in bad light needs to be told that, not "upload failed".
-      return { success: false, error: data?.message || 'The document did not reach the office.' };
+      return { success: false, error: data?.message || 'The document did not reach the office.', code: data?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'No connection. It will be sent again later.' };
     }
@@ -2009,7 +2024,7 @@ export class MobileApiService {
     fileName: string,
     source: { uri?: string; blob?: any; base64?: string } | string | undefined,
     assignmentId?: string,
-  ): Promise<{ success: boolean; documentUrl?: string; error?: string; assignmentCompletion?: AssignmentCompletionOutcome }> {
+  ): Promise<{ success: boolean; documentUrl?: string; error?: string; assignmentCompletion?: AssignmentCompletionOutcome; code?: string }> {
     // A bare string is legacy base64 from older call sites.
     const src = typeof source === 'string' ? { base64: source } : source || {};
 
@@ -2020,6 +2035,7 @@ export class MobileApiService {
 
     const MAX_ATTEMPTS = 4;
     let lastError = 'Upload failed';
+    let lastErrorCode: string | undefined;
     let tempUri: string | null = null;
 
     try {
@@ -2028,9 +2044,11 @@ export class MobileApiService {
           const ok = await this.sendBinaryUpload(url, fileName, src, () => tempUri, (u) => { tempUri = u; });
           if (ok.done) return ok.result;
           lastError = ok.error || lastError;
-          if (ok.fatal) return { success: false, error: lastError };
+          lastErrorCode = ok.code;
+          if (ok.fatal) return { success: false, error: lastError, code: lastErrorCode };
         } catch (err: any) {
           lastError = err?.message || 'Network error during upload';
+          lastErrorCode = undefined;
         }
 
         if (attempt < MAX_ATTEMPTS) {
@@ -2038,7 +2056,7 @@ export class MobileApiService {
           await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
         }
       }
-      return { success: false, error: `${lastError} (after ${MAX_ATTEMPTS} attempts)` };
+      return { success: false, error: `${lastError} (after ${MAX_ATTEMPTS} attempts)`, code: lastErrorCode };
     } finally {
       if (tempUri) {
         await FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
@@ -2053,7 +2071,7 @@ export class MobileApiService {
     src: { uri?: string; blob?: any; base64?: string },
     getTemp: () => string | null,
     setTemp: (u: string) => void,
-  ): Promise<{ done: boolean; fatal?: boolean; error?: string; result?: any }> {
+  ): Promise<{ done: boolean; fatal?: boolean; error?: string; result?: any; code?: string }> {
     const isWeb = Platform.OS === 'web';
 
     if (isWeb) {
@@ -2078,6 +2096,7 @@ export class MobileApiService {
         done: false,
         fatal: response.status >= 400 && response.status < 500 && ![401, 408, 429].includes(response.status),
         error: data.message || `Upload failed (${response.status})`,
+        code: data.code,
       };
     }
 
@@ -2114,6 +2133,7 @@ export class MobileApiService {
       done: false,
       fatal: result.status >= 400 && result.status < 500 && ![401, 408, 429].includes(result.status),
       error: data.message || `Upload failed (${result.status})`,
+      code: data.code,
     };
   }
 
@@ -2247,23 +2267,23 @@ export class MobileApiService {
     }
   }
 
-  static async createFeedback(input: { title?: string; body: string; category?: string; appContext?: Record<string, unknown>; attachments?: any[] }): Promise<{ success: boolean; id?: string; error?: string }> {
+  static async createFeedback(input: { title?: string; body: string; category?: string; appContext?: Record<string, unknown>; attachments?: any[] }): Promise<{ success: boolean; id?: string; error?: string; code?: string }> {
     try {
       const res = await this.fetchWithAuth(`${API_BASE_URL}/feedback`, { method: 'POST', body: JSON.stringify(input) });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.success) return { success: true, id: data?.data?.id };
-      return { success: false, error: data?.message || 'The support request could not be sent.' };
+      return { success: false, error: data?.message || 'The support request could not be sent.', code: data?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error sending the support request.' };
     }
   }
 
-  static async postFeedbackMessage(id: string, body: string): Promise<{ success: boolean; error?: string }> {
+  static async postFeedbackMessage(id: string, body: string): Promise<{ success: boolean; error?: string; code?: string }> {
     try {
       const res = await this.fetchWithAuth(`${API_BASE_URL}/feedback/${id}/messages`, { method: 'POST', body: JSON.stringify({ body }) });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.success) return { success: true };
-      return { success: false, error: data?.message || 'The message could not be sent.' };
+      return { success: false, error: data?.message || 'The message could not be sent.', code: data?.code };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error sending the message.' };
     }

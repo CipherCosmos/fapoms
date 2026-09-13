@@ -1,3 +1,4 @@
+import { isApiErrorCode, type ApiErrorCode } from '@fapoms/shared';
 import { t, type TranslationKey } from './i18n';
 
 /**
@@ -9,36 +10,34 @@ import { t, type TranslationKey } from './i18n';
  * inline alert — `result.error`, `upload.error`, `err.message`. Those strings are English
  * prose composed on the server (or, for the roughly forty sentinel messages in
  * `api.service.ts`, by the transport layer here) and no amount of catalogue work makes them
- * translatable, because the client never sees a code, only the finished sentence.
+ * translatable on their own, because a message can be reworded on the server at any time.
  *
- * ── What this does about it ────────────────────────────────────────────────────────────────
+ * ── The code, first ────────────────────────────────────────────────────────────────────────
  *
- * It matches the sentences that are actually stable — the app's own sentinels, and the handful
- * of backend messages that are fixed literals rather than composed strings — and returns a
- * catalogue key for them. Matching is on normalised text (case-folded, trimmed, trailing
- * punctuation dropped) so a full stop appearing or disappearing on the server does not silently
- * break a translation.
+ * Every error this backend sends now carries a stable machine-readable `code` alongside its
+ * human `message` (`withCode()`, `@fapoms/shared/error-codes.ts`), and `api.service.ts`'s
+ * response-handling methods forward it alongside the message they already returned. `BY_CODE`
+ * below is keyed on that field and is checked first — a code cannot be reworded by a copy edit
+ * the way a sentence can, so this is the reliable half of this file. It only maps codes whose
+ * message is a fixed, uninflected sentence: a code whose message carries a value worth keeping
+ * (`ACCOUNT_LOCKED`'s remaining-minutes count, for instance) is deliberately left out of
+ * `BY_CODE` so the `CAPTURING` table below still gets to extract it from the text.
+ *
+ * ── The message, second ────────────────────────────────────────────────────────────────────
+ *
+ * `EXACT`/`CAPTURING`/`PATTERNS` remain as the fallback for a response with no code at all — a
+ * transport failure never carries one, since there is no response body to put it in — and for
+ * the handful of local sentinel strings this file's own transport layer composes rather than
+ * the server. Matching is on normalised text (case-folded, trimmed, trailing punctuation
+ * dropped) so a full stop appearing or disappearing on the server does not silently break a
+ * translation.
  *
  * ── What it deliberately does NOT do ───────────────────────────────────────────────────────
  *
- * It does not guess. An unrecognised message falls through to `null`, and every call site then
- * renders the server's own English rather than a generic "something went wrong". That is the
- * right trade: a specific English sentence a colleague or the office can act on beats a
- * translated sentence that says nothing. It also keeps the gap visible instead of papering
- * over it.
- *
- * ── The backend ask ────────────────────────────────────────────────────────────────────────
- *
- * String matching is a stopgap and should be read as one. Every one of these mappings breaks
- * silently the day somebody rewords an exception on the server, and it can never cover the
- * composed messages (`"Karnatka" is not a state we recognise`, `Save failed (409)`,
- * `Upload failed (413)`) or the class-validator arrays that arrive joined with commas.
- *
- * The fix is on the API side: every error response should carry a stable machine-readable
- * `code` alongside its human `message`, so the client can key a catalogue entry off the code
- * and fall back to the message only for codes it has not been taught yet. Until that exists,
- * the list below is the honest maximum — and the mobile app's error toasts remain English for
- * every failure not enumerated here.
+ * It does not guess. An unrecognised code AND an unrecognised message both fall through to
+ * `null`, and every call site then renders the server's own English rather than a generic
+ * "something went wrong". That is the right trade: a specific English sentence a colleague or
+ * the office can act on beats a translated sentence that says nothing.
  */
 
 /** Normalise for comparison: case, surrounding whitespace, and a trailing full stop. */
@@ -117,6 +116,57 @@ const EXACT: Record<string, TranslationKey> = {
 };
 
 /**
+ * The code-primary table. Each entry's backend message is a fixed sentence — no count, no name,
+ * no interpolated value — which is what makes a flat code-to-key mapping lossless. `ACCOUNT_LOCKED`
+ * is the deliberate omission: its message names how many minutes remain, and only `CAPTURING`'s
+ * regex on the text actually keeps that number.
+ */
+const BY_CODE: Partial<Record<ApiErrorCode, TranslationKey>> = {
+  // — Sign-in ————————————————————————————————————————————————————————————————
+  INVALID_CREDENTIALS: 'errors.invalidCredentials',
+  ACCOUNT_INACTIVE: 'errors.accountInactive',
+  NO_PASSWORD_SET: 'errors.noPasswordSet',
+  SESSION_EXPIRED: 'errors.sessionExpired',
+  ACCOUNT_ON_HOLD: 'errors.accessOnHold',
+  ACCOUNT_CLOSED: 'errors.accountClosed',
+  // The two codes this file's own comment above used to say a client "should really" key off
+  // instead of the message — now it does.
+  PASSWORD_CHANGE_REQUIRED: 'errors.passwordChangeRequired',
+  REGISTRATION_IN_PROGRESS: 'errors.registrationInProgress',
+  UNAUTHENTICATED: 'errors.notSignedIn',
+
+  // — Passwords ——————————————————————————————————————————————————————————————
+  CURRENT_PASSWORD_WRONG: 'errors.currentPasswordWrong',
+  PASSWORD_TOO_SHORT: 'errors.passwordTooShort',
+  PASSWORD_TOO_WEAK: 'errors.passwordTooEasy',
+  PASSWORD_FIELDS_MISSING: 'errors.passwordFieldsMissing',
+
+  // — Ownership ——————————————————————————————————————————————————————————————
+  NOT_YOUR_RECORD: 'errors.notYourRecord',
+
+  // — Location ———————————————————————————————————————————————————————————————
+  INVALID_COORDINATES: 'errors.badCoordinates',
+
+  // — Files and uploads ——————————————————————————————————————————————————————
+  UPLOAD_NO_FILE: 'errors.noFileChosen',
+  UPLOAD_TYPE_NOT_ALLOWED: 'errors.fileTypeNotAllowed',
+  UPLOAD_TOO_LARGE: 'errors.fileTooLarge',
+  // A failed malware/content scan (`FileScanService.scanOrThrow`) and, on the binary upload
+  // route only, a checksum that does not match what the device declared — currently dormant
+  // there, since this app does not yet send one, but harmless to recognise early.
+  UPLOAD_REJECTED: 'errors.fileNotAccepted',
+  UPLOAD_CHECKSUM_MISMATCH: 'errors.fileNotAccepted',
+
+  // — Optimistic concurrency and idempotency ————————————————————————————————————
+  // Reachable from the assignment transition route (accept/reject/check-in-via-transition):
+  // a resubmitted `clientRequestId` whose payload no longer matches the original, or a decision
+  // made against a version of the assignment that has since moved.
+  IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: 'errors.requestAlreadySent',
+  STALE_ASSIGNMENT_VERSION: 'errors.assignmentChanged',
+  INVALID_ASSIGNMENT_VERSION: 'errors.assignmentOutOfSync',
+};
+
+/**
  * Messages that carry a value worth keeping. Matched before the plain patterns below, because
  * each one produces a different sentence depending on what it captured.
  */
@@ -149,11 +199,17 @@ const PATTERNS: Array<[RegExp, TranslationKey]> = [
 /**
  * A catalogue sentence for a known error, or null when this app has never seen it before.
  *
- * Callers should prefer `serverErrorText`, which handles the null case correctly. This is
- * exported for the tests and for anywhere that genuinely needs to know whether a message was
- * recognised.
+ * `code` is checked first — see `BY_CODE` above — and only when it names nothing this build
+ * recognises does this fall back to matching `raw` as text. Callers should prefer
+ * `serverErrorText`, which handles the null case correctly. This is exported for the tests and
+ * for anywhere that genuinely needs to know whether an error was recognised.
  */
-export function translateServerError(raw: unknown): string | null {
+export function translateServerError(raw: unknown, code?: unknown): string | null {
+  if (typeof code === 'string' && isApiErrorCode(code)) {
+    const byCode = BY_CODE[code];
+    if (byCode) return t(byCode);
+  }
+
   if (typeof raw !== 'string') return null;
   const text = normalise(raw);
   if (!text) return null;
@@ -175,13 +231,17 @@ export function translateServerError(raw: unknown): string | null {
 /**
  * What to actually put on screen for a failed call.
  *
- * The order is the point. A recognised error becomes a translated sentence. An unrecognised
- * one keeps the server's own wording, because a specific English sentence somebody can read
- * out to the office beats a translated generic. Only when there is no message at all does the
- * screen's own fallback copy apply.
+ * The order is the point. A recognised code or message becomes a translated sentence. An
+ * unrecognised one keeps the server's own wording, because a specific English sentence somebody
+ * can read out to the office beats a translated generic. Only when there is no message at all
+ * does the screen's own fallback copy apply.
+ *
+ * `code` is optional and defaults to absent, so every existing call site keeps compiling and
+ * behaving exactly as it did — only a caller that has one to give (an `api.service.ts` result
+ * carrying `.code` alongside `.error`) gets the more reliable match.
  */
-export function serverErrorText(raw: unknown, fallback: TranslationKey): string {
-  const translated = translateServerError(raw);
+export function serverErrorText(raw: unknown, fallback: TranslationKey, code?: unknown): string {
+  const translated = translateServerError(raw, code);
   if (translated) return translated;
   if (typeof raw === 'string' && raw.trim()) return raw.trim();
   return t(fallback);

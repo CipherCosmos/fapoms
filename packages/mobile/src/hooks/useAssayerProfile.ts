@@ -291,7 +291,7 @@ export function useAssayerProfile(user: {
       // endpoint it called did not exist, so that is what every save did.
       const result = await MobileApiService.updateAssayerProfile(user.id, changed);
       if (!result.success) {
-        feedback.error(t('profile.save.notSavedTitle'), serverErrorText(result.error, 'profile.save.notSavedBody'));
+        feedback.error(t('profile.save.notSavedTitle'), serverErrorText(result.error, 'profile.save.notSavedBody', result.code));
         return false;
       }
       // What was just sent is now what the server has, so it's the new baseline — the Save
