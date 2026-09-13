@@ -13,10 +13,6 @@ import { ReportsService } from './reports.service';
 import { ReportJobsService } from './report-jobs.service';
 import { EXCEL_MIME } from './excel-export';
 
-
-/** Roster is PII-scoped per caller role inside the service, so keep it to staff. */
-const ROSTER_ROLES = STAFF_ROLES;
-
 @ApiTags('reports')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -136,7 +132,7 @@ export class ReportsController {
   // throttled and these were not. Same ceiling so a burst of exports can't stall the process.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('assayer-roster')
-  @Roles(...ROSTER_ROLES)
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Export assayer roster and payroll rate card to Excel' })
   async assayerRoster(
     @Req() req: any,
@@ -156,7 +152,7 @@ export class ReportsController {
    */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('assayer-roster/pdf')
-  @Roles(...ROSTER_ROLES)
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Export the assayer roster to PDF' })
   async assayerRosterPdf(
     @Req() req: any,
@@ -251,7 +247,7 @@ export class ReportsController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('assayer-roster/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Roles(...ROSTER_ROLES)
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Queue the assayer roster export; returns a job id to poll' })
   async queueAssayerRoster(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     /**
@@ -280,7 +276,7 @@ export class ReportsController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('assayer-roster-pdf/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Roles(...ROSTER_ROLES)
+  @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Queue the assayer roster PDF export; returns a job id to poll' })
   async queueAssayerRosterPdf(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     const enqueued = await this.reportJobsService.enqueueAssayerRosterPdf(

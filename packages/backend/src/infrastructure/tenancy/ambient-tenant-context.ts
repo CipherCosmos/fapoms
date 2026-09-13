@@ -52,11 +52,14 @@ import { getRequestContext } from '../../core/context/request-context';
 /**
  * Roles that legitimately read across every organisation.
  *
- * The same list, for the same reasons, as `TenantContext.CROSS_TENANT_ROLES` — the platform
- * operator (ADMIN) and the role that runs the platform's technical estate (DEVELOPER), and
- * nothing else. Notably NOT OPERATIONS, which is the role finding F-03 was reproduced with, and
- * not ADMINISTRATOR, which is an *organisation* administrator: including either would make tenant
- * isolation meaningless for the roles most likely to hold it.
+ * The platform operator (ADMIN) and the role that runs the platform's technical estate
+ * (DEVELOPER), and nothing else. Notably NOT OPERATIONS, which is the role finding F-03 was
+ * reproduced with, and not ADMINISTRATOR, which is an *organisation* administrator: including
+ * either would make tenant isolation meaningless for the roles most likely to hold it.
+ *
+ * The one export both `TenantContext` and this file's own functions read — `tenant-context.ts`
+ * used to hand-declare an identical, unexported copy of exactly this list, kept in sync only by
+ * a comment saying so.
  */
 export const CROSS_TENANT_ROLES: readonly string[] = [SystemRole.ADMIN, SystemRole.DEVELOPER];
 

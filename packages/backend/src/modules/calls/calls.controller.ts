@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsString, IsUUID } from 'class-validator';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, Roles, hasAnyRole } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 import { CallsService } from './calls.service';
 
@@ -68,7 +68,7 @@ export class CallsController {
     return {
       id: req.user.id,
       name: req.user?.displayName || req.user?.username || undefined,
-      isAssayer: roles.includes(SystemRole.ASSAYER),
+      isAssayer: hasAnyRole(roles, [SystemRole.ASSAYER]),
     };
   }
 }

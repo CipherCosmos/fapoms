@@ -25,7 +25,7 @@ const AUTH_CHANGE_EVENTS = new Set<string>([
   'user:password-changed',
 ]);
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { RegionGuardService, RoomVerdict } from '../../infrastructure/scope/region-guard.service';
+import { RegionGuardService, RoomVerdict, isInternalStaff } from '../../infrastructure/scope/region-guard.service';
 import { verifyAccessToken } from '../../infrastructure/security/jwt-verify';
 import { REGION_ORDER } from '@fapoms/shared';
 import { FEEDBACK_TEAM_ROLE_NAMES } from '../feedback/feedback-roles';
@@ -234,11 +234,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // reason `STAFF_ROLES` excludes it: `users` has no client_id, so a client user cannot be
       // scoped to their own client, and unscoped access to every client's operational traffic
       // is worse than no live updates. A token carrying no roles at all is treated as external
-      // too — the room is opt-in, never a default.
-      const EXTERNAL_ROLES = ['ASSAYER', 'CLIENT_USER'];
-      const isInternalStaff =
-        roleNames.length > 0 && roleNames.some((r) => !EXTERNAL_ROLES.includes(r));
-      if (isInternalStaff) {
+      // too — the room is opt-in, never a default. Same rule `region-guard.service.ts` applies
+      // for the HTTP side; imported rather than re-declared so the two cannot drift apart.
+      if (isInternalStaff(roleNames)) {
         await client.join('staff');
 
         /**

@@ -90,7 +90,7 @@ describe('the billing read surface admits one set of roles', () => {
     const handler = src.slice(start, start + 1800);
     expect(handler).toContain('@Roles(...BILLING_READ_ROLES');
     expect(handler).toContain('isBillingStaff');
-    expect(handler).toMatch(/isBillingStaff\s*=\s*roles\.some\(\(r\) => \(BILLING_READ_ROLES as string\[\]\)/);
+    expect(handler).toMatch(/isBillingStaff\s*=\s*hasAnyRole\(roles,\s*BILLING_READ_ROLES\)/);
     // and the ownership check for a non-staff principal must still be there
     expect(handler).toContain('You may only view your own statement.');
   });

@@ -13,7 +13,7 @@ import { Type } from 'class-transformer';
 import { FeedbackService, FEEDBACK_TEAM_ROLES } from './feedback.service';
 import { FeedbackThreadService, FeedbackActor } from './feedback-thread.service';
 import { FeedbackEscalationService } from './feedback-escalation.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, AnyAuthenticated } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, AnyAuthenticated, hasAnyRole } from '../auth/guards';
 import { FeedbackCategory, FeedbackSeverity, FeedbackStatus, SystemRole } from '@fapoms/shared';
 import { FeedbackAttachmentDto } from './feedback-attachment.dto';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
@@ -109,8 +109,8 @@ export class FeedbackController {
   private actor(req: any): FeedbackActor {
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
     // An assayer token carries exactly the synthetic ['ASSAYER'] role and `req.user.id` is the assayer id.
-    const isAssayer = roles.includes(SystemRole.ASSAYER) && roles.length === 1;
-    const isTeam = roles.some((r) => (FEEDBACK_TEAM_ROLES as unknown as string[]).includes(r));
+    const isAssayer = hasAnyRole(roles, [SystemRole.ASSAYER]) && roles.length === 1;
+    const isTeam = hasAnyRole(roles, FEEDBACK_TEAM_ROLES);
     return {
       userId: isAssayer ? null : req.user.id,
       assayerId: isAssayer ? req.user.id : null,

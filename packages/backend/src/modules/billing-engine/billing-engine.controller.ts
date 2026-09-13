@@ -13,7 +13,7 @@ import { AssayerInvoiceService } from './assayer-invoice.service';
 import { BillingJobsService } from './billing-jobs.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback, hasAnyRole } from '../auth/guards';
 import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from './billing-roles';
 import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus, AssayerInvoiceStatus } from '@fapoms/shared';
 
@@ -335,7 +335,7 @@ export class BillingEngineController {
      * "You may only view your own statement" — a worse answer than the 403 it replaced, because
      * it accuses. An auditor reads the full book by definition; that is what auditing is.
      */
-    const isBillingStaff = roles.some((r) => (BILLING_READ_ROLES as string[]).includes(r));
+    const isBillingStaff = hasAnyRole(roles, BILLING_READ_ROLES);
     if (!isBillingStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only view your own statement.');
     }
@@ -429,7 +429,7 @@ export class BillingEngineController {
     await this.assayerInvoices.assertEnabled();
     // An assayer may read only their own invitation; the path id is attacker-controlled.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
-    const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
+    const isBillingStaff = hasAnyRole(roles, BILLING_ROLES);
     if (!isBillingStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only view your own invoice invitation.');
     }
@@ -451,7 +451,7 @@ export class BillingEngineController {
     await this.assayerInvoices.assertEnabled();
     // An assayer may submit only their own invitation; the path id is attacker-controlled.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
-    const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
+    const isBillingStaff = hasAnyRole(roles, BILLING_ROLES);
     if (!isBillingStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only submit your own invoice invitation.');
     }

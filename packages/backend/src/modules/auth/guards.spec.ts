@@ -1,6 +1,6 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RolesGuard, PermissionsGuard, JwtAuthGuard, ROLES_KEY, ANY_AUTHENTICATED_KEY, PASSWORD_CHANGE_EXEMPT_KEY } from './guards';
+import { RolesGuard, PermissionsGuard, JwtAuthGuard, ROLES_KEY, ANY_AUTHENTICATED_KEY, PASSWORD_CHANGE_EXEMPT_KEY, hasAnyRole } from './guards';
 
 /**
  * These lock in DENY-BY-DEFAULT.
@@ -207,5 +207,21 @@ describe('RolesGuard — DEVELOPER implication', () => {
     const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['ADMIN'], roleOnly: true }));
     const custom = { id: 'c-1', roles: [{ name: 'REGIONAL_LEAD', permissions: [] }] };
     expect(() => guard.canActivate(ctx(custom))).toThrow(ForbiddenException);
+  });
+});
+
+describe('hasAnyRole', () => {
+  const GROUP = ['ADMIN', 'DEVELOPER'];
+
+  it('true when the caller holds one of the group\'s roles', () => {
+    expect(hasAnyRole(['OPERATIONS', 'ADMIN'], GROUP)).toBe(true);
+  });
+
+  it('false when none of the caller\'s roles are in the group', () => {
+    expect(hasAnyRole(['OPERATIONS', 'ASSAYER'], GROUP)).toBe(false);
+  });
+
+  it('false for a caller with no roles at all', () => {
+    expect(hasAnyRole([], GROUP)).toBe(false);
   });
 });

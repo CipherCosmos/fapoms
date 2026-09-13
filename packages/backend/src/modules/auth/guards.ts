@@ -385,6 +385,21 @@ export function permissionKeysHeldBy(user: any): Set<string> {
 }
 
 /**
+ * Does this principal hold any role in `group`?
+ *
+ * A handler already past its `@Roles()` gate sometimes still has to fork behavior by WHICH role
+ * let the caller in — an assayer reading their own record versus billing staff reading anyone's,
+ * say. That fork was hand-written identically at each such site as
+ * `roles.some((r) => GROUP.includes(r))`, once per site, which is nothing beyond what this does —
+ * consolidated so the shape doesn't have to be retyped (and cannot drift: `some`/`includes` versus
+ * `includes`/`some`, an `as string[]` cast present at one call and missing at the next) the next
+ * time a route needs the same fork.
+ */
+export function hasAnyRole(roles: string[], group: readonly string[]): boolean {
+  return roles.some((r) => group.includes(r));
+}
+
+/**
  * Marks a route whose `@Roles(...)` list is the whole gate, with no permission fall-through.
  *
  * `RolesGuard` normally lets an unrecognised role in when it holds what the route declares — that
