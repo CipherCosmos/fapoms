@@ -1,3 +1,5 @@
+import { cleanVocabularyList } from '@fapoms/shared';
+
 /**
  * Shapes `GET /assayers/workforce-attribute/vocabulary`'s raw response into the two lists
  * `ProfileScreen` offers as autocomplete suggestions.
@@ -9,6 +11,9 @@
  * before a single assertion runs. Pulling the one part of `getWorkforceAttributeVocabulary` that
  * is actually worth unit testing - turning `{ SKILL: [...], LANGUAGE: [...] }` into clean,
  * de-duplicated, sorted name lists - into a file with no React Native import keeps it testable.
+ * The de-duplication/sort itself is `@fapoms/shared`'s `cleanVocabularyList` — the web hook
+ * (`useWorkforceVocabulary.ts`) hand-rolled an identical, slightly less defensive copy of exactly
+ * this until both were pointed at the one function.
  *
  * The endpoint itself is `@Roles(ADMIN, OPERATIONS)`-gated on the backend
  * (`assayer.controller.ts`), same as the web's equivalent hook already documents
@@ -19,25 +24,13 @@
  * skill or language be typed and added.
  */
 
-interface RawVocabularyEntry {
-  name?: unknown;
-}
-
 export interface WorkforceVocabulary {
   skills: string[];
   languages: string[];
 }
 
-function cleanNames(list: unknown): string[] {
-  if (!Array.isArray(list)) return [];
-  const names = (list as RawVocabularyEntry[])
-    .map((entry) => (entry && typeof entry === 'object' ? entry.name : undefined))
-    .filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
-  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-}
-
 /** `raw` is the vocabulary endpoint's `data` object: `{ SKILL?, LANGUAGE?, CERTIFICATION?, SPECIALIZATION? }`. */
 export function cleanWorkforceVocabulary(raw: unknown): WorkforceVocabulary {
   const data = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  return { skills: cleanNames(data.SKILL), languages: cleanNames(data.LANGUAGE) };
+  return { skills: cleanVocabularyList(data.SKILL), languages: cleanVocabularyList(data.LANGUAGE) };
 }

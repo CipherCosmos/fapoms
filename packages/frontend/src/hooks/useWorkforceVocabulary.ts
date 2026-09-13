@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../services/api';
+import { cleanVocabularyList } from '@fapoms/shared';
 
 /**
  * The skills and certifications that actually exist on the roster.
@@ -29,9 +30,6 @@ export interface WorkforceVocabulary {
   languages: string[] | null;
 }
 
-const clean = (list?: { name: string }[]) =>
-  Array.from(new Set((list ?? []).map((x) => x.name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-
 export function useWorkforceVocabulary(): WorkforceVocabulary {
   const [skills, setSkills] = useState<string[] | null>(null);
   const [certifications, setCertifications] = useState<string[] | null>(null);
@@ -43,9 +41,9 @@ export function useWorkforceVocabulary(): WorkforceVocabulary {
       .request<{ SKILL?: { name: string }[]; CERTIFICATION?: { name: string }[]; LANGUAGE?: { name: string }[] }>('/assayers/workforce-attribute/vocabulary')
       .then((v) => {
         if (cancelled) return;
-        setSkills(clean(v?.SKILL));
-        setCertifications(clean(v?.CERTIFICATION));
-        setLanguages(clean(v?.LANGUAGE));
+        setSkills(cleanVocabularyList(v?.SKILL));
+        setCertifications(cleanVocabularyList(v?.CERTIFICATION));
+        setLanguages(cleanVocabularyList(v?.LANGUAGE));
       })
       .catch(() => {
         if (cancelled) return;

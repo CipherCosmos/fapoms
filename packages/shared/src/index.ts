@@ -80,3 +80,8 @@ export * from './service-logs';
 // The machine-readable name of every failure the API can return, and the shape of an error body.
 // Lives here so a translated client keys off a code rather than matching the English sentence.
 export * from './error-codes';
+
+// Cleans the workforce-attribute vocabulary endpoint's raw rows into name lists — one
+// implementation, read by both the web hook and the mobile service that used to each carry their
+// own de-dupe/sort.
+export * from './workforce-vocabulary';
