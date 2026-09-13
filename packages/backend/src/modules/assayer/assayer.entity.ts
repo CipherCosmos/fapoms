@@ -433,6 +433,20 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'max_weekly_workload', type: 'int', default: 15 })
   maxWeeklyWorkload: number;
 
+  /**
+   * Dead. No writer, no reader.
+   *
+   * It was one of four per-client eligibility gates, and the one nobody maintained — an empty
+   * array meaning "eligible for everyone", which every row had. `ClientEligibilityFilter`
+   * (`recommendation.engine.ts:581-595`) consolidated all four into the client's restricted list
+   * plus the vetting team's empanelment standing, and stopped reading this. It came out of both
+   * DTOs on 2026-09-13, so nothing can set it either.
+   *
+   * The column stays until a migration can drop it safely: a deploy applies migrations before the
+   * outgoing container stops, so dropping a column a running image still selects is a 500 for the
+   * length of the changeover. That is the exact failure this deployment had on 2026-09-12, in
+   * reverse.
+   */
   @Column({ name: 'eligible_clients', type: 'jsonb', nullable: true })
   eligibleClients: string[] | null;
 

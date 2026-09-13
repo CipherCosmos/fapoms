@@ -404,6 +404,8 @@ export const AssayerRecord: React.FC<{
     for (const key of SUMMARY_EDIT_KEYS) {
       if (isSensitiveKey(key)) { f[key] = ''; continue; }
       let val = (rec as any)[key];
+      if (key === 'workingHoursStart') { f[key] = String((rec as any).workingHours?.start ?? ''); continue; }
+      if (key === 'workingHoursEnd') { f[key] = String((rec as any).workingHours?.end ?? ''); continue; }
       if (key === 'dateOfBirth' || key === 'joiningDate') val = val ? new Date(val).toISOString().split('T')[0] : '';
       else val = val !== null && val !== undefined ? String(val) : '';
       f[key] = val;
@@ -1105,6 +1107,7 @@ export const AssayerRecord: React.FC<{
                   ['Emergency contact', a.emergencyContactName, 'emergencyContactName'],
                   ['Emergency phone', a.emergencyContactPhone, 'emergencyContactPhone'],
                   ['Emergency relation', a.emergencyContactRelation, 'emergencyContactRelation'],
+                  ['Reach them first by', CONTACT_CHANNEL_LABELS[a.preferredContactChannel ?? 'AUTO'], 'preferredContactChannel'],
                 ]} />
 
                 <FactGroup
@@ -1118,7 +1121,11 @@ export const AssayerRecord: React.FC<{
                     ['District', a.district, 'district'],
                     ['State', a.state, 'state'],
                     ['Pincode', a.pincode, 'pincode'],
-                    ['Region', a.region],
+                    // Two elements made this row permanently read-only: `Facts` needs a record
+                    // key before it will offer an input. Region is derived from the state on
+                    // create and re-derived on edit, but HR has always been able to override it
+                    // through the API — on this screen they could not.
+                    ['Region', a.region, 'region'],
                     ['Map location', coordinates(a)
                       ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
@@ -1198,6 +1205,8 @@ export const AssayerRecord: React.FC<{
                 <FactGroup edit={editCtx} anchor="workload" flash={flashGroup} title="How much work they can take" rows={[
                   ['Most jobs in a day', a.maxDailyWorkload, 'maxDailyWorkload'],
                   ['Most jobs in a week', a.maxWeeklyWorkload, 'maxWeeklyWorkload'],
+                  ['Works from', (a as any).workingHours?.start ?? null, 'workingHoursStart'],
+                  ['Works until', (a as any).workingHours?.end ?? null, 'workingHoursEnd'],
                 ]} />
               </div>
             </div>
@@ -1460,13 +1469,36 @@ const StageStep: React.FC<{
 
 const EDIT_FIELD_BY_KEY = new Map<string, FieldDef>(EDIT_FIELDS.map((f) => [f.key, f]));
 
+/**
+ * How offers reach somebody, in words rather than as a stored code.
+ *
+ * The column has been read by dispatch since it existed and set by nothing, so every assayer sat
+ * on the derived default — including the ones with no smartphone, for whom PHONE exists precisely
+ * so the auto-decline never fires against an offer they cannot see.
+ */
+const CONTACT_CHANNEL_LABELS: Record<string, string> = {
+  AUTO: 'Automatic (app if they have it)',
+  APP: 'App',
+  PHONE: 'Phone — the desk calls',
+};
+
 const SUMMARY_EDIT_KEYS = [
   'phone', 'alternatePhone', 'email', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
-  'address', 'city', 'district', 'state', 'pincode',
+  'preferredContactChannel',
+  'address', 'city', 'district', 'state', 'pincode', 'region',
   'employmentType', 'employeeId', 'department', 'joiningDate', 'managerId', 'engagementType', 'unavailableReason', 'hrOwnerName',
   'dateOfBirth', 'qualification', 'aadhaarNumber', 'panNumber', 'vstsCode',
   'bankName', 'bankAccountNumber', 'ifscCode',
   'maxDailyWorkload', 'maxWeeklyWorkload', 'experienceYears', 'performanceRating',
+  /**
+   * The scheduler has honoured working hours since they existed and nothing could set them.
+   *
+   * Every piece of the plumbing was already here — the field pair (`AssayerForms.tsx:558`), the
+   * pair-to-object conversion (`buildAssayerEditBody`), and the rule that editing one sends both
+   * (`changedFormKeys`). The only missing link was this list, so the form never rendered them and
+   * the column stayed null on every row in the system.
+   */
+  'workingHoursStart', 'workingHoursEnd',
 ];
 
 interface EditCtx {

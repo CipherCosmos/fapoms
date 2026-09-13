@@ -514,9 +514,6 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsInt()
   maxWeeklyWorkload?: number;
 
-  @IsOptional() @IsArray()
-  eligibleClients?: string[];
-
   /**
    * How offers reach this person. The column has existed since the channel work and was in
    * neither request DTO, so every one of the 1,163 roster rows still sits on the `AUTO` default
@@ -704,9 +701,6 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
 
   @IsOptional() @IsInt()
   maxWeeklyWorkload?: number;
-
-  @IsOptional() @IsArray()
-  eligibleClients?: string[];
 
   /** See the same field on the create DTO — the column had no way in through either of them. */
   @IsOptional() @IsIn(CONTACT_CHANNELS)

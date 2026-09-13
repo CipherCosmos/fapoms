@@ -16,6 +16,8 @@ export interface Assayer {
   email: string | null;
   phone: string;
   alternatePhone: string | null;
+  /** AUTO | APP | PHONE. Read by dispatch; until 2026-09-13 no screen could set it. */
+  preferredContactChannel: 'AUTO' | 'APP' | 'PHONE' | null;
   address: string;
   state: string;
   district: string;

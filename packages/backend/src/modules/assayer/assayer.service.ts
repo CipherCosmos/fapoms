@@ -481,7 +481,6 @@ export interface CreateAssayerDto {
   workingHours?: { start: string; end: string };
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
-  eligibleClients?: string[];
   /**
    * How offers reach this person — see the column comment on `AssayerEntity`.
    *
@@ -596,7 +595,6 @@ export interface UpdateAssayerDto {
   workingHours?: { start: string; end: string };
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
-  eligibleClients?: string[];
   /** See `CreateAssayerDto.preferredContactChannel` — why the column needed a way in. */
   preferredContactChannel?: 'AUTO' | 'APP' | 'PHONE';
   /**

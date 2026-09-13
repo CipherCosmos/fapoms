@@ -455,6 +455,21 @@ export const EDIT_FIELDS: FieldDef[] = [
   // and a form that refuses to save without a phone cannot be used to fill in anything else.
   { key: 'phone', label: 'Phone' },
   { key: 'alternatePhone', label: 'Alternate Phone' },
+  /**
+   * How offers reach this person. The dispatch side has branched on it since it was added
+   * (`operations-inbox.service.ts:107`), and until now **no screen in either client could set
+   * it** — every assayer sat on the derived `AUTO` forever, including the ones who do not carry a
+   * smartphone and for whom the whole point of `PHONE` is that the auto-decline never fires.
+   */
+  {
+    key: 'preferredContactChannel',
+    label: 'How to reach them first',
+    options: [
+      { value: 'AUTO', label: 'Automatic — app if they have it, otherwise a call' },
+      { value: 'APP', label: 'App — offers wait for an in-app answer' },
+      { value: 'PHONE', label: 'Phone — the desk calls them, and no auto-decline' },
+    ],
+  },
   { key: 'address', label: 'Address', full: true },
   { key: 'state', label: 'State', options: INDIAN_STATES },
   { key: 'district', label: 'District' },

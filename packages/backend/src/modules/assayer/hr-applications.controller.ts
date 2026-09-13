@@ -1,14 +1,9 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req,
-  UploadedFile, UseGuards, UseInterceptors,
+  Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
-import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsEnum, IsInt, IsObject, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
-import { SystemRole, ApplicationStatus, EmploymentCategory, OnboardingDocument } from '@fapoms/shared';
+import { IsString, MaxLength, MinLength } from 'class-validator';
+import { SystemRole, ApplicationStatus } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { RegistrationApplicationService } from './registration-application.service';
 
@@ -23,70 +18,15 @@ class RequestMoreInfoDto {
 }
 
 /**
- * HR's review queue for applications — the Appraiser Recruitment spec's Module 4 (Internal
- * Validation). Originally scoped to the candidate-facing intake only, while the HR-desk wizard
- * wrote a live assayer directly and ungated. The owner ended that split on 2026-09-12: the desk
- * now files an application here too (`POST /`, source HR_DESK), and `approve()` refuses the
- * account that entered it — one gate for all three doors, with maker-checker on the one HR
- * authors itself.
+ * HR's review queue for candidate applications — the Appraiser Recruitment spec's Module 4.
+ *
+ * Everything here is the CANDIDATE's own work. A second desk intake once lived on this controller
+ * — a staff account typing an application and approving it, with maker-checker between the two —
+ * and was withdrawn on 2026-09-13 because no screen ever called it and the registration wizard
+ * already is the desk's door. Its DTO, its multer options and nine imports outlived it by a day;
+ * the docblock describing the segregation control it carried outlived it by longer, which is worse
+ * than the dead code, because it reads as a control that exists.
  */
-const staffUploadMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
-};
-
-class CreateStaffApplicationDto {
-  @IsString() @MinLength(1) @MaxLength(200)
-  fullName: string;
-
-  @IsString() @Matches(/^[0-9+\-() ]{6,20}$/, { message: 'mobile must be a phone number' })
-  mobile: string;
-
-  @IsOptional() @IsString() @MaxLength(255)
-  email?: string;
-
-  /** ISO date, the same shape the candidate form and CreateAssayerDto use. */
-  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/)
-  dateOfBirth?: string;
-
-  @IsOptional() @IsString() @MaxLength(20)
-  gender?: string;
-
-  @IsOptional() @IsString() @MaxLength(500)
-  address?: string;
-
-  @IsOptional() @IsString() @MaxLength(100)
-  state?: string;
-
-  @IsOptional() @IsString() @MaxLength(100)
-  city?: string;
-
-  @IsOptional() @IsString() @MaxLength(10)
-  pincode?: string;
-
-  @IsOptional() @IsInt() @Min(0) @Max(60)
-  experienceYears?: number;
-
-  @IsOptional() @IsString() @MaxLength(200)
-  currentEmployer?: string;
-
-  @IsOptional() @IsEnum(EmploymentCategory)
-  employmentCategory?: EmploymentCategory;
-
-  @IsOptional() @IsString() @MaxLength(2000)
-  expertise?: string;
-
-  @IsOptional() @IsString() @MaxLength(2000)
-  availability?: string;
-
-  /**
-   * What the wizard collects beyond these columns — identity and bank details, rates, standings.
-   * Held on the application and applied at promotion; see the entity's own comment.
-   */
-  @IsOptional() @IsObject()
-  extendedProfile?: Record<string, unknown>;
-}
-
 @ApiTags('HR applications')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
