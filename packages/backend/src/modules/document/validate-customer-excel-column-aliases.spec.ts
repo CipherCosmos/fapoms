@@ -35,8 +35,8 @@ describe('validateCustomerExcel — column-name tolerance', () => {
       ['ACC-2', '0002'],
     ]);
     const result = (controller as any).validateCustomerExcel(file);
-    expect(result.data.summary.missingBranchCodesCount).toBe(0);
-    expect(result.data.summary.uniqueBranchesCount).toBe(2);
+    expect(result.summary.missingBranchCodesCount).toBe(0);
+    expect(result.summary.uniqueBranchesCount).toBe(2);
   });
 
   it('matches the SCREAMING_SNAKE spelling too', () => {
@@ -45,8 +45,8 @@ describe('validateCustomerExcel — column-name tolerance', () => {
       ['ACC-1', '0001'],
     ]);
     const result = (controller as any).validateCustomerExcel(file);
-    expect(result.data.summary.totalRowsProcessed).toBe(1);
-    expect(result.data.summary.missingBranchCodesCount).toBe(0);
+    expect(result.summary.totalRowsProcessed).toBe(1);
+    expect(result.summary.missingBranchCodesCount).toBe(0);
   });
 
   it('finds the header row even when a title sits above it', () => {
@@ -58,8 +58,8 @@ describe('validateCustomerExcel — column-name tolerance', () => {
       ['ACC-1', '0001'], // deliberate duplicate account
     ]);
     const result = (controller as any).validateCustomerExcel(file);
-    expect(result.data.summary.totalRowsProcessed).toBe(2);
-    expect(result.data.summary.duplicateAccountsCount).toBe(1);
+    expect(result.summary.totalRowsProcessed).toBe(2);
+    expect(result.summary.duplicateAccountsCount).toBe(1);
   });
 
   it('still counts a genuinely missing SOL ID as a missing branch', () => {
@@ -68,6 +68,6 @@ describe('validateCustomerExcel — column-name tolerance', () => {
       ['ACC-1', ''],
     ]);
     const result = (controller as any).validateCustomerExcel(file);
-    expect(result.data.summary.missingBranchCodesCount).toBe(1);
+    expect(result.summary.missingBranchCodesCount).toBe(1);
   });
 });

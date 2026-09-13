@@ -507,6 +507,17 @@ export class ProjectController {
     }
 
     const report = await this.projectService.uploadBranchesFromExcel(scope, file.buffer, req.user.id);
+    /**
+     * What the import did, in `data` — the same shape the client-scoped endpoint returns and the
+     * same shape the completed job's result carries.
+     *
+     * `data` used to be the project's resulting branch list, with the counts hidden in `meta`.
+     * That made the small-file response, the large-file response and the finished-job response
+     * three different shapes for one outcome, so each had to be read differently and the web app
+     * grew a separate reader for each. The branch list is dropped rather than moved: the only
+     * caller refetched `GET /projects/:id/branches` immediately afterwards anyway, and sending
+     * every hydrated row back twice was never doing anything.
+     */
     return {
       totalRows: report.totalRows,
       created: report.created,

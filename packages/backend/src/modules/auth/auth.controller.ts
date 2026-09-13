@@ -101,14 +101,23 @@ export class AuthController {
   @ApiOperation({ summary: 'Check an assayer identifier exists (pre-login, no credentials returned)' })
   async verifyAssayer(@Body() dto: VerifyAssayerDto) {
     const found = await this.authService.verifyAssayerIdentifier(dto.identifier);
+    // Deliberately minimal: existence plus a display name. No contact details,
+    // no banking, no identifiers beyond the one already supplied by the caller.
+    //
+    // `needsAppAccess` is the one addition, and it is a flag rather than a fact about the
+    // person: it says the account exists but has never been given a password. 540 assayers are
+    // in that state — imported from the roster, never invited — and without this the app
+    // greeted them by name and then said their password was wrong for an account that has
+    // never had one. Passing it through is the whole point of computing it; it was being
+    // dropped here while the service worked it out.
     return found
-              ? {
-                verified: true,
-                displayName: found.displayName,
-                assayerCode: found.assayerCode,
-                ...(found.needsAppAccess ? { needsAppAccess: true } : {}),
-              }
-              : { verified: false };
+      ? {
+        verified: true,
+        displayName: found.displayName,
+        assayerCode: found.assayerCode,
+        ...(found.needsAppAccess ? { needsAppAccess: true } : {}),
+      }
+      : { verified: false };
   }
 
   /**

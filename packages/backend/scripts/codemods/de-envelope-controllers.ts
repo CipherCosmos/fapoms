@@ -87,11 +87,12 @@ function hasBareResParam(method: MethodDeclaration): boolean {
 }
 
 /** Exactly `{ success: true, data: <expr> }` — order-independent, no other keys. */
-function matchSafeShape(obj: ObjectLiteralExpression): Node | null {
+function matchSafeShape(obj: ObjectLiteralExpression): { dataExpr: Node; dataProp: Node } | null {
   const props = obj.getProperties();
   if (props.length !== 2) return null;
   let successOk = false;
   let dataExpr: Node | null = null;
+  let dataProp: Node | null = null;
   for (const p of props) {
     if (!Node.isPropertyAssignment(p)) return null;
     const name = p.getName();
@@ -101,11 +102,26 @@ function matchSafeShape(obj: ObjectLiteralExpression): Node | null {
       else return null;
     } else if (name === 'data') {
       dataExpr = p.getInitializer() ?? null;
+      dataProp = p;
     } else {
       return null;
     }
   }
-  return successOk && dataExpr ? dataExpr : null;
+  return successOk && dataExpr && dataProp ? { dataExpr, dataProp } : null;
+}
+
+/**
+ * Leading `//`/`/** *\/` comments immediately before `node`, as source text — e.g. a doc comment
+ * explaining a security- or product-relevant fact about the value being computed. `.getText()` on
+ * the value we keep never includes these (they precede it), and `ReturnStatement#replaceWithText`
+ * replaces the statement's own leading-trivia range too when nothing but whitespace separates a
+ * comment from the statement it annotates — so either one is silently dropped unless captured and
+ * re-emitted explicitly.
+ */
+function leadingCommentsText(node: Node): string {
+  const ranges = node.getLeadingCommentRanges();
+  if (ranges.length === 0) return '';
+  return ranges.map((r) => r.getText()).join('\n') + '\n';
 }
 
 /** True if `obj` has a `success: true` property, regardless of what else it carries. */
@@ -199,15 +215,19 @@ function processFile(filePath: string, project: Project, apply: boolean): FileRe
         continue;
       }
 
-      const dataExpr = matchSafeShape(expr);
-      if (!dataExpr) {
+      const safe = matchSafeShape(expr);
+      if (!safe) {
         result.manualShape++;
         continue;
       }
 
       result.automated++;
       if (apply) {
-        ret.replaceWithText(`return ${dataExpr.getText()};`);
+        // Preserve both: a comment leading the whole `return` statement (e.g. explaining why the
+        // value is shaped this way at all) and one leading the `data:` property specifically
+        // (e.g. explaining the value itself) — two different, both real, attachment points.
+        const preserved = leadingCommentsText(ret) + leadingCommentsText(safe.dataProp);
+        ret.replaceWithText(`${preserved}return ${safe.dataExpr.getText()};`);
       }
     }
   }

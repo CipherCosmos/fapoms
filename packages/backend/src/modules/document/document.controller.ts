@@ -262,7 +262,7 @@ export class DocumentController {
       integrity,
     }, req?.user?.id || '00000000-0000-0000-0000-000000000000');
 
-    return { success: true, data: doc };
+    return doc;
   }
 
   /**
@@ -303,10 +303,7 @@ export class DocumentController {
     const objectKey = `documents/direct/${randomUUID()}/${safeName}`;
     const expiresIn = 900; // 15 minutes to complete the PUT
     const uploadUrl = await this.storage.getSignedUploadUrl(objectKey, contentType, expiresIn);
-    return {
-      success: true,
-      data: { objectKey, uploadUrl, method: 'PUT', headers: { 'Content-Type': contentType }, expiresIn },
-    };
+    return { objectKey, uploadUrl, method: 'PUT', headers: { 'Content-Type': contentType }, expiresIn };
   }
 
   @Post('upload/finalize')
@@ -332,7 +329,7 @@ export class DocumentController {
      */
     const existing = await this.documentService.findByFilePath(body.objectKey);
     if (existing) {
-      return { success: true, data: existing };
+      return existing;
     }
     // Confirm the object actually landed before creating a row that claims it did.
     let size = 0;
@@ -396,7 +393,7 @@ export class DocumentController {
       req?.user?.id || '00000000-0000-0000-0000-000000000000',
     );
 
-    return { success: true, data: doc };
+    return doc;
   }
 
   @Post('mobile-upload')
@@ -652,7 +649,7 @@ export class DocumentController {
       chunkSize: body.chunkSize ? Number(body.chunkSize) : undefined,
       createdBy: req.user.id,
     });
-    return { success: true, data: session };
+    return session;
   }
 
   /**
@@ -668,13 +665,10 @@ export class DocumentController {
     const missing: number[] = [];
     for (let i = 0; i < session.totalChunks; i++) if (!received.includes(i)) missing.push(i);
     return {
-      success: true,
-      data: {
-        ...session,
-        receivedChunks: received,
-        missingChunks: missing,
-        progress: Math.round((received.length / session.totalChunks) * 100),
-      },
+      ...session,
+      receivedChunks: received,
+      missingChunks: missing,
+      progress: Math.round((received.length / session.totalChunks) * 100),
     };
   }
 
@@ -692,7 +686,7 @@ export class DocumentController {
       throw new BadRequestException('No chunk content received.');
     }
     const progress = await this.chunkedUploadService.saveChunk(uploadId, Number(index), chunk.buffer);
-    return { success: true, data: { ...progress, index: Number(index) } };
+    return { ...progress, index: Number(index) };
   }
 
   @Get('upload/session/:uploadId/chunk/:index/presigned-url')
@@ -703,7 +697,7 @@ export class DocumentController {
     @Param('index') index: string,
   ) {
     const data = await this.chunkedUploadService.getPresignedPartUrl(uploadId, Number(index));
-    return { success: true, data: { ...data, index: Number(index) } };
+    return { ...data, index: Number(index) };
   }
 
   @Post('upload/session/:uploadId/complete')
@@ -931,20 +925,17 @@ export class DocumentController {
     const status = (duplicateAccountsCount > 50 || missingBranchesCount > 10) ? 'IMPORT_BLOCKED' : 'VALIDATED_READY_FOR_IMPORT';
 
     return {
-      success: true,
-      data: {
-        summary: {
-          totalRowsProcessed: totalRows,
-          uniqueAccountsCount: accountNumbersSeen.size,
-          duplicateAccountsCount,
-          uniqueBranchesCount: solIdsSeen.size,
-          missingBranchCodesCount: missingBranchesCount,
-          status,
-        },
-        recommendation: status === 'IMPORT_BLOCKED'
-          ? 'Reconciliation Blocked: Fix duplicate account numbers or missing branch codes in Excel sheet before proceeding.'
-          : 'Reconciliation Passed: Ready for OCR generation and assignment mapping.',
+      summary: {
+        totalRowsProcessed: totalRows,
+        uniqueAccountsCount: accountNumbersSeen.size,
+        duplicateAccountsCount,
+        uniqueBranchesCount: solIdsSeen.size,
+        missingBranchCodesCount: missingBranchesCount,
+        status,
       },
+      recommendation: status === 'IMPORT_BLOCKED'
+        ? 'Reconciliation Blocked: Fix duplicate account numbers or missing branch codes in Excel sheet before proceeding.'
+        : 'Reconciliation Passed: Ready for OCR generation and assignment mapping.',
     };
   }
 
@@ -958,7 +949,7 @@ export class DocumentController {
     // query is needed to learn the document's region. Same resolution path `issueDownloadToken`
     // uses below, staged rather than immediate-enforcing (see region-guard.service.ts).
     await this.regionGuard.assertRegionAllowedStaged(doc.assessment?.branch?.region ?? null, scope, 'document:findOne');
-    return { success: true, data: doc };
+    return doc;
   }
 
   @Get(':id/download')
@@ -1111,10 +1102,7 @@ export class DocumentController {
       this.regionGuard.assertRegionAllowed(doc.assessment?.branch?.region ?? null, scope);
     }
     const { token, expiresAt } = this.documentAccessTokenService.issue(id);
-    return {
-      success: true,
-      data: { downloadUrl: `/documents/${id}/download?token=${token}`, token, expiresAt },
-    };
+    return { downloadUrl: `/documents/${id}/download?token=${token}`, token, expiresAt };
   }
 
   /**
@@ -1129,17 +1117,14 @@ export class DocumentController {
     const doc = await this.documentService.findOne(id);
     await this.regionGuard.assertRegionAllowedStaged(doc.assessment?.branch?.region ?? null, scope, 'document:trail');
     return {
-      success: true,
-      data: {
-        documentId: doc.id,
-        fileName: doc.fileName,
-        type: doc.type,
-        status: doc.status,
-        assessmentId: doc.assessmentId,
-        branch: doc.assessment?.branch?.name ?? null,
-        project: doc.assessment?.project?.name ?? null,
-        trail: this.documentService.buildTransportTrail(doc),
-      },
+      documentId: doc.id,
+      fileName: doc.fileName,
+      type: doc.type,
+      status: doc.status,
+      assessmentId: doc.assessmentId,
+      branch: doc.assessment?.branch?.name ?? null,
+      project: doc.assessment?.project?.name ?? null,
+      trail: this.documentService.buildTransportTrail(doc),
     };
   }
 
@@ -1180,7 +1165,7 @@ export class DocumentController {
       );
     }
     const doc = await this.documentService.updateStatus(id, dto.status, req.user.id);
-    return { success: true, data: doc };
+    return doc;
   }
 
   /**
@@ -1316,7 +1301,7 @@ export class DocumentController {
       return { success: true, data: documents, meta: { readiness } };
     }
     const list = await this.documentService.findByProjectBranch(projectBranchId);
-    return { success: true, data: list };
+    return list;
   }
 
   // Must admit every role the frontend /documents route (and the document-list gate) allows, or the
@@ -1503,7 +1488,7 @@ export class DocumentController {
     const region = await this.documentService.resolveAssessmentRegion(assessmentId);
     await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:findByAssessment');
     const list = await this.documentService.findByAssessment(assessmentId);
-    return { success: true, data: list };
+    return list;
   }
 
   @Get('project/:projectId')
@@ -1513,7 +1498,7 @@ export class DocumentController {
     // A project spans multiple branches — potentially multiple regions — so this is a list to
     // filter (mode-aware, in the service), not a single ceiling to gate.
     const list = await this.documentService.findByProject(projectId, scope);
-    return { success: true, data: list };
+    return list;
   }
 
   @Get()
@@ -1539,7 +1524,7 @@ export class DocumentController {
   @ApiOperation({ summary: 'Get document statistics' })
   async getStats(@GlobalScopeFilter() scope?: GlobalScope) {
     const stats = await this.documentService.getDocumentStats(scope);
-    return { success: true, data: stats };
+    return stats;
   }
 
   @Get('queue/data-entry')
@@ -1548,7 +1533,7 @@ export class DocumentController {
   @ApiOperation({ summary: 'Get data entry queue — all received PDFs grouped by assessment' })
   async getDataEntryQueue(@GlobalScopeFilter() scope?: GlobalScope) {
     const queue = await this.documentService.findDataEntryQueue(scope);
-    return { success: true, data: queue };
+    return queue;
   }
 
   @Post(':id/send-external-ocr')
@@ -1640,7 +1625,7 @@ export class DocumentController {
     @Query('limit') limit?: number,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return { success: true, data: await this.documentService.dataEntryQueue({ assignedTo, lane, search, page, limit }, scope) };
+    return await this.documentService.dataEntryQueue({ assignedTo, lane, search, page, limit }, scope);
   }
 
   @Get('data-entry/mine')
@@ -1655,10 +1640,7 @@ export class DocumentController {
     @Query('limit') limit?: number,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return {
-      success: true,
-      data: await this.documentService.dataEntryQueue({ assignedTo: req.user.id, lane, search, page, limit }, scope),
-    };
+    return await this.documentService.dataEntryQueue({ assignedTo: req.user.id, lane, search, page, limit }, scope);
   }
 
   @Get('data-entry/team')
@@ -1669,7 +1651,7 @@ export class DocumentController {
   @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'People a returned packet can be delegated to' })
   async dataEntryTeam() {
-    return { success: true, data: await this.documentService.dataEntryTeam() };
+    return await this.documentService.dataEntryTeam();
   }
 
   @Post(':id/assign-data-entry')
@@ -1682,7 +1664,7 @@ export class DocumentController {
     @Req() req: any,
   ) {
     const doc = await this.documentService.assignForDataEntry(id, body.assigneeId, req.user.id);
-    return { success: true, data: doc };
+    return doc;
   }
 
   @Post(':id/complete-data-entry')
@@ -1690,6 +1672,6 @@ export class DocumentController {
   @ApiOperation({ summary: 'Hand a processed packet back to the data entry head' })
   async completeDataEntry(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const doc = await this.documentService.completeDataEntry(id, req.user.id);
-    return { success: true, data: doc };
+    return doc;
   }
 }

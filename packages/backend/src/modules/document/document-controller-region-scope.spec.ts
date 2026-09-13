@@ -76,7 +76,7 @@ describe('DocumentController — staged region scope', () => {
       const res = await controller.findOne('doc-1', scope);
 
       expect(mockRegionGuard.assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', scope, 'document:findOne');
-      expect(res).toEqual({ success: true, data: { id: 'doc-1', assessment: { branch: { region: 'SOUTH' } } } });
+      expect(res).toEqual({ id: 'doc-1', assessment: { branch: { region: 'SOUTH' } } });
     });
 
     it('a null branch region is passed through as null, not swallowed', async () => {
@@ -115,7 +115,7 @@ describe('DocumentController — staged region scope', () => {
 
       expect(mockDocumentService.resolveProjectBranchRegion).toHaveBeenCalledWith('pb-1');
       expect(mockRegionGuard.assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', scope, 'document:findByProjectBranch');
-      expect(res).toEqual({ success: true, data: [{ id: 'doc-1' }] });
+      expect(res).toEqual([{ id: 'doc-1' }]);
     });
 
     it('a refusal stops the request before the branch is listed', async () => {

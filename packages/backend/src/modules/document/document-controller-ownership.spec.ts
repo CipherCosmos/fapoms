@@ -103,7 +103,7 @@ describe('DocumentController — download-token region scope, and upload multer 
       const res = await controller.issueDownloadToken('doc-1', staffReq(SystemRole.ADMIN) as any, { regions: null } as any);
 
       expect(mockRegionGuard.assertRegionAllowed).toHaveBeenCalledWith(REGION_B, { regions: null });
-      expect(res.success).toBe(true);
+      expect(res.downloadUrl).toBeDefined();
     });
 
     it('still runs the unchanged ownership check for a pure-ASSAYER caller, not the region check', async () => {

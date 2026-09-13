@@ -234,6 +234,12 @@ export class UserController {
   @ApiOperation({ summary: 'Create a new user' })
   async create(@Body() dto: CreateUserRequestDto, @Req() req: any) {
     const { user, generatedPassword } = await this.userService.createUser(dto, req.user.id);
+    /**
+     * The only moment this password is ever readable. It is deliberately not stored, not
+     * logged and not retrievable from any other endpoint, so the admin must pass it on from
+     * this response; if it is lost, the recovery path is POST /users/:id/reset-password.
+     * The field is absent when the caller supplied their own password.
+     */
     return { ...this.sanitizeUser(user), initialPassword: generatedPassword };
   }
 
