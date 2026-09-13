@@ -14,6 +14,7 @@ import { userMessage } from '../../services/errors';
 import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 import { Page } from '../../components/ui/Page';
+import { loadFailed } from '../../queryClient';
 
 /**
  * Container logs, in the browser.
@@ -304,7 +305,7 @@ export const ServiceLogs: React.FC = () => {
         subtitle="Live and historical output from the containers running this deployment. Credentials are stripped before anything leaves the server; every read is recorded in the audit trail."
       />
 
-      {services.isError && (
+      {loadFailed(services) && (
         <div style={{ ...card, borderColor: 'var(--danger)', display: 'flex', gap: 8 }}>
           <AlertTriangle size={18} />
           <span>{userMessage(services.error)}</span>

@@ -23,6 +23,7 @@ import { useCurrentRoles, canDeleteClients, canManageClients } from '../hooks/us
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 import { safeHttpUrl } from '../utils/url';
 import { Page } from '../components/ui/Page';
+import { loadFailed } from '../queryClient';
 
 const LIFECYCLE_COLORS: Record<string, { color: string; bg: string }> = {
   PROSPECT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -125,7 +126,7 @@ const Clients: React.FC = () => {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const { data, isLoading, isFetching, isError, refetch } = useClientsList({
+  const clientsQuery = useClientsList({
     page,
     limit,
     search: debouncedSearch || undefined,
@@ -135,6 +136,8 @@ const Clients: React.FC = () => {
     sortBy: sortBy || undefined,
     sortOrder,
   });
+  const { data, isLoading, isFetching, refetch } = clientsQuery;
+  const clientsFailed = loadFailed(clientsQuery);
 
   const handleSort = (key: string) => {
     if (sortBy === key) {
@@ -435,13 +438,17 @@ const Clients: React.FC = () => {
           return next;
         })}
         emptyState={
-          isError ? (
+          clientsFailed ? (
             /*
              * `data` is `undefined` whether the list is genuinely empty or the request just
              * failed — this page rendered the identical "No clients found, add your first
              * client" empty state either way, with an "Add Client" button that would only
              * confuse things further on a real outage. Same failed-fetch-as-empty gap Track C
              * found and fixed on Billing's Payouts/Invoices tabs; same fix, this page's data.
+             *
+             * `loadFailed`, not `isError`: a 5xx is retried once and then PAUSES when the tab is
+             * not frontmost, and a paused query is neither erroring nor loading nor holding data
+             * — which put the "add your first client" invitation back over a refused list.
              */
             <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
               <Building2 size={34} style={{ color: 'var(--danger)', opacity: 0.5 }} />

@@ -17,6 +17,7 @@ import { useScope, withScope } from '../context/ScopeContext';
 import { formatRupees as money, activityEventLabel } from '@fapoms/shared';
 import { HBarChart, DonutChart, StackedColumnChart, type HBarDatum, type ColumnDatum } from '../components/charts';
 import { Page } from '../components/ui/Page';
+import { loadFailed } from '../queryClient';
 
 interface Attention {
   key: string; severity: 'critical' | 'high' | 'medium';
@@ -104,7 +105,7 @@ export const Dashboard: React.FC = () => {
   const roles = useCurrentRoles();
   const permissions = useCurrentPermissions();
 
-  const { data, isPending, isFetching, error, refetch } = useQuery({
+  const dashboardQuery = useQuery({
     queryKey: [...queryKeys.dashboard.all, 'operations', scopeKey],
     // `{ signal }` forwarded so React Query can actually cancel this request — without it, a
     // query React Query gives up on (a fast remount, a scope change before the first reply)
@@ -117,6 +118,17 @@ export const Dashboard: React.FC = () => {
     queryFn: ({ signal }) => api.request<Snapshot>(`/system-dashboard/operations?${withScope(scopeParams)}`, { signal }),
     staleTime: 30_000,
   });
+  const { data, isPending, isFetching, error, refetch } = dashboardQuery;
+  /**
+   * The other end of the same gap.
+   *
+   * `isPending` below covers the window where nothing is fetching and nothing has ever loaded.
+   * It does not cover the window after that: a 5xx is retried once and then PAUSES until the tab
+   * comes forward, and a paused query never settles, so `isPending` stays true and `error` stays
+   * null for as long as the tab is in the background. The skeleton therefore sat there
+   * indefinitely, still promising figures, over a request the browser had stopped making.
+   */
+  const dashboardFailed = loadFailed(dashboardQuery);
 
   /**
    * A 403 here is an answer, not a fault: the snapshot spans every project, and a role scoped to
@@ -306,9 +318,9 @@ export const Dashboard: React.FC = () => {
        * covers that gap: once ANY attempt ever settles — success or a real error — it flips to
        * `false` for good and the `error &&` block below takes over, exactly as before.
        */}
-      {isPending && <DashboardSkeleton />}
+      {isPending && !dashboardFailed && <DashboardSkeleton />}
 
-      {error && (isNotEntitled ? (
+      {(error || dashboardFailed) && (isNotEntitled ? (
         /**
          * Refused, not broken — and they are different things to the person reading the screen.
          *

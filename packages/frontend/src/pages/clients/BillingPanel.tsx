@@ -8,6 +8,7 @@ import { api } from '../../services/api';
 import { isValidIfsc } from '@fapoms/shared';
 import { applyPlaceToAddressGroup, composeAddress, emptyAddressGroup, stateOptionsFor, type AddressGroup } from './address-group';
 import { taxIdHint, taxIdGstinConsequenceHint } from './field-hints';
+import { loadFailed } from '../../queryClient';
 
 /**
  * A client's billing, in one place: what they are billed per audit (the rate card), the tax
@@ -33,7 +34,10 @@ const OTHER = '__other__';
 type IfscBankInfo = { branchName: string; city: string; state: string; address: string };
 
 export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
-  const { data: billing, isLoading, isError: billingIsError } = useClientBilling(clientId);
+  const billingQuery = useClientBilling(clientId);
+  const { data: billing, isLoading } = billingQuery;
+  // See `loadFailed`: a refused read that pauses is not an absence of billing terms.
+  const billingIsError = loadFailed(billingQuery);
   const detail = useClientDetail(clientId);
   const updateBilling = useUpdateBilling();
   const updateClient = useUpdateClient();

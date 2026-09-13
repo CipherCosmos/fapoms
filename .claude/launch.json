@@ -4,8 +4,20 @@
     {
       "name": "orbit-web",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "cd packages/mobile && npx expo start --web --port 8083"],
+      "runtimeArgs": [
+        "-c",
+        "cd packages/mobile && npx expo start --web --port 8083"
+      ],
       "port": 8083
+    },
+    {
+      "name": "fapoms-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd packages/frontend && VITE_API_URL=http://localhost:8080 npx vite --port 5175 --strictPort"
+      ],
+      "port": 5175
     }
   ]
 }

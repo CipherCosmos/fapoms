@@ -9,6 +9,7 @@ import { queryKeys } from '../hooks/queryKeys';
 import { hasAnyRole, useCurrentRoles, useCurrentUserId } from '../hooks/useCurrentRoles';
 import { roleLabel } from '@fapoms/shared';
 import { Select, useConfirm } from './ui';
+import { loadFailed } from '../queryClient';
 
 /**
  * Staff remarks about one assayer: the list, the summary the recommendation engine scores from,
@@ -235,7 +236,7 @@ export const AssayerRemarks: React.FC<{
       )}
       {!canWrite && err && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', marginBottom: '8px' }}>{err}</div>}
 
-      {query.isError ? (
+      {loadFailed(query) ? (
         <div style={{ fontSize: fs, color: 'var(--danger)' }}>{userMessage(query.error)}</div>
       ) : remarks.length === 0 && !query.isLoading ? (
         <div style={{ fontSize: fs, color: 'var(--text-muted)', padding: compact ? '8px 0' : '14px 0' }}>No remarks yet.</div>

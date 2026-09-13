@@ -178,4 +178,23 @@ describe('BillingPanel — no billing profile saved yet', () => {
     expect(screen.queryByText(/no billing profile saved for this client yet/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /save billing/i })).not.toBeInTheDocument();
   });
+
+  /**
+   * And in the state the guard above could not see.
+   *
+   * The notice was written for that live incident and then gated on `isError`, which is false for
+   * a query that failed and PAUSED — no error, no data, not loading. That is the ordinary shape of
+   * a 5xx during a backend restart in a tab that is not frontmost, which is exactly when the
+   * incident happened. So the branch existed, was correct, and could not fire in its own case.
+   */
+  it('and in the paused one, which is the shape the live incident actually had', () => {
+    mockUseClientBilling.mockReturnValue({
+      data: undefined, isLoading: false, isError: false, fetchStatus: 'paused',
+    });
+    render(<BillingPanel clientId="cli-1" />);
+
+    expect(screen.getByText(/could not load this client's billing profile/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no billing profile saved for this client yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save billing/i })).not.toBeInTheDocument();
+  });
 });

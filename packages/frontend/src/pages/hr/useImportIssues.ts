@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '../../services/api';
 import { queryKeys } from '../../hooks/queryKeys';
+import { loadFailed } from '../../queryClient';
 
 /**
  * The review queue, read once for everything that shows it.
@@ -52,7 +53,12 @@ export function useImportIssues() {
     openCount: query.data?.openCount ?? 0,
     /** True until the first response lands, so a caller can tell "none" from "not yet known". */
     loading: query.isLoading,
-    failed: query.isError,
+    /*
+       `loadFailed`, not `isError`. A 5xx is retried once and then pauses while the tab is in the
+       background, and a paused query reports neither error nor loading — so `failed` was false
+       for a queue that had been refused, and the panel said the desk was clear.
+    */
+    failed: loadFailed(query),
     refetch: query.refetch,
   };
 }

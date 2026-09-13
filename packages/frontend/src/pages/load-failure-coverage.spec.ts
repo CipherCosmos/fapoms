@@ -108,6 +108,23 @@ const REPAIRED: Array<[path: string, whatItUsedToSay: string, ownMarker?: string
   ['pages/users/RolesPermissionsPanel.tsx', 'a roles screen with no roles'],
   ['components/RuleBypassBanner.tsx', 'silence, which is how it says "these are real records"'],
   ['pages/work/AuditWork.tsx', 'nothing at all, when the browser was offline'],
+
+  /*
+   * ── The tail ────────────────────────────────────────────────────────────────
+   *
+   * Seven more found by asking the narrower question the first sweep did not: not "does this file
+   * handle failure at all" but "does it handle the PAUSED one". Each of these already had a
+   * careful, well-worded failure branch — the paragraph above `billingIsError` is three sentences
+   * of a real production reproduction — and each guarded it with bare `isError`, so the branch
+   * could not fire in the state it was written for.
+   */
+  ['pages/Clients.tsx', '"No clients found — add your first client", over a list that was refused'],
+  ['pages/admin/DangerZone/DangerZoneSection.tsx', 'an empty selection of things to destroy, with nothing said'],
+  ['pages/hr/useImportIssues.ts', 'failed: false, so the import queue read as clear'],
+  ['pages/clients/BillingPanel.tsx', 'a billing form that said the profile "isn\'t saved" while it plainly was'],
+  ['pages/admin/ServiceLogs.tsx', 'a service picker with no services in it'],
+  ['components/AssayerRemarks.tsx', '"No remarks yet."'],
+  ['pages/Dashboard.tsx', 'a skeleton that never leaves — the mirror image, promising figures that had stopped coming'],
 ];
 
 /**

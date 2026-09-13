@@ -11,6 +11,7 @@ import { SectionCard, Pill } from '../../../components/ui/settings';
 import { useConfirm, useToast } from '../../../components/ui';
 import { useCurrentUserId } from '../../../hooks/useCurrentRoles';
 import { DataResetModal } from './DataResetModal';
+import { loadFailed } from '../../../queryClient';
 
 export interface WipeDomain {
   key: string;
@@ -75,7 +76,7 @@ export const DangerZoneSection: React.FC = () => {
   /** A REJECTED/EXPIRED notice the developer has read and put away, so a new request can start. */
   const [dismissedId, setDismissedId] = useState<string | null>(null);
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const domainsQuery = useQuery({
     queryKey: ['data-reset', 'domains'],
     queryFn: () => api.request<{ domains: WipeDomain[] }>('/admin/data-reset/domains'),
     /**
@@ -90,6 +91,14 @@ export const DangerZoneSection: React.FC = () => {
     staleTime: 0,
     refetchOnMount: 'always',
   });
+  const { data, isLoading, error, refetch } = domainsQuery;
+  /*
+    `loadFailed`, not `isError`. A 5xx is retried once and then pauses while the tab is in the
+    background — no error, no data, not loading — and this screen's third branch renders the
+    domain list, so a refused read offered an empty selection of things to destroy with no sign
+    that anything had gone wrong.
+  */
+  const domainsFailed = loadFailed(domainsQuery);
   const domains = data?.domains ?? [];
 
   /**
@@ -295,7 +304,7 @@ export const DangerZoneSection: React.FC = () => {
       >
         {isLoading ? (
           <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
-        ) : isError ? (
+        ) : domainsFailed ? (
           <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
             <div>Couldn&apos;t load what can be cleared. {userMessage(error)}</div>
             <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }} onClick={() => refetch()}>Try again</button>

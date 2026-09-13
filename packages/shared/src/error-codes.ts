@@ -163,6 +163,76 @@ export const ASSAYER_ERROR_CODES = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Optimistic concurrency and idempotency
+// ---------------------------------------------------------------------------
+
+/**
+ * A write lost a race, or asked to redo one that already happened.
+ *
+ * These were, until now, a code EMBEDDED in the message text as a stable, colon-terminated
+ * prefix (`` `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${v}…` ``) rather
+ * than a proper `code` field — a real, deliberate convention (`assignment-constraint-errors.ts`'s
+ * own comment: "a stable prefix so a client can match on it"), just one `withCode` already made
+ * unnecessary by the time these were written. The prefix stays in the message — nothing here
+ * renames or removes it, per the rule at the top of this file — but the code now also rides where
+ * every other code does, so a client reads one field instead of parsing two different shapes of
+ * the same idea.
+ */
+export const CONCURRENCY_ERROR_CODES = {
+  /** A versioned write arrived with no `expectedVersion` at all. */
+  MISSING_EXPECTED_VERSION: 'MISSING_EXPECTED_VERSION',
+  /** The row moved since the version this write was decided against. Reload and reapply. */
+  STALE_ASSIGNMENT_VERSION: 'STALE_ASSIGNMENT_VERSION',
+  /** `expectedVersion` names a version that was never committed — ahead of the row, not behind it. */
+  INVALID_ASSIGNMENT_VERSION: 'INVALID_ASSIGNMENT_VERSION',
+  /** Same idea as `STALE_ASSIGNMENT_VERSION`, for an empanelment standing. */
+  STALE_EMPANELMENT_VERSION: 'STALE_EMPANELMENT_VERSION',
+  /** Same idea as `INVALID_ASSIGNMENT_VERSION`, for an empanelment standing. */
+  INVALID_EMPANELMENT_VERSION: 'INVALID_EMPANELMENT_VERSION',
+  /** A reassignment's own post-write read-back did not match the version the write should have produced. */
+  REASSIGNMENT_VERSION_MISMATCH: 'REASSIGNMENT_VERSION_MISMATCH',
+  /** A document verification decision was made against a version this document has moved past. */
+  DOCUMENT_VERSION_STALE: 'DOCUMENT_VERSION_STALE',
+  /** The document version this verification names is not the current one, so it cannot be verified. */
+  CANNOT_VERIFY_SUPERSEDED_VERSION: 'CANNOT_VERIFY_SUPERSEDED_VERSION',
+  /** The content hash supplied with a verification no longer matches the document's own. */
+  CONTENT_HASH_MISMATCH: 'CONTENT_HASH_MISMATCH',
+  /** Lost a database-level race (serialization failure/deadlock); the transaction rolled back cleanly. Retry. */
+  RETRY_CONTENTION: 'RETRY_CONTENTION',
+} as const;
+
+/** A request that looks like a resubmission, and what that resubmission ran into. */
+export const IDEMPOTENCY_ERROR_CODES = {
+  /** The same `clientRequestId` was already used for a genuinely different command/target/payload. */
+  IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST',
+  /** A PAN, Aadhaar, phone or name+phone/email match against an existing assayer record. */
+  DEFINITE_DUPLICATE: 'DEFINITE_DUPLICATE',
+  /** A shared-contact match (same phone, different name) not yet authorised as a household contact. */
+  PROBABLE_DUPLICATE: 'PROBABLE_DUPLICATE',
+} as const;
+
+/**
+ * A write that should have landed did not, caught by reading the row straight back rather than
+ * trusting the write call's own success — the belt on top of the transaction's own suspenders.
+ */
+export const WRITE_VERIFICATION_ERROR_CODES = {
+  ASSIGNMENT_NOT_PERSISTED: 'ASSIGNMENT_NOT_PERSISTED',
+  REASSIGNMENT_NOT_PERSISTED: 'REASSIGNMENT_NOT_PERSISTED',
+} as const;
+
+/** Business-rule conflicts that do not fit one of the groups above. */
+export const OTHER_CONFLICT_ERROR_CODES = {
+  /** Reassignment refused: the assignment being moved was already cancelled. */
+  ASSIGNMENT_CANCELLED: 'ASSIGNMENT_CANCELLED',
+  /** A client has no billing configuration row, so its work cannot be priced. */
+  NO_CLIENT_CONFIGURATION: 'NO_CLIENT_CONFIGURATION',
+  /** The uploaded bytes' checksum does not match what the client declared before sending them. */
+  UPLOAD_CHECKSUM_MISMATCH: 'UPLOAD_CHECKSUM_MISMATCH',
+  /** This document version already carries a different reviewer's verdict. */
+  DOCUMENT_ALREADY_REVIEWED: 'DOCUMENT_ALREADY_REVIEWED',
+} as const;
+
+// ---------------------------------------------------------------------------
 // Generic, and the floor under everything
 // ---------------------------------------------------------------------------
 
@@ -212,6 +282,10 @@ export const API_ERROR_CODES = {
   ...AUTH_ERROR_CODES,
   ...ASSAYER_ERROR_CODES,
   ...ASSIGNMENT_ERROR_CODES,
+  ...CONCURRENCY_ERROR_CODES,
+  ...IDEMPOTENCY_ERROR_CODES,
+  ...WRITE_VERIFICATION_ERROR_CODES,
+  ...OTHER_CONFLICT_ERROR_CODES,
   ...GENERAL_ERROR_CODES,
 } as const;
 
