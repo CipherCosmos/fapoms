@@ -4,6 +4,7 @@ import {
   translateError,
   classifyError,
   userMessage,
+  fieldErrorKeys,
   AppError,
 } from './errors';
 
@@ -114,5 +115,92 @@ describe('ErrorTranslator', () => {
       expect(classified.isConflict).toBe(true);
       expect(classified.isRetryable).toBe(false);
     });
+  });
+});
+
+/**
+ * A validation failure knows which boxes it is about. It used to stop knowing the moment it
+ * crossed into the app.
+ *
+ * NestJS sends an array of messages, each starting with the property it concerns.
+ * `joinServerMessage` collapses that into one paragraph for the banner — which is right, it is
+ * what a person reads — and the keys went with it. The registration wizard, the one screen that
+ * offers "Go to field", got them back by replaying the collapsing rule in reverse and matching the
+ * output by text. That works, and it is forty lines of comment explaining why it has to.
+ */
+describe('the field keys a validation failure names', () => {
+  const validation = (messages: string[]) => fromResponse(400, { message: messages });
+
+  it('keeps the property off each message, in the server’s own spelling', () => {
+    const err = validation([
+      'panNumber must match /^[A-Z]{5}[0-9]{4}[A-Z]$/',
+      'phone must be a valid Indian mobile number',
+    ]);
+    expect(fieldErrorKeys(err)).toEqual(['panNumber', 'phone']);
+  });
+
+  it('names a field once, however many of its rules failed', () => {
+    const err = validation([
+      'panNumber should not be empty',
+      'panNumber must be a string',
+      'panNumber must match /^[A-Z]{5}[0-9]{4}[A-Z]$/',
+    ]);
+    expect(fieldErrorKeys(err)).toEqual(['panNumber']);
+  });
+
+  it('keeps the path for a nested DTO, because that is what names the box', () => {
+    expect(fieldErrorKeys(validation(['configuration.defaultRadius must not be less than 1'])))
+      .toEqual(['configuration.defaultRadius']);
+  });
+
+  /**
+   * The distinction that stops this putting nonsense on a form: a property name has no spaces and
+   * looks like an identifier. A human-written sentence — which is most of what the API sends —
+   * does not, and yields nothing rather than a field called "Something".
+   */
+  it('takes nothing from a sentence written for a person', () => {
+    expect(fieldErrorKeys(validation(['Someone else changed this record while you were editing.'])))
+      .toEqual([]);
+    expect(fieldErrorKeys(fromResponse(409, { message: 'That PAN is already on the roster.' })))
+      .toEqual([]);
+  });
+
+  it('is empty, not undefined, for every other kind of failure', () => {
+    expect(fieldErrorKeys(fromResponse(500, {}))).toEqual([]);
+    expect(fieldErrorKeys(fromNetwork(new Error('offline')))).toEqual([]);
+    expect(fieldErrorKeys(new AppError('hand-made'))).toEqual([]);
+  });
+
+  it('survives being handed something that is not an error at all', () => {
+    // Callers reach this from a `catch`, where anything can arrive.
+    expect(fieldErrorKeys(undefined)).toEqual([]);
+    expect(fieldErrorKeys('a string someone threw')).toEqual([]);
+  });
+
+  /**
+   * And while the keys were being kept anyway: the banner used to print the property name as the
+   * server typed it — "PanNumber should not be empty", "MaxDailyWorkload must not be less than 1"
+   * — which is the schema describing itself to a clerk. Only the leading token is touched.
+   */
+  it('says the field in words, and leaves the rest of the server’s sentence alone', () => {
+    const err = validation(['panNumber should not be empty', 'phone should not be empty']);
+    expect(userMessage(err)).toContain('2 things need attention');
+    expect(userMessage(err)).toContain('Pan Number should not be empty.');
+    expect(userMessage(err)).toContain('Phone should not be empty.');
+  });
+
+  it('keeps a regex, a number or anything else the message carries after that word', () => {
+    const err = validation(['panNumber must match /^[A-Z]{5}[0-9]{4}[A-Z]$/']);
+    expect(userMessage(err)).toBe('Pan Number must match /^[A-Z]{5}[0-9]{4}[A-Z]$/.');
+  });
+
+  it('names the box, not the path, for a nested DTO', () => {
+    expect(userMessage(validation(['configuration.defaultRadius must not be less than 1'])))
+      .toBe('Default Radius must not be less than 1.');
+  });
+
+  it('does not touch a sentence written for a person', () => {
+    const human = 'That PAN is already on the roster.';
+    expect(userMessage(validation([human]))).toBe(human);
   });
 });

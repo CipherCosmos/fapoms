@@ -57,13 +57,29 @@ export class AppError extends Error {
   readonly status?: number;
   readonly category: ErrorCategory;
   readonly domainCode?: string;
+  /**
+   * The field keys a validation failure named, in the server's own spelling (`panNumber`, not
+   * "Pan Number").
+   *
+   * A NestJS validation failure arrives as an array of messages, each beginning with the property
+   * it is about. `joinServerMessage` collapses that into one readable paragraph and everything
+   * downstream got prose — so the one screen that wanted to put an error back on the box it
+   * belongs to had to re-derive the keys by replaying that transform in reverse and matching the
+   * result by text (`mappedFieldsFromError` in `hr/registration/steps.ts`, a forty-line comment
+   * explaining the round trip). Keeping the keys costs nothing and means no other form has to do
+   * that to offer the same thing.
+   *
+   * Empty for everything that is not a field-level validation failure, which is most errors.
+   */
+  readonly fields: readonly string[];
 
   constructor(
     userMessage: string,
     technical?: string,
     status?: number,
     category: ErrorCategory = 'user-correction-required',
-    domainCode?: string
+    domainCode?: string,
+    fields: readonly string[] = [],
   ) {
     super(userMessage);
     this.name = 'AppError';
@@ -72,6 +88,7 @@ export class AppError extends Error {
     this.status = status;
     this.category = category;
     this.domainCode = domainCode;
+    this.fields = fields;
   }
 }
 
@@ -201,17 +218,65 @@ function joinServerMessage(raw: unknown): string {
   if (Array.isArray(raw)) {
     const parts = raw.filter((m) => typeof m === 'string') as string[];
     if (parts.length === 0) return '';
-    if (parts.length === 1) return simplifyEnumMessage(parts[0]) ?? sentence(parts[0]);
+    if (parts.length === 1) return simplifyEnumMessage(parts[0]) ?? sentence(humaniseFieldPrefix(parts[0]));
 
     const lines = parts
       .slice(0, MAX_LISTED_VALIDATION_MESSAGES)
-      .map((m) => `• ${simplifyEnumMessage(m) ?? sentence(m)}`);
+      .map((m) => `• ${simplifyEnumMessage(m) ?? sentence(humaniseFieldPrefix(m))}`);
     const hidden = parts.length - lines.length;
     if (hidden > 0) lines.push(`• and ${hidden} more.`);
 
     return [`${parts.length} things need attention:`, ...lines].join('\n');
   }
   return typeof raw === 'string' ? raw : '';
+}
+
+/**
+ * The property each validation message is about, taken while the array is still an array.
+ *
+ * class-validator always puts the property first: "panNumber must match /^[A-Z]{5}…/". That word
+ * is the key, and it is the only part of the message worth keeping structured — everything else is
+ * prose meant for a person. Deduplicated, because one field failing three rules produces three
+ * messages naming it.
+ */
+/**
+ * A property name, not the first word of an ordinary sentence: no spaces by construction, starting
+ * lower-case, and possibly a dotted path into a nested DTO (`configuration.defaultRadius`). A
+ * sentence written for a person fails this, which is what keeps a field called "Something" off a
+ * form.
+ */
+const PROPERTY_TOKEN = /^[a-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)*$/;
+
+function fieldKeysOf(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const keys: string[] = [];
+  for (const message of raw) {
+    if (typeof message !== 'string') continue;
+    const first = message.trim().split(/\s+/)[0];
+    if (!PROPERTY_TOKEN.test(first)) continue;
+    if (!keys.includes(first)) keys.push(first);
+  }
+  return keys;
+}
+
+/**
+ * "panNumber must match /^[A-Z]{5}…/" -> "Pan Number must match /^[A-Z]{5}…/".
+ *
+ * The banner printed the property name as typed, so a clerk read "PanNumber should not be empty"
+ * and "MaxDailyWorkload must not be less than 1" — the schema talking about itself. Only the
+ * leading token is touched, and only when it is a property name; the rest of the message is the
+ * server's and stays exactly as sent. A dotted path keeps its last segment, because
+ * "Configuration.default Radius" names nothing a person can find on a form.
+ */
+function humaniseFieldPrefix(message: string): string {
+  const trimmed = message.trim();
+  const first = trimmed.split(/\s+/)[0] ?? '';
+  if (!PROPERTY_TOKEN.test(first)) return trimmed;
+  const leaf = first.slice(first.lastIndexOf('.') + 1);
+  const spaced = leaf
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, (c) => c.toUpperCase());
+  return spaced + trimmed.slice(first.length);
 }
 
 /** "projectNumber should not be empty" -> "Project Number" */
@@ -418,7 +483,21 @@ export function fromResponse(status: number, body: any): AppError {
     friendly = statusEntry ? statusEntry.message : 'Something went wrong. Please try again.';
   }
 
-  return new AppError(friendly, serverText || `HTTP ${status}`, status, category, domainCode);
+  return new AppError(
+    friendly, serverText || `HTTP ${status}`, status, category, domainCode, fieldKeysOf(body?.message),
+  );
+}
+
+/**
+ * The boxes a failed save was about, for any form that wants to put the error back on them.
+ *
+ * Reads the keys `fromResponse` kept, and falls back to nothing rather than guessing: a caller
+ * that gets an empty list shows the banner it always showed, which is what every form in the app
+ * did before this existed. Never throws on a non-`AppError`, because callers reach it from a
+ * `catch` where anything can arrive.
+ */
+export function fieldErrorKeys(err: unknown): readonly string[] {
+  return err instanceof AppError ? err.fields : [];
 }
 
 /** Builds the error for a fetch that never reached the server at all. */

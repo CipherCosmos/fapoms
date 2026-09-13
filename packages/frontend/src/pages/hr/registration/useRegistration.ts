@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { todayDateKey } from '@fapoms/shared';
 import { api } from '../../../services/api';
-import { userMessage } from '../../../services/errors';
+import { fieldErrorKeys, userMessage } from '../../../services/errors';
 import { stringifyList } from '../AssayerForms';
 import { isSensitiveKey, type Assayer } from '../assayer-shared';
 import { REGISTRATION_FIELDS, RATE_KEYS, type RegistrationStepKey } from './steps';
@@ -114,6 +114,11 @@ export interface RegistrationState {
   busy: boolean;
   /** A save that failed, in the server's own words. Cleared when the clerk edits anything. */
   error: string | null;
+  /**
+   * The boxes that failure named, if it was a field-level one — server spelling (`panNumber`).
+   * Empty for everything else, which is what the banner's fallback path is for.
+   */
+  errorFields: readonly string[];
   /** Set when a resumed record could not be loaded — the flow must not pretend it started fresh. */
   loadError: string | null;
   loading: boolean;
@@ -144,6 +149,14 @@ export function useRegistration(resumeAssayerId?: string): Registration {
   const [assayerId, setAssayerId] = useState<string | null>(resumeAssayerId ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The boxes the last failure was about, in the server's own spelling.
+   *
+   * `AppError` keeps these now, so the banner's "Go to field" links are built from what the server
+   * actually named rather than from re-parsing the sentence it was collapsed into. The prose path
+   * still works and is still the fallback — see `mappedFieldsFromError`.
+   */
+  const [errorFields, setErrorFields] = useState<readonly string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(resumeAssayerId));
 
@@ -242,15 +255,26 @@ export function useRegistration(resumeAssayerId?: string): Registration {
     return () => { alive = false; };
   }, [resumeAssayerId, adopt]);
 
+  /** Record a failure: its sentence and the boxes it named, always together. */
+  const fail = useCallback((message: string, cause?: unknown) => {
+    setError(message);
+    setErrorFields(fieldErrorKeys(cause));
+  }, []);
+
+  const clearError = useCallback(() => {
+    setError(null);
+    setErrorFields([]);
+  }, []);
+
   const set = useCallback((key: string, value: string) => {
     setForm((f) => ({ ...f, [key]: value }));
-    setError(null);
-  }, []);
+    clearError();
+  }, [clearError]);
 
   const merge = useCallback((values: Record<string, string>) => {
     setForm((f) => ({ ...f, ...values }));
-    setError(null);
-  }, []);
+    clearError();
+  }, [clearError]);
 
   const refresh = useCallback(async () => {
     const id = latest.current.assayerId;
@@ -258,13 +282,13 @@ export function useRegistration(resumeAssayerId?: string): Registration {
     try {
       const fresh = await api.request<Assayer>(`/assayers/${id}`);
       adopt(fresh);
-    } catch (e) { setError(userMessage(e)); }
-  }, [adopt]);
+    } catch (e) { fail(userMessage(e), e); }
+  }, [adopt, fail]);
 
   const commit = useCallback(async (): Promise<boolean> => {
     const { form: f, saved: s, record: r, assayerId: id } = latest.current;
     setBusy(true);
-    setError(null);
+    clearError();
     try {
       if (!id) {
         const created = await api.request<Assayer>('/assayers', {
@@ -276,7 +300,7 @@ export function useRegistration(resumeAssayerId?: string): Registration {
       }
 
       const plan = buildUpdatePlan(REGISTRATION_FIELDS, f, s, r ?? { workingHours: null, certifications: null });
-      if (plan.problems.length > 0) { setError(plan.problems.join(' ')); return false; }
+      if (plan.problems.length > 0) { fail(plan.problems.join(' ')); return false; }
       if (plan.body) {
         const updated = await api.request<Assayer>(`/assayers/${id}`, {
           method: 'PUT', body: JSON.stringify(plan.body),
@@ -301,8 +325,8 @@ export function useRegistration(resumeAssayerId?: string): Registration {
           try {
             await api.request(`/assayers/${id}/commercial`, { method: 'POST', body: JSON.stringify(rates) });
           } catch (e) {
-            setError(`Their details were saved, but the pay rates were not: ${userMessage(e)} `
-              + 'The rates are still in the boxes below — try again, or move on and set them later.');
+            fail(`Their details were saved, but the pay rates were not: ${userMessage(e)} `
+              + 'The rates are still in the boxes below — try again, or move on and set them later.', e);
             return false;
           }
         }
@@ -314,12 +338,12 @@ export function useRegistration(resumeAssayerId?: string): Registration {
       }
       return true;
     } catch (e) {
-      setError(userMessage(e));
+      fail(userMessage(e), e);
       return false;
     } finally {
       setBusy(false);
     }
-  }, [adopt]);
+  }, [adopt, clearError, fail]);
 
   const isDirty = useCallback((keys: readonly string[]): boolean => {
     const { form: f, saved: s } = latest.current;
@@ -327,8 +351,8 @@ export function useRegistration(resumeAssayerId?: string): Registration {
   }, []);
 
   return {
-    form, record, assayerId, busy, error, loadError, loading,
-    set, merge, reveal, commit, refresh, dismissError: () => setError(null), isDirty,
+    form, record, assayerId, busy, error, errorFields, loadError, loading,
+    set, merge, reveal, commit, refresh, dismissError: clearError, isDirty,
   };
 }
 

@@ -917,12 +917,14 @@ export const RegistrationWizard: React.FC<{
           read, so `mappedFieldsFromError` replays the same collapsing rule against every box this
           flow owns and offers each recovered one as its own jump, landing on the right step with
           the box focused rather than leaving the clerk to hunt for what "Aadhaar Number" means here.
+          `AppError` keeps the server's own field keys now, so that reverse-engineering is the
+          fallback rather than the only path — see `fieldErrorKeys` in services/errors.ts.
         */
         <AlertBanner type="error" onClose={reg.dismissError}>
           <div ref={errorBannerRef} style={{ scrollMarginTop: SCROLL_CLEARANCE_PX, whiteSpace: 'pre-line' }}>{reg.error}</div>
-          {mappedFieldsFromError(reg.error).length > 0 && (
+          {mappedFieldsFromError(reg.error, reg.errorFields).length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: '8px' }}>
-              {mappedFieldsFromError(reg.error).map((f) => (
+              {mappedFieldsFromError(reg.error, reg.errorFields).map((f) => (
                 <button key={f.key} type="button" onClick={() => jumpToField(f.key, f.step)} style={linkButtonStyle}>
                   {f.label} — Go to field
                 </button>

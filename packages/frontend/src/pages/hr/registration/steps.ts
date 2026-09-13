@@ -336,7 +336,7 @@ export interface ErrorField {
  * Never guesses: a field this cannot place is simply left out of the returned list, and the
  * banner's own sentence — which callers keep showing verbatim — is unaffected either way.
  */
-export function mappedFieldsFromError(message: string): ErrorField[] {
+export function mappedFieldsFromError(message: string, keys: readonly string[] = []): ErrorField[] {
   const fields = [...REGISTRATION_FIELDS, ...RATE_FIELDS];
   const labelOf = (key: string): string =>
     key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
@@ -372,9 +372,29 @@ export function mappedFieldsFromError(message: string): ErrorField[] {
     if (!firstWord) return undefined;
     const asKey = firstWord.charAt(0).toLowerCase() + firstWord.slice(1);
     if (fields.some((f) => f.key === asKey)) return asKey;
-    // Fall back to the spaced label, so an older collapsed message still resolves.
-    return keyByLabel.get(firstWord);
+    if (keyByLabel.has(firstWord)) return keyByLabel.get(firstWord);
+    /*
+      Multi-word labels, because the banner now prints "Pan Number should not be empty" rather
+      than "PanNumber…" — one whitespace token is no longer enough to recognise a field by. The
+      longest matching label wins, so "Bank Name" is not read as "Bank".
+    */
+    const text = line.replace(/^[•\s-]+/, '').trim();
+    let best: string | undefined;
+    for (const [label, key] of keyByLabel) {
+      if (!text.startsWith(label)) continue;
+      if (!best || label.length > (labelOf(best).length)) best = key;
+    }
+    return best;
   };
+
+  /*
+    The keys the server named, when we still have them. `AppError` keeps the property off each
+    class-validator message now, so this is the direct answer and everything below is the fallback
+    for a message that arrived as prose — an older server, a cached bundle, or one of this flow's
+    own locally-composed problem sentences, which never had keys to keep.
+  */
+  for (const key of keys) addIfKnown(key);
+  if (found.length > 0) return found;
 
   for (const line of message.split('\n')) {
     if (/^\s*\d+\s+things?\s+need attention/i.test(line)) continue;

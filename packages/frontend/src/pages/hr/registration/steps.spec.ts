@@ -3,8 +3,10 @@ import {
 } from '@fapoms/shared';
 import {
   REGISTRATION_FIELDS, RATE_KEYS, REGISTRATION_STEP_KEYS, STANDING_CHOICES, STEP_FIELDS,
-  activationGaps, firstIncompleteStep, isPlannableForSomeone, stepOfField, validateStep,
+  activationGaps, firstIncompleteStep, isPlannableForSomeone, mappedFieldsFromError, stepOfField,
+  validateStep,
 } from './steps';
+import { fromResponse } from '../../../services/errors';
 
 // `services/api` pulls in the socket client, which reads `import.meta.env` and cannot be
 // parsed by jest's CommonJS runtime. Mocked here purely to keep this pure module's tests pure —
@@ -242,5 +244,65 @@ describe('reopening an interrupted registration', () => {
       ifscCode: 'HDFC0001234', joiningDate: '2026-01-01', emergencyContactPhone: '+919876543211',
       latitude: 10.1,
     } as never)).toBe('review');
+  });
+});
+
+/**
+ * "Go to field", and the two ways it can know which field.
+ *
+ * The banner shows the server's sentence and offers a jump to each box it named. Where those names
+ * come from changed: `AppError` keeps the property off each class-validator message now, so the
+ * keys are read directly. The prose parsing underneath stays, because it is what a locally-composed
+ * problem sentence and an older server still go through — and because it is the half that breaks
+ * silently, being a text match against a message nobody here controls.
+ */
+describe('mappedFieldsFromError', () => {
+  const validation = (messages: string[]) => fromResponse(400, { message: messages });
+
+  it('places every box a validation failure named, from the keys it kept', () => {
+    const err = validation([
+      'panNumber must match /^[A-Z]{5}[0-9]{4}[A-Z]$/',
+      'ifscCode must match /^[A-Z]{4}0[A-Z0-9]{6}$/',
+    ]);
+    const mapped = mappedFieldsFromError(err.userMessage, err.fields);
+    expect(mapped.map((f) => f.key)).toEqual(['panNumber', 'ifscCode']);
+    // Each jump has to land somewhere: a key with no step is dropped, never guessed at.
+    expect(mapped.every((f) => REGISTRATION_STEP_KEYS.includes(f.step))).toBe(true);
+    expect(mapped.map((f) => f.label)).not.toContain('panNumber');
+  });
+
+  /**
+   * The half that has to keep working when the keys are not there, exercised with the exact
+   * sentence `joinServerMessage` produces — including its new spaced field names, which one
+   * whitespace token is no longer enough to recognise.
+   */
+  it('recovers them from the banner sentence alone when no keys came with it', () => {
+    const err = validation(['panNumber should not be empty', 'bankName should not be empty']);
+    expect(mappedFieldsFromError(err.userMessage, []).map((f) => f.key))
+      .toEqual(['panNumber', 'bankName']);
+  });
+
+  it('reads a single-field failure, which never goes through that sentence at all', () => {
+    const err = validation(['aadhaarNumber must be a valid Aadhaar number']);
+    expect(mappedFieldsFromError(err.userMessage, []).map((f) => f.key)).toEqual(['aadhaarNumber']);
+  });
+
+  it('takes the longest matching label, so "Bank Name" is not read as "Bank"', () => {
+    const mapped = mappedFieldsFromError('Bank Name should not be empty.', []);
+    expect(mapped.map((f) => f.key)).toEqual(['bankName']);
+  });
+
+  it('offers nothing rather than a guess, for a message about no box in this flow', () => {
+    expect(mappedFieldsFromError('Someone else changed this record while you were editing.', []))
+      .toEqual([]);
+    expect(mappedFieldsFromError('', [])).toEqual([]);
+  });
+
+  it('names a box once, however many of its rules failed', () => {
+    const err = validation([
+      'panNumber should not be empty',
+      'panNumber must match /^[A-Z]{5}[0-9]{4}[A-Z]$/',
+    ]);
+    expect(mappedFieldsFromError(err.userMessage, err.fields).map((f) => f.key)).toEqual(['panNumber']);
   });
 });
