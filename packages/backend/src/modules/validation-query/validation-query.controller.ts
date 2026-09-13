@@ -6,8 +6,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { assertUploadAllowed } from '../document/upload-validation';
-import { memoryStorage } from 'multer';
+import { assertUploadAllowed, uploadMulterOptions } from '../document/upload-validation';
 import { IsOptional, IsString, IsArray, IsNumber, IsObject, IsIn, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ValidationQueryService, ClarificationFilter } from './validation-query.service';
@@ -29,10 +28,7 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
  * Files arrive in req.file.buffer and are immediately pushed to object storage
  * (MinIO / S3). Nothing touches the local filesystem.
  */
-const chatMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
-};
+const chatMulterOptions = uploadMulterOptions({ maxBytes: 25 * 1024 * 1024 }); // 25 MB
 
 /**
  * One attachment on a thread message.

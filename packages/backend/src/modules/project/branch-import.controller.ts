@@ -38,7 +38,6 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { SystemRole } from '@fapoms/shared';
@@ -50,13 +49,9 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { uploadMulterOptions, MAX_UPLOAD_BYTES } from '../document/upload-validation';
 
-/** Same shape as `documentUploadMulterOptions` in document.controller.ts — see that file. */
-const branchUploadMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
-};
+const branchUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
 
 @ApiTags('Branches')
 @ApiBearerAuth()

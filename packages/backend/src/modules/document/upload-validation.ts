@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { memoryStorage } from 'multer';
 import { DEFAULT_MAX_UPLOAD_MB, SCAN_UPLOAD_MIME_TYPES } from '@fapoms/shared';
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
@@ -88,6 +89,28 @@ export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || D
  */
 export const MAX_RESUMABLE_UPLOAD_BYTES =
   (Number(process.env.DOCUMENT_MAX_RESUMABLE_UPLOAD_MB) || 100) * 1024 * 1024;
+
+/**
+ * The `FileInterceptor`/`FilesInterceptor` options object every upload route builds by hand today
+ * — `{ storage: memoryStorage(), limits: {...} }`, near-identical across document, customer-master,
+ * assayer, branch-import, project, feedback and validation-query controllers (several of whose own
+ * comments already point at each other with "same shape as X — see that file", which is the
+ * pattern actually drifting apart, not staying in sync). One factory, called with the ceiling that
+ * differs per route, replaces the hand-copied object literal.
+ *
+ * `memoryStorage()` — never disk — is the one thing every call site agreed on regardless: nothing
+ * in this codebase should let multer buffer an upload to the container's local filesystem, since
+ * `assertUploadAllowed` and the malware scanner both expect an in-memory `Buffer`.
+ */
+export function uploadMulterOptions(opts: { maxBytes: number; maxFiles?: number }) {
+  return {
+    storage: memoryStorage(),
+    limits: {
+      fileSize: opts.maxBytes,
+      ...(opts.maxFiles !== undefined ? { files: opts.maxFiles } : {}),
+    },
+  };
+}
 
 const HUMAN_ALLOWED = 'PDF, images (JPEG/PNG/WebP/HEIC), Excel and CSV';
 

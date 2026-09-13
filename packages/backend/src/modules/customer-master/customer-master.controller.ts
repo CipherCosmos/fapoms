@@ -2,20 +2,15 @@ import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, Res
 import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { assertUploadAllowed, MAX_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES } from '../document/upload-validation';
+import { assertUploadAllowed, uploadMulterOptions, MAX_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES } from '../document/upload-validation';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { CustomerMasterService } from './customer-master.service';
 import { ImportJobService } from '../import/import-job.service';
 
-/** Same shape as `documentUploadMulterOptions` in document.controller.ts — see that file. */
-const customerMasterUploadMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
-};
+const customerMasterUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';

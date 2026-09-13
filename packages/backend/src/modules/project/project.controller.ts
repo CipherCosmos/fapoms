@@ -24,15 +24,10 @@ import {
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { uploadMulterOptions, MAX_UPLOAD_BYTES } from '../document/upload-validation';
 
-/** Same shape as `documentUploadMulterOptions` in document.controller.ts — see that file. */
-const projectBranchUploadMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
-};
+const projectBranchUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
 
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, IsEnum, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
 import { Transform } from 'class-transformer';

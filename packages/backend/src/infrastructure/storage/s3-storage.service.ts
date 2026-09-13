@@ -11,6 +11,11 @@ import {
   HeadBucketCommand,
   PutBucketCorsCommand,
   PutBucketEncryptionCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  ListPartsCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -342,5 +347,88 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
       ContentType: contentType,
     });
     return getSignedUrl(this.client, command, { expiresIn });
+  }
+
+  // ── Multipart upload ──────────────────────────────────────────────────────
+  //
+  // Reuses this same tuned client (retry/timeout config, MinIO endpoint override) rather than a
+  // second, separately-constructed S3Client — see the interface's own comment on why this half
+  // used to exist as its own thing in ChunkedUploadService.
+
+  /** Same key scheme as `saveFile` — one place decides what an uploaded object is named. */
+  private deriveKey(fileName: string): string {
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return `uploads/${Date.now()}-${safeFileName}`;
+  }
+
+  async createMultipartUpload(fileName: string, contentType?: string): Promise<{ uploadId: string; key: string }> {
+    const key = this.deriveKey(fileName);
+    const { UploadId } = await this.client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: key,
+        ...(contentType ? { ContentType: contentType } : {}),
+        ...this.sseParams(),
+      }),
+    );
+    if (!UploadId) {
+      throw new InternalServerErrorException('Object storage did not return an upload id for a new multipart upload.');
+    }
+    return { uploadId: UploadId, key };
+  }
+
+  async uploadPart(key: string, uploadId: string, partNumber: number, data: Buffer): Promise<void> {
+    await this.client.send(
+      new UploadPartCommand({
+        Bucket: this.bucket,
+        Key: key,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+        Body: data,
+        ContentLength: data.length,
+      }),
+    );
+  }
+
+  async listUploadedParts(key: string, uploadId: string): Promise<number[]> {
+    const { Parts } = await this.client.send(
+      new ListPartsCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId }),
+    );
+    return (Parts ?? [])
+      .map((p) => p.PartNumber ?? 0)
+      .filter((n) => n > 0)
+      .sort((a, b) => a - b);
+  }
+
+  async getSignedPartUploadUrl(key: string, uploadId: string, partNumber: number, expiresIn = 3600): Promise<string> {
+    const command = new UploadPartCommand({
+      Bucket: this.bucket,
+      Key: key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+    });
+    return getSignedUrl(this.client, command, { expiresIn });
+  }
+
+  async completeMultipartUpload(key: string, uploadId: string): Promise<void> {
+    const { Parts } = await this.client.send(
+      new ListPartsCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId }),
+    );
+    await this.client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: (Parts ?? []).map((p) => ({ PartNumber: p.PartNumber, ETag: p.ETag })),
+        },
+      }),
+    );
+  }
+
+  async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
+    await this.client.send(
+      new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId }),
+    );
   }
 }

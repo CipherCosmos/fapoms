@@ -1,20 +1,22 @@
-import { Injectable, Logger, BadRequestException, NotFoundException, Inject, OnModuleInit } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Logger, BadRequestException, NotFoundException, Inject } from '@nestjs/common';
 import { createHash } from 'crypto';
-import {
-  S3Client,
-  CreateMultipartUploadCommand,
-  UploadPartCommand,
-  CompleteMultipartUploadCommand,
-  AbortMultipartUploadCommand,
-  ListPartsCommand,
-  HeadBucketCommand,
-  CreateBucketCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from '../../infrastructure/redis/redis-client.module';
+import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { assertUploadAllowed, MAX_RESUMABLE_UPLOAD_BYTES } from './upload-validation';
+
+/** The subset of StorageEngine this service actually needs, all present at once or not at all. */
+type MultipartStorage = Required<
+  Pick<
+    StorageEngine,
+    | 'createMultipartUpload'
+    | 'uploadPart'
+    | 'listUploadedParts'
+    | 'getSignedPartUploadUrl'
+    | 'completeMultipartUpload'
+    | 'abortMultipartUpload'
+  >
+>;
 
 export interface UploadSession {
   uploadId: string;       // Our internal ID (hex MD5)
@@ -48,7 +50,7 @@ export interface UploadSession {
  * (stateless, ephemeral) API container.
  */
 @Injectable()
-export class ChunkedUploadService implements OnModuleInit {
+export class ChunkedUploadService {
   private readonly logger = new Logger(ChunkedUploadService.name);
 
   /**
@@ -98,51 +100,33 @@ export class ChunkedUploadService implements OnModuleInit {
   /** Abandoned sessions are reclaimed after this long. */
   private static readonly SESSION_TTL_SECONDS = 24 * 60 * 60;
 
-  private readonly s3: S3Client;
-  private readonly bucket: string;
-
   constructor(
-    private readonly config: ConfigService,
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
-  ) {
-    this.bucket = this.config.get<string>('S3_BUCKET_NAME', 'fapoms-documents');
-    const endpoint = this.config.get<string>('S3_ENDPOINT', '');
-    const forcePathStyle = this.config.get<string>('S3_FORCE_PATH_STYLE', 'false') === 'true';
+  ) {}
 
-    this.s3 = new S3Client({
-      region: this.config.get<string>('AWS_REGION', 'us-east-1'),
-      credentials: {
-        accessKeyId: this.config.get<string>('AWS_ACCESS_KEY_ID', ''),
-        secretAccessKey: this.config.get<string>('AWS_SECRET_ACCESS_KEY', ''),
-      },
-      ...(endpoint ? { endpoint } : {}),
-      ...(forcePathStyle ? { forcePathStyle: true } : {}),
-    });
-  }
-
-  async onModuleInit(): Promise<void> {
-    // Ensure the bucket exists. S3StorageService does the same on its init,
-    // but ChunkedUploadService has its own S3Client instance so we must also
-    // guarantee the bucket here in case this service initialises first.
-    try {
-      await this.s3.send(new HeadBucketCommand({ Bucket: this.bucket }));
-    } catch (err: any) {
-      if (err?.name === 'NoSuchBucket' || err?.$metadata?.httpStatusCode === 404) {
-        try {
-          await this.s3.send(new CreateBucketCommand({ Bucket: this.bucket }));
-          this.logger.log(`Created storage bucket "${this.bucket}" from ChunkedUploadService.`);
-        } catch (createErr: any) {
-          // Ignore if bucket was created by S3StorageService concurrently
-          if (
-            createErr?.name !== 'BucketAlreadyOwnedByYou' &&
-            createErr?.name !== 'BucketAlreadyExists' &&
-            createErr?.$metadata?.httpStatusCode !== 409
-          ) {
-            throw createErr;
-          }
-        }
-      }
+  /**
+   * Multipart is optional on `StorageEngine` — `LocalStorageService` has no real analog, the way
+   * it also has no presigned-URL support (see `document.controller.ts`'s own `typeof` guard for
+   * that pair). Surfaced here, once, with a clear message, rather than as "storage.uploadPart is
+   * not a function" from deep inside a chunk upload. `main.ts`'s production guard already
+   * requires `STORAGE_DRIVER=s3`, so this only bites in local dev/test with the driver unset.
+   */
+  private requireMultipart(): MultipartStorage {
+    const s = this.storage;
+    if (
+      typeof s.createMultipartUpload !== 'function' ||
+      typeof s.uploadPart !== 'function' ||
+      typeof s.listUploadedParts !== 'function' ||
+      typeof s.getSignedPartUploadUrl !== 'function' ||
+      typeof s.completeMultipartUpload !== 'function' ||
+      typeof s.abortMultipartUpload !== 'function'
+    ) {
+      throw new BadRequestException(
+        'Resumable chunked upload needs real multipart object storage (STORAGE_DRIVER=s3); the local storage driver does not support it.',
+      );
     }
+    return s as MultipartStorage;
   }
 
   // ─── Redis helpers ────────────────────────────────────────────────────────
@@ -210,22 +194,15 @@ export class ChunkedUploadService implements OnModuleInit {
       .update(`${input.assessmentId}:${input.fileName}:${input.fileSize}:${Date.now()}:${Math.random()}`)
       .digest('hex');
 
-    const safeFileName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const s3Key = `uploads/${Date.now()}-${safeFileName}`;
-
-    // Open the multipart upload in MinIO. The returned s3UploadId must be
-    // supplied in every subsequent UploadPart and CompleteMultipartUpload call.
-    const { UploadId: s3UploadId } = await this.s3.send(
-      new CreateMultipartUploadCommand({
-        Bucket: this.bucket,
-        Key: s3Key,
-        ContentType: 'application/pdf',
-      }),
+    // Open the multipart upload. The store derives the key (same scheme `saveFile` uses) and
+    // returns it — this service used to compute its own key before calling CreateMultipartUpload,
+    // duplicating exactly the logic `saveFile` already has; now there is one place that decides
+    // what an uploaded object is named. The returned s3UploadId must be supplied in every
+    // subsequent part upload and completion call.
+    const { uploadId: s3UploadId, key: s3Key } = await this.requireMultipart().createMultipartUpload(
+      input.fileName,
+      'application/pdf',
     );
-
-    if (!s3UploadId) {
-      throw new BadRequestException('Failed to open a multipart upload session in object storage.');
-    }
 
     const session: UploadSession = {
       uploadId,
@@ -259,17 +236,9 @@ export class ChunkedUploadService implements OnModuleInit {
    */
   async receivedChunks(uploadId: string): Promise<number[]> {
     const session = await this.loadSession(uploadId);
-    const { Parts } = await this.s3.send(
-      new ListPartsCommand({
-        Bucket: this.bucket,
-        Key: session.s3Key,
-        UploadId: session.s3UploadId,
-      }),
-    );
+    const parts = await this.requireMultipart().listUploadedParts(session.s3Key, session.s3UploadId);
     // S3 part numbers are 1-indexed; we expose 0-indexed to match the original API.
-    return (Parts ?? [])
-      .map((p) => (p.PartNumber ?? 1) - 1)
-      .sort((a, b) => a - b);
+    return parts.map((n) => n - 1).sort((a, b) => a - b);
   }
 
   /**
@@ -294,16 +263,7 @@ export class ChunkedUploadService implements OnModuleInit {
       throw new BadRequestException('Empty chunk.');
     }
 
-    await this.s3.send(
-      new UploadPartCommand({
-        Bucket: this.bucket,
-        Key: session.s3Key,
-        UploadId: session.s3UploadId,
-        PartNumber: index + 1, // S3 is 1-indexed
-        Body: data,
-        ContentLength: data.length,
-      }),
-    );
+    await this.requireMultipart().uploadPart(session.s3Key, session.s3UploadId, index + 1, data); // S3 is 1-indexed
 
     const receivedCount = (await this.receivedChunks(uploadId)).length;
     return { received: receivedCount, total: session.totalChunks };
@@ -330,14 +290,12 @@ export class ChunkedUploadService implements OnModuleInit {
       );
     }
 
-    const command = new UploadPartCommand({
-      Bucket: this.bucket,
-      Key: session.s3Key,
-      UploadId: session.s3UploadId,
-      PartNumber: partNumber,
-    });
-
-    const presignedUrl = await getSignedUrl(this.s3, command, { expiresIn });
+    const presignedUrl = await this.requireMultipart().getSignedPartUploadUrl(
+      session.s3Key,
+      session.s3UploadId,
+      partNumber,
+      expiresIn,
+    );
     return { presignedUrl, partNumber };
   }
 
@@ -351,18 +309,11 @@ export class ChunkedUploadService implements OnModuleInit {
    */
   async assemble(uploadId: string): Promise<{ s3Key: string; session: UploadSession }> {
     const session = await this.loadSession(uploadId);
+    const storage = this.requireMultipart();
 
-    // Fetch the actual uploaded parts with their ETags — required by S3's
-    // CompleteMultipartUpload contract.
-    const { Parts } = await this.s3.send(
-      new ListPartsCommand({
-        Bucket: this.bucket,
-        Key: session.s3Key,
-        UploadId: session.s3UploadId,
-      }),
-    );
-
-    const received = (Parts ?? []).map((p) => p.PartNumber ?? 0);
+    // Which parts actually landed — checked before completing, so an incomplete upload is refused
+    // by name rather than assembled into a corrupt file.
+    const received = await storage.listUploadedParts(session.s3Key, session.s3UploadId);
 
     if (received.length !== session.totalChunks) {
       const missing: number[] = [];
@@ -374,19 +325,10 @@ export class ChunkedUploadService implements OnModuleInit {
       );
     }
 
-    await this.s3.send(
-      new CompleteMultipartUploadCommand({
-        Bucket: this.bucket,
-        Key: session.s3Key,
-        UploadId: session.s3UploadId,
-        MultipartUpload: {
-          Parts: (Parts ?? []).map((p) => ({
-            PartNumber: p.PartNumber,
-            ETag: p.ETag,
-          })),
-        },
-      }),
-    );
+    // The store re-fetches the parts itself to build the ETag manifest CompleteMultipartUpload
+    // needs — one extra cheap List call, in exchange for the caller never having to know an ETag
+    // exists at all.
+    await storage.completeMultipartUpload(session.s3Key, session.s3UploadId);
 
     this.logger.log(
       `Upload session ${uploadId} completed → object key: ${session.s3Key}`,
@@ -410,13 +352,7 @@ export class ChunkedUploadService implements OnModuleInit {
     }
 
     try {
-      await this.s3.send(
-        new AbortMultipartUploadCommand({
-          Bucket: this.bucket,
-          Key: session.s3Key,
-          UploadId: session.s3UploadId,
-        }),
-      );
+      await this.requireMultipart().abortMultipartUpload(session.s3Key, session.s3UploadId);
     } catch (err: any) {
       // Log but don't propagate — the session is being discarded regardless.
       this.logger.warn(`Could not abort S3 multipart upload ${session.s3UploadId}: ${err?.message}`);

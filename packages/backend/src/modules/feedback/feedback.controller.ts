@@ -3,7 +3,6 @@ import {
   UseInterceptors, UploadedFiles, BadRequestException, NotFoundException, Inject, Logger,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import {
@@ -19,7 +18,7 @@ import { FeedbackCategory, FeedbackSeverity, FeedbackStatus, SystemRole } from '
 import { FeedbackAttachmentDto } from './feedback-attachment.dto';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { assertUploadAllowed } from '../document/upload-validation';
+import { assertUploadAllowed, uploadMulterOptions } from '../document/upload-validation';
 import { MAX_FEEDBACK_ATTACHMENT_MB, MAX_FEEDBACK_ATTACHMENTS } from '@fapoms/shared';
 
 /**
@@ -41,10 +40,10 @@ const FEEDBACK_MAX_ATTACHMENT_BYTES = MAX_FEEDBACK_ATTACHMENT_MB * 1024 * 1024;
  * rejected. `assertUploadAllowed` still runs, for the type allowlist multer knows nothing about
  * and to produce the message a person reads.
  */
-const feedbackMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: FEEDBACK_MAX_ATTACHMENT_BYTES, files: MAX_FEEDBACK_ATTACHMENTS },
-};
+const feedbackMulterOptions = uploadMulterOptions({
+  maxBytes: FEEDBACK_MAX_ATTACHMENT_BYTES,
+  maxFiles: MAX_FEEDBACK_ATTACHMENTS,
+});
 
 // Real classes, not inline TS types: the global ValidationPipe runs `whitelist: true`,
 // which strips any property without a class-validator decorator on it.

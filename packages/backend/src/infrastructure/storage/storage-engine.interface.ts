@@ -43,4 +43,41 @@ export interface StorageEngine {
    * Crucial for high throughput and zero server bottleneck on low 2G/3G networks.
    */
   getSignedUploadUrl?(key: string, contentType?: string, expiresIn?: number): Promise<string>;
+
+  // ── Multipart upload — server-orchestrated resumable upload for large files ─────────────────
+  //
+  // `ChunkedUploadService` used to build its own S3Client and call these AWS SDK commands
+  // directly, rather than going through this interface — a second, independently-tuned S3
+  // connection existed for no reason a StorageEngine method couldn't serve, and this class's own
+  // `onModuleInit` had to re-guard the exact same "does the bucket exist yet" race
+  // `S3StorageService.onModuleInit` already handles, because the two were unaware of each other.
+  // Optional, like the presign methods above: there is no meaningful local-disk multipart
+  // primitive, so `LocalStorageService` implements none of these, and a caller must check for
+  // their presence first (see `ChunkedUploadService.requireMultipart`).
+
+  /**
+   * Open a new multipart upload. The storage layer derives the key the same way `saveFile` does
+   * — callers must not construct it themselves — so key-generation logic has exactly one home
+   * regardless of which upload path produced it.
+   */
+  createMultipartUpload?(fileName: string, contentType?: string): Promise<{ uploadId: string; key: string }>;
+
+  /** Upload one part. `partNumber` is 1-indexed, matching S3's own multipart part numbering. */
+  uploadPart?(key: string, uploadId: string, partNumber: number, data: Buffer): Promise<void>;
+
+  /** Which 1-indexed part numbers the store has actually received, in ascending order. */
+  listUploadedParts?(key: string, uploadId: string): Promise<number[]>;
+
+  /** Pre-signed PUT URL for one part, so a client can upload it directly to the store. */
+  getSignedPartUploadUrl?(key: string, uploadId: string, partNumber: number, expiresIn?: number): Promise<string>;
+
+  /**
+   * Assemble every uploaded part into the final object. The store is responsible for fetching
+   * each part's ETag and building the completion manifest — a caller only names which upload to
+   * finish, never touches an ETag.
+   */
+  completeMultipartUpload?(key: string, uploadId: string): Promise<void>;
+
+  /** Discard an in-progress multipart upload and reclaim its staged parts. */
+  abortMultipartUpload?(key: string, uploadId: string): Promise<void>;
 }

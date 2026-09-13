@@ -2,7 +2,6 @@ import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDP
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength, IsEmail } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
 import { Response } from 'express';
@@ -22,7 +21,7 @@ import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMe
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
-import { assertUploadAllowed, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
+import { assertUploadAllowed, uploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
 import { AssignmentService } from '../assignment/assignment.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
@@ -42,16 +41,10 @@ import { deriveFileIntegrity, verifyClientHash } from './document-integrity';
  * multer just gets to reject the oversized request earlier, mid-stream, rather than after the
  * whole file has already landed in the process.
  */
-const documentUploadMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
-};
+const documentUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
 
 /** Same ceiling as `documentUploadMulterOptions`, plus the per-request file-count cap that already exists as the interceptor's own `maxCount` argument — restated here so multer enforces both at the streaming layer. */
-const documentBatchUploadMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: 100 },
-};
+const documentBatchUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 100 });
 
 /**
  * The resumable-chunk upload route has no `assertUploadAllowed` call of its own — each PUT is
@@ -60,10 +53,7 @@ const documentBatchUploadMulterOptions = {
  * therefore never legitimately exceed that same ceiling, so it is reused here as the multer-level
  * cap rather than inventing a separate number for chunks.
  */
-const resumableChunkMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_RESUMABLE_UPLOAD_BYTES },
-};
+const resumableChunkMulterOptions = uploadMulterOptions({ maxBytes: MAX_RESUMABLE_UPLOAD_BYTES });
 
 
 /**
