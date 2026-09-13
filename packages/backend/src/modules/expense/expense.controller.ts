@@ -81,10 +81,7 @@ export class ExpenseController {
     // An assayer may only claim on their own assignment; the service enforces it when this
     // resolves to an id, and staff raising a claim on someone's behalf skip the check.
     const claimant = assayerIdOf(req.user);
-    return {
-      success: true,
-      data: await this.expenseService.create(assignmentId, dto, req.user.userId ?? req.user.id, claimant, scope),
-    };
+    return await this.expenseService.create(assignmentId, dto, req.user.userId ?? req.user.id, claimant, scope);
   }
 
   @Get('assignments/:assignmentId/expenses')
@@ -100,21 +97,21 @@ export class ExpenseController {
     if (claimant && expenses.some((e) => e.assayerId !== claimant)) {
       throw new ForbiddenException('You can only view claims on your own assignments.');
     }
-    return { success: true, data: expenses };
+    return expenses;
   }
 
   @Get('expenses/mine')
   @Roles(SystemRole.ASSAYER)
   @ApiOperation({ summary: "The signed-in assayer's own claims" })
   async findMine(@Req() req: any, @Query('status') status?: ExpenseStatus) {
-    return { success: true, data: await this.expenseService.findForAssayer(req.user.id, status) };
+    return await this.expenseService.findForAssayer(req.user.id, status);
   }
 
   @Get('expenses/mine/summary')
   @Roles(SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Claim totals for the mobile earnings screen' })
   async mySummary(@Req() req: any) {
-    return { success: true, data: await this.expenseService.summaryForAssayer(req.user.id) };
+    return await this.expenseService.summaryForAssayer(req.user.id);
   }
 
   @Get('expenses/pending')
@@ -126,7 +123,7 @@ export class ExpenseController {
   @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Claims awaiting a decision' })
   async findPending(@GlobalScopeFilter() scope?: GlobalScope) {
-    return { success: true, data: await this.expenseService.findPending(scope) };
+    return await this.expenseService.findPending(scope);
   }
 
   @Get('assayers/:assayerId/expenses')
@@ -138,7 +135,7 @@ export class ExpenseController {
     @Query('status') status?: ExpenseStatus,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return { success: true, data: await this.expenseService.findForAssayer(assayerId, status, scope) };
+    return await this.expenseService.findForAssayer(assayerId, status, scope);
   }
 
   // Approving reimbursement commits money, so this is narrower than the read routes above.
@@ -152,9 +149,6 @@ export class ExpenseController {
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return {
-      success: true,
-      data: await this.expenseService.review(expenseId, dto.approve, req.user.userId ?? req.user.id, dto.notes, scope),
-    };
+    return await this.expenseService.review(expenseId, dto.approve, req.user.userId ?? req.user.id, dto.notes, scope);
   }
 }

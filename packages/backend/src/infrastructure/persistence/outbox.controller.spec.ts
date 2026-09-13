@@ -94,8 +94,7 @@ describe('OutboxController', () => {
       // Counts only, no rows, nothing identifying. A dashboard tile polling this must not write
       // an audit row per poll, or the trail becomes unreadable exactly when it is needed.
       await expect(controller.health()).resolves.toEqual({
-        success: true,
-        data: { pending: 2, deadLettered: 1, retrying: 1, oldestPendingAgeSeconds: 90, maxAttempts: 15 },
+        pending: 2, deadLettered: 1, retrying: 1, oldestPendingAgeSeconds: 90, maxAttempts: 15,
       });
       expect(audit.recordEventSafe).not.toHaveBeenCalled();
     });
@@ -104,7 +103,7 @@ describe('OutboxController', () => {
       // 25 is what ParseLimitPipe hands the method; the handler never sees the raw query value.
       const res: any = await controller.list(25, req);
       expect(deadLetters.list).toHaveBeenCalledWith(25);
-      expect(res.data.count).toBe(1);
+      expect(res.count).toBe(1);
       expect(audit.recordEventSafe).toHaveBeenCalledWith(
         expect.objectContaining({
           eventType: 'OUTBOX_DEAD_LETTERS_READ',
@@ -151,7 +150,7 @@ describe('OutboxController', () => {
     it('records a replay with the attempt count it undid, not the reset one', async () => {
       const res: any = await controller.replay('e1', req);
       expect(deadLetters.replay).toHaveBeenCalledWith('e1', 'dev-1');
-      expect(res.data.previousAttempts).toBe(15);
+      expect(res.previousAttempts).toBe(15);
       const [event] = audit.recordEventSafe.mock.calls.at(-1)!;
       expect(event).toMatchObject({
         eventType: 'OUTBOX_EVENT_REPLAYED',

@@ -25,7 +25,7 @@ describe('the pre-login identifier check', () => {
 
     const res: any = await c.verifyAssayer({ identifier: 'AS-01' });
 
-    expect(res.data).toEqual({
+    expect(res).toEqual({
       verified: true, displayName: 'Meera Iyer', assayerCode: 'AS-01', needsAppAccess: true,
     });
   });
@@ -37,7 +37,7 @@ describe('the pre-login identifier check', () => {
 
     const res: any = await c.verifyAssayer({ identifier: 'AS-01' });
 
-    expect(res.data).toEqual({ verified: true, displayName: 'Meera Iyer', assayerCode: 'AS-01' });
+    expect(res).toEqual({ verified: true, displayName: 'Meera Iyer', assayerCode: 'AS-01' });
   });
 
   it('still says nothing at all about an identifier it does not recognise', async () => {
@@ -45,7 +45,7 @@ describe('the pre-login identifier check', () => {
 
     const res: any = await c.verifyAssayer({ identifier: 'nobody' });
 
-    expect(res.data).toEqual({ verified: false });
+    expect(res).toEqual({ verified: false });
   });
 
   it('never returns contact details or identifiers the caller did not supply', async () => {
@@ -58,6 +58,6 @@ describe('the pre-login identifier check', () => {
 
     const res: any = await c.verifyAssayer({ identifier: 'AS-01' });
 
-    expect(Object.keys(res.data).sort()).toEqual(['assayerCode', 'displayName', 'verified']);
+    expect(Object.keys(res).sort()).toEqual(['assayerCode', 'displayName', 'verified']);
   });
 });

@@ -173,7 +173,7 @@ export class GeoController {
     // A miss (malformed code, unknown code, or the lookup provider being unreachable) is a
     // normal, expected outcome for a form field, not an error — so it is a 200 with null data,
     // not a 404. The caller decides what "we couldn't find that" looks like in the UI.
-    return { success: true, data: result };
+    return result;
   }
 
   @Get('states')
@@ -183,7 +183,7 @@ export class GeoController {
     const states = await this.cache.wrap('ref:geo:states', GEO_CACHE_TTL_SECONDS, () =>
       this.stateRepo.find({ order: { name: 'ASC' } }),
     );
-    return { success: true, data: states };
+    return states;
   }
 
   @Get('states/:stateId/districts')
@@ -193,7 +193,7 @@ export class GeoController {
     const districts = await this.cache.wrap(`ref:geo:districts:${stateId}`, GEO_CACHE_TTL_SECONDS, () =>
       this.districtRepo.find({ where: { stateId }, order: { name: 'ASC' } }),
     );
-    return { success: true, data: districts };
+    return districts;
   }
 
   @Get('districts/:districtId/cities')
@@ -203,7 +203,7 @@ export class GeoController {
     const cities = await this.cache.wrap(`ref:geo:cities:${districtId}`, GEO_CACHE_TTL_SECONDS, () =>
       this.cityRepo.find({ where: { districtId }, order: { name: 'ASC' } }),
     );
-    return { success: true, data: cities };
+    return cities;
   }
 
   @Post('route/optimize')
@@ -217,10 +217,7 @@ export class GeoController {
       throw new BadRequestException('Optimization limit exceeded: Cannot optimize more than 20 destinations at once.');
     }
     const result = await this.routingService.optimizeRoute(dto.origin, dto.destinations, dto.roundTrip, dto.mode);
-    return {
-      success: true,
-      data: result,
-    };
+    return result;
   }
 
   // -----------------------------------------------------------------------
@@ -234,7 +231,7 @@ export class GeoController {
   @RequirePermissions('branch:view:organization', 'assayer:view:organization')
   @ApiOperation({ summary: 'How precise the stored coordinates are, by tier' })
   async precisionSummary(@Param('target') target: string) {
-    return { success: true, data: await this.geoPrecision.summary(assertTarget(target)) };
+    return await this.geoPrecision.summary(assertTarget(target));
   }
 
   @Get('precision/:target/imprecise')
@@ -247,7 +244,7 @@ export class GeoController {
     @Param('target') target: string,
     @Query('limit', new ParseLimitPipe({ default: 100, max: 500 })) limit: number,
   ) {
-    return { success: true, data: await this.geoPrecision.imprecise(assertTarget(target), limit) };
+    return await this.geoPrecision.imprecise(assertTarget(target), limit);
   }
 
   @Post('precision/:target/backfill')
@@ -263,7 +260,7 @@ export class GeoController {
     // Bounded, and deliberately not "all". The free providers allow about one lookup a second,
     // so an unbounded run on a national estate would hold an HTTP request open for hours.
     const limit = Math.min(Math.max(Number(dto?.limit) || 25, 1), 200);
-    return { success: true, data: await this.geoPrecision.backfill(assertTarget(target), limit) };
+    return await this.geoPrecision.backfill(assertTarget(target), limit);
   }
 
   @Post('branches/enrich-addresses')
@@ -276,7 +273,7 @@ export class GeoController {
     // large bite in one call. Only branches still missing a derivable field are touched, so a
     // re-run is a cheap no-op.
     const limit = Math.min(Math.max(Number(dto?.limit) || 500, 1), 6000);
-    return { success: true, data: await this.geoPrecision.enrichBranchAddresses(limit) };
+    return await this.geoPrecision.enrichBranchAddresses(limit);
   }
 
   @Post('precision/:target/:id/pin')
@@ -292,6 +289,6 @@ export class GeoController {
     const geo = await this.geoPrecision.pinManually(
       assertTarget(target), id, dto.latitude, dto.longitude, req.user.id, dto.note,
     );
-    return { success: true, data: geo };
+    return geo;
   }
 }

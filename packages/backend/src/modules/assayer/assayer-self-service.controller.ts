@@ -195,18 +195,15 @@ export class AssayerSelfServiceController {
     const outstanding = required.filter((item) => !item.hasScan);
 
     return {
-      success: true,
-      data: {
-        items: [...required, ...optional],
-        summary: {
-          required: required.length,
-          received: required.length - outstanding.length,
-          outstanding: outstanding.length,
-          // Named so a client cannot mistake it for a gate. Nothing in this system waits on it:
-          // HR completes registrations from the desk with no phone involved, and that has to stay
-          // true — this route describes progress, it does not confer or withhold anything.
-          complete: outstanding.length === 0,
-        },
+      items: [...required, ...optional],
+      summary: {
+        required: required.length,
+        received: required.length - outstanding.length,
+        outstanding: outstanding.length,
+        // Named so a client cannot mistake it for a gate. Nothing in this system waits on it:
+        // HR completes registrations from the desk with no phone involved, and that has to stay
+        // true — this route describes progress, it does not confer or withhold anything.
+        complete: outstanding.length === 0,
       },
     };
   }

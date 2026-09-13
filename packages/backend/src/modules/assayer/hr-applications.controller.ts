@@ -64,7 +64,7 @@ export class HrApplicationsController {
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'List self-registration applications, optionally filtered by status' })
   async list(@Query('status') status?: ApplicationStatus) {
-    return { success: true, data: await this.registrationApplications.listApplications(status) };
+    return await this.registrationApplications.listApplications(status);
   }
 
   @Get(':id')
@@ -72,7 +72,7 @@ export class HrApplicationsController {
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'One application, with its uploaded documents' })
   async get(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.registrationApplications.getApplication(id) };
+    return await this.registrationApplications.getApplication(id);
   }
 
   @Post(':id/approve')
@@ -90,7 +90,7 @@ export class HrApplicationsController {
     );
     // `gaps` goes back to the caller, not only to the audit trail. A promotion whose rate card or
     // identity fields were refused used to read as a clean success on the screen that approved it.
-    return { success: true, data: { ...assayer, gaps } };
+    return { ...assayer, gaps };
   }
 
   @Post(':id/resend-invite')
@@ -98,7 +98,7 @@ export class HrApplicationsController {
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Send the candidate a fresh registration link, invalidating any earlier one' })
   async resendInvite(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    return { success: true, data: await this.registrationApplications.resendInvite(id, req.user.id) };
+    return await this.registrationApplications.resendInvite(id, req.user.id);
   }
 
   @Post(':id/reject')
@@ -106,7 +106,7 @@ export class HrApplicationsController {
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Decline the application' })
   async reject(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RejectApplicationDto, @Req() req: any) {
-    return { success: true, data: await this.registrationApplications.reject(id, req.user.id, dto.reason) };
+    return await this.registrationApplications.reject(id, req.user.id, dto.reason);
   }
 
   @Post(':id/request-info')
@@ -114,6 +114,6 @@ export class HrApplicationsController {
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Ask the candidate for a correction or an additional document' })
   async requestMoreInfo(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RequestMoreInfoDto, @Req() req: any) {
-    return { success: true, data: await this.registrationApplications.requestMoreInfo(id, req.user.id, dto.notes) };
+    return await this.registrationApplications.requestMoreInfo(id, req.user.id, dto.notes);
   }
 }

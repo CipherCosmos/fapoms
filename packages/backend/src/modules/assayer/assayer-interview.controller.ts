@@ -44,7 +44,7 @@ export class AssayerInterviewController {
       req.user.displayName ?? req.user.username ?? req.user.email ?? undefined,
       req.user.organizationId,
     );
-    return { success: true, data: interview };
+    return interview;
   }
 
   @Get()
@@ -52,6 +52,6 @@ export class AssayerInterviewController {
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'The interview log' })
   async list() {
-    return { success: true, data: await this.interviews.list() };
+    return await this.interviews.list();
   }
 }

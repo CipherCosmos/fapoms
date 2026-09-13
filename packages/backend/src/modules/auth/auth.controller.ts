@@ -101,26 +101,14 @@ export class AuthController {
   @ApiOperation({ summary: 'Check an assayer identifier exists (pre-login, no credentials returned)' })
   async verifyAssayer(@Body() dto: VerifyAssayerDto) {
     const found = await this.authService.verifyAssayerIdentifier(dto.identifier);
-    return {
-      success: true,
-      // Deliberately minimal: existence plus a display name. No contact details,
-      // no banking, no identifiers beyond the one already supplied by the caller.
-      //
-      // `needsAppAccess` is the one addition, and it is a flag rather than a fact about the
-      // person: it says the account exists but has never been given a password. 540 assayers are
-      // in that state — imported from the roster, never invited — and without this the app
-      // greeted them by name and then said their password was wrong for an account that has
-      // never had one. Passing it through is the whole point of computing it; it was being
-      // dropped here while the service worked it out.
-      data: found
-        ? {
-          verified: true,
-          displayName: found.displayName,
-          assayerCode: found.assayerCode,
-          ...(found.needsAppAccess ? { needsAppAccess: true } : {}),
-        }
-        : { verified: false },
-    };
+    return found
+              ? {
+                verified: true,
+                displayName: found.displayName,
+                assayerCode: found.assayerCode,
+                ...(found.needsAppAccess ? { needsAppAccess: true } : {}),
+              }
+              : { verified: false };
   }
 
   /**
@@ -142,12 +130,9 @@ export class AuthController {
   async status() {
     const database = await probeDatabase(this.dataSource);
     return {
-      success: true,
-      data: {
-        status: database === 'up' ? 'online' : 'degraded',
-        database: database === 'up' ? 'connected' : 'disconnected',
-        timestamp: new Date().toISOString(),
-      },
+      status: database === 'up' ? 'online' : 'degraded',
+      database: database === 'up' ? 'connected' : 'disconnected',
+      timestamp: new Date().toISOString(),
     };
   }
 
@@ -183,24 +168,18 @@ export class AuthController {
     // The account has a confirmed second factor: the password was right but there is NO session yet.
     // Return the stable MFA-challenge contract; the client collects a code and calls /auth/mfa/verify.
     if ('mfaRequired' in result) {
-      return {
-        success: true,
-        data: { mfaRequired: true, challengeId: result.challengeId, factors: result.factors },
-      };
+      return { mfaRequired: true, challengeId: result.challengeId, factors: result.factors };
     }
 
     return {
-      success: true,
-      data: {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresIn: result.expiresIn,
-        user: {
-          ...result.user,
-          roles: Array.isArray(result.user.roles)
-            ? result.user.roles.map((r: any) => (typeof r === 'string' ? r : r.name))
-            : [],
-        },
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiresIn: result.expiresIn,
+      user: {
+        ...result.user,
+        roles: Array.isArray(result.user.roles)
+          ? result.user.roles.map((r: any) => (typeof r === 'string' ? r : r.name))
+          : [],
       },
     };
   }
@@ -218,17 +197,14 @@ export class AuthController {
     const userAgent = req.headers['user-agent'];
     const result = await this.authService.verifyMfaChallenge(dto.challengeId, dto.code, ipAddress, userAgent);
     return {
-      success: true,
-      data: {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresIn: result.expiresIn,
-        user: {
-          ...result.user,
-          roles: Array.isArray(result.user.roles)
-            ? result.user.roles.map((r: any) => (typeof r === 'string' ? r : r.name))
-            : [],
-        },
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiresIn: result.expiresIn,
+      user: {
+        ...result.user,
+        roles: Array.isArray(result.user.roles)
+          ? result.user.roles.map((r: any) => (typeof r === 'string' ? r : r.name))
+          : [],
       },
     };
   }
@@ -244,7 +220,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Send a login code over email or SMS for an open MFA challenge' })
   async sendMfaCode(@Body() dto: MfaSendDto) {
     const result = await this.authService.sendMfaChallengeCode(dto.challengeId, dto.factor);
-    return { success: true, data: result };
+    return result;
   }
 
   // Same reasoning as login: it exchanges a stored secret for a session.
@@ -263,28 +239,25 @@ export class AuthController {
     );
 
     return {
-      success: true,
-      data: {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresIn: result.expiresIn,
-        user: {
-          id: result.user.id,
-          username: result.user.username,
-          name: result.user.name,
-          email: result.user.email,
-          phone: result.user.phone,
-          status: result.user.status,
-          /**
-           * Biometric resume happens with no password typed, so this response is the only
-           * moment the app can learn a forced change is pending and open the change-password
-           * screen. It was omitted here while `/auth/login` returned it — which made the
-           * biometric path a silent walk past the rotation requirement: the guard now refuses
-           * such a session everywhere except the change-password flow, and without this field
-           * the app could not say why.
-           */
-          mustChangePassword: !!result.user.mustChangePassword,
-        },
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiresIn: result.expiresIn,
+      user: {
+        id: result.user.id,
+        username: result.user.username,
+        name: result.user.name,
+        email: result.user.email,
+        phone: result.user.phone,
+        status: result.user.status,
+        /**
+         * Biometric resume happens with no password typed, so this response is the only
+         * moment the app can learn a forced change is pending and open the change-password
+         * screen. It was omitted here while `/auth/login` returned it — which made the
+         * biometric path a silent walk past the rotation requirement: the guard now refuses
+         * such a session everywhere except the change-password flow, and without this field
+         * the app could not say why.
+         */
+        mustChangePassword: !!result.user.mustChangePassword,
       },
     };
   }
@@ -305,10 +278,7 @@ export class AuthController {
       userAgent,
     );
 
-    return {
-      success: true,
-      data: tokens,
-    };
+    return tokens;
   }
 
   @Post('logout')
@@ -323,10 +293,7 @@ export class AuthController {
     const ipAddress = req.ip || req.connection?.remoteAddress;
     await this.authService.logout(req.user.id, ipAddress);
 
-    return {
-      success: true,
-      data: { message: 'Logged out successfully' },
-    };
+    return { message: 'Logged out successfully' };
   }
 
 }

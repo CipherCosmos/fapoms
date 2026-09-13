@@ -104,30 +104,27 @@ export class PlatformSettingsController {
   @Roles()
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Operational limits the web and mobile clients must render' })
-  async limits(): Promise<{ success: boolean; data: { maxNegotiationRounds: number; checkInGeofenceMeters: number; maxSingleExpenseClaim: number } }> {
+  async limits(): Promise<{ maxNegotiationRounds: number; checkInGeofenceMeters: number; maxSingleExpenseClaim: number }> {
     const [checkInGeofenceMeters, maxSingleExpenseClaim] = await Promise.all([
       this.settings.getNumber('field.checkInGeofenceMeters', 2000),
       this.settings.getNumber('expense.maxSingleClaim', 50_000),
     ]);
     return {
-      success: true,
-      data: {
-        /**
-         * A literal 0, not a setting, and the KEY DELIBERATELY STAYS.
-         *
-         * In-app fee negotiation is removed (2026-09): `field.maxNegotiationRounds` is gone
-         * from the settings registry and the counter-offer route refuses by name. But every
-         * shipped mobile build gates its own counter-offer button on this number — the block
-         * comment above explains why the cap was served rather than hardcoded — so returning 0
-         * makes those builds show "Negotiation closed" on their own, with no forced update.
-         * This is the machine half of the kill-switch; the transition route's explicit 400 is
-         * the human half for any build that posts a counter anyway. Remove the key only when
-         * pre-removal APKs are no longer in the field.
-         */
-        maxNegotiationRounds: 0,
-        checkInGeofenceMeters,
-        maxSingleExpenseClaim,
-      },
+      /**
+       * A literal 0, not a setting, and the KEY DELIBERATELY STAYS.
+       *
+       * In-app fee negotiation is removed (2026-09): `field.maxNegotiationRounds` is gone
+       * from the settings registry and the counter-offer route refuses by name. But every
+       * shipped mobile build gates its own counter-offer button on this number — the block
+       * comment above explains why the cap was served rather than hardcoded — so returning 0
+       * makes those builds show "Negotiation closed" on their own, with no forced update.
+       * This is the machine half of the kill-switch; the transition route's explicit 400 is
+       * the human half for any build that posts a counter anyway. Remove the key only when
+       * pre-removal APKs are no longer in the field.
+       */
+      maxNegotiationRounds: 0,
+      checkInGeofenceMeters,
+      maxSingleExpenseClaim,
     };
   }
 
@@ -154,7 +151,7 @@ export class PlatformSettingsController {
   @Get()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Every platform setting, its value in force, and where that value came from' })
-  async findAll(@Req() req: any): Promise<{ success: boolean; data: { groups: (typeof SETTINGS_GROUPS)[number][]; settings: ResolvedSetting[] } }> {
+  async findAll(@Req() req: any): Promise<{ groups: (typeof SETTINGS_GROUPS)[number][]; settings: ResolvedSetting[] }> {
     const roles: string[] = this.rolesOf(req);
     const expanded = expandRoles(roles);
 
@@ -171,15 +168,12 @@ export class PlatformSettingsController {
      * group (billing.assayerInvoicingEnabled) is hidden from the group it visually lives in.
      */
     if (expanded.includes(SystemRole.DEVELOPER)) {
-      return { success: true, data: { groups: [...SETTINGS_GROUPS], settings } };
+      return { groups: [...SETTINGS_GROUPS], settings };
     }
     if (expanded.includes(SystemRole.ADMIN)) {
       return {
-        success: true,
-        data: {
-          groups: SETTINGS_GROUPS.filter((g) => audienceOfGroup(g.key) === 'business'),
-          settings: settings.filter((s) => audienceOfSetting(s.key) === 'business'),
-        },
+        groups: SETTINGS_GROUPS.filter((g) => audienceOfGroup(g.key) === 'business'),
+        settings: settings.filter((s) => audienceOfSetting(s.key) === 'business'),
       };
     }
 
@@ -189,11 +183,8 @@ export class PlatformSettingsController {
       roles.flatMap((r) => PlatformSettingsController.READABLE_GROUPS[r] ?? []),
     );
     return {
-      success: true,
-      data: {
-        groups: SETTINGS_GROUPS.filter((g) => allowed.has(g.key)),
-        settings: settings.filter((s) => allowed.has(s.group)),
-      },
+      groups: SETTINGS_GROUPS.filter((g) => allowed.has(g.key)),
+      settings: settings.filter((s) => allowed.has(s.group)),
     };
   }
 
@@ -226,7 +217,7 @@ export class PlatformSettingsController {
     @Param('key') key: string,
     @Body() dto: SetSettingRequestDto,
     @Req() req: any,
-  ): Promise<{ success: boolean; data: ResolvedSetting[] }> {
+  ): Promise<ResolvedSetting[]> {
     await this.settings.set(key, dto.value, req.user?.id, this.rolesOf(req));
 
     /**
@@ -254,7 +245,7 @@ export class PlatformSettingsController {
       metadata: { settingKey: key },
     });
 
-    return { success: true, data: await this.settings.describeAll() };
+    return await this.settings.describeAll();
   }
 
   /** Same two-layer reasoning — `@RoleOnly()` door plus per-key audience fence — as `set()` above. */
@@ -263,7 +254,7 @@ export class PlatformSettingsController {
   @RoleOnly()
   @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Clear a saved setting so it follows the environment or shipped default again' })
-  async reset(@Param('key') key: string, @Req() req: any): Promise<{ success: boolean; data: ResolvedSetting[] }> {
+  async reset(@Param('key') key: string, @Req() req: any): Promise<ResolvedSetting[]> {
     await this.settings.reset(key, req.user?.id, this.rolesOf(req));
     await this.audit.recordEventSafe({
       category: EventCategory.SYSTEM,
@@ -274,6 +265,6 @@ export class PlatformSettingsController {
       remarks: `Reset platform setting "${key}" to its default.`,
       metadata: { settingKey: key },
     });
-    return { success: true, data: await this.settings.describeAll() };
+    return await this.settings.describeAll();
   }
 }

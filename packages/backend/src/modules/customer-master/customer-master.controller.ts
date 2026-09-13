@@ -92,15 +92,12 @@ export class CustomerMasterController {
     // shared `useImportJob` hook follows this one exactly as it follows the roster and branch runs.
     res?.status(202);
     return {
-      success: true,
-      data: {
-        ...job,
-        queued: true,
-        statusUrl: `/customer-master/import-jobs/${job.jobId}`,
-        message:
-          'Upload received. Reconciling every row against this client\'s branches runs in the '
-          + 'background — it does not need this page kept open; the report appears when it finishes.',
-      },
+      ...job,
+      queued: true,
+      statusUrl: `/customer-master/import-jobs/${job.jobId}`,
+      message:
+        'Upload received. Reconciling every row against this client\'s branches runs in the '
+        + 'background — it does not need this page kept open; the report appears when it finishes.',
     };
   }
 
@@ -116,7 +113,7 @@ export class CustomerMasterController {
   @ApiOperation({ summary: 'Progress and result of a queued customer master import' })
   async importJobStatus(@Param('jobId') jobId: string, @Req() req: any) {
     const status = await this.importJobService.getCustomerMasterImportStatus(req.user.id, jobId);
-    return { success: true, data: status };
+    return status;
   }
 
   @Post('versions/:versionId/approve')
@@ -130,10 +127,7 @@ export class CustomerMasterController {
     @Req() req: any,
   ) {
     const version = await this.customerMasterService.approveVersion(versionId, req.user.id);
-    return {
-      success: true,
-      data: version,
-    };
+    return version;
   }
 
   @Get('projects/:projectId/daily-run')
@@ -146,7 +140,7 @@ export class CustomerMasterController {
     @Query('auditDate') auditDate: string,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return { success: true, data: await this.customerMasterService.dailyRun(projectId, auditDate, scope) };
+    return await this.customerMasterService.dailyRun(projectId, auditDate, scope);
   }
 
   @Get('projects/:projectId/versions')
@@ -165,10 +159,7 @@ export class CustomerMasterController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const list = await this.customerMasterService.findByProject(projectId, scope);
-    return {
-      success: true,
-      data: list,
-    };
+    return list;
   }
 
   @Get('versions/:versionId/records')

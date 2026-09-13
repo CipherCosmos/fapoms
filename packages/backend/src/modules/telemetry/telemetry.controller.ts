@@ -37,7 +37,7 @@ export class TelemetryController {
       sessionId: req.user.sid ?? null,
       ipAddress: req.ip ?? null,
     });
-    return { success: true, data: { recorded } };
+    return { recorded };
   }
 
   /** One user's recent UI activity — administrators and auditors only. */

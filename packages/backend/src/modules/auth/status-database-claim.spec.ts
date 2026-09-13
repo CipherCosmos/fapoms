@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { Reflector } from '@nestjs/core';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { AddressInfo } from 'net';
@@ -7,6 +8,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { HealthController } from '../../health.controller';
 import { probeDatabase } from '../../health-probe';
+import { ResponseInterceptor } from '../../infrastructure/http/response.interceptor';
 
 /**
  * AN ENDPOINT NAMED "status" MUST BE ABLE TO GO RED.
@@ -78,6 +80,11 @@ async function serve(dataSource: DataSource): Promise<{ app: INestApplication; b
   const app = moduleRef.createNestApplication();
   // The same prefix `main.ts` sets, so the path asserted below is the path deployed.
   app.setGlobalPrefix('api/v1');
+  // The same envelope main.ts applies globally — without it this rig would answer with whatever
+  // shape the controller happens to return today, not the shape the real deployment serves, and
+  // a de-envelope change to the controller (making it return bare data and let this interceptor
+  // wrap it) would silently stop being wire-compatible with what this test asserts.
+  app.useGlobalInterceptors(new ResponseInterceptor(app.get(Reflector)));
   await app.init();
   await app.listen(0);
   const { port } = app.getHttpServer().address() as AddressInfo;

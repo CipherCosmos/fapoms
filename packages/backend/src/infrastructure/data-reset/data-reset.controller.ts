@@ -89,13 +89,13 @@ export class DataResetController {
   @Get('domains')
   @ApiOperation({ summary: 'Every wipeable domain, with current row counts' })
   async domains() {
-    return { success: true, data: await this.dataReset.describeDomains() };
+    return await this.dataReset.describeDomains();
   }
 
   @Post('preview')
   @ApiOperation({ summary: 'What a selection would actually touch, before committing to it' })
   async preview(@Body() dto: PreviewDataResetDto) {
-    return { success: true, data: await this.dataReset.preview(dto.domainKeys) };
+    return await this.dataReset.preview(dto.domainKeys);
   }
 
   // ── The two-person rule ─────────────────────────────────────────────────
@@ -103,7 +103,7 @@ export class DataResetController {
   @Post('requests')
   @ApiOperation({ summary: 'File a data-wipe request for an admin to approve' })
   async createRequest(@Body() dto: CreateDestructiveRequestDto, @Req() req: any) {
-    return { success: true, data: await this.approvals.request(req.user.id, dto.domains) };
+    return await this.approvals.request(req.user.id, dto.domains);
   }
 
   @Get('requests')
@@ -126,7 +126,7 @@ export class DataResetController {
   @Post('requests/:id/cancel')
   @ApiOperation({ summary: 'Withdraw your own request before it is decided' })
   async cancelRequest(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: any) {
-    return { success: true, data: await this.approvals.cancel(id, req.user.id) };
+    return await this.approvals.cancel(id, req.user.id);
   }
 
   /**
@@ -144,7 +144,7 @@ export class DataResetController {
   @RequirePermissions('system:approve:platform')
   @ApiOperation({ summary: "Approve a developer's data-wipe request (never your own)" })
   async approveRequest(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: any) {
-    return { success: true, data: await this.approvals.decide(id, req.user.id, true) };
+    return await this.approvals.decide(id, req.user.id, true);
   }
 
   @Post('requests/:id/reject')
@@ -157,7 +157,7 @@ export class DataResetController {
     @Body() dto: RejectDestructiveRequestDto,
     @Req() req: any,
   ) {
-    return { success: true, data: await this.approvals.decide(id, req.user.id, false, dto.reason) };
+    return await this.approvals.decide(id, req.user.id, false, dto.reason);
   }
 
   // ── Execution ───────────────────────────────────────────────────────────
@@ -201,6 +201,6 @@ export class DataResetController {
         this.approvals.assertExecutableAndConsume(dto.requestId, req.user.id, dto.domainKeys, manager),
     });
 
-    return { success: true, data: result };
+    return result;
   }
 }

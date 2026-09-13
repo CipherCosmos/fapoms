@@ -59,10 +59,7 @@ export class OcrBoundaryController {
     @Req() req: any,
   ) {
     const job = await this.ocrProcessingService.createJob(documentId, req.user.id);
-    return {
-      success: true,
-      data: job,
-    };
+    return job;
   }
 
   @Post('jobs/:id/results')
@@ -76,10 +73,7 @@ export class OcrBoundaryController {
     @Req() req: any,
   ) {
     const job = await this.ocrProcessingService.receiveOcrResults(id, dto.externalJobId, dto.ocrPayload, req.user.id);
-    return {
-      success: true,
-      data: job,
-    };
+    return job;
   }
 
   /**
@@ -102,10 +96,7 @@ export class OcrBoundaryController {
   @ApiOperation({ summary: 'Get status tracking details of an OCR job' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const job = await this.ocrProcessingService.findOne(id);
-    return {
-      success: true,
-      data: job,
-    };
+    return job;
   }
 
   @Post('jobs/:id/retry')
@@ -115,9 +106,6 @@ export class OcrBoundaryController {
   @ApiOperation({ summary: 'Retry a failed OCR job request' })
   async retryJob(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const job = await this.ocrProcessingService.retryJob(id, req.user.id);
-    return {
-      success: true,
-      data: job,
-    };
+    return job;
   }
 }

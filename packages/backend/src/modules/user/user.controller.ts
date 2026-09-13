@@ -198,10 +198,7 @@ export class UserController {
   @PasswordChangeExempt()
   @ApiOperation({ summary: 'Get current user profile' })
   getMe(@Req() req: any) {
-    return {
-      success: true,
-      data: this.sanitizeUser(req.user),
-    };
+    return this.sanitizeUser(req.user);
   }
 
   @Put('me')
@@ -209,10 +206,7 @@ export class UserController {
   @ApiOperation({ summary: 'Self update personal details (first name, last name, phone)' })
   async updateMe(@Body() dto: SelfUpdateProfileDto, @Req() req: any) {
     const updated = await this.userService.updateUser(req.user.id, dto, req.user.id);
-    return {
-      success: true,
-      data: this.sanitizeUser(updated),
-    };
+    return this.sanitizeUser(updated);
   }
 
   @Post('me/change-password')
@@ -222,10 +216,7 @@ export class UserController {
   @ApiOperation({ summary: 'Change current user password' })
   async changePassword(@Body() dto: SelfChangePasswordDto, @Req() req: any) {
     await this.userService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
-    return {
-      success: true,
-      data: { message: 'Password changed successfully.' },
-    };
+    return { message: 'Password changed successfully.' };
   }
 
   @Post('bulk/status')
@@ -234,7 +225,7 @@ export class UserController {
   @ApiOperation({ summary: 'Activate or suspend a batch of users in one operation' })
   async bulkSetStatus(@Body() dto: BulkSetStatusDto, @Req() req: any) {
     const result = await this.userService.bulkSetStatus(dto.ids, dto.status, req.user.id);
-    return { success: true, data: result };
+    return result;
   }
 
   @Post()
@@ -243,16 +234,7 @@ export class UserController {
   @ApiOperation({ summary: 'Create a new user' })
   async create(@Body() dto: CreateUserRequestDto, @Req() req: any) {
     const { user, generatedPassword } = await this.userService.createUser(dto, req.user.id);
-    /**
-     * The only moment this password is ever readable. It is deliberately not stored, not
-     * logged and not retrievable from any other endpoint, so the admin must pass it on from
-     * this response; if it is lost, the recovery path is POST /users/:id/reset-password.
-     * The field is absent when the caller supplied their own password.
-     */
-    return {
-      success: true,
-      data: { ...this.sanitizeUser(user), initialPassword: generatedPassword },
-    };
+    return { ...this.sanitizeUser(user), initialPassword: generatedPassword };
   }
 
   @Get()
@@ -315,10 +297,7 @@ export class UserController {
   @ApiOperation({ summary: 'List all available roles' })
   async findAllRoles() {
     const roles = await this.userService.findAllRoles();
-    return {
-      success: true,
-      data: roles.map((r) => ({ ...r, isSystem: SYSTEM_ROLE_NAMES.includes(r.name) })),
-    };
+    return roles.map((r) => ({ ...r, isSystem: SYSTEM_ROLE_NAMES.includes(r.name) }));
   }
 
   /** The permission catalogue the role editor renders as a matrix. */
@@ -329,7 +308,7 @@ export class UserController {
   @ApiOperation({ summary: 'List every permission that can be granted to a role' })
   async findAllPermissions() {
     const permissions = await this.userService.findAllPermissions();
-    return { success: true, data: permissions };
+    return permissions;
   }
 
   /**
@@ -348,7 +327,7 @@ export class UserController {
   @ApiOperation({ summary: 'Create a custom role' })
   async createRole(@Body() dto: CreateRoleRequestDto, @Req() req: any) {
     const role = await this.userService.createRole(dto, req.user.id);
-    return { success: true, data: role };
+    return role;
   }
 
   @Put('roles/:id')
@@ -361,7 +340,7 @@ export class UserController {
     @Req() req: any,
   ) {
     const role = await this.userService.updateRole(id, dto, req.user.id);
-    return { success: true, data: role };
+    return role;
   }
 
   /**
@@ -379,7 +358,7 @@ export class UserController {
     @Req() req: any,
   ) {
     const role = await this.userService.setRolePermissions(id, dto.permissionIds, req.user.id);
-    return { success: true, data: role };
+    return role;
   }
 
   @Delete('roles/:id')
@@ -416,10 +395,7 @@ export class UserController {
   @ApiOperation({ summary: 'Get user by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const user = await this.userService.findById(id);
-    return {
-      success: true,
-      data: this.sanitizeUser(user),
-    };
+    return this.sanitizeUser(user);
   }
 
   @Put(':id')
@@ -432,10 +408,7 @@ export class UserController {
     @Req() req: any,
   ) {
     const user = await this.userService.updateUser(id, dto, req.user.id);
-    return {
-      success: true,
-      data: this.sanitizeUser(user),
-    };
+    return this.sanitizeUser(user);
   }
 
   @Put(':id/roles')
@@ -452,10 +425,7 @@ export class UserController {
       dto.roleIds,
       req.user.id,
     );
-    return {
-      success: true,
-      data: this.sanitizeUser(user),
-    };
+    return this.sanitizeUser(user);
   }
 
   @Post(':id/unlock')
@@ -464,7 +434,7 @@ export class UserController {
   @ApiOperation({ summary: 'Clear a lockout without changing the password' })
   async unlockAccount(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const user = await this.userService.unlockAccount(id, req.user.id);
-    return { success: true, data: this.sanitizeUser(user) };
+    return this.sanitizeUser(user);
   }
 
   @Post(':id/reset-password')
@@ -477,7 +447,7 @@ export class UserController {
     @Req() req: any,
   ) {
     await this.userService.resetPassword(id, dto.newPassword, req.user.id);
-    return { success: true, data: { message: 'Password reset.' } };
+    return { message: 'Password reset.' };
   }
 
   /** Remove sensitive fields before sending to client */

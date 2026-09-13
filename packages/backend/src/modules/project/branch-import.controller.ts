@@ -119,44 +119,38 @@ export class BranchImportController {
       // 202: accepted, not done. The body says where to watch.
       res.status(202);
       return {
-        success: true,
-        data: {
-          ...job,
-          queued: true,
-          statusUrl: `/branches/import/${clientId}/jobs/${job.jobId}`,
-          message:
-            `This file has ${preflight.totalRows} row(s), ${preflight.rowsNeedingGeocode} of which need a location ` +
-            `looked up. Address lookups are limited to about one per second by the mapping providers, so this ` +
-            `import is running in the background — it does not need this page kept open. Check its progress at ` +
-            `the status URL.`,
-        },
+        ...job,
+        queued: true,
+        statusUrl: `/branches/import/${clientId}/jobs/${job.jobId}`,
+        message:
+          `This file has ${preflight.totalRows} row(s), ${preflight.rowsNeedingGeocode} of which need a location ` +
+          `looked up. Address lookups are limited to about one per second by the mapping providers, so this ` +
+          `import is running in the background — it does not need this page kept open. Check its progress at ` +
+          `the status URL.`,
       };
     }
 
     const report = await this.projectService.uploadBranchesFromExcel(scope, file.buffer, req.user.id);
     return {
-      success: true,
-      data: {
-        totalRows: report.totalRows,
-        created: report.created,
-        updated: report.updated,
-        unchanged: report.unchanged,
-        skipped: report.skipped,
-        imprecise: report.imprecise,
-        // Archived branches this file restored — see `BranchImportOutcome.revived`.
-        revived: report.revived,
-        // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
-        // therefore dropped in silence. See `BranchImportOutcome.notes`.
-        notes: report.notes,
-        /**
-         * Kept because the Branches page has always read it.
-         *
-         * The old importer counted every row it wrote, created or updated alike, and called that
-         * `importedCount`. Reproduced exactly rather than redefined, so the message the operator
-         * reads after an import does not change meaning on the day this endpoint did.
-         */
-        importedCount: report.created + report.updated + report.unchanged,
-      },
+      totalRows: report.totalRows,
+      created: report.created,
+      updated: report.updated,
+      unchanged: report.unchanged,
+      skipped: report.skipped,
+      imprecise: report.imprecise,
+      // Archived branches this file restored — see `BranchImportOutcome.revived`.
+      revived: report.revived,
+      // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
+      // therefore dropped in silence. See `BranchImportOutcome.notes`.
+      notes: report.notes,
+      /**
+       * Kept because the Branches page has always read it.
+       *
+       * The old importer counted every row it wrote, created or updated alike, and called that
+       * `importedCount`. Reproduced exactly rather than redefined, so the message the operator
+       * reads after an import does not change meaning on the day this endpoint did.
+       */
+      importedCount: report.created + report.updated + report.unchanged,
     };
   }
 
@@ -173,9 +167,6 @@ export class BranchImportController {
   @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'State, progress and result of a queued branch-master import' })
   async getImportJob(@Param('clientId', ParseUUIDPipe) clientId: string, @Param('jobId') jobId: string) {
-    return {
-      success: true,
-      data: await this.importJobService.getBranchImportStatus({ kind: 'CLIENT', id: clientId }, jobId),
-    };
+    return await this.importJobService.getBranchImportStatus({ kind: 'CLIENT', id: clientId }, jobId);
   }
 }

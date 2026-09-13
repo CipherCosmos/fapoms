@@ -1113,10 +1113,10 @@ const mockNotificationService = {
 
       const res = await controller.limits();
 
-      expect(res.data.maxNegotiationRounds).toBe(0);
+      expect(res.maxNegotiationRounds).toBe(0);
       // The neighbours still resolve from settings — only the negotiation cap is nailed down.
-      expect(res.data.checkInGeofenceMeters).toBe(2000);
-      expect(res.data.maxSingleExpenseClaim).toBe(50_000);
+      expect(res.checkInGeofenceMeters).toBe(2000);
+      expect(res.maxSingleExpenseClaim).toBe(50_000);
       expect(settings.getNumber).not.toHaveBeenCalledWith('field.maxNegotiationRounds', expect.anything());
     });
   });

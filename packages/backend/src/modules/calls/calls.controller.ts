@@ -34,7 +34,7 @@ export class CallsController {
   @Get('config')
   @ApiOperation({ summary: 'Client-facing LiveKit URL' })
   config() {
-    return { success: true, data: this.callsService.config() };
+    return this.callsService.config();
   }
 
   @Post('initiate')
@@ -54,13 +54,13 @@ export class CallsController {
   @Post('decline')
   @ApiOperation({ summary: 'Decline an incoming call' })
   async decline(@Body() dto: RoomActionDto, @Req() req: any) {
-    return { success: true, data: await this.callsService.decline(this.actor(req), dto.roomName) };
+    return await this.callsService.decline(this.actor(req), dto.roomName);
   }
 
   @Post('hangup')
   @ApiOperation({ summary: 'End (or cancel) a call' })
   async hangup(@Body() dto: RoomActionDto, @Req() req: any) {
-    return { success: true, data: await this.callsService.hangup(this.actor(req), dto.roomName) };
+    return await this.callsService.hangup(this.actor(req), dto.roomName);
   }
 
   private actor(req: any): { id: string; name?: string; isAssayer: boolean } {

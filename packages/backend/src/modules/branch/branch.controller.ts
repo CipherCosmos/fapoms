@@ -165,7 +165,7 @@ export class BranchController {
      */
     this.regionGuard.assertRegionSettable(branchRegionAtCreate(dto), scope);
     const branch = await this.branchService.create(dto, req.user.id, req.user.organizationId);
-    return { success: true, data: branch };
+    return branch;
   }
 
   @Get()
@@ -218,7 +218,7 @@ export class BranchController {
     @Query('risk') risk?: string,
     @Query('type') type?: string,
   ) {
-    return { success: true, data: await this.branchService.summary(scope, { search, risk, type }) };
+    return await this.branchService.summary(scope, { search, risk, type });
   }
 
   @Get(':id')
@@ -228,7 +228,7 @@ export class BranchController {
     // The list is narrowed; this is the ceiling. Branch ids travel in payloads and bookmarks,
     // so without it the narrowing is discovery-only and any known id reads the record.
     this.regionGuard.assertRegionAllowed(branch.region, scope);
-    return { success: true, data: branch };
+    return branch;
   }
 
   @Put(':id')
@@ -264,7 +264,7 @@ export class BranchController {
     const current = await this.branchService.regionAnchorOf(id);
     this.regionGuard.assertRegionSettable(branchRegionAfterUpdate(dto, current), scope);
     const branch = await this.branchService.update(id, dto, req.user.id);
-    return { success: true, data: branch };
+    return branch;
   }
 
   @Delete(':id')
@@ -280,7 +280,7 @@ export class BranchController {
     // out-of-region branch it cannot see.
     await this.regionGuard.assertBranchInScope(id, scope);
     await this.branchService.remove(id, req.user.id);
-    return { success: true, data: { message: 'Branch deleted successfully' } };
+    return { message: 'Branch deleted successfully' };
   }
 
   // -----------------------------------------------------------------------
@@ -307,7 +307,7 @@ export class BranchController {
   async findContacts(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertBranchInScope(id, scope);
     const contacts = await this.branchService.findContacts(id);
-    return { success: true, data: contacts };
+    return contacts;
   }
 
   @Post(':id/contacts')
@@ -322,7 +322,7 @@ export class BranchController {
   ) {
     await this.regionGuard.assertBranchInScope(id, scope);
     const contact = await this.branchService.addContact(id, dto, req.user.id);
-    return { success: true, data: contact };
+    return contact;
   }
 
   @Put(':id/contacts/:contactId')
@@ -337,7 +337,7 @@ export class BranchController {
   ) {
     await this.regionGuard.assertBranchContactInScope(contactId, scope);
     const contact = await this.branchService.updateContact(contactId, dto, req.user.id);
-    return { success: true, data: contact };
+    return contact;
   }
 
   @Delete(':id/contacts/:contactId')
@@ -351,7 +351,7 @@ export class BranchController {
   ) {
     await this.regionGuard.assertBranchContactInScope(contactId, scope);
     await this.branchService.removeContact(contactId, req.user.id);
-    return { success: true, data: { message: 'Contact removed successfully' } };
+    return { message: 'Contact removed successfully' };
   }
 
   // -----------------------------------------------------------------------
@@ -363,7 +363,7 @@ export class BranchController {
   async findDocuments(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertBranchInScope(id, scope);
     const documents = await this.branchService.findDocuments(id);
-    return { success: true, data: documents };
+    return documents;
   }
 
   @Post(':id/documents')
@@ -378,7 +378,7 @@ export class BranchController {
   ) {
     await this.regionGuard.assertBranchInScope(id, scope);
     const doc = await this.branchService.addDocument(id, dto, req.user.id);
-    return { success: true, data: doc };
+    return doc;
   }
 
   @Delete(':id/documents/:documentId')
@@ -392,7 +392,7 @@ export class BranchController {
   ) {
     await this.regionGuard.assertBranchDocumentInScope(documentId, scope);
     await this.branchService.removeDocument(documentId, req.user.id);
-    return { success: true, data: { message: 'Document removed successfully' } };
+    return { message: 'Document removed successfully' };
   }
 
   // -----------------------------------------------------------------------

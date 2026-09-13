@@ -40,7 +40,7 @@ describe('reading a single assignment', () => {
   it('lets an assayer open an assignment that is theirs', async () => {
     const c = controllerWith(assignment('asr-1'));
     const res: any = await (c as any).findOne('asg-1', asAssayer('asr-1'), undefined);
-    expect(res.success).toBe(true);
+    expect(res.id).toBe('asg-1');
   });
 
   it('refuses an assayer an assignment belonging to somebody else', async () => {
@@ -60,6 +60,6 @@ describe('reading a single assignment', () => {
     const c = controllerWith(assignment('asr-2'));
     const staff = { user: { id: 'u-9', roles: [SystemRole.OPERATIONS] } };
     const res: any = await (c as any).findOne('asg-1', staff, undefined);
-    expect(res.success).toBe(true);
+    expect(res.id).toBe('asg-1');
   });
 });

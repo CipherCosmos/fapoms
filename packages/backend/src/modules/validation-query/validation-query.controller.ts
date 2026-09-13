@@ -159,7 +159,7 @@ export class ValidationQueryController {
       }),
     );
 
-    return { success: true, data: results };
+    return results;
   }
 
   // Single file upload fallback (for simpler clients)
@@ -185,16 +185,13 @@ export class ValidationQueryController {
     );
 
     return {
-      success: true,
-      data: {
-        url: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}`,
-        s3Key: key,
-        fileName: file.originalname,
-        fileType: file.mimetype,
-        size: file.size,
-        uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'DESK_OPERATOR',
-        timestamp: new Date().toISOString(),
-      },
+      url: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}`,
+      s3Key: key,
+      fileName: file.originalname,
+      fileType: file.mimetype,
+      size: file.size,
+      uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'DESK_OPERATOR',
+      timestamp: new Date().toISOString(),
     };
   }
 
@@ -222,12 +219,9 @@ export class ValidationQueryController {
 
     const { token, expiresAt } = this.documentAccessTokenService.issue(key);
     return {
-      success: true,
-      data: {
-        downloadUrl: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}?token=${token}`,
-        token,
-        expiresAt,
-      },
+      downloadUrl: `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}?token=${token}`,
+      token,
+      expiresAt,
     };
   }
 
@@ -327,20 +321,14 @@ export class ValidationQueryController {
   @Get('worklist')
   @ApiOperation({ summary: 'Clarifications enriched for a worklist (branch, assayer, SLA, whose court)' })
   async worklist(@Query() q: ClarificationWorklistQuery, @GlobalScopeFilter() scope?: GlobalScope) {
-    return {
-      success: true,
-      data: await this.validationQueryService.getClarificationWorklist({ filter: q.filter, limit: q.limit, scope }),
-    };
+    return await this.validationQueryService.getClarificationWorklist({ filter: q.filter, limit: q.limit, scope });
   }
 
   @Roles(...STAFF_ROLES)
   @Get('worklist/by-assayer')
   @ApiOperation({ summary: 'Open clarifications grouped by auditor, most pressing auditor first (for a single call)' })
   async worklistByAssayer(@Query() q: ClarificationWorklistQuery, @GlobalScopeFilter() scope?: GlobalScope) {
-    return {
-      success: true,
-      data: await this.validationQueryService.getClarificationsByAssayer({ limit: q.limit, scope }),
-    };
+    return await this.validationQueryService.getClarificationsByAssayer({ limit: q.limit, scope });
   }
 
   /**
@@ -378,7 +366,7 @@ export class ValidationQueryController {
     // for `findMine`.
     if (this.isAssayerCaller(req)) {
       const list = await this.validationQueryService.findByAssayer(req.user.id);
-      return { success: true, data: list };
+      return list;
     }
     // Staff branch below — mode-aware region filtering applies from here down. `scope` is
     // only forwarded when present so a direct (non-HTTP) caller that supplies no scope keeps
@@ -388,7 +376,7 @@ export class ValidationQueryController {
       const list = scope
         ? await this.validationQueryService.findByAssayer(assayerId, scope)
         : await this.validationQueryService.findByAssayer(assayerId);
-      return { success: true, data: list };
+      return list;
     }
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 50;
@@ -406,7 +394,7 @@ export class ValidationQueryController {
   @ApiOperation({ summary: 'Raise a new validation query to an assayer (Data Entry / Admin)' })
   async createQuery(@Body() dto: CreateValidationQueryDto, @Req() req: any) {
     const query = await this.validationQueryService.createQuery(dto, req.user.id);
-    return { success: true, data: query };
+    return query;
   }
 
   @Post(':id/respond')
@@ -429,7 +417,7 @@ export class ValidationQueryController {
       await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:respondToQuery');
     }
     const query = await this.validationQueryService.respondToQuery(id, dto.response || '', req.user.id, dto.attachments);
-    return { success: true, data: query };
+    return query;
   }
 
   @Post(':id/resolve')
@@ -443,7 +431,7 @@ export class ValidationQueryController {
       await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:resolveQuery');
     }
     const query = await this.validationQueryService.resolveQuery(id, req.user.id);
-    return { success: true, data: query };
+    return query;
   }
 
   @Post(':id/reopen')
@@ -456,7 +444,7 @@ export class ValidationQueryController {
       await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:reopenQuery');
     }
     const query = await this.validationQueryService.reopenQuery(id, req.user.id);
-    return { success: true, data: query };
+    return query;
   }
 
   @Get('validation-case/:validationCaseId')
@@ -478,7 +466,7 @@ export class ValidationQueryController {
     let list = await this.validationQueryService.findByValidationCase(validationCaseId);
     // An assayer may see only their own clarifications within a case, never a colleague's.
     if (this.isAssayerCaller(req)) list = list.filter((q) => q.assayerId === req.user?.id);
-    return { success: true, data: list };
+    return list;
   }
 
   @Get('assayer/:assayerId')
@@ -495,7 +483,7 @@ export class ValidationQueryController {
     const list = !isAssayer && scope
       ? await this.validationQueryService.findByAssayer(targetId, scope)
       : await this.validationQueryService.findByAssayer(targetId);
-    return { success: true, data: list };
+    return list;
   }
 
   // ── Clarification thread ──────────────────────────────────────────────────
@@ -533,7 +521,7 @@ export class ValidationQueryController {
       snapshotUrl: m.snapshotPath ? this.signedAttachmentUrl(m.snapshotPath) : null,
       markUrl: this.buildMarkUrl(documentId, m.pageNumber, m.region),
     }));
-    return { success: true, data };
+    return data;
   }
 
   /** A five-minute, single-key download link, reusing the attachment-token instrument above. */
@@ -582,7 +570,7 @@ export class ValidationQueryController {
       req.user.displayName ?? req.user.username ?? null,
       dto,
     );
-    return { success: true, data: message };
+    return message;
   }
 
   @Post(':id/messages/read')
@@ -590,7 +578,7 @@ export class ValidationQueryController {
   @ApiOperation({ summary: 'Mark all messages in a thread as read (read receipts)' })
   async markRead(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const result = await this.threadService.markThreadAsRead(id, req.user.id);
-    return { success: true, data: result };
+    return result;
   }
 
   @Post('messages/:messageId/reactions')
@@ -607,7 +595,7 @@ export class ValidationQueryController {
       req.user.id,
       req.user.displayName ?? req.user.username ?? 'User',
     );
-    return { success: true, data: message };
+    return message;
   }
 
   @Delete('messages/:messageId/reactions')
@@ -619,7 +607,7 @@ export class ValidationQueryController {
     @Req() req: any,
   ) {
     const message = await this.threadService.removeReaction(messageId, dto.emoji, req.user.id);
-    return { success: true, data: message };
+    return message;
   }
 
   @Post('messages/:messageId/star')
@@ -627,6 +615,6 @@ export class ValidationQueryController {
   @ApiOperation({ summary: 'Toggle starred status on a clarification message' })
   async toggleStar(@Param('messageId', ParseUUIDPipe) messageId: string) {
     const message = await this.threadService.toggleStarMessage(messageId);
-    return { success: true, data: message };
+    return message;
   }
 }

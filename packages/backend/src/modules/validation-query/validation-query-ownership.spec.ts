@@ -84,7 +84,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
 
       expect(mockService.findByAssayer).toHaveBeenCalledWith(ME);
       expect(mockService.findByAssayer).not.toHaveBeenCalledWith(SOMEONE_ELSE);
-      expect(res.data).toEqual([{ id: 'q-1', assayerId: ME }]);
+      expect(res).toEqual([{ id: 'q-1', assayerId: ME }]);
     });
 
     it('leaves a staff caller free to page the whole table or filter by assayerId', async () => {
@@ -96,7 +96,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
       mockService.findByAssayer.mockResolvedValue([{ id: 'q-2', assayerId: SOMEONE_ELSE }]);
       const res = await controller.findAll(staffReq() as any, SOMEONE_ELSE, undefined, undefined);
       expect(mockService.findByAssayer).toHaveBeenCalledWith(SOMEONE_ELSE);
-      expect(res.data).toEqual([{ id: 'q-2', assayerId: SOMEONE_ELSE }]);
+      expect(res).toEqual([{ id: 'q-2', assayerId: SOMEONE_ELSE }]);
     });
   });
 
@@ -126,7 +126,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
       const res = await controller.respondToQuery('q-1', { response: 'answer' } as any, assayerReq(ME) as any);
 
       expect(mockService.respondToQuery).toHaveBeenCalledWith('q-1', 'answer', ME, undefined);
-      expect(res.success).toBe(true);
+      expect(res).toEqual({ id: 'q-1', status: 'RESPONDED' });
     });
 
     it('never object-scopes a staff caller', async () => {
@@ -148,7 +148,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
 
       const res = await controller.findByValidationCase('case-1', assayerReq(ME) as any);
 
-      expect(res.data).toEqual([{ id: 'q-1', assayerId: ME }]);
+      expect(res).toEqual([{ id: 'q-1', assayerId: ME }]);
     });
 
     it('leaves the full case thread visible to staff', async () => {
@@ -159,7 +159,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
 
       const res = await controller.findByValidationCase('case-1', staffReq() as any);
 
-      expect(res.data).toHaveLength(2);
+      expect(res).toHaveLength(2);
     });
   });
 
@@ -204,7 +204,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
 
       const res = await controller.listMessages('q-1', assayerReq(ME) as any);
 
-      expect(res.success).toBe(true);
+      expect(res).toHaveLength(1);
       expect(mockThreadService.listMessages).toHaveBeenCalledWith('q-1');
     });
 
@@ -263,8 +263,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
       const res = await controller.issueAttachmentToken('chat/photo.jpg', assayerReq(ME) as any);
 
       expect(mockDocumentAccessTokenService.issue).toHaveBeenCalledWith('chat/photo.jpg');
-      expect(res.success).toBe(true);
-      expect(res.data.downloadUrl).toContain(encodeURIComponent('chat/photo.jpg'));
+      expect(res.downloadUrl).toContain(encodeURIComponent('chat/photo.jpg'));
     });
 
     it('never object-scopes a staff caller once the key resolves to a real attachment', async () => {
@@ -274,7 +273,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
 
       expect(mockService.ownerAssayerId).not.toHaveBeenCalled();
       expect(mockDocumentAccessTokenService.issue).toHaveBeenCalledWith('chat/photo.jpg');
-      expect(res.success).toBe(true);
+      expect(res.downloadUrl).toContain(encodeURIComponent('chat/photo.jpg'));
     });
   });
 });

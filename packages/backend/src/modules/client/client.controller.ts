@@ -306,7 +306,7 @@ export class ClientController {
       Number.isFinite(min) ? min : 0,
     );
     const scoped = await this.clientService.filterQualifiedAssayersByRegion(data, scope);
-    return { success: true, data: scoped };
+    return scoped;
   }
 
   // -----------------------------------------------------------------------
@@ -319,7 +319,7 @@ export class ClientController {
   @ApiOperation({ summary: 'Create a new client profile' })
   async create(@Body() dto: CreateClientRequestDto, @Req() req: any) {
     const client = await this.clientService.create(dto, req.user.id, req.user.organizationId);
-    return { success: true, data: client };
+    return client;
   }
 
   /**
@@ -375,7 +375,7 @@ export class ClientController {
   @ApiOperation({ summary: 'Get client profile with contacts, contracts, and billing' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const client = await this.clientService.findOne(id);
-    return { success: true, data: client };
+    return client;
   }
 
   @Put(':id')
@@ -384,7 +384,7 @@ export class ClientController {
   @ApiOperation({ summary: 'Update client profile and configuration' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateClientRequestDto, @Req() req: any) {
     const client = await this.clientService.update(id, dto, req.user.id);
-    return { success: true, data: client };
+    return client;
   }
 
   @Delete(':id')
@@ -393,7 +393,7 @@ export class ClientController {
   @ApiOperation({ summary: 'Soft delete client profile' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.clientService.remove(id, req.user.id);
-    return { success: true, data: { message: 'Client deleted successfully' } };
+    return { message: 'Client deleted successfully' };
   }
 
   // -----------------------------------------------------------------------
@@ -409,7 +409,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     const result = await this.clientService.bulkTransitionLifecycle(dto.ids, dto.status, req.user.id, dto.reason);
-    return { success: true, data: result };
+    return result;
   }
 
   @Patch(':id/lifecycle')
@@ -422,7 +422,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     const client = await this.clientService.transitionLifecycle(id, dto.status, req.user.id, dto.reason);
-    return { success: true, data: client };
+    return client;
   }
 
   // -----------------------------------------------------------------------
@@ -437,7 +437,7 @@ export class ClientController {
   @ApiOperation({ summary: 'List client contacts' })
   async findContacts(@Param('id', ParseUUIDPipe) id: string) {
     const contacts = await this.clientService.findContacts(id);
-    return { success: true, data: contacts };
+    return contacts;
   }
 
   @Post(':id/contacts')
@@ -450,7 +450,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     const contact = await this.clientService.addContact(id, dto, req.user.id);
-    return { success: true, data: contact };
+    return contact;
   }
 
   @Put(':id/contacts/:contactId')
@@ -463,7 +463,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     const contact = await this.clientService.updateContact(contactId, dto, req.user.id);
-    return { success: true, data: contact };
+    return contact;
   }
 
   @Delete(':id/contacts/:contactId')
@@ -475,7 +475,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     await this.clientService.removeContact(contactId, req.user.id);
-    return { success: true, data: { message: 'Contact removed successfully' } };
+    return { message: 'Contact removed successfully' };
   }
 
   // -----------------------------------------------------------------------
@@ -492,7 +492,7 @@ export class ClientController {
   @ApiOperation({ summary: 'List client contracts' })
   async findContracts(@Param('id', ParseUUIDPipe) id: string) {
     const contracts = await this.clientService.findContracts(id);
-    return { success: true, data: contracts };
+    return contracts;
   }
 
   @Post(':id/contracts')
@@ -505,7 +505,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     const contract = await this.clientService.addContract(id, dto, req.user.id);
-    return { success: true, data: contract };
+    return contract;
   }
 
   @Put(':id/contracts/:contractId')
@@ -518,7 +518,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     const contract = await this.clientService.updateContract(contractId, dto, req.user.id);
-    return { success: true, data: contract };
+    return contract;
   }
 
   @Delete(':id/contracts/:contractId')
@@ -530,7 +530,7 @@ export class ClientController {
     @Req() req: any,
   ) {
     await this.clientService.removeContract(contractId, req.user.id);
-    return { success: true, data: { message: 'Contract removed successfully' } };
+    return { message: 'Contract removed successfully' };
   }
 
   // -----------------------------------------------------------------------
@@ -546,7 +546,7 @@ export class ClientController {
   @ApiOperation({ summary: 'Get client billing information' })
   async findBilling(@Param('id', ParseUUIDPipe) id: string) {
     const billing = await this.clientService.findBilling(id);
-    return { success: true, data: billing };
+    return billing;
   }
 
   @Put(':id/billing')
@@ -559,6 +559,6 @@ export class ClientController {
     @Req() req: any,
   ) {
     const billing = await this.clientService.upsertBilling(id, dto, req.user.id);
-    return { success: true, data: billing };
+    return billing;
   }
 }

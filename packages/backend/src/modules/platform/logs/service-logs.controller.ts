@@ -45,7 +45,7 @@ export class ServiceLogsController {
   @ApiOperation({ summary: 'Services whose logs are readable on this deployment' })
   async services() {
     this.assertEnabled();
-    return { success: true, data: { services: await this.logs.listAvailable() } };
+    return { services: await this.logs.listAvailable() };
   }
 
   /**

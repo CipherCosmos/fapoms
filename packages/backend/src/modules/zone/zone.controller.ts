@@ -82,10 +82,7 @@ export class ZoneController {
   @ApiOperation({ summary: 'Create an operational zone' })
   async create(@Body() dto: CreateZoneRequestDto, @Req() req: any) {
     const zone = await this.zoneService.create(dto, req.user.id);
-    return {
-      success: true,
-      data: zone,
-    };
+    return zone;
   }
 
   @Get()
@@ -120,10 +117,7 @@ export class ZoneController {
   @ApiOperation({ summary: 'Get details for a single zone by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const zone = await this.zoneService.findOne(id);
-    return {
-      success: true,
-      data: zone,
-    };
+    return zone;
   }
 
   @Put(':id')
@@ -136,10 +130,7 @@ export class ZoneController {
     @Req() req: any,
   ) {
     const zone = await this.zoneService.update(id, dto, req.user.id);
-    return {
-      success: true,
-      data: zone,
-    };
+    return zone;
   }
 
   @Delete(':id')
@@ -148,9 +139,6 @@ export class ZoneController {
   @ApiOperation({ summary: 'Soft delete zone mapping' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.zoneService.remove(id, req.user.id);
-    return {
-      success: true,
-      data: { message: 'Zone deleted successfully' },
-    };
+    return { message: 'Zone deleted successfully' };
   }
 }

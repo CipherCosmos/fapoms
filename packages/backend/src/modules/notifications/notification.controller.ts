@@ -102,7 +102,7 @@ export class NotificationController {
   @ApiOperation({ summary: 'Just the bell badge count — cheap enough to poll on its own' })
   async unreadCount(@Req() req: any) {
     const count = await this.notificationService.getUnreadCount(req.user.id, viewerOrganizationId(req));
-    return { success: true, data: { count } };
+    return { count };
   }
 
   @Get('preferences')
@@ -110,7 +110,7 @@ export class NotificationController {
   @ApiOperation({ summary: 'Per-category channel preferences for the authenticated recipient' })
   async getPreferences(@Req() req: any) {
     const prefs = await this.notificationService.getPreferences(req.user.id, this.isAssayer(req.user));
-    return { success: true, data: prefs };
+    return prefs;
   }
 
   @Put('preferences/:category')
@@ -125,7 +125,7 @@ export class NotificationController {
       throw new BadRequestException(`Unknown category "${category}".`);
     }
     const saved = await this.notificationService.setPreference(req.user.id, this.isAssayer(req.user), category, dto);
-    return { success: true, data: saved };
+    return saved;
   }
 
   @Post(':id/read')
@@ -135,7 +135,7 @@ export class NotificationController {
     // Previously `req?.user?.id || id`, which fell back to using the *notification id* as the
     // recipient id — letting anyone mark any notification read by knowing its id.
     const notif = await this.notificationService.markAsRead(id, req.user.id, viewerOrganizationId(req));
-    return { success: true, data: notif };
+    return notif;
   }
 
   @Post(':id/unread')
@@ -143,7 +143,7 @@ export class NotificationController {
   @ApiOperation({ summary: 'Mark one of your own notifications as unread' })
   async markAsUnread(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const notif = await this.notificationService.markAsUnread(id, req.user.id, viewerOrganizationId(req));
-    return { success: true, data: notif };
+    return notif;
   }
 
   @Post('read-all')
@@ -151,7 +151,7 @@ export class NotificationController {
   @ApiOperation({ summary: 'Mark every one of your unread notifications as read' })
   async markAllAsRead(@Req() req: any) {
     const updated = await this.notificationService.markAllAsRead(req.user.id, viewerOrganizationId(req));
-    return { success: true, data: { updated } };
+    return { updated };
   }
 
   @Post('device-token')

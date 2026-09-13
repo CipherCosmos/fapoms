@@ -385,10 +385,7 @@ export class AssignmentController {
     await this.regionGuard.assertProjectBranchInScope(dto.projectBranchId, scope);
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const assignment = await this.assignmentService.create(dto, userId);
-    return {
-      success: true,
-      data: assignment,
-    };
+    return assignment;
   }
 
   // The whole assignment book — staff only. Assayers reach their own work via
@@ -471,10 +468,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Get assignment status and SLA statistics summary' })
   async getDashboardSummary(@GlobalScopeFilter() scope?: GlobalScope) {
     const summary = await this.assignmentService.getDashboardSummary(scope);
-    return {
-      success: true,
-      data: summary,
-    };
+    return summary;
   }
 
   /**
@@ -489,7 +483,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Compare the recorded movement trail against the travel this assignment was quoted' })
   async travelVerification(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertAssignmentInScope(id, scope);
-    return { success: true, data: await this.assignmentService.getTravelVerification(id) };
+    return await this.assignmentService.getTravelVerification(id);
   }
 
   /**
@@ -501,7 +495,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Field issues assayers have reported, newest first' })
   async fieldIssues(@GlobalScopeFilter() scope?: GlobalScope) {
     const issues = await this.assignmentService.listFieldIssues(scope);
-    return { success: true, data: issues };
+    return issues;
   }
 
   /**
@@ -518,10 +512,7 @@ export class AssignmentController {
       this.operationsInbox.getInbox(scope),
       this.assignmentService.listFieldIssues(scope),
     ]);
-    return {
-      success: true,
-      data: { ...inbox, fieldIssues: fieldIssues.filter((i: any) => i.open), suggestNextAfterAttempts: SUGGEST_NEXT_AFTER_ATTEMPTS },
-    };
+    return { ...inbox, fieldIssues: fieldIssues.filter((i: any) => i.open), suggestNextAfterAttempts: SUGGEST_NEXT_AFTER_ATTEMPTS };
   }
 
   /**
@@ -535,7 +526,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Assignments past a deadline or audit date, ranked most-overdue first' })
   async fallingBehind(@GlobalScopeFilter() scope?: GlobalScope) {
     const items = await this.assignmentService.getFallingBehind(scope);
-    return { success: true, data: items };
+    return items;
   }
 
   @Get(':id')
@@ -572,10 +563,7 @@ export class AssignmentController {
       throw new ForbiddenException('You can only open an assignment of your own.');
     }
 
-    return {
-      success: true,
-      data: assignment,
-    };
+    return assignment;
   }
 
   @Put(':id')
@@ -599,10 +587,7 @@ export class AssignmentController {
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const assignment = await this.assignmentService.update(id, dto, userId);
-    return {
-      success: true,
-      data: assignment,
-    };
+    return assignment;
   }
 
   // Driving the assignment lifecycle (accept/reject/cancel/complete) is an operations
@@ -824,10 +809,7 @@ export class AssignmentController {
     } else {
       throw new BadRequestException(`Invalid transition: ${targetStatus}.`);
     }
-    return {
-      success: true,
-      data: assignment,
-    };
+    return assignment;
   }
 
   @Post(':id/accept')
@@ -862,7 +844,7 @@ export class AssignmentController {
         clientRequestId: body?.clientRequestId,
       },
     );
-    return { success: true, data: assignment };
+    return assignment;
   }
 
   @Post(':id/reject')
@@ -894,7 +876,7 @@ export class AssignmentController {
       expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
       clientRequestId: body?.clientRequestId,
     });
-    return { success: true, data: assignment };
+    return assignment;
   }
 
   @Post(':id/cancel')
@@ -916,7 +898,7 @@ export class AssignmentController {
       expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
       clientRequestId: body?.clientRequestId,
     });
-    return { success: true, data: assignment };
+    return assignment;
   }
 
   @Post(':id/start')
@@ -944,7 +926,7 @@ export class AssignmentController {
       expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
       clientRequestId: body?.clientRequestId,
     });
-    return { success: true, data: assignment };
+    return assignment;
   }
 
   @Post(':id/complete')
@@ -962,7 +944,7 @@ export class AssignmentController {
       expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
       clientRequestId: body?.clientRequestId,
     });
-    return { success: true, data: assignment };
+    return assignment;
   }
 
   @Post(':id/reassign')
@@ -992,7 +974,7 @@ export class AssignmentController {
         clientRequestId: body.clientRequestId,
       },
     );
-    return { success: true, data: assignment };
+    return assignment;
   }
 
   @Get(':id/reassignments')
@@ -1004,7 +986,7 @@ export class AssignmentController {
   ) {
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const history = await this.assignmentService.getReassignmentHistory(id);
-    return { success: true, data: history };
+    return history;
   }
 
   /**
@@ -1030,10 +1012,7 @@ export class AssignmentController {
       expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
       clientRequestId: body?.clientRequestId,
     });
-    return {
-      success: true,
-      data: assignment,
-    };
+    return assignment;
   }
 
   @Post(':id/escalate')
@@ -1049,10 +1028,7 @@ export class AssignmentController {
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const userId = req.user.id;
     const assignment = await this.assignmentService.escalate(id, userId, body?.reason);
-    return {
-      success: true,
-      data: assignment,
-    };
+    return assignment;
   }
 
   /**
@@ -1085,7 +1061,7 @@ export class AssignmentController {
     }
 
     const assignment = await this.assignmentService.reportIssue(id, userId, body.category, body.note);
-    return { success: true, data: assignment };
+    return assignment;
   }
 
   @Get(':id/timeline')
@@ -1094,10 +1070,7 @@ export class AssignmentController {
   async getTimeline(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const timeline = await this.assignmentService.getTimeline(id);
-    return {
-      success: true,
-      data: timeline,
-    };
+    return timeline;
   }
 
   // This route declared only @RequirePermissions and no @Roles. Every other route on this
@@ -1139,9 +1112,6 @@ export class AssignmentController {
     }
     const userName = req.user.displayName || req.user.email || 'System User';
     const comment = await this.assignmentService.addComment(id, body.comment, req.user.id, userName);
-    return {
-      success: true,
-      data: comment,
-    };
+    return comment;
   }
 }

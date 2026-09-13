@@ -44,7 +44,7 @@ export class ComplianceController {
       this.incidents.summary(),
       this.rights.summary(),
     ]);
-    return { success: true, data: { auditUnsealed, incidents, rightsRequests } };
+    return { auditUnsealed, incidents, rightsRequests };
   }
 
   // ── Data-principal rights requests (DPDP) ──────────────────────────────────
@@ -52,55 +52,55 @@ export class ComplianceController {
   @Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'List DPDP data-principal rights requests with their SLA clocks' })
   async listRights() {
-    return { success: true, data: await this.rights.list() };
+    return await this.rights.list();
   }
 
   @Get('rights-requests/:id')
   @Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'One rights request with its SLA clock' })
   async getRights(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.rights.get(id) };
+    return await this.rights.get(id);
   }
 
   @Post('rights-requests')
   @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Log a data-principal rights request (starts the SLA clock)' })
   async createRights(@Body() dto: CreateRightsRequestDto, @Req() req: any) {
-    return { success: true, data: await this.rights.create(dto, req.user?.id ?? null) };
+    return await this.rights.create(dto, req.user?.id ?? null);
   }
 
   @Patch('rights-requests/:id')
   @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Update a rights request or record its resolution' })
   async updateRights(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateRightsRequestDto, @Req() req: any) {
-    return { success: true, data: await this.rights.update(id, dto, req.user?.id ?? null) };
+    return await this.rights.update(id, dto, req.user?.id ?? null);
   }
 
   @Get('incidents')
   @Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'List security incidents with their statutory clocks' })
   async list() {
-    return { success: true, data: await this.incidents.list() };
+    return await this.incidents.list();
   }
 
   @Get('incidents/:id')
   @Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'One security incident with its clocks' })
   async get(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.incidents.get(id) };
+    return await this.incidents.get(id);
   }
 
   @Post('incidents')
   @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Raise a security incident (starts the CERT-In / DPDP clocks)' })
   async create(@Body() dto: CreateIncidentDto, @Req() req: any) {
-    return { success: true, data: await this.incidents.create(dto, req.user?.id ?? null) };
+    return await this.incidents.create(dto, req.user?.id ?? null);
   }
 
   @Patch('incidents/:id')
   @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Update an incident or record a reporting milestone' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateIncidentDto, @Req() req: any) {
-    return { success: true, data: await this.incidents.update(id, dto, req.user?.id ?? null) };
+    return await this.incidents.update(id, dto, req.user?.id ?? null);
   }
 }

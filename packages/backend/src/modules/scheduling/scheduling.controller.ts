@@ -106,10 +106,7 @@ export class SchedulingController {
   async create(@Body() dto: CreateScheduleRequestDto, @Req() req: any) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const schedule = await this.schedulingService.create(dto, userId);
-    return {
-      success: true,
-      data: schedule,
-    };
+    return schedule;
   }
 
   @Get()
@@ -181,7 +178,7 @@ export class SchedulingController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     if (!assayerId || !date) {
-      return { success: true, data: { count: 0, schedules: [] } };
+      return { count: 0, schedules: [] };
     }
     // Reveals where an arbitrary assayer is booked; gated on that assayer's own region.
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
@@ -208,10 +205,7 @@ export class SchedulingController {
   ) {
     await this.regionGuard.assertScheduleInScope(id, scope);
     const schedule = await this.schedulingService.findOne(id, scope);
-    return {
-      success: true,
-      data: callerIsClientUser(req) ? toClientSafeSchedule(schedule) : schedule,
-    };
+    return callerIsClientUser(req) ? toClientSafeSchedule(schedule) : schedule;
   }
 
   @Post(':id/transition')
@@ -233,10 +227,7 @@ export class SchedulingController {
     await this.regionGuard.assertScheduleInScope(id, scope);
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const schedule = await this.schedulingService.transition(id, dto.targetStatus, userId, dto.remarks, dto.scheduledDate);
-    return {
-      success: true,
-      data: schedule,
-    };
+    return schedule;
   }
 
   @Get(':id/timeline')
@@ -245,9 +236,6 @@ export class SchedulingController {
   async getTimeline(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertScheduleInScope(id, scope);
     const timeline = await this.schedulingService.getTimeline(id);
-    return {
-      success: true,
-      data: timeline,
-    };
+    return timeline;
   }
 }

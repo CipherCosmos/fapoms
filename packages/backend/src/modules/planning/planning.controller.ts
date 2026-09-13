@@ -200,10 +200,7 @@ export class PlanningController {
   ) {
     await this.regionGuard.assertProjectInScope(projectId, scope);
     const coverage = await this.planningOrchestratorService.getProjectCoverage(projectId);
-    return {
-      success: true,
-      data: coverage,
-    };
+    return coverage;
   }
 
   /**
@@ -224,10 +221,7 @@ export class PlanningController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const plan = await this.coveragePlanningEngine.generateCoveragePlan(projectId, scope);
-    return {
-      success: true,
-      data: plan,
-    };
+    return plan;
   }
 
   /**
@@ -263,7 +257,7 @@ export class PlanningController {
     // principal of its own; without this the queued run would be unscoped and would hand a
     // regional operator the national plan.
     const enqueued = await this.planningJobsService.enqueueCoveragePlan(projectId, scope ?? null, req.user?.id);
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   @Post('projects/:projectId/coverage-plan')
@@ -278,10 +272,7 @@ export class PlanningController {
   ) {
     await this.regionGuard.assertProjectInScope(projectId, scope);
     const plan = await this.operationsPlanningService.createOrRegeneratePlan(projectId, body.overrides || [], req.user.id, body.justification);
-    return {
-      success: true,
-      data: plan,
-    };
+    return plan;
   }
 
   @Put('coverage-plans/:planId/transition')
@@ -296,10 +287,7 @@ export class PlanningController {
   ) {
     await this.regionGuard.assertCoveragePlanInScope(planId, scope);
     const plan = await this.operationsPlanningService.transitionPlanStatus(planId, body.status, req.user.id);
-    return {
-      success: true,
-      data: plan,
-    };
+    return plan;
   }
 
   @Post('coverage-plans/:planId/execute')
@@ -318,22 +306,19 @@ export class PlanningController {
     await this.regionGuard.assertCoveragePlanInScope(planId, scope);
     const result = await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id, body?.scheduledDate);
     return {
-      success: true,
-      data: {
-        message: result.fullySkipped
-          ? `Nothing could be deployed — ${result.skipped.length} allocation(s) were skipped.`
-          : `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}` +
-            (result.dateRange ? ` across ${result.dateRange.start} → ${result.dateRange.end}.` : '.'),
-        deployedCount: result.deployed.length,
-        skippedCount: result.skipped.length,
-        deployed: result.deployed,
-        skipped: result.skipped,
-        // Additive: a fully-skipped deploy is now an explained outcome rather than a thrown
-        // error, and each branch carries its own workable date instead of one shared one.
-        skippedReasons: result.skippedReasons,
-        fullySkipped: result.fullySkipped,
-        dateRange: result.dateRange,
-      },
+      message: result.fullySkipped
+        ? `Nothing could be deployed — ${result.skipped.length} allocation(s) were skipped.`
+        : `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}` +
+          (result.dateRange ? ` across ${result.dateRange.start} → ${result.dateRange.end}.` : '.'),
+      deployedCount: result.deployed.length,
+      skippedCount: result.skipped.length,
+      deployed: result.deployed,
+      skipped: result.skipped,
+      // Additive: a fully-skipped deploy is now an explained outcome rather than a thrown
+      // error, and each branch carries its own workable date instead of one shared one.
+      skippedReasons: result.skippedReasons,
+      fullySkipped: result.fullySkipped,
+      dateRange: result.dateRange,
     };
   }
 
@@ -349,10 +334,7 @@ export class PlanningController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const report = await this.projectPlanningService.getProjectPlanningCandidates(projectId, scope);
-    return {
-      success: true,
-      data: report,
-    };
+    return report;
   }
 
   /**
@@ -373,7 +355,7 @@ export class PlanningController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const enqueued = await this.planningJobsService.enqueueProjectCandidates(projectId, scope ?? null, req.user?.id);
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   @Post('projects/:projectId/optimize')
@@ -389,10 +371,7 @@ export class PlanningController {
   ) {
     await this.regionGuard.assertProjectInScope(projectId, scope);
     const plan = await this.optimizationEngine.generateProjectDeploymentPlan(projectId);
-    return {
-      success: true,
-      data: plan,
-    };
+    return plan;
   }
 
   @Post('scenarios/simulate')
@@ -408,10 +387,7 @@ export class PlanningController {
   ) {
     await this.regionGuard.assertProjectInScope(dto.projectId, scope);
     const plan = await this.scenarioPlanningService.simulatePlanningScenario(dto);
-    return {
-      success: true,
-      data: plan,
-    };
+    return plan;
   }
 
   @Get('command-center')
@@ -422,7 +398,7 @@ export class PlanningController {
   async commandCenter(@GlobalScopeFilter() scope: GlobalScope) {
     // Takes the whole global scope now — the map is the surface where an operator most expects
     // "show me my region" to mean it, both for the branch pins and for the assayer pins.
-    return { success: true, data: await this.commandCenterService.overview(scope) };
+    return await this.commandCenterService.overview(scope);
   }
 
   @Get('suggest-date')
@@ -435,7 +411,7 @@ export class PlanningController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertBranchInScope(branchId, scope);
-    return { success: true, data: await this.planningService.suggestAuditDate(branchId) };
+    return await this.planningService.suggestAuditDate(branchId);
   }
 
   @Get('recommendations')
@@ -549,7 +525,7 @@ export class PlanningController {
       targetDate,
       Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
     );
-    return { success: true, data: plan };
+    return plan;
   }
 
   /**
@@ -603,7 +579,7 @@ export class PlanningController {
       Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
       req.user?.id,
     );
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   /** Clustering plus the engine per branch per cluster, then a route optimisation per plan. */
@@ -629,10 +605,7 @@ export class PlanningController {
       targetDate,
       Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
     );
-    return {
-      success: true,
-      data: plan,
-    };
+    return plan;
   }
 
   /** The queued twin of the single-project day planner. */
@@ -658,7 +631,7 @@ export class PlanningController {
       Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
       req.user?.id,
     );
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   /**
@@ -682,7 +655,7 @@ export class PlanningController {
   @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
   @ApiOperation({ summary: 'Poll a queued planning job for progress and, once done, its result' })
   async getPlanningJob(@Param('jobId') jobId: string, @Req() req: any) {
-    return { success: true, data: await this.planningJobsService.status(jobId, req.user?.id) };
+    return await this.planningJobsService.status(jobId, req.user?.id);
   }
 
   // Rule Engine Management REST Endpoints
@@ -692,10 +665,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Create a new business planning rule' })
   async createRule(@Body() dto: CreateBusinessRuleRequestDto, @Req() req: any) {
     const rule = await this.planningService.createRule(dto, req.user.id);
-    return {
-      success: true,
-      data: rule,
-    };
+    return rule;
   }
 
   @Put('rules/:id')
@@ -708,10 +678,7 @@ export class PlanningController {
     @Req() req: any,
   ) {
     const rule = await this.planningService.updateRule(id, dto, req.user.id);
-    return {
-      success: true,
-      data: rule,
-    };
+    return rule;
   }
 
   @Delete('rules/:id')
@@ -720,10 +687,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'Soft delete/disable a business planning rule' })
   async deleteRule(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.planningService.deleteRule(id, req.user.id);
-    return {
-      success: true,
-      data: { message: 'Business rule deleted successfully' },
-    };
+    return { message: 'Business rule deleted successfully' };
   }
 
   @Roles(...STAFF_ROLES)
@@ -731,10 +695,7 @@ export class PlanningController {
   @ApiOperation({ summary: 'List all active business planning rules' })
   async getRules(@Query('scope') scope?: string) {
     const rules = await this.planningService.getRules(scope);
-    return {
-      success: true,
-      data: rules,
-    };
+    return rules;
   }
 
   @Get('rules/:id')
@@ -742,9 +703,6 @@ export class PlanningController {
   @ApiOperation({ summary: 'Get a business planning rule by ID' })
   async getRule(@Param('id', ParseUUIDPipe) id: string) {
     const rule = await this.planningService.getRule(id);
-    return {
-      success: true,
-      data: rule,
-    };
+    return rule;
   }
 }

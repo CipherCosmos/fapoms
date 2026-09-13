@@ -44,7 +44,7 @@ export class RuleBypassController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Which operational rules are currently suspended, if any' })
   async state() {
-    return { success: true, data: await this.ruleBypass.getState() };
+    return await this.ruleBypass.getState();
   }
 
   /** The catalogue, so the admin screen renders what each rule protects rather than a raw key. */
@@ -54,7 +54,7 @@ export class RuleBypassController {
   @RequirePermissions('configuration:view:platform')
   @ApiOperation({ summary: 'The rules that can be suspended, and what each one protects' })
   catalogue() {
-    return { success: true, data: { rules: BYPASSABLE_RULES, defaultHours: DEFAULT_BYPASS_HOURS } };
+    return { rules: BYPASSABLE_RULES, defaultHours: DEFAULT_BYPASS_HOURS };
   }
 
   /**
@@ -87,7 +87,7 @@ export class RuleBypassController {
       dto.hours ?? DEFAULT_BYPASS_HOURS,
       { id: req.user.id, name: req.user.fullName ?? req.user.username ?? req.user.email ?? null },
     );
-    return { success: true, data: state };
+    return state;
   }
 
   /** Close the window early. Same reasoning and the same `@RoleOnly()` fix as `enable()` above. */
@@ -101,7 +101,7 @@ export class RuleBypassController {
       id: req.user.id,
       name: req.user.fullName ?? req.user.username ?? req.user.email ?? null,
     });
-    return { success: true, data: state };
+    return state;
   }
 
   /** Every window ever opened, with what it was used for. */
@@ -113,6 +113,6 @@ export class RuleBypassController {
   // `Math.min(limit, 200)` in the service has no floor, so `?limit=-5` reached `take: -5` and
   // 500'd. The pipe rejects that before the handler runs; the default of 50 is unchanged.
   async history(@Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit: number) {
-    return { success: true, data: await this.ruleBypass.history(limit) };
+    return await this.ruleBypass.history(limit);
   }
 }

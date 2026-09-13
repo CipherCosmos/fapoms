@@ -60,7 +60,7 @@ export class SystemDashboardController {
     // view cannot be widened by editing the request. The global scope narrows only the
     // territorial sections — see OperationsSnapshotService.TERRITORIAL_SECTIONS.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
-    return { success: true, data: await this.operationsSnapshot.snapshot(roles, req.user?.id, scope) };
+    return await this.operationsSnapshot.snapshot(roles, req.user?.id, scope);
   }
 
   @Get('metrics')
@@ -112,16 +112,13 @@ export class SystemDashboardController {
     const c = counts[0] ?? {};
 
     return {
-      success: true,
-      data: {
-        clients: Number(c.clients || 0),
-        projects: Number(c.projects || 0),
-        activeProjects: Number(c.active_projects || 0),
-        branches: Number(c.branches || 0),
-        activeBranches: Number(c.active_branches || 0),
-        users: Number(c.users || 0),
-        activities: recentActivities,
-      },
+      clients: Number(c.clients || 0),
+      projects: Number(c.projects || 0),
+      activeProjects: Number(c.active_projects || 0),
+      branches: Number(c.branches || 0),
+      activeBranches: Number(c.active_branches || 0),
+      users: Number(c.users || 0),
+      activities: recentActivities,
     };
   }
 }

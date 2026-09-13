@@ -116,7 +116,7 @@ export class AssayerRemarksController {
       },
       this.actor(req),
     );
-    return { success: true, data: remark };
+    return remark;
   }
 
   @Delete(':id')

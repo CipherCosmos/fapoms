@@ -30,7 +30,7 @@ export class SearchController {
   @ApiQuery({ name: 'q', required: true, description: 'Search term' })
   async search(@Query('q') q: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     if (!q || q.length < 1) {
-      return { success: true, data: { branches: [], assayers: [], projects: [], clients: [], assignments: [] } };
+      return { branches: [], assayers: [], projects: [], clients: [], assignments: [] };
     }
     const data = await this.searchService.searchAll(q, scope, rolesOf(req.user));
     return { success: true, data };

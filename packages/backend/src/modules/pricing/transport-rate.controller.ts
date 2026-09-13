@@ -95,8 +95,8 @@ export class TransportRateController {
 
   @Get()
   @ApiOperation({ summary: 'List every transport rate, including retired rows' })
-  async findAll(): Promise<{ success: boolean; data: TransportRateEntity[] }> {
-    return { success: true, data: await this.transportRateService.findAll() };
+  async findAll(): Promise<TransportRateEntity[]> {
+    return this.transportRateService.findAll();
   }
 
   /**

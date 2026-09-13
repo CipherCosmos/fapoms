@@ -160,10 +160,7 @@ export class ProjectController {
   @ApiOperation({ summary: 'Create a new project linked to a client institution' })
   async create(@Body() dto: CreateProjectRequestDto, @Req() req: any) {
     const project = await this.projectService.create(dto, req.user.id, req.user.organizationId);
-    return {
-      success: true,
-      data: project,
-    };
+    return project;
   }
 
   // Was @Public(): the entire project portfolio was readable without a token.
@@ -197,10 +194,7 @@ export class ProjectController {
   @ApiOperation({ summary: 'Get details for a single project by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const project = await this.projectService.findOne(id);
-    return {
-      success: true,
-      data: project,
-    };
+    return project;
   }
 
   @Put(':id')
@@ -213,10 +207,7 @@ export class ProjectController {
     @Req() req: any,
   ) {
     const project = await this.projectService.update(id, dto, req.user.id);
-    return {
-      success: true,
-      data: project,
-    };
+    return project;
   }
 
   // Lifecycle moves used to ride on PUT, which meant resending the whole project
@@ -232,7 +223,7 @@ export class ProjectController {
     @Req() req: any,
   ) {
     const project = await this.projectService.transition(id, dto.targetStatus, req.user.id, dto.reason);
-    return { success: true, data: project };
+    return project;
   }
 
   @Delete(':id')
@@ -241,10 +232,7 @@ export class ProjectController {
   @ApiOperation({ summary: 'Soft delete a project' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.projectService.remove(id, req.user.id);
-    return {
-      success: true,
-      data: { message: 'Project deleted successfully' },
-    };
+    return { message: 'Project deleted successfully' };
   }
 
   // Was @Public() — anyone reaching the API could read every project branch's assignment
@@ -263,7 +251,7 @@ export class ProjectController {
     // Full history of one branch — status, assignments, fees, negotiation. Region-ceilinged
     // like every other detail read: the coverage list is narrowed, so this must be too.
     await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
-    return { success: true, data: await this.projectService.getBranchHistory(projectBranchId) };
+    return await this.projectService.getBranchHistory(projectBranchId);
   }
 
   // Declaring a branch unstaffable is an operational decision with client-SLA consequences,
@@ -288,10 +276,7 @@ export class ProjectController {
      * Maharashtra project branch unable-to-cover, 201, and could not then read the row it wrote.
      */
     await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
-    return {
-      success: true,
-      data: await this.projectService.markBranchUnableToCover(projectBranchId, req.user.id, dto.reason),
-    };
+    return await this.projectService.markBranchUnableToCover(projectBranchId, req.user.id, dto.reason);
   }
 
   @Post('branches/:projectBranchId/reopen-coverage')
@@ -306,10 +291,7 @@ export class ProjectController {
     // The undo of `unable-to-cover`, and it had the identical hole: putting another region's
     // branch back into the planning pool is as much a coverage decision as taking it out.
     await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
-    return {
-      success: true,
-      data: await this.projectService.reopenBranchCoverage(projectBranchId, req.user.id),
-    };
+    return await this.projectService.reopenBranchCoverage(projectBranchId, req.user.id);
   }
 
   /**
@@ -425,10 +407,7 @@ export class ProjectController {
       await this.regionGuard.assertBranchInScope(branchId, scope);
     }
     const list = await this.projectService.associateBranches(id, dto.branchIds, req.user.id);
-    return {
-      success: true,
-      data: list,
-    };
+    return list;
   }
 
   /**
@@ -516,51 +495,34 @@ export class ProjectController {
       // 202: accepted, not done. The body says where to watch.
       res.status(202);
       return {
-        success: true,
-        data: {
-          ...job,
-          queued: true,
-          statusUrl: `/projects/${id}/branches/import-jobs/${job.jobId}`,
-          message:
-            `This file has ${preflight.totalRows} row(s), ${preflight.rowsNeedingGeocode} of which need a location ` +
-            `looked up. Address lookups are limited to about one per second by the mapping providers, so this ` +
-            `import is running in the background — it does not need this page kept open. Check its progress at ` +
-            `the status URL.`,
-        },
+        ...job,
+        queued: true,
+        statusUrl: `/projects/${id}/branches/import-jobs/${job.jobId}`,
+        message:
+          `This file has ${preflight.totalRows} row(s), ${preflight.rowsNeedingGeocode} of which need a location ` +
+          `looked up. Address lookups are limited to about one per second by the mapping providers, so this ` +
+          `import is running in the background — it does not need this page kept open. Check its progress at ` +
+          `the status URL.`,
       };
     }
 
     const report = await this.projectService.uploadBranchesFromExcel(scope, file.buffer, req.user.id);
-    /**
-     * What the import did, in `data` — the same shape the client-scoped endpoint returns and the
-     * same shape the completed job's result carries.
-     *
-     * `data` used to be the project's resulting branch list, with the counts hidden in `meta`.
-     * That made the small-file response, the large-file response and the finished-job response
-     * three different shapes for one outcome, so each had to be read differently and the web app
-     * grew a separate reader for each. The branch list is dropped rather than moved: the only
-     * caller refetched `GET /projects/:id/branches` immediately afterwards anyway, and sending
-     * every hydrated row back twice was never doing anything.
-     */
     return {
-      success: true,
-      data: {
-        totalRows: report.totalRows,
-        created: report.created,
-        updated: report.updated,
-        unchanged: report.unchanged,
-        linked: report.linked,
-        skipped: report.skipped,
-        // Rows that imported but landed on a fallback coordinate. Distinct from `skipped` — these
-        // branches exist, they just cannot be planned or checked into until someone corrects
-        // where they are, so the operator has to be told while the import is still in front of them.
-        imprecise: report.imprecise,
-        // Archived branches this file restored — see `BranchImportOutcome.revived`.
-        revived: report.revived,
-        // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
-        // therefore dropped in silence. See `BranchImportOutcome.notes`.
-        notes: report.notes,
-      },
+      totalRows: report.totalRows,
+      created: report.created,
+      updated: report.updated,
+      unchanged: report.unchanged,
+      linked: report.linked,
+      skipped: report.skipped,
+      // Rows that imported but landed on a fallback coordinate. Distinct from `skipped` — these
+      // branches exist, they just cannot be planned or checked into until someone corrects
+      // where they are, so the operator has to be told while the import is still in front of them.
+      imprecise: report.imprecise,
+      // Archived branches this file restored — see `BranchImportOutcome.revived`.
+      revived: report.revived,
+      // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
+      // therefore dropped in silence. See `BranchImportOutcome.notes`.
+      notes: report.notes,
     };
   }
 
@@ -585,10 +547,7 @@ export class ProjectController {
   ) {
     // The scope is passed through and checked against the job's own payload — Bull ids are a
     // per-queue counter, so without that check they are trivially enumerable across projects.
-    return {
-      success: true,
-      data: await this.importJobService.getBranchImportStatus({ kind: 'PROJECT', id }, jobId),
-    };
+    return await this.importJobService.getBranchImportStatus({ kind: 'PROJECT', id }, jobId);
   }
 
   @Get(':id/branches/template')
@@ -625,9 +584,6 @@ export class ProjectController {
      */
     await this.regionGuard.assertProjectBranchInScope(pbId, scope);
     const list = await this.projectService.removeProjectBranch(id, pbId, req.user.id);
-    return {
-      success: true,
-      data: list,
-    };
+    return list;
   }
 }

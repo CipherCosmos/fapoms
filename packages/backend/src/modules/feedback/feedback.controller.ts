@@ -130,7 +130,7 @@ export class FeedbackController {
   @ApiOperation({ summary: 'File a bug, enhancement, process idea or question' })
   async create(@Body() dto: CreateFeedbackRequestDto, @Req() req: any) {
     const thread = await this.feedbackService.create(dto, this.actor(req));
-    return { success: true, data: thread };
+    return thread;
   }
 
   /**
@@ -180,7 +180,7 @@ export class FeedbackController {
         };
       }),
     );
-    return { success: true, data: saved };
+    return saved;
   }
 
   /**
@@ -245,14 +245,14 @@ export class FeedbackController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Feedback I have reported' })
   async mine(@Req() req: any) {
-    return { success: true, data: await this.feedbackService.findMine(this.actor(req)) };
+    return await this.feedbackService.findMine(this.actor(req));
   }
 
   @Get('similar')
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Open items similar to what I am about to file — vote instead of duplicating' })
   async similar(@Query('text') text: string, @Req() req: any) {
-    return { success: true, data: await this.feedbackService.similar(text ?? '', this.actor(req)) };
+    return await this.feedbackService.similar(text ?? '', this.actor(req));
   }
 
   // ── Team side ───────────────────────────────────────────────────────────────
@@ -286,28 +286,28 @@ export class FeedbackController {
   @Roles(...FEEDBACK_TEAM_ROLES)
   @ApiOperation({ summary: 'Headline counts for the team dashboard' })
   async stats() {
-    return { success: true, data: await this.feedbackService.stats() };
+    return await this.feedbackService.stats();
   }
 
   @Get('digest')
   @Roles(...FEEDBACK_TEAM_ROLES)
   @ApiOperation({ summary: 'Themes, aging items and open criticals — the reporting rollup' })
   async digest() {
-    return { success: true, data: await this.feedbackService.digest() };
+    return await this.feedbackService.digest();
   }
 
   @Get('assignees')
   @Roles(...FEEDBACK_TEAM_ROLES)
   @ApiOperation({ summary: 'People a thread can be assigned to' })
   async assignees() {
-    return { success: true, data: await this.feedbackService.teamMembers() };
+    return await this.feedbackService.teamMembers();
   }
 
   @Get('attention')
   @Roles(...FEEDBACK_TEAM_ROLES)
   @ApiOperation({ summary: 'SLA breaches: items awaiting first response or past their resolution clock' })
   async attention() {
-    return { success: true, data: await this.escalation.attention() };
+    return await this.escalation.attention();
   }
 
   // ── One thread (reporter own, or team) ──────────────────────────────────────
@@ -316,14 +316,14 @@ export class FeedbackController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'One feedback thread' })
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    return { success: true, data: await this.feedbackService.findOne(id, this.actor(req)) };
+    return await this.feedbackService.findOne(id, this.actor(req));
   }
 
   @Get(':id/messages')
   @AnyAuthenticated()
   @ApiOperation({ summary: 'The conversation on a thread (internal notes hidden from reporters)' })
   async messages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    return { success: true, data: await this.threadService.listMessages(id, this.actor(req)) };
+    return await this.threadService.listMessages(id, this.actor(req));
   }
 
   @Post(':id/messages')
@@ -333,21 +333,21 @@ export class FeedbackController {
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @ApiOperation({ summary: 'Reply on a thread' })
   async postMessage(@Param('id', ParseUUIDPipe) id: string, @Body() dto: PostFeedbackMessageRequestDto, @Req() req: any) {
-    return { success: true, data: await this.threadService.postMessage(id, this.actor(req), dto) };
+    return await this.threadService.postMessage(id, this.actor(req), dto);
   }
 
   @Post(':id/messages/read')
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Mark the other side\'s messages read' })
   async markRead(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    return { success: true, data: await this.threadService.markRead(id, this.actor(req)) };
+    return await this.threadService.markRead(id, this.actor(req));
   }
 
   @Post(':id/vote')
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Add or remove your "me too" on an item' })
   async vote(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    return { success: true, data: await this.feedbackService.vote(id, this.actor(req)) };
+    return await this.feedbackService.vote(id, this.actor(req));
   }
 
   // ── Team decisions ──────────────────────────────────────────────────────────
@@ -356,20 +356,20 @@ export class FeedbackController {
   @Roles(...FEEDBACK_TEAM_ROLES)
   @ApiOperation({ summary: 'Set category, severity, status, assignee or duplicate link' })
   async triage(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TriageFeedbackRequestDto, @Req() req: any) {
-    return { success: true, data: await this.feedbackService.triage(id, dto, req.user.id) };
+    return await this.feedbackService.triage(id, dto, req.user.id);
   }
 
   @Post(':id/resolve')
   @Roles(...FEEDBACK_TEAM_ROLES)
   @ApiOperation({ summary: 'Mark an item resolved' })
   async resolve(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ResolveFeedbackRequestDto, @Req() req: any) {
-    return { success: true, data: await this.feedbackService.resolve(id, req.user.id, dto.note) };
+    return await this.feedbackService.resolve(id, req.user.id, dto.note);
   }
 
   @Post(':id/reopen')
   @Roles(...FEEDBACK_TEAM_ROLES)
   @ApiOperation({ summary: 'Reopen a resolved or closed item' })
   async reopen(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    return { success: true, data: await this.feedbackService.reopen(id, req.user.id) };
+    return await this.feedbackService.reopen(id, req.user.id);
   }
 }

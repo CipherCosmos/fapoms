@@ -72,7 +72,7 @@ export class SessionController {
   @ApiOperation({ summary: 'Sign out ALL my devices (revoke every session on my account)' })
   async revokeAllMine(@Req() req: any) {
     await this.sessions.revokeAllForUser(req.user.id, req.user.id, 'USER_REVOKED_ALL');
-    return { success: true, data: { message: 'All your devices have been signed out.' } };
+    return { message: 'All your devices have been signed out.' };
   }
 
   /**

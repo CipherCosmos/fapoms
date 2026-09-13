@@ -73,7 +73,7 @@ export class OrganizationController {
   @ApiOperation({ summary: 'Create a new organization' })
   async create(@Body() dto: CreateOrganizationRequestDto, @Req() req: any) {
     const org = await this.organizationService.create(dto, req.user.id);
-    return { success: true, data: org };
+    return org;
   }
 
   @Get()
@@ -102,7 +102,7 @@ export class OrganizationController {
   @ApiOperation({ summary: 'Get an organization by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const org = await this.organizationService.findOne(id);
-    return { success: true, data: org };
+    return org;
   }
 
   @Put(':id')
@@ -111,7 +111,7 @@ export class OrganizationController {
   @ApiOperation({ summary: 'Update an organization' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateOrganizationRequestDto, @Req() req: any) {
     const org = await this.organizationService.update(id, dto, req.user.id);
-    return { success: true, data: org };
+    return org;
   }
 
   @Delete(':id')

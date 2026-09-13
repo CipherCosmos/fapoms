@@ -108,7 +108,7 @@ describe('NotificationController', () => {
     it('returns just the count', async () => {
       mockNotifService.getUnreadCount.mockResolvedValueOnce(4);
       const result: any = await controller.unreadCount({ user: { id: 'u1' } });
-      expect(result.data).toEqual({ count: 4 });
+      expect(result).toEqual({ count: 4 });
     });
   });
 
@@ -116,7 +116,7 @@ describe('NotificationController', () => {
     it('reports how many were updated', async () => {
       mockNotifService.markAllAsRead.mockResolvedValueOnce(7);
       const result: any = await controller.markAllAsRead({ user: { id: 'u1' } });
-      expect(result.data).toEqual({ updated: 7 });
+      expect(result).toEqual({ updated: 7 });
       expect(mockNotifService.markAllAsRead).toHaveBeenCalledWith('u1', null);
     });
   });
@@ -142,7 +142,7 @@ describe('NotificationController', () => {
       const result: any = await controller.setPreference(
         'ASSIGNMENT' as any, { user: { id: 'u1', roles: [] } }, { push: false },
       );
-      expect(result.success).toBe(true);
+      expect(result).toEqual({ category: 'ASSIGNMENT', inApp: true, push: true, email: false });
       expect(mockNotifService.setPreference).toHaveBeenCalledWith('u1', false, 'ASSIGNMENT', { push: false });
     });
   });

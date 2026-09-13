@@ -68,7 +68,7 @@ export class AuditLogController {
       this.auditSealService.verify(limit),
       this.auditSealService.unsealedCount(),
     ]);
-    return { success: true, data: { ...result, unsealed } };
+    return { ...result, unsealed };
   }
 
   /**

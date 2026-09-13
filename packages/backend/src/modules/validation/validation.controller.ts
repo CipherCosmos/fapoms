@@ -100,10 +100,7 @@ export class ValidationController {
     // — the same shape `assignment.create` uses for the same reason.
     await this.regionGuard.assertProjectBranchInScope(dto.projectBranchId, scope);
     const vCase = await this.validationService.create(dto, req.user.id);
-    return {
-      success: true,
-      data: vCase,
-    };
+    return vCase;
   }
 
   @Get()
@@ -148,7 +145,7 @@ export class ValidationController {
   @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: 'People a validation review can be routed to' })
   async team() {
-    return { success: true, data: await this.validationService.validationTeam() };
+    return await this.validationService.validationTeam();
   }
 
   @Get('workload')
@@ -156,7 +153,7 @@ export class ValidationController {
   @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: 'Per-member desk workload: open packets, reviews held, aging' })
   async workload() {
-    return { success: true, data: await this.validationService.workload() };
+    return await this.validationService.workload();
   }
 
   @Get('activity')
@@ -166,7 +163,7 @@ export class ValidationController {
   // Clamped at 100 in the service already; the pipe moves the guard to the boundary so the
   // handler cannot be called with a number the service would have to defend against.
   async activity(@Query('limit', new ParseLimitPipe({ default: 20, max: 100 })) limit: number) {
-    return { success: true, data: await this.validationService.activity(limit) };
+    return await this.validationService.activity(limit);
   }
 
   @Get('attention')
@@ -174,14 +171,14 @@ export class ValidationController {
   @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: "The desk's SLA breaches, bucketed: what the head must unstick right now" })
   async attention() {
-    return { success: true, data: await this.deskEscalation.attention() };
+    return await this.deskEscalation.attention();
   }
 
   @Get(':id/trail')
   @ApiOperation({ summary: 'Merged audit trail for a case and its branch packets' })
   async trail(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertValidationCaseInScope(id, scope);
-    return { success: true, data: await this.validationService.trail(id) };
+    return await this.validationService.trail(id);
   }
 
   @Get(':id')
@@ -189,10 +186,7 @@ export class ValidationController {
   async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertValidationCaseInScope(id, scope);
     const vCase = await this.validationService.findOne(id);
-    return {
-      success: true,
-      data: vCase,
-    };
+    return vCase;
   }
 
   @Post(':id/assign')
@@ -210,10 +204,7 @@ export class ValidationController {
   ) {
     await this.regionGuard.assertValidationCaseInScope(id, scope);
     const vCase = await this.validationService.assign(id, dto.reviewerId, req.user.id);
-    return {
-      success: true,
-      data: vCase,
-    };
+    return vCase;
   }
 
   @Post('bulk/transition')
@@ -230,7 +221,7 @@ export class ValidationController {
     // state nobody asked for.
     await this.regionGuard.assertValidationCasesInScope(dto.ids, scope);
     const result = await this.validationService.bulkTransition(dto.ids, dto.targetStatus, req.user.id, dto.remarks);
-    return { success: true, data: result };
+    return result;
   }
 
   @Post(':id/transition')
@@ -251,9 +242,6 @@ export class ValidationController {
     // have been told the case is in.
     await this.regionGuard.assertValidationCaseInScope(id, scope);
     const vCase = await this.validationService.transition(id, dto.targetStatus, req.user.id, dto.remarks, dto.notes, dto.ocrResult);
-    return {
-      success: true,
-      data: vCase,
-    };
+    return vCase;
   }
 }

@@ -184,17 +184,14 @@ export class NotificationAdminController {
   @Get('catalog')
   @ApiOperation({ summary: 'Every notification type, effective settings plus shipped defaults' })
   async catalog(): Promise<{
-    success: boolean;
-    data: {
-      types: Array<EffectiveNotificationType & {
-        defaults: { channels: string[]; priority: string; roles: string[]; title: string; body: string; link?: string };
-        placeholders: string[];
-      }>;
-      channels: string[];
-      priorities: string[];
-      categories: string[];
-      roles: string[];
-    };
+    types: Array<EffectiveNotificationType & {
+      defaults: { channels: string[]; priority: string; roles: string[]; title: string; body: string; link?: string };
+      placeholders: string[];
+    }>;
+    channels: string[];
+    priorities: string[];
+    categories: string[];
+    roles: string[];
   }> {
     const effective = await this.settings.effectiveCatalog();
     const types = Object.entries(effective)
@@ -216,14 +213,11 @@ export class NotificationAdminController {
       .sort((a, b) => a.category.localeCompare(b.category) || a.type.localeCompare(b.type));
 
     return {
-      success: true,
-      data: {
-        types,
-        channels: Object.values(NotificationChannel),
-        priorities: Object.values(NotificationPriority),
-        categories: Object.values(NotificationCategory),
-        roles: Object.values(SystemRole),
-      },
+      types,
+      channels: Object.values(NotificationChannel),
+      priorities: Object.values(NotificationPriority),
+      categories: Object.values(NotificationCategory),
+      roles: Object.values(SystemRole),
     };
   }
 
@@ -254,10 +248,10 @@ export class NotificationAdminController {
   @RoleOnly()
   @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Reset one notification type to its shipped default' })
-  async reset(@Param('type') type: string, @Req() req: any): Promise<{ success: boolean; data: EffectiveNotificationType }> {
+  async reset(@Param('type') type: string, @Req() req: any): Promise<EffectiveNotificationType> {
     const data = await this.settings.reset(type);
     await this.record('NOTIFICATION_SETTING_RESET', type, req.user?.id, `Reset notification "${type}" to its shipped default.`);
-    return { success: true, data };
+    return data;
   }
 
   /**
@@ -267,7 +261,7 @@ export class NotificationAdminController {
    */
   @Post('preview')
   @ApiOperation({ summary: 'Render a draft template against sample values' })
-  async preview(@Body() dto: PreviewTemplateRequestDto): Promise<{ success: boolean; data: any }> {
+  async preview(@Body() dto: PreviewTemplateRequestDto): Promise<any> {
     const rendered = this.settings.preview(
       {
         title: dto.title,
@@ -279,23 +273,20 @@ export class NotificationAdminController {
       dto.payload ?? {},
     );
     return {
-      success: true,
-      data: {
-        ...rendered,
-        // The exact HTML the mail shell would wrap it in, so the editor can show a true preview.
-        emailHtml: renderEmailHtml({
-          title: rendered.emailSubject,
-          bodyLines: rendered.emailBody.split('\n').filter(Boolean),
-          linkUrl: rendered.link ? `${appPublicUrl()}${rendered.link}` : null,
-        }),
-      },
+      ...rendered,
+      // The exact HTML the mail shell would wrap it in, so the editor can show a true preview.
+      emailHtml: renderEmailHtml({
+        title: rendered.emailSubject,
+        bodyLines: rendered.emailBody.split('\n').filter(Boolean),
+        linkUrl: rendered.link ? `${appPublicUrl()}${rendered.link}` : null,
+      }),
     };
   }
 
   /** Whether mail can actually leave the building, and how it is configured. */
   @Get('email/status')
   @ApiOperation({ summary: 'Is outbound email configured, and by which transport' })
-  async emailStatus(): Promise<{ success: boolean; data: any }> {
+  async emailStatus(): Promise<any> {
     /**
      * Resolved exactly the way the provider resolves it — saved settings, then environment.
      *
@@ -327,21 +318,18 @@ export class NotificationAdminController {
     const account = transport === 'GMAIL' ? gmailUser : transport === 'SMTP' ? smtpHost : null;
 
     return {
-      success: true,
-      data: {
-        enabled: this.email.isEnabled(),
-        transport,
-        // The account, never the credential.
-        account,
-        from: v['email.from'] ?? process.env.EMAIL_FROM ?? (transport === 'GMAIL' ? gmailUser : null),
-        appPublicUrl: appPublicUrl(),
-        digestCron: v['digest.cron'] ?? process.env.EMAIL_DIGEST_CRON ?? '30 8 * * 1-6',
-        digestTimeZone: 'Asia/Kolkata',
-        // What to do about it, in the response, so the screen never has to guess.
-        hint: this.email.isEnabled()
-          ? null
-          : 'Configure it under Administration → Platform Settings → Email delivery. It takes effect immediately; no restart.',
-      },
+      enabled: this.email.isEnabled(),
+      transport,
+      // The account, never the credential.
+      account,
+      from: v['email.from'] ?? process.env.EMAIL_FROM ?? (transport === 'GMAIL' ? gmailUser : null),
+      appPublicUrl: appPublicUrl(),
+      digestCron: v['digest.cron'] ?? process.env.EMAIL_DIGEST_CRON ?? '30 8 * * 1-6',
+      digestTimeZone: 'Asia/Kolkata',
+      // What to do about it, in the response, so the screen never has to guess.
+      hint: this.email.isEnabled()
+        ? null
+        : 'Configure it under Administration → Platform Settings → Email delivery. It takes effect immediately; no restart.',
     };
   }
 
@@ -405,7 +393,7 @@ export class NotificationAdminController {
   // permission fired a real, unscheduled digest at every real candidate recipient — not a drill.
   @RoleOnly()
   @ApiOperation({ summary: 'Assemble and send the morning digest immediately' })
-  async runDigest(): Promise<{ success: boolean; data: { queued: boolean } }> {
+  async runDigest(): Promise<{ queued: boolean }> {
     try {
       /**
        * A fixed job id, so an impatient second click cannot send every recipient a second
@@ -420,7 +408,7 @@ export class NotificationAdminController {
         removeOnFail: FAILED_JOB_RETENTION,
         attempts: 1,
       });
-      return { success: true, data: { queued: true } };
+      return { queued: true };
     } catch (err: any) {
       throw new BadRequestException(
         `Could not queue the digest — the job queue is unreachable (${err?.message ?? 'unknown error'}).`,

@@ -110,7 +110,7 @@ export class PublicRegistrationController {
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @ApiOperation({ summary: 'Resolve an invite link to its application draft' })
   async hydrate(@Param('token') token: string) {
-    return { success: true, data: await this.registrationApplications.hydrate(token) };
+    return await this.registrationApplications.hydrate(token);
   }
 
   @Post(':token/otp/request')
@@ -118,7 +118,7 @@ export class PublicRegistrationController {
   @ApiOperation({ summary: 'Send a mobile verification code' })
   async requestOtp(@Param('token') token: string, @Body() dto: RequestOtpDto) {
     await this.registrationApplications.requestOtp(token, dto.phone);
-    return { success: true, data: { sent: true } };
+    return { sent: true };
   }
 
   @Post(':token/otp/verify')
@@ -126,21 +126,21 @@ export class PublicRegistrationController {
   @ApiOperation({ summary: 'Verify a mobile verification code' })
   async verifyOtp(@Param('token') token: string, @Body() dto: VerifyOtpDto) {
     await this.registrationApplications.verifyOtp(token, dto.phone, dto.code);
-    return { success: true, data: { verified: true } };
+    return { verified: true };
   }
 
   @Patch(':token/draft')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @ApiOperation({ summary: 'Autosave the profile-creation draft' })
   async updateDraft(@Param('token') token: string, @Body() dto: UpdateDraftRequestDto) {
-    return { success: true, data: await this.registrationApplications.updateDraft(token, dto) };
+    return await this.registrationApplications.updateDraft(token, dto);
   }
 
   @Post(':token/consent')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiOperation({ summary: 'Record the declaration & consent acknowledgement' })
   async acceptConsent(@Param('token') token: string, @Body() dto: AcceptConsentDto) {
-    return { success: true, data: await this.registrationApplications.acceptConsent(token, dto.consentVersion) };
+    return await this.registrationApplications.acceptConsent(token, dto.consentVersion);
   }
 
   @Post(':token/documents/:requirement')
@@ -169,6 +169,6 @@ export class PublicRegistrationController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Submit the application for HR review' })
   async submit(@Param('token') token: string) {
-    return { success: true, data: await this.registrationApplications.submit(token) };
+    return await this.registrationApplications.submit(token);
   }
 }

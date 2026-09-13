@@ -79,10 +79,7 @@ export class HolidayController {
   @ApiOperation({ summary: 'Register a national or regional holiday' })
   async create(@Body() dto: CreateHolidayRequestDto, @Req() req: any) {
     const holiday = await this.holidayService.create(dto, req.user.id);
-    return {
-      success: true,
-      data: holiday,
-    };
+    return holiday;
   }
 
   @Get()
@@ -138,10 +135,7 @@ export class HolidayController {
       return { success: false, error: 'Invalid date parameter' };
     }
     const isHoliday = await this.holidayService.isHoliday(date, stateCode, clientId);
-    return {
-      success: true,
-      data: { isHoliday },
-    };
+    return { isHoliday };
   }
 
   @Put(':id')
@@ -154,10 +148,7 @@ export class HolidayController {
     @Req() req: any,
   ) {
     const holiday = await this.holidayService.update(id, dto, req.user.id);
-    return {
-      success: true,
-      data: holiday,
-    };
+    return holiday;
   }
 
   @Delete(':id')
@@ -166,9 +157,6 @@ export class HolidayController {
   @ApiOperation({ summary: 'Soft delete holiday record' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.holidayService.remove(id, req.user.id);
-    return {
-      success: true,
-      data: { message: 'Holiday deleted successfully' },
-    };
+    return { message: 'Holiday deleted successfully' };
   }
 }

@@ -57,7 +57,7 @@ export class CallLogController {
   @ApiOperation({ summary: 'Record a call made to an assayer about a branch' })
   async create(@Body() dto: CreateCallLogRequestDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertProjectBranchInScope(dto.projectBranchId, scope);
-    return { success: true, data: await this.callLogService.create(dto, req.user.userId ?? req.user.id) };
+    return await this.callLogService.create(dto, req.user.userId ?? req.user.id);
   }
 
   @Get()
@@ -67,7 +67,7 @@ export class CallLogController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
-    return { success: true, data: await this.callLogService.findForProjectBranch(projectBranchId) };
+    return await this.callLogService.findForProjectBranch(projectBranchId);
   }
 
   @Get('last-contact')
@@ -77,6 +77,6 @@ export class CallLogController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertProjectBranchInScope(projectBranchId, scope);
-    return { success: true, data: await this.callLogService.lastContactByAssayer(projectBranchId) };
+    return await this.callLogService.lastContactByAssayer(projectBranchId);
   }
 }

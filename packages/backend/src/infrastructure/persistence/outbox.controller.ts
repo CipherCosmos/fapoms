@@ -53,7 +53,7 @@ export class OutboxController {
   @Get('health')
   @ApiOperation({ summary: 'Outbox backlog: pending, retrying, dead-lettered, oldest pending' })
   async health() {
-    return { success: true, data: await this.deadLetters.health() };
+    return await this.deadLetters.health();
   }
 
   /** Everything the relay has given up on, newest failure first. */
@@ -66,7 +66,7 @@ export class OutboxController {
     const events = await this.deadLetters.list(limit);
     await this.record(req, 'OUTBOX_DEAD_LETTERS_READ', NOT_A_RECORD_ENTITY_ID, 'SUCCESS',
       `Read the outbox dead-letter queue (${events.length} event(s)).`, { returned: events.length });
-    return { success: true, data: { events, count: events.length } };
+    return { events, count: events.length };
   }
 
   /** One event with its payload — the detail the list deliberately does not carry. */
@@ -76,7 +76,7 @@ export class OutboxController {
     const event = await this.deadLetters.get(id);
     await this.record(req, 'OUTBOX_EVENT_READ', id, 'SUCCESS',
       `Read outbox event ${id} (${event.eventName}).`, { eventName: event.eventName, attempts: event.attempts });
-    return { success: true, data: event };
+    return event;
   }
 
   /**
@@ -101,7 +101,7 @@ export class OutboxController {
     await this.record(req, 'OUTBOX_EVENT_REPLAYED', id, 'SUCCESS',
       `Returned outbox event ${id} (${event.eventName}) to the relay for redelivery.`,
       { eventName: event.eventName, subject: event.subject, previousAttempts: event.previousAttempts });
-    return { success: true, data: event };
+    return event;
   }
 
   private async record(

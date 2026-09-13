@@ -207,7 +207,7 @@ export class ReportsController {
       { status, projectBranchStatus, priority, scope: scope ?? null },
       req.user?.id,
     );
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -235,7 +235,7 @@ export class ReportsController {
       { clientId, projectId, assayerId, state, scope: scope ?? null },
       req.user?.id,
     );
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -245,7 +245,7 @@ export class ReportsController {
   @ApiOperation({ summary: 'Queue the Command Center territory export; returns a job id to poll' })
   async queueCommandCenter(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     const enqueued = await this.reportJobsService.enqueueCommandCenter({ scope: scope ?? null }, req.user?.id);
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -270,7 +270,7 @@ export class ReportsController {
       { principal: { id: req.user?.id, roles: rolesOf(req.user) }, scope: scope ?? null },
       req.user?.id,
     );
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   /**
@@ -287,7 +287,7 @@ export class ReportsController {
       { principal: { id: req.user?.id, roles: rolesOf(req.user) }, scope: scope ?? null },
       req.user?.id,
     );
-    return { success: true, data: enqueued };
+    return enqueued;
   }
 
   /**
@@ -313,7 +313,7 @@ export class ReportsController {
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Poll a queued report export for progress and, once done, its file metadata' })
   async reportJob(@Param('jobId') jobId: string, @Req() req: any) {
-    return { success: true, data: await this.reportJobsService.status(jobId, req.user?.id) };
+    return await this.reportJobsService.status(jobId, req.user?.id);
   }
 
   /**

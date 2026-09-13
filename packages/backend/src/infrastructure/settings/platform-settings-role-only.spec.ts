@@ -161,7 +161,7 @@ describe('PlatformSettingsController.findAll — the audience split', () => {
   const groupKeysOf = (data: any) => data.groups.map((g: any) => g.key);
 
   it('a pure administrator sees the business groups and business keys only', async () => {
-    const { data } = await controller.findAll(reqWithRoles('ADMIN'));
+    const data = await controller.findAll(reqWithRoles('ADMIN'));
 
     expect(groupKeysOf(data)).toEqual(
       SETTINGS_GROUPS.filter((g) => g.audience === 'business').map((g) => g.key),
@@ -172,7 +172,7 @@ describe('PlatformSettingsController.findAll — the audience split', () => {
   });
 
   it('a developer sees every group and every key', async () => {
-    const { data } = await controller.findAll(reqWithRoles('DEVELOPER'));
+    const data = await controller.findAll(reqWithRoles('DEVELOPER'));
 
     expect(groupKeysOf(data)).toEqual(SETTINGS_GROUPS.map((g) => g.key));
     expect(keysOf(data)).toEqual(described.map((s) => s.key));
@@ -180,21 +180,21 @@ describe('PlatformSettingsController.findAll — the audience split', () => {
 
   it('a migrated administrator holding both names is treated as the developer, not the admin', async () => {
     // DEVELOPER is checked BEFORE ADMIN in the controller — order is the point of this test.
-    const { data } = await controller.findAll(reqWithRoles('ADMIN', 'DEVELOPER'));
+    const data = await controller.findAll(reqWithRoles('ADMIN', 'DEVELOPER'));
 
     expect(keysOf(data)).toContain('email.from');
     expect(keysOf(data)).toContain('billing.assayerInvoicingEnabled');
   });
 
   it('AUDITOR still reads exactly the transport group, unchanged by the split', async () => {
-    const { data } = await controller.findAll(reqWithRoles('AUDITOR'));
+    const data = await controller.findAll(reqWithRoles('AUDITOR'));
 
     expect(groupKeysOf(data)).toEqual(['transport']);
     expect(keysOf(data)).toEqual(['transport.avgSpeedKmh.CAR']);
   });
 
   it('OPERATIONS still reads no groups at all, unchanged by the split', async () => {
-    const { data } = await controller.findAll(reqWithRoles('OPERATIONS'));
+    const data = await controller.findAll(reqWithRoles('OPERATIONS'));
 
     expect(data.groups).toEqual([]);
     expect(data.settings).toEqual([]);

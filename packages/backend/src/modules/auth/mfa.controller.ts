@@ -46,7 +46,7 @@ export class MfaController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'My MFA status (enrolled / confirmed / recovery codes left)' })
   async status(@Req() req: any) {
-    return { success: true, data: await this.mfa.status(req.user.id) };
+    return await this.mfa.status(req.user.id);
   }
 
   /** Begin TOTP enrolment — returns the otpauth URI + secret to render a QR. Not active until confirmed. */
@@ -57,7 +57,7 @@ export class MfaController {
   @ApiOperation({ summary: 'Start TOTP enrolment (returns otpauth URI + secret for the QR)' })
   async enrol(@Req() req: any) {
     const account = req.user.email || req.user.username || req.user.id;
-    return { success: true, data: await this.mfa.beginEnrol(req.user.id, account) };
+    return await this.mfa.beginEnrol(req.user.id, account);
   }
 
   /** Confirm enrolment by proving one code; activates MFA and returns the one-time recovery codes. */
@@ -68,7 +68,7 @@ export class MfaController {
   @ApiOperation({ summary: 'Confirm & activate TOTP; returns single-use recovery codes (shown once)' })
   async confirm(@Body() dto: MfaCodeDto, @Req() req: any) {
     const { recoveryCodes } = await this.mfa.confirmEnrol(req.user.id, dto.code);
-    return { success: true, data: { recoveryCodes } };
+    return { recoveryCodes };
   }
 
   /** Begin email-OTP enrolment — sends a code to the address (defaults to the account's email). */
@@ -80,7 +80,7 @@ export class MfaController {
   async enrolEmail(@Body() dto: EmailEnrolDto, @Req() req: any) {
     const dest = dto.email || req.user.email;
     if (!dest) throw new BadRequestException('No email address on file — provide one to enrol email as a second factor.');
-    return { success: true, data: await this.mfa.beginDeliveredEnrol(req.user.id, 'EMAIL', dest) };
+    return await this.mfa.beginDeliveredEnrol(req.user.id, 'EMAIL', dest);
   }
 
   /** Confirm & activate the email factor with the code just sent. */
@@ -91,7 +91,7 @@ export class MfaController {
   @ApiOperation({ summary: 'Confirm & activate email as a second factor' })
   async confirmEmail(@Body() dto: MfaCodeDto, @Req() req: any) {
     const { recoveryCodes } = await this.mfa.confirmEnrol(req.user.id, dto.code, 'EMAIL');
-    return { success: true, data: { recoveryCodes } };
+    return { recoveryCodes };
   }
 
   /** Begin SMS-OTP enrolment — sends a code to the phone. Refused if SMS is not configured server-side. */
@@ -101,7 +101,7 @@ export class MfaController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Start SMS second-factor enrolment (sends a code to confirm the number)' })
   async enrolSms(@Body() dto: SmsEnrolDto, @Req() req: any) {
-    return { success: true, data: await this.mfa.beginDeliveredEnrol(req.user.id, 'SMS', dto.phone) };
+    return await this.mfa.beginDeliveredEnrol(req.user.id, 'SMS', dto.phone);
   }
 
   /** Confirm & activate the SMS factor with the code just sent. */
@@ -112,7 +112,7 @@ export class MfaController {
   @ApiOperation({ summary: 'Confirm & activate SMS as a second factor' })
   async confirmSms(@Body() dto: MfaCodeDto, @Req() req: any) {
     const { recoveryCodes } = await this.mfa.confirmEnrol(req.user.id, dto.code, 'SMS');
-    return { success: true, data: { recoveryCodes } };
+    return { recoveryCodes };
   }
 
   /**
@@ -127,7 +127,7 @@ export class MfaController {
     const f = factor ? String(factor).toUpperCase() : undefined;
     if (f && !['TOTP', 'EMAIL', 'SMS'].includes(f)) throw new BadRequestException('Unknown factor.');
     await this.mfa.disable(req.user.id, req.user.id, f as any);
-    return { success: true, data: { message: f ? `${f} factor removed.` : 'MFA disabled.' } };
+    return { message: f ? `${f} factor removed.` : 'MFA disabled.' };
   }
 
   /** Replace my recovery codes (invalidates the old set); returns the new codes once. */
@@ -137,6 +137,6 @@ export class MfaController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Regenerate my recovery codes (old ones stop working)' })
   async regenerate(@Req() req: any) {
-    return { success: true, data: { recoveryCodes: await this.mfa.regenerateRecoveryCodes(req.user.id) } };
+    return { recoveryCodes: await this.mfa.regenerateRecoveryCodes(req.user.id) };
   }
 }
