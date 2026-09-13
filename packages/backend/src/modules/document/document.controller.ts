@@ -31,6 +31,7 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
+import { buildPaginationMeta } from '../../infrastructure/http/pagination';
 import { deriveFileIntegrity, verifyClientHash } from './document-integrity';
 
 /**
@@ -1515,7 +1516,12 @@ export class DocumentController {
     const parsedOffset = Number(offset);
     const safeOffset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? Math.floor(parsedOffset) : 0;
     const { data, total } = await this.documentService.findAll(scope, limit, safeOffset);
-    return { success: true, data, pagination: { total, limit, offset: safeOffset } };
+    // Nested under meta.pagination, matching the shape every other paged list here uses
+    // (branch/client/user/zone/…) — this route's own request stays offset-based (no client reads
+    // this response today, confirmed by grep; nothing needs the request shape to change), so page
+    // is derived from it rather than the other way around.
+    const page = Math.floor(safeOffset / limit) + 1;
+    return { data, meta: { pagination: buildPaginationMeta({ page, limit, total }) } };
   }
 
   @Get('stats/summary')

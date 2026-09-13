@@ -4,6 +4,7 @@ import { SecurityIncidentService } from './security-incident.service';
 describe('SecurityIncidentService', () => {
   let repo: any;
   let audit: any;
+  let settings: any;
   let notificationDispatch: any;
   let service: SecurityIncidentService;
 
@@ -16,8 +17,9 @@ describe('SecurityIncidentService', () => {
       find: jest.fn(async () => [...store.values()]),
     };
     audit = { recordEventSafe: jest.fn().mockResolvedValue(undefined) };
+    settings = { getNumber: jest.fn().mockResolvedValue(500) };
     notificationDispatch = { emitSafe: jest.fn() };
-    service = new SecurityIncidentService(repo, audit, notificationDispatch);
+    service = new SecurityIncidentService(repo, audit, settings, notificationDispatch);
   });
 
   it('raises an incident, audits it, notifies, and returns it with live clocks', async () => {

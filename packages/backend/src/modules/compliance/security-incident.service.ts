@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { SecurityIncidentEntity } from './security-incident.entity';
 import { computeIncidentClocks, type IncidentClocks } from './incident-clocks';
@@ -51,6 +52,7 @@ export class SecurityIncidentService {
     @InjectRepository(SecurityIncidentEntity)
     private readonly repo: Repository<SecurityIncidentEntity>,
     private readonly audit: AuditService,
+    private readonly settings: PlatformSettingsService,
     private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
@@ -94,7 +96,8 @@ export class SecurityIncidentService {
   }
 
   async list(): Promise<IncidentView[]> {
-    const rows = await this.repo.find({ order: { detectedAt: 'DESC' }, take: 500 });
+    const take = await this.settings.getNumber('dpdp.securityIncidentListCap');
+    const rows = await this.repo.find({ order: { detectedAt: 'DESC' }, take });
     return rows.map((r) => this.toView(r));
   }
 
@@ -141,7 +144,8 @@ export class SecurityIncidentService {
   async summary(): Promise<{
     total: number; open: number; certInOverdue: number; boardOverdue: number; principalsOverdue: number;
   }> {
-    const rows = await this.repo.find({ take: 2000 });
+    const take = await this.settings.getNumber('dpdp.securityIncidentSummaryScanCap');
+    const rows = await this.repo.find({ take });
     const now = new Date();
     let open = 0, certInOverdue = 0, boardOverdue = 0, principalsOverdue = 0;
     for (const r of rows) {

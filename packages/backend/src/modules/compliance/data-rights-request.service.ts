@@ -91,10 +91,11 @@ export class DataRightsRequestService {
   }
 
   async list(): Promise<RightsRequestView[]> {
-    const [rows, days] = await Promise.all([
-      this.repo.find({ order: { receivedAt: 'DESC' }, take: 500 }),
+    const [take, days] = await Promise.all([
+      this.settings.getNumber('dpdp.rightsRequestListCap'),
       this.slaDays(),
     ]);
+    const rows = await this.repo.find({ order: { receivedAt: 'DESC' }, take });
     return rows.map((r) => this.toView(r, days));
   }
 
@@ -132,7 +133,11 @@ export class DataRightsRequestService {
 
   /** Counts for the compliance-health view: open requests and any past their SLA. */
   async summary(): Promise<{ open: number; overdue: number }> {
-    const [rows, days] = await Promise.all([this.repo.find({ take: 2000 }), this.slaDays()]);
+    const [take, days] = await Promise.all([
+      this.settings.getNumber('dpdp.rightsRequestSummaryScanCap'),
+      this.slaDays(),
+    ]);
+    const rows = await this.repo.find({ take });
     const now = new Date();
     let open = 0, overdue = 0;
     for (const r of rows) {

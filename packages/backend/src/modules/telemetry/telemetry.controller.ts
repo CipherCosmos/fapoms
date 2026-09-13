@@ -6,6 +6,7 @@ import {
 } from '../auth/guards';
 import { TelemetryService, MAX_TELEMETRY_BATCH } from './telemetry.service';
 import type { RawTelemetryEvent } from './telemetry-scrub';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /**
  * Ingests UI interaction telemetry, and reads it back for oversight.
@@ -45,9 +46,12 @@ export class TelemetryController {
   @Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
   @RequirePermissions('audit_log:view:platform')
   @ApiOperation({ summary: "A user's UI activity timeline (admin/audit)" })
-  async forUser(@Query('userId') userId: string, @Query('limit') limit = 100) {
+  async forUser(
+    @Query('userId') userId: string,
+    @Query('limit', new ParseLimitPipe({ default: 100, max: 500 })) limit: number,
+  ) {
     if (!userId) throw new BadRequestException('userId is required.');
-    const data = await this.telemetry.listForUser(userId, Number(limit) || 100);
+    const data = await this.telemetry.listForUser(userId, limit);
     return { success: true, data };
   }
 }

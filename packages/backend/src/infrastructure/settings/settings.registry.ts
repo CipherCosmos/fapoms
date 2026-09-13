@@ -966,6 +966,64 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     unit: 'days',
     applies: 'immediately',
   },
+  // The four below are plumbing, not policy — how many rows one internal read pulls before
+  // rendering — so they carry the group's own `dpdp` home (this IS where they're read from) but
+  // an `audience: 'technical'` override, the same mechanism `billing.assayerInvoicingEnabled`
+  // uses to sit in a business group while staying the Developer's to flip. No route accepts a
+  // `?limit=` for any of the four reads these cap; each was a bare `take:` no query parameter
+  // could reach, hence a setting instead of a pipe.
+  {
+    key: 'dpdp.securityIncidentListCap',
+    label: 'Security incident list size',
+    description: 'How many security incidents the incident register shows at once, newest first.',
+    group: 'dpdp',
+    type: 'number',
+    default: 500,
+    min: 50,
+    max: 5000,
+    unit: 'rows',
+    applies: 'immediately',
+    audience: 'technical',
+  },
+  {
+    key: 'dpdp.securityIncidentSummaryScanCap',
+    label: 'Security incident summary scan size',
+    description: 'How many incident rows the compliance-health summary counts over (open, overdue by clock) before it stops. Raise it only if the incident register itself is expected to exceed this many rows.',
+    group: 'dpdp',
+    type: 'number',
+    default: 2000,
+    min: 500,
+    max: 20000,
+    unit: 'rows',
+    applies: 'immediately',
+    audience: 'technical',
+  },
+  {
+    key: 'dpdp.rightsRequestListCap',
+    label: 'Rights-request list size',
+    description: 'How many rights requests the register shows at once, newest first.',
+    group: 'dpdp',
+    type: 'number',
+    default: 500,
+    min: 50,
+    max: 5000,
+    unit: 'rows',
+    applies: 'immediately',
+    audience: 'technical',
+  },
+  {
+    key: 'dpdp.rightsRequestSummaryScanCap',
+    label: 'Rights-request summary scan size',
+    description: 'How many rights-request rows the compliance-health summary counts over (open, overdue by SLA) before it stops. Raise it only if the register itself is expected to exceed this many rows.',
+    group: 'dpdp',
+    type: 'number',
+    default: 2000,
+    min: 500,
+    max: 20000,
+    unit: 'rows',
+    applies: 'immediately',
+    audience: 'technical',
+  },
 
   // ── Planning ────────────────────────────────────────────────────────────
   {

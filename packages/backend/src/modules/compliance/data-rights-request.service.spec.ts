@@ -17,7 +17,10 @@ describe('DataRightsRequestService', () => {
       find: jest.fn(async () => [...store.values()]),
     };
     audit = { recordEventSafe: jest.fn().mockResolvedValue(undefined) };
-    settings = { get: jest.fn().mockResolvedValue(null) }; // → default 30-day SLA
+    settings = {
+      get: jest.fn().mockResolvedValue(null), // → default 30-day SLA
+      getNumber: jest.fn().mockResolvedValue(500), // → default list/scan cap
+    };
     notificationDispatch = { emitSafe: jest.fn() };
     service = new DataRightsRequestService(repo, audit, settings, notificationDispatch);
   });

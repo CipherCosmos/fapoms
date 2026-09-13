@@ -10,6 +10,7 @@ import { OrganizationController } from '../../modules/organization/organization.
 import { ProjectController } from '../../modules/project/project.controller';
 import { RuleBypassController } from '../../modules/platform/rule-bypass/rule-bypass.controller';
 import { SchedulingController } from '../../modules/scheduling/scheduling.controller';
+import { TelemetryController } from '../../modules/telemetry/telemetry.controller';
 import { ValidationController } from '../../modules/validation/validation.controller';
 
 /**
@@ -35,9 +36,12 @@ import { ValidationController } from '../../modules/validation/validation.contro
  *
  * Routes deliberately NOT listed here are bounded one layer down, in their service, and are named
  * in the campaign report rather than moved: the three document data-entry/overview routes, the
- * mobile-facing `GET /assignments/assayer/:id`, `GET /feedback`, `GET /validation-queries`,
- * `GET /assayer-remarks/assayer/:id` and `GET /telemetry/user`. A service clamp is a real clamp;
- * it is just not the boundary.
+ * mobile-facing `GET /assignments/assayer/:id`, `GET /feedback`, `GET /validation-queries` and
+ * `GET /assayer-remarks/assayer/:id`. A service clamp is a real clamp; it is just not the
+ * boundary. `GET /telemetry/user` used to be on this list too — its own service-level clamp is
+ * still there (belt-and-suspenders, not removed) — until the route itself gained the same
+ * `ParseLimitPipe` binding every route below already has, which is why it moved down into the
+ * table instead.
  */
 describe('collection endpoints: the limit pipe is bound, not just written', () => {
   const pipesFor = (controller: Type<any>, method: string, param = 'limit'): PipeTransform[] => {
@@ -68,6 +72,9 @@ describe('collection endpoints: the limit pipe is bound, not just written', () =
       'imprecise() does take: limit * 4 — ?limit=5000000 asks for twenty million rows'],
     ['GET /audit-log/trail', AuditLogController, 'getUnifiedTrail', 200, 500,
       'was a hand-rolled Math.min(Number(limit) || 200, 500), the clamp the pipe was factored out of'],
+    ['GET /telemetry/user', TelemetryController, 'forUser', 100, 500,
+      'a bare @Query(\'limit\') with a JS default of 100 and no ceiling at the boundary; ' +
+      '?limit=5000000 reached the service, which happened to clamp it — this is what made that the boundary instead'],
   ];
 
   describe.each(ROUTES)('%s', (_label, controller, method, def, max, _was) => {

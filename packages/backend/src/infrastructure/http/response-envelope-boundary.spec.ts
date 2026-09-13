@@ -7,7 +7,7 @@ import { execSync } from 'child_process';
  * `{ success: true, data }` at roughly 458 separate return sites (a plain-text count; a few of
  * those were a code comment quoting the shape, not a real site), when `ResponseInterceptor` has
  * applied that same envelope automatically — and passed an already-enveloped body straight
- * through — since it shipped. Around 370 real sites are gone as of this file; 81 remain, each
+ * through — since it shipped. Around 371 real sites are gone as of this file; 80 remain, each
  * requiring a human judgment call this file does not attempt to make (a lone `{ success: true }`
  * with no `data` key, or `success: true` beside other sibling keys a blind rewrite would silently
  * drop).
@@ -306,7 +306,6 @@ describe('response envelope boundary — no controller hand-rolls the envelope o
     'src/modules/document/document.controller.ts :: completeUpload',
     'src/modules/document/document.controller.ts :: dispatchBatch',
     'src/modules/document/document.controller.ts :: dispatchDocument',
-    'src/modules/document/document.controller.ts :: findAll',
     'src/modules/document/document.controller.ts :: findByProjectBranch',
     'src/modules/document/document.controller.ts :: mobileUpload',
     'src/modules/document/document.controller.ts :: mobileUploadBinary',
@@ -350,7 +349,7 @@ describe('response envelope boundary — no controller hand-rolls the envelope o
    * same breath — but it can never grow, which is the one direction that would mean the fitness
    * test itself has gone blind to a new violation.
    */
-  const CANARY_CEILING = 81;
+  const CANARY_CEILING = 80;
 
   const project = new Project({
     tsConfigFilePath: path.join(BACKEND_ROOT, 'tsconfig.json'),

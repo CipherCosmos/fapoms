@@ -9,6 +9,19 @@ import { DevicePlatform } from './device-token.entity';
 import { rolesOf } from '../assayer/assayer-visibility';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
+/**
+ * Deliberately not `PaginatedResponse<T>`'s `meta.pagination` shape (no `page`/`totalPages`/
+ * `hasNext`): this is a bounded inbox digest — "how many unread, how many total, what window did
+ * you ask for" — not page navigation, and `frontend/src/services/api.ts`'s `getNotificationPage()`
+ * has a live, verified dependency on this exact flat `{ total, unreadCount, limit, offset }`
+ * shape. A named function rather than the inline literal this used to be, so a future
+ * pagination-shape fitness test can tell "a real paginated list, hand-rolling its own meta" apart
+ * from "an inbox digest that was never meant to look like one" structurally — by whether the call
+ * is inline or reaches a named factory — instead of a hardcoded exception naming this route.
+ */
+function buildInboxMeta(total: number, unreadCount: number, limit?: number, offset?: number) {
+  return { total, unreadCount, limit, offset };
+}
 
 /**
  * Device-token and preference bodies, previously inline object literals with no runtime
@@ -94,7 +107,7 @@ export class NotificationController {
       { category, unreadOnly, limit, offset },
       viewerOrganizationId(req),
     );
-    return { success: true, data: page.items, meta: { total: page.total, unreadCount: page.unreadCount, limit, offset } };
+    return { success: true, data: page.items, meta: buildInboxMeta(page.total, page.unreadCount, limit, offset) };
   }
 
   @Get('unread-count')
