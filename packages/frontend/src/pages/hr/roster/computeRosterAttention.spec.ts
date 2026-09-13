@@ -88,7 +88,9 @@ describe('computeRosterAttention — deterministic domain classification', () =>
 
     const result = computeRosterAttention(activeMissingBank);
     expect(result.state).toBe('PAYOUT_BLOCKED');
-    expect(result.reason).toContain('Missing mandatory payout credentials');
+    // Short enough to read whole in the cell it renders in: the previous wording was truncated to
+    // "Missing mandatory payout creden…" on every row, which said less than the badge above it.
+    expect(result.reason).toBe('No PAN, bank or IFSC');
   });
 
   it('never marks non-workable or departed records as PAYOUT_BLOCKED even if bank details are missing', () => {

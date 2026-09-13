@@ -44,7 +44,10 @@ export function computeRosterAttention(person: RosterPerson): RosterAttentionDet
   if (isWorkable && cannotBePaid(person as any)) {
     return {
       state: 'PAYOUT_BLOCKED',
-      reason: 'Missing mandatory payout credentials (PAN, Bank, or IFSC)',
+      // Short enough to read in the column it renders in. The previous sentence was 52 characters
+      // in a 180-pixel cell, so every row showed "Missing mandatory payout creden…" — a truncation
+      // that told the reader less than the badge above it already had.
+      reason: 'No PAN, bank or IFSC',
     };
   }
 

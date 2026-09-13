@@ -42,27 +42,22 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
         gap: '12px',
       }}
     >
+      {/*
+        No second title.
+
+        This screen sits inside the Workforce section, under a header that already says "Workforce"
+        and a People tab that already carries the headcount — so "Assayer Workforce Roster / 107
+        total registered assayers" was the same two facts a third and fourth time, stacked, above a
+        row of nine counted filter chips. What is left is the only thing this line knew that the
+        others did not: how many rows the current filters are showing.
+      */}
       <div>
-        <h1
-          style={{
-            margin: 0,
-            fontSize: '20px',
-            fontWeight: 700,
-            color: 'var(--text-primary)',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          Assayer Workforce Roster
-        </h1>
-        <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--text-secondary)' }}>
-          {totalCount.toLocaleString('en-IN')} total registered assayers
-          {filteredCount !== totalCount && (
-            <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
-              {' '}
-              · {filteredCount.toLocaleString('en-IN')} matching current filters
-            </span>
-          )}
-        </p>
+        {filteredCount !== totalCount ? (
+          <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
+            Showing <strong style={{ color: 'var(--text-primary)' }}>{filteredCount.toLocaleString('en-IN')}</strong>
+            {' '}of {totalCount.toLocaleString('en-IN')}
+          </p>
+        ) : null}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>

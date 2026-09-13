@@ -65,7 +65,15 @@ export const RecordGaps: React.FC<{ a: RosterPerson }> = ({ a }) => {
       }}
     >
       <AlertTriangle size={12} />
-      {blockers.length ? `Cannot be paid · ${missing.length} missing` : `${missing.length} missing`}
+      {/*
+        The count, not the verdict.
+
+        "Cannot be paid" is what the Operational Attention column two cells to the left already
+        says, as a badge, on the same row — so a payout-blocked person carried the same sentence
+        twice, truncated in both places. This column answers a different question: how much of the
+        file is missing. The colour still says whether any of the gaps is a payout blocker.
+      */}
+      {`${missing.length} missing`}
     </span>
   );
 };

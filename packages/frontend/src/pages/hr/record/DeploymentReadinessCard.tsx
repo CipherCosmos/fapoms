@@ -107,7 +107,15 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
           <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
             Deployment Readiness
           </span>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>(Backend-Authoritative)</span>
+          {/*
+            "(Backend-Authoritative)" is a sentence about our architecture, printed on a screen a
+            coordinator reads to decide whether to ring somebody. It told them nothing they could
+            act on and everything about where the answer was computed. What they need to know is
+            that this is the same verdict dispatch will apply — so say that.
+          */}
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            the same check dispatch makes
+          </span>
         </div>
         <div
           data-testid="readiness-verdict-badge"
