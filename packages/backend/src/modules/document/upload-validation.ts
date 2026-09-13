@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { memoryStorage } from 'multer';
-import { DEFAULT_MAX_UPLOAD_MB, SCAN_UPLOAD_MIME_TYPES } from '@fapoms/shared';
+import { DEFAULT_MAX_UPLOAD_MB, MAX_RESUMABLE_UPLOAD_MB, SCAN_UPLOAD_MIME_TYPES } from '@fapoms/shared';
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 
@@ -80,15 +80,12 @@ export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || D
  * `DOCUMENT_MAX_RESUMABLE_UPLOAD_MB` is the deployment escape hatch — the same shape as the other
  * cap, so raising one does not silently teach anybody to edit the other by hand.
  *
- * The default (100) is a literal here, not a shared import: `@fapoms/shared` dropped
- * `MAX_RESUMABLE_UPLOAD_MB` in the same pass that added `SCAN_UPLOAD_MIME_TYPES`, and only the
- * single-request default (`DEFAULT_MAX_UPLOAD_MB`) has a replacement there — no client picker
- * needs to know the resumable ceiling ahead of time the way it needs the plain one, so there was
- * nothing on the client side for a shared constant to serve. Same value as before; raise it via
- * the env var above, not by editing this number.
+ * The default is `@fapoms/shared`'s `MAX_RESUMABLE_UPLOAD_MB`, not a re-typed literal — raise the
+ * ceiling via the env var above, not by editing either number, or the two will read differently
+ * to a deployment that only checked one of them.
  */
 export const MAX_RESUMABLE_UPLOAD_BYTES =
-  (Number(process.env.DOCUMENT_MAX_RESUMABLE_UPLOAD_MB) || 100) * 1024 * 1024;
+  (Number(process.env.DOCUMENT_MAX_RESUMABLE_UPLOAD_MB) || MAX_RESUMABLE_UPLOAD_MB) * 1024 * 1024;
 
 /**
  * The `FileInterceptor`/`FilesInterceptor` options object every upload route builds by hand today
