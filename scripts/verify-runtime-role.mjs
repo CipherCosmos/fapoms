@@ -50,7 +50,11 @@ const { Client } = require('pg');
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BACKEND = join(REPO_ROOT, 'packages', 'backend');
 
-const ADMIN_URL = process.env.DB_ADMIN_URL || 'postgres://pgadmin:pgadmin_dev@127.0.0.1:55433/postgres';
+const ADMIN_URL = process.env.DB_ADMIN_URL;
+if (!ADMIN_URL) {
+  console.error('DB_ADMIN_URL is required — see the usage example at the top of this file.');
+  process.exit(1);
+}
 
 /**
  * The two ways a FAPOMS database comes into existence, both of which must end in the same place.

@@ -41,7 +41,8 @@
 import { randomUUID } from 'node:crypto';
 
 const API = process.env.AC_API || 'http://127.0.0.1:8080/api/v1';
-const PASSWORD = process.env.AC_PASSWORD || 'admin123';
+const PASSWORD = process.env.AC_PASSWORD;
+if (!PASSWORD) throw new Error('AC_PASSWORD is required — nothing in this script works without it.');
 
 const results = [];
 let group = '';

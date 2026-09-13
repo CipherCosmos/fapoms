@@ -543,35 +543,57 @@ directly by the script itself), whose own `${VAR:-default}` lines are the true d
 
 ## Summary of genuine inconsistencies found
 
-Everything below is the same variable name resolving to a materially different default, or a
-different name doing the same job, in more than one place. Presented for a human decision — nothing in
-this repo was changed to produce or fix this list.
+This list was originally nine items presented for a human decision. Each has since been triaged:
+four were confirmed real and fixed the same session this file was added; four turned out, on
+closer reading of each script's own documented usage, to be a deliberate difference rather than
+drift; one is a real but low-confidence case, left alone. The triage is kept here rather than
+deleted, so the reasoning survives and nobody re-discovers the same question from scratch.
 
-1. **`packages/backend/scripts/*`: three different `DB_HOST` defaults** in the same directory —
-   `postgres` (3 files), `localhost` (1 file), and a third rule that actively rewrites an explicit
-   `postgres` value back to `localhost` (6 files).
-2. **Same directory, `DB_PASSWORD`: no default in the four `.js` scripts vs. `fapoms_dev`** in the six
-   `.ts` diagnostic scripts.
-3. **`repair-inverted-exit-dates.js` alone accepts `DB_USER`** as a fallback name for `DB_USERNAME`,
-   with no other script or the application itself recognizing that name, and no literal default if
-   both are unset (every sibling script defaults to `'fapoms'`).
-4. **`scripts/verify-http-security.mjs` defaults `AC_PASSWORD` to `admin123`;** every other script that
-   reads `AC_PASSWORD` (a dozen-plus of them) requires it with no default.
-5. **`scripts/verify-runtime-role.mjs` hardcodes a fallback connection string for `DB_ADMIN_URL`**
-   (embedded dev credentials); every other reader of `DB_ADMIN_URL` treats it as required.
-6. **`scripts/acceptance/custom-role-parity.mjs` defaults `AC_USERNAME` to `admin`;**
-   `verify-deployment.mjs` reads the same variable with no default.
-7. **`deploy/docker-compose.prod.yml` requires `DB_DATABASE` on the `postgres` service (no fallback)
-   but defaults it to `fapoms` on the `db-migrate` service** — the same variable, two different
-   resolution rules, in the same file.
-8. **`docker-compose.yml` (dev) hardcodes the frontend container's `VITE_API_URL`** to
-   `http://backend:3000` rather than reading it from `.env.docker` — a `VITE_API_URL` set there has no
-   effect in Docker dev, unlike running the frontend directly against `vite.config.ts`'s own default.
-9. **`.env.production.example` points operators at `packages/backend/.env.example`** for the full
-   variable list and precedence — that file does not exist anywhere in this repository.
-10. **`FAPOMS_BRANCH` differs between the homeserver and AWS `auto-deploy.env.example` files** (`main`
-    vs. `test`) — called out here for completeness, but this one is deliberate and documented in the
-    files themselves, not an oversight.
+**Fixed:**
+
+1. **`repair-inverted-exit-dates.js` accepted `DB_USER`** as an undocumented fallback name for
+   `DB_USERNAME`, with no literal default if both were unset. Now reads `DB_USERNAME || 'fapoms'`,
+   matching every sibling script.
+2. **`scripts/verify-http-security.mjs` defaulted `AC_PASSWORD` to `admin123`.**
+   `scripts/acceptance/README.md` documents the rule directly: "`AC_PASSWORD` has no default and
+   nothing works without it" — every other reader of it (a dozen-plus scripts) already followed
+   that. Now throws if unset, like the rest.
+3. **`scripts/verify-runtime-role.mjs` hardcoded a fallback connection string for `DB_ADMIN_URL`**
+   with embedded dev credentials; every other reader (`create-database.mjs`, `provision.ts`,
+   `verify-migrations-from-empty.mjs`) requires it explicitly. CI already sets it explicitly for
+   this script too, so nothing depended on the fallback. Now throws if unset.
+4. **`.env.production.example` pointed operators at `packages/backend/.env.example`** for the full
+   variable list — that file has never existed in this repository. Repointed at this file.
+
+**Investigated, found deliberate — left as-is:**
+
+5. **Three different `DB_HOST` defaults across `packages/backend/scripts/*`** turned out to split
+   exactly along each script's own documented invocation method: the four `.js` maintenance
+   scripts say `docker compose exec backend node scripts/...` in their own header comments, where
+   `postgres` (or the rewrite-to-`localhost` some of the diagnostic `.ts` scripts do explicitly)
+   is the correct container-network hostname; `repair-inverted-exit-dates.js` alone documents
+   plain `node scripts/...` from the host, where `localhost` is correct. Same split, same reason,
+   for `DB_PASSWORD`'s `fapoms_dev` convenience default on the host-run `.ts` scripts only.
+6. **`deploy/docker-compose.prod.yml` requires `DB_DATABASE` on `postgres` but defaults it to
+   `fapoms` on `db-migrate`.** Looked like drift, but `db-migrate` runs `provision.ts`, which
+   already has its own `env('DB_DATABASE', 'fapoms')` fallback in the application code — the
+   compose-level default is redundant with it, not in conflict with it. Both paths land on the
+   same name if the operator leaves it unset.
+7. **`docker-compose.yml` (dev) hardcodes the frontend container's `VITE_API_URL`** to
+   `http://backend:3000`. This is consumed by `vite.config.ts`'s dev-server proxy target, which
+   runs inside the frontend container — `backend` is the correct, resolvable docker-network
+   hostname there, and a value from `.env.docker` intended for a non-containerized run would
+   actively break the proxy if it were used instead.
+8. **`FAPOMS_BRANCH` differs between the homeserver and AWS `auto-deploy.env.example` files**
+   (`main` vs. `test`) — deliberate and documented in the files themselves, not an oversight.
+
+**Real but low-confidence — not changed:**
+
+9. **`scripts/acceptance/custom-role-parity.mjs` defaults `AC_USERNAME` to `admin`;**
+   `verify-deployment.mjs` reads the same variable with no default. Unlike `AC_PASSWORD`, no
+   README rule mandates one behaviour for `AC_USERNAME`, and only these two scripts read it at
+   all — a real difference, but a much weaker case than the `AC_PASSWORD` one it was found
+   alongside. Left alone; worth a second opinion before changing.
 
 Not drift, but worth keeping in mind while reading the tables above: several variables are
 **intentionally** read with different defaults in genuinely different contexts — `DB_POOL_MAX` is 20
