@@ -1,6 +1,7 @@
 import {
   PAN_PATTERN, IFSC_PATTERN, AADHAAR_PATTERN, GSTIN_PATTERN,
-  isValidPan, isValidIfsc, isValidAadhaar, isPlaceholderAadhaar, isValidGstin,
+  isValidPan, isValidIfsc, isValidAadhaar, isPlaceholderAadhaar, isValidGstin, isGstinOrPan,
+  GSTIN_OR_PAN_REFUSAL,
   normalisePhone, verhoeffCheckDigit, gstinCheckDigit,
 } from './identity-validation';
 
@@ -344,5 +345,43 @@ describe('normalisePhone', () => {
     expect(normalisePhone(null)).toBeNull();
     expect(normalisePhone(undefined)).toBeNull();
     expect(normalisePhone({})).toBeNull();
+  });
+});
+
+/**
+ * One rule, read by three callers: the API decorator that refuses the save, the edit form that
+ * greys out Save before the save is attempted, and the controller spec that pins the constraint
+ * name. They used to be three copies of the same boolean expression and two copies of the same
+ * sentence, which is how one screen came to say "double-check before saving" about something that
+ * would not be saved at all.
+ */
+describe('isGstinOrPan', () => {
+  it('takes either shape, because the column has always held both', () => {
+    expect(isGstinOrPan('27AAPFU0939F1ZV')).toBe(true);
+    expect(isGstinOrPan('ABCDE1234F')).toBe(true);
+  });
+
+  it('takes an empty value, so clearing the field is never blocked by the rule', () => {
+    expect(isGstinOrPan('')).toBe(true);
+    expect(isGstinOrPan('   ')).toBe(true);
+  });
+
+  it('refuses what matches neither — including a string of the right length', () => {
+    expect(isGstinOrPan('27AAPFU0939F1ZW')).toBe(false); // GSTIN length, wrong check digit
+    expect(isGstinOrPan('ABCD1234F')).toBe(false);
+    expect(isGstinOrPan('not a tax number')).toBe(false);
+  });
+
+  it('refuses a non-string rather than coercing one', () => {
+    expect(isGstinOrPan(undefined)).toBe(false);
+    expect(isGstinOrPan(null)).toBe(false);
+    expect(isGstinOrPan(27)).toBe(false);
+  });
+
+  it('says what to type, not just that it is wrong', () => {
+    // The sentence is user-facing on two surfaces; an example of each accepted shape is the
+    // whole of its value.
+    expect(GSTIN_OR_PAN_REFUSAL).toContain('27AAPFU0939F1ZV');
+    expect(GSTIN_OR_PAN_REFUSAL).toContain('ABCDE1234F');
   });
 });

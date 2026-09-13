@@ -21,7 +21,7 @@ import { Transform, Type } from 'class-transformer';
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, ClientLifecycleStatus, ContractStatus, isValidGstin, isValidPan } from '@fapoms/shared';
+import { SystemRole, ClientLifecycleStatus, ContractStatus, isGstinOrPan, GSTIN_OR_PAN_REFUSAL } from '@fapoms/shared';
 import { QualificationScoreService } from '../assayer/qualification-score.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
@@ -50,10 +50,10 @@ const IsGstinOrPanFormat = (options?: ValidationOptions): PropertyDecorator =>
   ValidateBy({
     name: 'isGstinOrPanFormat',
     validator: {
-      validate: (value: unknown) =>
-        typeof value === 'string' && (value.trim() === '' || isValidGstin(value) || isValidPan(value)),
-      defaultMessage: () =>
-        "This doesn't look like a GSTIN or a PAN — enter one of the two, e.g. 27AAPFU0939F1ZV or ABCDE1234F.",
+      // Both the rule and its sentence come from `@fapoms/shared` so the edit form can warn with
+      // exactly what this will say, before the operator presses Save rather than after.
+      validate: isGstinOrPan,
+      defaultMessage: () => GSTIN_OR_PAN_REFUSAL,
     },
   }, options);
 

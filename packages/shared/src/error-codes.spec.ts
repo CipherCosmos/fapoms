@@ -1,13 +1,13 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
-  AUTH_ERROR_CODES,
-  ASSAYER_ERROR_CODES,
-  ASSIGNMENT_ERROR_CODES,
-  GENERAL_ERROR_CODES,
   API_ERROR_CODES,
   FIELD_ERROR_CODES,
+  GENERAL_ERROR_CODES,
   isApiErrorCode,
   fallbackCodeForStatus,
 } from './error-codes';
+import * as catalogue from './error-codes';
 
 describe('isApiErrorCode', () => {
   it('recognises a real code from each category', () => {
@@ -45,13 +45,39 @@ describe('isApiErrorCode', () => {
   });
 });
 
+/**
+ * The categories actually spread into `API_ERROR_CODES`, read from the composition itself.
+ *
+ * This was four names typed out by hand, and by the time there were eight categories it was
+ * comparing half the catalogue against all of it and failing — a test that had quietly become a
+ * statement about the day it was written rather than about the code. Parsing the spread list means
+ * a new category is covered the moment it is added, and a category that stops being composed in
+ * stops being checked, both without anybody remembering to come here.
+ */
+function spreadCategories(): Array<[string, Record<string, string>]> {
+  const source = readFileSync(join(__dirname, 'error-codes.ts'), 'utf8');
+  const composition = source.match(/export const API_ERROR_CODES = \{([\s\S]*?)\} as const;/);
+  if (!composition) throw new Error('API_ERROR_CODES is no longer composed by spreading categories.');
+  const names = [...composition[1].matchAll(/\.\.\.(\w+)/g)].map((m) => m[1]);
+  return names.map((name) => {
+    const codes = (catalogue as Record<string, unknown>)[name];
+    if (!codes || typeof codes !== 'object') throw new Error(`${name} is spread in but not exported.`);
+    return [name, codes as Record<string, string>];
+  });
+}
+
 describe('API_ERROR_CODES composition', () => {
+  it('reads the real category list, so this cannot pass by checking nothing', () => {
+    const names = spreadCategories().map(([name]) => name);
+    expect(names.length).toBeGreaterThan(3);
+    expect(names).toContain('AUTH_ERROR_CODES');
+  });
+
   it('has no code name defined in more than one category', () => {
     // The composed object is built by spreading four category objects together. A name reused
     // across two categories would silently let the later one win with no error — this would
     // catch that the moment it happened, rather than leaving one category's code quietly dead.
-    const categories = [AUTH_ERROR_CODES, ASSAYER_ERROR_CODES, ASSIGNMENT_ERROR_CODES, GENERAL_ERROR_CODES];
-    const allKeys = categories.flatMap((c) => Object.keys(c));
+    const allKeys = spreadCategories().flatMap(([, codes]) => Object.keys(codes));
     expect(new Set(allKeys).size).toBe(allKeys.length);
     expect(Object.keys(API_ERROR_CODES).length).toBe(allKeys.length);
   });

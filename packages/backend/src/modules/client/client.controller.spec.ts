@@ -1,6 +1,6 @@
 import { validate, IsOptional, IsString, MaxLength, ValidateBy } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
-import { isValidGstin, isValidPan, ContractStatus } from '@fapoms/shared';
+import { isGstinOrPan, GSTIN_OR_PAN_REFUSAL, ContractStatus } from '@fapoms/shared';
 import { UpdateContractRequestDto } from './client.controller';
 
 /**
@@ -11,20 +11,16 @@ import { UpdateContractRequestDto } from './client.controller';
  * assayer DTOs (PAN, IFSC, Aadhaar all have one). Anything up to 100 characters was accepted and
  * stored, including a masked value echoed back from a list view.
  *
- * `IsGstinOrPanFormat` is declared here rather than imported because it is module-private in
+ * The decorator is still declared here rather than imported, because it is module-private in
  * `client.controller.ts` — the same reasoning `coded-validation.pipe.spec.ts` uses for its own
- * local copy of `IsPanFormat`. What this pins down is the mapping from the constraint NAME
- * (`isGstinOrPanFormat`) and behaviour to the real one; the two must agree, not the module
- * boundary.
+ * local copy of `IsPanFormat`. What it wraps no longer is: the rule and its sentence are
+ * `isGstinOrPan` and `GSTIN_OR_PAN_REFUSAL` in `@fapoms/shared`, which is also what the client
+ * edit form now checks before it lets the operator press Save. This copy therefore pins the
+ * mapping from the constraint NAME to the shared rule, and cannot restate the rule wrongly.
  */
 const IsGstinOrPanFormat = () => ValidateBy({
   name: 'isGstinOrPanFormat',
-  validator: {
-    validate: (value: unknown) =>
-      typeof value === 'string' && (value.trim() === '' || isValidGstin(value) || isValidPan(value)),
-    defaultMessage: () =>
-      "This doesn't look like a GSTIN or a PAN — enter one of the two, e.g. 27AAPFU0939F1ZV or ABCDE1234F.",
-  },
+  validator: { validate: isGstinOrPan, defaultMessage: () => GSTIN_OR_PAN_REFUSAL },
 });
 
 class TaxIdDto {

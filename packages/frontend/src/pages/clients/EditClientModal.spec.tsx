@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { EditClientModal } from './EditClientModal';
 import { useUpdateClient } from '../../hooks/useClients';
 import { api } from '../../services/api';
-import { ClientType, ClientLifecycleStatus } from '@fapoms/shared';
+import { ClientType, ClientLifecycleStatus, GSTIN_OR_PAN_REFUSAL } from '@fapoms/shared';
 import type { Client } from '@fapoms/shared';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
@@ -20,8 +20,15 @@ const mockUseUpdateClient = useUpdateClient as jest.Mock;
  * `EditClientModal`'s Address used to be one free-text textarea and Tax ID a plain box with no
  * format check. These pin the two properties the task cares about: an existing address the new
  * autocomplete does not recognise must round-trip byte-for-byte (nobody's saved address should
- * change shape just because they opened Edit and clicked Save), and an odd-looking Tax ID must
- * warn, never block.
+ * change shape just because they opened Edit and clicked Save), and a Tax ID matching neither a
+ * GSTIN nor a PAN must be refused HERE, where it can be corrected, rather than accepted by the
+ * form and thrown back by the API.
+ *
+ * That second one used to read "warn, never block", and the test below asserted it: the operator
+ * was shown a grey "double-check before saving" and the save went through to a server carrying
+ * `IsGstinOrPanFormat`, which refused it. The rule was never the form's to make — it belongs to
+ * the API — so the form now reads the same `isGstinOrPan` from `@fapoms/shared` and says the same
+ * sentence the server would have.
  */
 
 const baseClient: Client = {
@@ -69,16 +76,28 @@ describe('EditClientModal', () => {
     expect((screen.getByPlaceholderText('Type to search district…') as HTMLInputElement).value).toBe('Pune');
   });
 
-  it('warns on a Tax ID matching neither a GSTIN nor a PAN, but still saves it', async () => {
+  it('refuses a Tax ID matching neither a GSTIN nor a PAN, instead of letting the API do it', async () => {
     render(<EditClientModal client={baseClient} onClose={jest.fn()} />);
 
     fireEvent.change(screen.getByPlaceholderText('e.g., GSTIN / PAN'), { target: { value: 'not-a-real-number' } });
-    expect(screen.getByText(/doesn't look like a gstin/i)).toBeInTheDocument();
+    expect(screen.getByText(/doesn't look like a gstin or a pan/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(mutateAsync).not.toHaveBeenCalled());
+  });
 
-    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
-    expect(mutateAsync.mock.calls[0][0].payload.taxId).toBe('not-a-real-number');
+  it('says the same thing the API would, rather than a softer version of it', () => {
+    render(<EditClientModal client={baseClient} onClose={jest.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText('e.g., GSTIN / PAN'), { target: { value: 'zzz' } });
+    expect(screen.getByText(GSTIN_OR_PAN_REFUSAL)).toBeInTheDocument();
+  });
+
+  it('clears without complaint — the field is optional and must stay clearable', () => {
+    render(<EditClientModal client={{ ...baseClient, taxId: '27AAPFU0939F1ZV' }} onClose={jest.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText('e.g., GSTIN / PAN'), { target: { value: '' } });
+    expect(screen.queryByText(/doesn't look like a gstin/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save changes/i })).not.toBeDisabled();
   });
 
   it('shows no hint for a real GSTIN', () => {

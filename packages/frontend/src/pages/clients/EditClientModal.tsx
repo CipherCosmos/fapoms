@@ -7,7 +7,7 @@ import type { Client } from '@fapoms/shared';
 import { ClientType, Priority, clientTypeLabel, priorityLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { applyPlaceToAddressGroup, composeAddress, emptyAddressGroup, stateOptionsFor } from './address-group';
-import { taxIdHint } from './field-hints';
+import { taxIdRefusal } from './field-hints';
 
 // The enum supplies the values; `@fapoms/shared`'s label layer supplies the wording, the same
 // way the clients list already does. Rendering the value itself put "MICROFINANCE" and
@@ -48,9 +48,16 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
   const setAddrField = (k: keyof typeof addr) => (v: string) => setAddr((a) => ({ ...a, [k]: v }));
   const stateOptions = useMemo(() => stateOptionsFor(addr.state), [addr.state]);
 
+  /**
+   * The one field on this form the API will refuse outright, checked here rather than discovered
+   * on the way back. Same rule and same sentence — both come from `@fapoms/shared` — so the form
+   * cannot start refusing something the server would have taken, or the reverse.
+   */
+  const taxIdProblem = taxIdRefusal(form.taxId);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name || !form.displayName) return;
+    if (!form.name || !form.displayName || taxIdProblem) return;
     try {
       await update.mutateAsync({
         id: client.id,
@@ -81,7 +88,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
     <Modal open onClose={onClose} title={<><Building2 size={18} style={{ marginRight: 6 }} /> Edit Client — {client.clientCode}</>} width="560px" asForm onSubmit={handleSubmit} footer={
       <>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
-        <button type="submit" disabled={update.isPending || !form.name || !form.displayName} className="btn btn-primary">
+        <button type="submit" disabled={update.isPending || !form.name || !form.displayName || !!taxIdProblem} className="btn btn-primary">
           {update.isPending ? 'Saving...' : 'Save Changes'}
         </button>
       </>
@@ -217,10 +224,12 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Tax ID" />
               <StyledInput placeholder="e.g., GSTIN / PAN" value={form.taxId} onChange={(e) => set('taxId', e.target.value)} />
-              {/* Advisory, shown while the field still has focus of the operator's attention —
-                  never a reason to refuse a save. The column has always held either shape. */}
-              {taxIdHint(form.taxId) && (
-                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>{taxIdHint(form.taxId)}</span>
+              {/* Not advisory: `taxId` carries the API's `IsGstinOrPanFormat` rule, so this is
+                  what the save will be refused with. Said in the refusing tone, next to a Save
+                  that is already off, rather than in the same grey as the billing screen's note
+                  on a field that genuinely takes anything. */}
+              {taxIdProblem && (
+                <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--danger)', marginTop: '3px' }}>{taxIdProblem}</span>
               )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gridColumn: '1 / -1' }}>

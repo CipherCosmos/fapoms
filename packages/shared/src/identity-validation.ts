@@ -202,6 +202,32 @@ export function isValidGstin(value: unknown): boolean {
 }
 
 /**
+ * Does this value pass the rule the API enforces on a client's `taxId`?
+ *
+ * The column has always held either shape — a GSTIN for a GST-registered entity, a bare PAN for
+ * an individual or a client not yet registered — and an empty string passes, so clearing the
+ * field is never blocked by the rule meant to keep junk out of it.
+ */
+export function isGstinOrPan(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return value.trim() === '' || isValidGstin(value) || isValidPan(value);
+}
+
+/**
+ * What the API says when it refuses one — and what the form should say BEFORE it is sent.
+ *
+ * It lives here because it was written twice, in the two places that have to agree: the server's
+ * `IsGstinOrPanFormat` decorator refused the save with this sentence, while the edit form showed
+ * a grey "double-check before saving" that read as advice. It was not advice. The operator typed
+ * something, was told to check it, saved anyway because nothing said they could not, and got the
+ * refusal from the server on a screen that had implied the opposite. The identical grey note on
+ * the BILLING tax identifier is genuinely advisory — that column has no such rule — so the two
+ * looked the same and behaved differently, which is the worst of both.
+ */
+export const GSTIN_OR_PAN_REFUSAL =
+  "This doesn't look like a GSTIN or a PAN — enter one of the two, e.g. 27AAPFU0939F1ZV or ABCDE1234F.";
+
+/**
  * A real Aadhaar number: twelve digits, not a degenerate repeat, Verhoeff checksum intact.
  *
  * Why more than the twelve-digit shape: the length-only check stored any typo and any

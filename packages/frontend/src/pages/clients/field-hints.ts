@@ -1,4 +1,4 @@
-import { isValidPan, isValidGstin } from '@fapoms/shared';
+import { isValidPan, isValidGstin, isGstinOrPan, GSTIN_OR_PAN_REFUSAL } from '@fapoms/shared';
 
 /**
  * A client's registered tax identifier has always been free text, and it holds either a GSTIN
@@ -16,6 +16,23 @@ export function taxIdHint(value: string): string | null {
   if (!v) return null;
   if (isValidGstin(v) || isValidPan(v)) return null;
   return "Doesn't look like a GSTIN (e.g. 27ABCDE1234F1Z5) or a PAN (e.g. ABCDE1234F) - double-check before saving.";
+}
+
+/**
+ * The same field, on the screen where the rule is enforced.
+ *
+ * `taxIdHint` above is advice, and on the BILLING tax identifier that is the truth: the column
+ * takes anything, including a foreign registration or a TIN. On a CLIENT's `taxId` it was not —
+ * the API refuses a value matching neither shape — and both screens printed the same grey
+ * "double-check before saving". So one of them was telling an operator to look twice at something
+ * that would be accepted, and the other was telling them to look twice at something that would be
+ * thrown back. Identical words, opposite outcomes, nothing on screen to tell them apart.
+ *
+ * This returns the API's own sentence, so what the form warns and what the server would say
+ * cannot drift into two different explanations of one rule.
+ */
+export function taxIdRefusal(value: string): string | null {
+  return isGstinOrPan(value) ? null : GSTIN_OR_PAN_REFUSAL;
 }
 
 /**
