@@ -29,10 +29,10 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { AssignmentStatus, EventCategory, Priority, ProjectStatus, ProjectBranchStatus, SystemRole, resolveRegion, zoneNameForState, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
-import * as xlsx from 'xlsx';
 // One implementation of "read a spreadsheet column", shared with the assayer roster upload —
 // the exact-header bug that dropped every row has now been hit by both importers.
 import { parseSheet, rowReader, identifyTemplate, normaliseHeader, BLANK_HEADER, ParsedSheet, RowReader } from '../../core/excel/sheet-reader';
+import { buildWorkbook } from '../reports/excel-export';
 import { BranchEntity } from '../branch/branch.entity';
 import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
 import { needsBetterFix } from '../geo/coordinate-resolution';
@@ -627,46 +627,53 @@ export class ProjectService implements OnModuleInit {
       relations: ['branch'],
     });
 
-    const rows: Record<string, any>[] = projectBranches.map((pb) => ({
-      BRANCH: pb.branch.solId,
-      BRANCH_NAME: pb.branch.name,
-      DISTRICT: pb.branch.district,
-      STATE: pb.branch.state,
-      'Branch Address': pb.branch.address || '',
-      Packets: pb.packetCount ?? '',
-      Pincode: pb.branch.pincode || '',
-      'Branch Manager': pb.branch.managerName || '',
-      'Branch Phone': pb.branch.phone || '',
-      'Branch Email': pb.branch.email || '',
-    }));
+    // One row per header, in header order — buildWorkbook takes positional arrays, not the
+    // keyed-by-header objects json_to_sheet took; it also supplies the "still show the columns
+    // when there is no data yet" blank row itself, the same fix this file used to apply by hand.
+    const rows: Array<Array<unknown>> = projectBranches.map((pb) => {
+      const byHeader: Record<string, unknown> = {
+        BRANCH: pb.branch.solId,
+        BRANCH_NAME: pb.branch.name,
+        DISTRICT: pb.branch.district,
+        STATE: pb.branch.state,
+        'Branch Address': pb.branch.address || '',
+        Packets: pb.packetCount ?? '',
+        Pincode: pb.branch.pincode || '',
+        'Branch Manager': pb.branch.managerName || '',
+        'Branch Phone': pb.branch.phone || '',
+        'Branch Email': pb.branch.email || '',
+      };
+      return headers.map((h) => byHeader[h]);
+    });
 
-    if (rows.length === 0) {
-      rows.push(Object.fromEntries(headers.map((h) => [h, ''])));
-    }
-
-    const ws = xlsx.utils.json_to_sheet(rows, { header: headers });
-    ws['!cols'] = headers.map((h) => ({ wch: h === 'Branch Address' ? 55 : Math.max(14, h.length + 4) }));
-    const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, 'Branch');
-
-    const instructions = [
-      { Field: 'Worked out for you', Required: '', Description: 'You do not need to supply a location, a risk rating, a complexity, or audit hours. The branch is located from its address, risk follows the priority set on the project, and complexity and audit hours are calculated from Packets. Any of these can be adjusted afterwards on the Branches page if needed.' },
-      { Field: 'BRANCH', Required: 'Yes', Description: 'The branch SOL ID from the client, e.g. 8 or 0751. Re-importing the same SOL ID updates that branch rather than creating a duplicate.' },
-      { Field: 'BRANCH_NAME', Required: 'Yes', Description: 'Branch name, e.g. THENKURISSI.' },
-      { Field: 'DISTRICT', Required: 'Yes', Description: 'District name — used to cluster nearby branches into one assayer-day and to compute travel.' },
-      { Field: 'STATE', Required: 'Yes', Description: 'State name — used to apply state-specific public holidays when scheduling.' },
-      { Field: 'Branch Address', Required: 'Yes', Description: 'Full address. The branch is located on the map from this; a 6-digit pincode inside the text is detected automatically. The more complete the address, the more precise the pin.' },
-      { Field: 'Packets', Required: 'Yes', Description: 'Estimated packets to audit at this branch this cycle. This is the number that matters most: it sets how long the audit takes, how complex the branch is rated, how many branches one assayer can cover in a day, and the coverage figure quoted to the client. Left blank, the system assumes a flat 6 hours and the plan will be wrong.' },
-      { Field: 'Pincode', Required: 'No', Description: '6-digit pincode. Leave blank if it already appears in the address.' },
-      { Field: 'Branch Manager', Required: 'No', Description: 'Contact name at the branch, shown to the assayer before the visit.' },
-      { Field: 'Branch Phone', Required: 'No', Description: 'Branch contact number, shown to the assayer before the visit.' },
-      { Field: 'Branch Email', Required: 'No', Description: 'Branch email for correspondence.' },
+    const instructions: Array<[string, string, string]> = [
+      ['Worked out for you', '', 'You do not need to supply a location, a risk rating, a complexity, or audit hours. The branch is located from its address, risk follows the priority set on the project, and complexity and audit hours are calculated from Packets. Any of these can be adjusted afterwards on the Branches page if needed.'],
+      ['BRANCH', 'Yes', 'The branch SOL ID from the client, e.g. 8 or 0751. Re-importing the same SOL ID updates that branch rather than creating a duplicate.'],
+      ['BRANCH_NAME', 'Yes', 'Branch name, e.g. THENKURISSI.'],
+      ['DISTRICT', 'Yes', 'District name — used to cluster nearby branches into one assayer-day and to compute travel.'],
+      ['STATE', 'Yes', 'State name — used to apply state-specific public holidays when scheduling.'],
+      ['Branch Address', 'Yes', 'Full address. The branch is located on the map from this; a 6-digit pincode inside the text is detected automatically. The more complete the address, the more precise the pin.'],
+      ['Packets', 'Yes', 'Estimated packets to audit at this branch this cycle. This is the number that matters most: it sets how long the audit takes, how complex the branch is rated, how many branches one assayer can cover in a day, and the coverage figure quoted to the client. Left blank, the system assumes a flat 6 hours and the plan will be wrong.'],
+      ['Pincode', 'No', '6-digit pincode. Leave blank if it already appears in the address.'],
+      ['Branch Manager', 'No', 'Contact name at the branch, shown to the assayer before the visit.'],
+      ['Branch Phone', 'No', 'Branch contact number, shown to the assayer before the visit.'],
+      ['Branch Email', 'No', 'Branch email for correspondence.'],
     ];
-    const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
-    instrWs['!cols'] = [{ wch: 18 }, { wch: 10 }, { wch: 110 }];
-    xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
 
-    return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    return buildWorkbook([
+      {
+        name: 'Branch',
+        headers,
+        rows,
+        columnWidths: headers.map((h) => (h === 'Branch Address' ? 55 : Math.max(14, h.length + 4))),
+      },
+      {
+        name: 'Instructions',
+        headers: ['Field', 'Required', 'Description'],
+        rows: instructions,
+        columnWidths: [18, 10, 110],
+      },
+    ]);
   }
 
   /**

@@ -1,5 +1,6 @@
 import {
-  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt, randomUUID, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
+  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as bcrypt from 'bcrypt'; import { randomInt, randomUUID, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
+import { buildWorkbook } from '../reports/excel-export';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
@@ -23,6 +24,7 @@ import {
   tenantStampId,
   tenantWhere,
 } from '../../infrastructure/tenancy/ambient-tenant-context';
+import { fieldFingerprint } from '../../infrastructure/security/field-encryption';
 import { pincodeAuthority } from '../geo/india-geocoder';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from '../geo/coordinate-resolution';
 import { reverseFreely } from '../geo/osm-geocoder';
@@ -1445,8 +1447,32 @@ export class AssayerService implements OnModuleInit {
     const normalizedPan = dto.panNumber ? dto.panNumber.trim().toUpperCase() : null;
 
     if (normalizedPan || normalizedPhone || normalizedEmail) {
+      /**
+       * The PAN is matched on its fingerprint, because the column itself cannot be matched at all.
+       *
+       * `pan_number` is encrypted with a fresh random IV per call, so two encryptions of one PAN
+       * are different bytes and `{ panNumber: normalizedPan }` returned nothing on every
+       * deployment with a key configured — while the branch below threw a confident
+       * `DEFINITE_DUPLICATE: An assayer with PAN … already exists`. A control that cannot fire,
+       * worded as one that has.
+       *
+       * The Aadhaar was never compared at all. It is now, on the same basis: the two identifiers
+       * the candidate is asked for, uploads scans of, and has validated at typing time are finally
+       * the two the roster checks itself against.
+       */
+      const panFingerprint = fieldFingerprint(normalizedPan);
+      const aadhaarFingerprint = fieldFingerprint((dto as { aadhaarNumber?: string }).aadhaarNumber);
+
+      const normalizedAadhaar = (dto as { aadhaarNumber?: string }).aadhaarNumber?.replace(/\s+/g, '') || null;
+
       const matchPredicates: any[] = [];
-      if (normalizedPan) matchPredicates.push({ panNumber: normalizedPan });
+      // With no `PII_ENCRYPTION_KEY` there is no fingerprint and no ciphertext either — the column
+      // holds plaintext, so the direct comparison is the one that works. Named rather than left to
+      // fall through, because "the check quietly stopped running" is the failure being fixed here.
+      if (panFingerprint) matchPredicates.push({ panFingerprint });
+      else if (normalizedPan) matchPredicates.push({ panNumber: normalizedPan });
+      if (aadhaarFingerprint) matchPredicates.push({ aadhaarFingerprint });
+      else if (normalizedAadhaar) matchPredicates.push({ aadhaarNumber: normalizedAadhaar });
       if (normalizedPhone) matchPredicates.push({ phone: normalizedPhone });
       if (normalizedEmail) matchPredicates.push({ email: normalizedEmail });
 
@@ -1455,10 +1481,22 @@ export class AssayerService implements OnModuleInit {
       });
 
       for (const m of matchCandidates) {
-        // Definite Duplicate Check
-        if (normalizedPan && m.panNumber && m.panNumber.toUpperCase() === normalizedPan) {
+        // Definite Duplicate Check — on the fingerprint where there is one, on the value otherwise.
+        const panMatches = panFingerprint
+          ? m.panFingerprint === panFingerprint
+          : Boolean(normalizedPan && m.panNumber && m.panNumber.trim().toUpperCase() === normalizedPan);
+        if (panMatches) {
           throw new ConflictException(
             `DEFINITE_DUPLICATE: An assayer with PAN ${normalizedPan} already exists (${m.displayName || m.assayerCode}).`,
+          );
+        }
+        const aadhaarMatches = aadhaarFingerprint
+          ? m.aadhaarFingerprint === aadhaarFingerprint
+          : Boolean(normalizedAadhaar && m.aadhaarNumber
+            && m.aadhaarNumber.replace(/\s+/g, '') === normalizedAadhaar);
+        if (aadhaarMatches) {
+          throw new ConflictException(
+            `DEFINITE_DUPLICATE: An assayer with that Aadhaar already exists (${m.displayName || m.assayerCode}).`,
           );
         }
 
@@ -4640,18 +4678,20 @@ export class AssayerService implements OnModuleInit {
     ];
 
     const headers = columns.map((c) => c.field);
-    const ws = xlsx.utils.json_to_sheet([], { header: headers });
-    ws['!cols'] = headers.map((h) => ({ wch: h === 'Residence Address' ? 50 : Math.max(16, h.length + 4) }));
-
-    const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, 'Assayers');
-
-    const instructions = columns.map((c) => ({ Field: c.field, Required: c.required, Description: c.description }));
-    const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
-    instrWs['!cols'] = [{ wch: 28 }, { wch: 10 }, { wch: 100 }];
-    xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
-
-    return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    return buildWorkbook([
+      {
+        name: 'Assayers',
+        headers,
+        rows: [],
+        columnWidths: headers.map((h) => (h === 'Residence Address' ? 50 : Math.max(16, h.length + 4))),
+      },
+      {
+        name: 'Instructions',
+        headers: ['Field', 'Required', 'Description'],
+        rows: columns.map((c) => [c.field, c.required, c.description]),
+        columnWidths: [28, 10, 100],
+      },
+    ]);
   }
 
   /**

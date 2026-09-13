@@ -10,6 +10,17 @@ export interface SheetSpec {
   headers: string[];
   /** One array per row, aligned with `headers`. Undefined/null cells are left blank. */
   rows: Array<Array<unknown>>;
+  /**
+   * Column width in Excel's own `wch` unit (roughly one average character), aligned with
+   * `headers`. Omit to let Excel size columns itself.
+   *
+   * The two callers this was added for (assayer and branch upload templates) used to build their
+   * own workbook by hand instead of calling `buildWorkbook` specifically because this one thing —
+   * a wide "Address" column, narrow ones either side of it — had nowhere to go on the shared
+   * shape. Duplicating `book_new`/`book_append_sheet`/`xlsx.write` to set one array afterwards was
+   * the actual cost of that gap, not a real difference in what either needed.
+   */
+  columnWidths?: number[];
 }
 
 /** Sanitise a sheet name so Excel accepts it (≤31 chars, no reserved chars). */
@@ -37,6 +48,9 @@ export function buildWorkbook(sheets: SheetSpec[]): Buffer {
         ? [spec.headers, ...spec.rows]
         : [spec.headers, spec.headers.map(() => null)];
     const ws = xlsx.utils.aoa_to_sheet(data);
+    if (spec.columnWidths) {
+      ws['!cols'] = spec.columnWidths.map((wch) => ({ wch }));
+    }
     xlsx.utils.book_append_sheet(wb, ws, sheetName(spec.name));
   }
   return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));

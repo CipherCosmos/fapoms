@@ -221,16 +221,13 @@ export class RosterImportService {
   ): { sheet: xlsx.WorkSheet; parsed: ParsedSheet } {
     const workbook = xlsx.read(file, { type: 'buffer', cellDates: true });
 
-    const parsed: ParsedSheet = sheetName && workbook.Sheets[sheetName]
-      ? {
-          sheetName,
-          headerRow: 1,
-          headers: Object.keys(
-            (xlsx.utils.sheet_to_json<Record<string, any>>(workbook.Sheets[sheetName])[0] ?? {}),
-          ),
-          rows: xlsx.utils.sheet_to_json<Record<string, any>>(workbook.Sheets[sheetName], { defval: null }),
-        }
-      : parseSheet(file, ROSTER_SIGNATURE_COLUMNS);
+    // Same header-row scan either way — an explicit sheetName only narrows WHICH sheet is
+    // scanned, not whether a title row above the real headers is found on it. This used to
+    // re-implement a simpler read for the named-sheet case (row 1 assumed to be the header,
+    // headers taken from a single row rather than the union across all of them — the exact
+    // blank-first-cell gap `parseSheet`'s own header-union logic exists to close), a second
+    // sheet reader that could recognise a workbook the scored search would have refused.
+    const parsed: ParsedSheet = parseSheet(file, ROSTER_SIGNATURE_COLUMNS, sheetName);
 
     const sheet = workbook.Sheets[parsed.sheetName];
     if (!sheet) {

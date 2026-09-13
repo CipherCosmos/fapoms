@@ -5,7 +5,6 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
 import { Response } from 'express';
-import * as xlsx from 'xlsx';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -22,6 +21,11 @@ import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
 import { assertUploadAllowed, uploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
+import { parseSheet, rowReader } from '../../core/excel/sheet-reader';
+import {
+  CUSTOMER_ACCOUNT_NUMBER_ALIASES,
+  CUSTOMER_SOL_ID_ALIASES,
+} from '../customer-master/customer-master.service';
 import { AssignmentService } from '../assignment/assignment.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
@@ -887,16 +891,17 @@ export class DocumentController {
     // Had no type/size allowlist at all — same gap as `uploadGeneratedBatch`/`uploadExcelReport`
     // above, closed the same way. Size is already capped at the multer layer
     // (`documentUploadMulterOptions`); this adds the missing type check before an arbitrary
-    // upload reaches `xlsx.read`.
+    // upload reaches `parseSheet`.
     assertUploadAllowed({
       contentType: file.mimetype,
       size: file.size,
       fileName: file.originalname,
       allowed: SPREADSHEET_UPLOAD_TYPES,
     });
-    const workbook = xlsx.read(file.buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    // Same scored sheet/header-row reader every Excel import in this product uses — this route
+    // used to read SheetNames[0] and row 1 unconditionally, same gap as the real importer this
+    // previews for (customer-master.service.ts's uploadAndReconcile).
+    const { rows } = parseSheet(file.buffer, [...CUSTOMER_ACCOUNT_NUMBER_ALIASES, ...CUSTOMER_SOL_ID_ALIASES]);
 
     const totalRows = rows.length;
     let duplicateAccountsCount = 0;
@@ -905,8 +910,13 @@ export class DocumentController {
     const solIdsSeen = new Set<string>();
 
     for (const row of rows) {
-      const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
-      const solId = String(row['SOL ID'] || row.SOL_ID || row.SolId || row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || row['BRANCH'] || row.Branch || '').trim();
+      const read = rowReader(row);
+      // The same alias list the real importer reads — this preview used to recognise a couple of
+      // SOL ID spellings (BRANCH/Branch) the importer itself did not, so a file using one of them
+      // could preview clean and then import with every row unmatched. One list now, imported from
+      // customer-master.service.ts, so the two cannot drift apart again.
+      const acc = read(...CUSTOMER_ACCOUNT_NUMBER_ALIASES);
+      const solId = read(...CUSTOMER_SOL_ID_ALIASES);
       if (acc) {
         if (accountNumbersSeen.has(acc)) duplicateAccountsCount++;
         else accountNumbersSeen.add(acc);

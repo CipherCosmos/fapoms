@@ -9,7 +9,25 @@ import { CustomerMasterStatus, EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
 import { GlobalScope, assertClientAllowed } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
-import * as xlsx from 'xlsx';
+import { parseSheet, rowReader } from '../../core/excel/sheet-reader';
+
+/**
+ * The column spellings a customer-master file uses for each field — the one place both this
+ * importer and `document.controller.ts`'s `validateCustomerExcel` preview read them from.
+ *
+ * Previously each hand-rolled its own `row['Account Number'] || row.ACCOUNT_NO || row.AccountNo`
+ * chain, and the two had quietly drifted: the preview recognised a `BRANCH`/`Branch` header for
+ * the SOL ID column that the real importer did not, so a file using that heading could preview as
+ * "0 missing branches" and then import with every row unmatched. Reconciled here as the union of
+ * what either side recognised — a real widening for the importer, not a narrowing of the preview,
+ * since there is no reason the preview's extra tolerance was wrong.
+ */
+export const CUSTOMER_ACCOUNT_NUMBER_ALIASES = ['Account Number', 'ACCOUNT_NO', 'AccountNo'];
+export const CUSTOMER_SOL_ID_ALIASES = [
+  'SOL ID', 'SOL_ID', 'SolId', 'Branch Code', 'BRANCH_CODE', 'BranchCode', 'BRANCH', 'Branch',
+];
+export const CUSTOMER_NAME_ALIASES = ['Customer Name', 'CUSTOMER_NAME', 'Name'];
+export const CUSTOMER_PACKETS_ALIASES = ['Packets', 'PACKET_COUNT'];
 
 /** One account row from the upload that could not be tied to a branch. */
 export interface UnmatchedAccountDto {
@@ -82,9 +100,14 @@ export class CustomerMasterService {
     const nextVersionNumber = existingVersions.length > 0 ? existingVersions[0].versionNumber + 1 : 1;
     const previousVersion = existingVersions.length > 0 ? existingVersions[0] : null;
 
-    const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    // Scored sheet + header-row detection, not SheetNames[0] and row 1 unconditionally — a
+    // workbook with more than one tab, or a title row above the real headers, used to be read as
+    // if neither could happen. Same reader every Excel import in this product uses.
+    const { rows } = parseSheet(fileBuffer, [
+      ...CUSTOMER_ACCOUNT_NUMBER_ALIASES,
+      ...CUSTOMER_SOL_ID_ALIASES,
+      ...CUSTOMER_NAME_ALIASES,
+    ]);
 
     const totalRows = rows.length;
     let duplicateAccounts = 0;
@@ -129,7 +152,7 @@ export class CustomerMasterService {
 
     // HIGH-01 Remediation: Extract account numbers and query previous records in 1000-item chunks instead of full in-memory dump
     const accountNumbersFromRows = rows
-      .map((r) => String(r['Account Number'] || r.ACCOUNT_NO || r.AccountNo || '').trim())
+      .map((r) => rowReader(r)(...CUSTOMER_ACCOUNT_NUMBER_ALIASES))
       .filter((acc) => acc.length > 0);
 
     const prevRecordMap = new Map<string, string>();
@@ -147,10 +170,11 @@ export class CustomerMasterService {
     }
 
     for (const row of rows) {
-      const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
-      const solId = String(row['SOL ID'] || row.SOL_ID || row.SolId || row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || '').trim().toUpperCase();
-      const name = String(row['Customer Name'] || row.CUSTOMER_NAME || row.Name || 'Unknown Customer').trim();
-      const packets = parseInt(String(row.Packets || row.PACKET_COUNT || 1), 10) || 1;
+      const read = rowReader(row);
+      const acc = read(...CUSTOMER_ACCOUNT_NUMBER_ALIASES);
+      const solId = read(...CUSTOMER_SOL_ID_ALIASES).toUpperCase();
+      const name = read(...CUSTOMER_NAME_ALIASES) || 'Unknown Customer';
+      const packets = parseInt(read(...CUSTOMER_PACKETS_ALIASES) || '1', 10) || 1;
 
       if (!acc) continue;
 

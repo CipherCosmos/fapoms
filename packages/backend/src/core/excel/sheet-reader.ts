@@ -102,14 +102,30 @@ function scoreHeaders(headers: string[], expected: Set<string>): number {
  * the header row is: score every candidate against the columns the caller needs and keep the best.
  * Ties go to the earliest sheet and earliest row, which is the ordinary single-table case.
  */
-export function parseSheet(fileBuffer: Buffer, expectedColumns: string[] = []): ParsedSheet {
+/**
+ * @param onlySheet When given, and present in the workbook, the sheet-scoring loop is skipped
+ *   entirely and only this sheet is scanned for its header row — for a caller that already knows
+ *   which sheet it wants (e.g. a re-import naming the sheet a previous run resolved) and does not
+ *   want the *other* sheets' columns influencing the choice. The header-row scan itself (a title
+ *   row above the real headers, the union-of-headers collection below) still runs exactly as it
+ *   does for every other sheet — knowing the sheet name is not the same as knowing which row the
+ *   headers are actually on. Falls back to the normal scored search across every sheet when this
+ *   name is absent or not present in the workbook, same as passing nothing at all.
+ */
+export function parseSheet(
+  fileBuffer: Buffer,
+  expectedColumns: string[] = [],
+  onlySheet?: string,
+): ParsedSheet {
   const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
   const expected = new Set(expectedColumns.map(normaliseHeader));
+  const sheetNames =
+    onlySheet && workbook.Sheets[onlySheet] ? [onlySheet] : workbook.SheetNames;
 
   let best: ParsedSheet | null = null;
   let bestScore = -1;
 
-  for (const sheetName of workbook.SheetNames) {
+  for (const sheetName of sheetNames) {
     const worksheet = workbook.Sheets[sheetName];
     if (!worksheet) continue;
 
