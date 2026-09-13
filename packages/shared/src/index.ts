@@ -87,3 +87,12 @@ export * from './error-codes';
 // implementation, read by both the web hook and the mobile service that used to each carry their
 // own de-dupe/sort.
 export * from './workforce-vocabulary';
+
+// Resolves a LiveKit signaling URL the backend may have returned as a bare relative path — one
+// implementation, read by both the web call service and the mobile calls service that used to
+// each carry their own copy.
+export * from './livekit-url';
+
+// Socket.IO reconnection behaviour, byte-identical between the web and mobile socket clients
+// since the mobile fix was ported to web verbatim — one object so the two cannot silently drift.
+export * from './socket-transport-config';

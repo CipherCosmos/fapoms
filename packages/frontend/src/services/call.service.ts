@@ -3,6 +3,7 @@
 // connectRoom (see below), so the ~900 kB WebRTC library is fetched only when a call actually
 // starts — not parsed at login by every user, most of whom never place a call.
 import type * as LiveKit from 'livekit-client';
+import { resolveLiveKitUrl as resolveLiveKitUrlShared } from '@fapoms/shared';
 import { api } from './api';
 import { connectSocket, getSocket } from './socket';
 import { userMessage } from './errors';
@@ -51,13 +52,12 @@ interface IncomingPayload {
 }
 
 /**
- * The server hands out a RELATIVE signaling path (`/livekit`) — the browser only ever talks
- * to its own origin, and the dev proxy / backend pipe the WebSocket to the SFU internally.
- * An absolute URL (a deployment fronting the SFU with its own TLS name) passes through.
+ * The browser's own origin is the platform-specific half `resolveLiveKitUrl` needs — see its own
+ * doc comment in `@fapoms/shared` for what it does with it. `rewriteLocalhost` stays off here:
+ * that branch exists for React Native's emulator/LAN addressing, not a browser tab.
  */
 function resolveLiveKitUrl(url: string): string {
-  if (url.startsWith('/')) return `${window.location.origin}${url}`;
-  return url;
+  return resolveLiveKitUrlShared(url, window.location.origin);
 }
 
 function currentUserId(): string | null {

@@ -17,6 +17,7 @@
  * Socket events (subscribed in App.tsx, forwarded to the handlers at the bottom):
  *   call:incoming / call:answered / call:ended
  */
+import { resolveLiveKitUrl as resolveLiveKitUrlShared } from '@fapoms/shared';
 import { MobileApiService } from './api.service';
 
 // ─────────────────────────────────────────────── Native module, guarded
@@ -56,23 +57,13 @@ export function initializeCalling(): void {
 // ─────────────────────────────────────────────── URL normalisation
 
 /**
- * The backend hands out a RELATIVE signaling path (`/livekit`): the app connects to the
- * same API origin it already talks REST to (which encodes the 10.0.2.2 emulator rule and
- * the operator-configured LAN address), and the backend pipes the WebSocket to the SFU.
- * The device never contacts LiveKit directly. Legacy absolute `localhost` URLs are still
- * rewritten to the API host; any other absolute URL passes through.
+ * The app's own API origin (which already encodes the 10.0.2.2 emulator rule and the
+ * operator-configured LAN address) is the platform-specific half `resolveLiveKitUrl` needs —
+ * see its own doc comment in `@fapoms/shared` for what it does with it. `rewriteLocalhost` is
+ * on here: it exists specifically for React Native's own addressing, not the browser's.
  */
 function normalizeLiveKitUrl(rawUrl: string): string {
-  if (rawUrl.startsWith('/')) {
-    return `${MobileApiService.getApiOrigin()}${rawUrl}`;
-  }
-  // Regex rather than `new URL`: Hermes' URL implementation is incomplete, and this must
-  // never be the thing that breaks a call. Preserves scheme, port and path.
-  const localhost = /^(\w+:\/\/)(localhost|127\.0\.0\.1)(?=[:/]|$)/i;
-  if (!localhost.test(rawUrl)) return rawUrl;
-  const apiHost = MobileApiService.getApiOrigin().match(/^\w+:\/\/([^/:]+)/)?.[1];
-  if (!apiHost) return rawUrl;
-  return rawUrl.replace(localhost, (_m, scheme: string) => `${scheme}${apiHost}`);
+  return resolveLiveKitUrlShared(rawUrl, MobileApiService.getApiOrigin(), { rewriteLocalhost: true });
 }
 
 // ─────────────────────────────────────────────── Call state store

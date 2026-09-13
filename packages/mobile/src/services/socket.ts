@@ -1,4 +1,5 @@
 import { io, Socket } from 'socket.io-client';
+import { SOCKET_RECONNECT_CONFIG } from '@fapoms/shared';
 import { MobileApiService } from './api.service';
 
 let socket: Socket | null = null;
@@ -52,23 +53,9 @@ export function connectMobileSocket(): Socket | null {
     // Read the token fresh on every (re)connection attempt — a static value here would
     // keep resending a token captured at connect time, which is wrong once it's refreshed.
     auth: (cb) => cb({ token: MobileApiService.getAuthToken() }),
-    transports: ['websocket', 'polling'],
-    reconnection: true,
-    /**
-     * Never stop trying.
-     *
-     * This was 10 attempts with a 5-second ceiling, so the socket gave up for good after
-     * roughly a minute offline and stayed dead for the rest of the session. That is precisely
-     * the field pattern: an assayer spends twenty minutes in a bank vault with no signal,
-     * comes out, and the app has silently stopped receiving anything live until it is force
-     * closed and reopened.
-     */
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    // Backed off further so a long outage across a whole roster does not turn into every
-    // handset retrying twelve times a minute against the same server.
-    reconnectionDelayMax: 30000,
-    randomizationFactor: 0.5,
+    // See `SOCKET_RECONNECT_CONFIG`'s own comment for why these values (shared with the web
+    // client, which had this same fix ported to it verbatim).
+    ...SOCKET_RECONNECT_CONFIG,
   });
 
   socket.on('connect', () => {

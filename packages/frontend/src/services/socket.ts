@@ -1,4 +1,5 @@
 import { io, Socket } from 'socket.io-client';
+import { SOCKET_RECONNECT_CONFIG } from '@fapoms/shared';
 import { createManualReconnect } from './manualReconnect';
 
 const WS_URL = import.meta.env.VITE_WS_URL || '/events';
@@ -56,18 +57,9 @@ export function connectSocket(): Socket | null {
      * this; the web client was not.
      */
     auth: (cb: (data: { token: string | null }) => void) => cb({ token: getSocketToken() }),
-    transports: ['websocket', 'polling'],
-    reconnection: true,
-    /**
-     * Never give up. Ten attempts with a 5-second ceiling meant the socket died for good
-     * after about a minute — a closed laptop lid, a Wi-Fi switch or a brief VPN drop was
-     * enough to leave an operations desk looking at a screen that had quietly stopped
-     * updating, with nothing on it saying so.
-     */
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 30000,
-    randomizationFactor: 0.5,
+    // See `SOCKET_RECONNECT_CONFIG`'s own comment for why these values (shared with the mobile
+    // client, which hit the same "gave up after a minute offline" bug first).
+    ...SOCKET_RECONNECT_CONFIG,
   });
 
   socket.on('connect', () => {
