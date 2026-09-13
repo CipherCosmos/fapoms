@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { loadFailed } from '../../queryClient';
+import { LoadFailure } from '../../components/LoadFailure';
 import { ShieldAlert, Clock, AlertTriangle, CheckCircle2, Plus, Link2 } from 'lucide-react';
 import {
   getComplianceHealth, listIncidents, raiseIncident, updateIncident,
@@ -78,6 +80,8 @@ export const CompliancePanel: React.FC = () => {
   });
 
   const rows: SecurityIncident[] = Array.isArray(incidents.data) ? incidents.data : [];
+  // Same rule for the register itself: an empty list and a refused read are different facts.
+  const incidentsFailed = loadFailed(incidents);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1000, margin: '0 auto' }}>
@@ -87,15 +91,27 @@ export const CompliancePanel: React.FC = () => {
         subtitle="The security-incident register and the statutory clocks it runs — CERT-In within 6 hours, a full DPDP breach report to the Data Protection Board within 72 hours, and affected people notified without delay."
       />
 
-      {/* Health strip */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <HealthTile label="Open incidents" value={health.data?.incidents.open ?? 0} />
-        <HealthTile label="CERT-In overdue" value={health.data?.incidents.certInOverdue ?? 0} bad />
-        <HealthTile label="DPDP Board report overdue" value={health.data?.incidents.boardOverdue ?? 0} bad />
-        <HealthTile label="People not yet notified" value={health.data?.incidents.principalsOverdue ?? 0} bad />
-        <HealthTile label="Rights requests overdue" value={health.data?.rightsRequests.overdue ?? 0} bad />
-        <HealthTile label="Audit unsealed" value={health.data?.auditUnsealed ?? 0} bad />
-      </div>
+      {/*
+        Zero is an answer, and `?? 0` was not answering.
+
+        Every tile read `health.data?.… ?? 0`, so a refused or failed request reported "CERT-In
+        overdue: 0 · DPDP Board report overdue: 0 · People not yet notified: 0" — a confident
+        all-clear on a six-hour and a seventy-two-hour statutory clock, from a screen whose whole
+        purpose is to say when those clocks have run out. Nothing distinguished it from a genuinely
+        clean register.
+      */}
+      {loadFailed(health) ? (
+        <LoadFailure loads={[{ label: 'the statutory clocks', query: health }]} />
+      ) : (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <HealthTile label="Open incidents" value={health.data?.incidents.open ?? 0} />
+          <HealthTile label="CERT-In overdue" value={health.data?.incidents.certInOverdue ?? 0} bad />
+          <HealthTile label="DPDP Board report overdue" value={health.data?.incidents.boardOverdue ?? 0} bad />
+          <HealthTile label="People not yet notified" value={health.data?.incidents.principalsOverdue ?? 0} bad />
+          <HealthTile label="Rights requests overdue" value={health.data?.rightsRequests.overdue ?? 0} bad />
+          <HealthTile label="Audit unsealed" value={health.data?.auditUnsealed ?? 0} bad />
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid var(--border-color)' }}>
@@ -147,7 +163,9 @@ export const CompliancePanel: React.FC = () => {
       )}
 
       {/* Incident list */}
-      {incidents.isLoading ? (
+      {incidentsFailed ? (
+        <LoadFailure loads={[{ label: 'the incident register', query: incidents }]} />
+      ) : incidents.isLoading ? (
         <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading incidents…</div>
       ) : rows.length === 0 ? (
         <div className="glass-card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -217,7 +235,8 @@ export const CompliancePanel: React.FC = () => {
 const RightsRequestsSection: React.FC = () => {
   const qc = useQueryClient();
   const canWrite = canManageCompliance(useCurrentRoles());
-  const { data, isLoading } = useQuery({ queryKey: ['compliance', 'rights'], queryFn: listRightsRequests });
+  const requests = useQuery({ queryKey: ['compliance', 'rights'], queryFn: listRightsRequests });
+  const { data, isLoading } = requests;
   const [form, setForm] = useState({ requestType: 'ACCESS', subjectRef: '', requesterName: '', details: '' });
   const [show, setShow] = useState(false);
   const invalidate = () => {
@@ -260,7 +279,10 @@ const RightsRequestsSection: React.FC = () => {
         </div>
       )}
 
-      {isLoading ? (
+      {/* A refused read is not an empty register — the rule the health strip above now follows. */}
+      {loadFailed(requests) ? (
+        <LoadFailure loads={[{ label: 'the rights requests', query: requests }]} />
+      ) : isLoading ? (
         <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading requests…</div>
       ) : rows.length === 0 ? (
         <div className="glass-card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>

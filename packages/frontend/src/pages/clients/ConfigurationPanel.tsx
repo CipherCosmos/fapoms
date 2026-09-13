@@ -5,6 +5,8 @@ import { useClientDetail, useUpdateClient } from '../../hooks/useClients';
 import { useWorkforceVocabulary, asOptions } from '../../hooks/useWorkforceVocabulary';
 import { AssayerMultiSelect } from './AssayerMultiSelect';
 import { userMessage } from '../../services/errors';
+import { loadFailed } from '../../queryClient';
+import { LoadFailure } from '../../components/LoadFailure';
 
 const WORKING_DAY_OPTIONS = [
   { value: 0, label: 'Sun' },
@@ -107,7 +109,8 @@ const CompetencyField: React.FC<{
 // Structured, human-editable form. JSON blobs in the entity are surfaced as
 // individual fields so a non-technical operator never touches raw JSON.
 export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
-  const { data: client, isLoading } = useClientDetail(clientId);
+  const clientQuery = useClientDetail(clientId);
+  const client = clientQuery.data;
   const update = useUpdateClient();
   const { toast } = useToast();
 
@@ -218,7 +221,25 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
     }
   };
 
-  if (isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
+  /**
+   * A failed read must not become a destructive write.
+   *
+   * This rendered the whole form from `client === undefined` whenever the load failed, because
+   * `isLoading` is false by then — every box blank, and Save live. The save below sends
+   * `preferredAssayers`, `restrictedAssayers` and `workingDays` unconditionally, so pressing it
+   * replaced the client's real lists with the empty ones the form had invented. A refused GET
+   * turned into a silent data loss on the next click.
+   *
+   * `loadFailed` rather than `isError`: a 5xx retries once and then PAUSES when the tab is not
+   * frontmost, which sets neither flag and leaves `data` undefined — the exact state this screen
+   * was rendering a live form from.
+   */
+  if (loadFailed(clientQuery)) {
+    return <LoadFailure loads={[{ label: "this client's configuration", query: clientQuery }]} />;
+  }
+  if (clientQuery.isPending || !client) {
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
+  }
 
   // Shown on the collapsed disclosure so an override in force is never invisible.
   const weightsSet = WEIGHT_KEYS.filter((k) => (weights[k] ?? '').trim() !== '').length;

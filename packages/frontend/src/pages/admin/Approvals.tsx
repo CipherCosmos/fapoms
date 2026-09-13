@@ -7,6 +7,7 @@ import {
 } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { loadFailed } from '../../queryClient';
 import { PageHeader, useConfirm, useToast } from '../../components/ui';
 import { useCurrentRoles, canApproveDestructiveActions } from '../../hooks/useCurrentRoles';
 
@@ -93,7 +94,7 @@ export const Approvals: React.FC = () => {
    * refetchOnWindowFocus: false) because the other half of the flow happens on someone else's
    * screen; the bell notification covers the gap between polls.
    */
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const queueQuery = useQuery({
     queryKey: ['data-reset', 'requests'],
     queryFn: () => api.request<DestructiveActionRequest[]>('/admin/data-reset/requests'),
     staleTime: 0,
@@ -101,6 +102,16 @@ export const Approvals: React.FC = () => {
     refetchOnWindowFocus: 'always',
     refetchInterval: 30_000,
   });
+  const { data, isLoading, error, refetch } = queueQuery;
+  /**
+   * `loadFailed`, not `isError`.
+   *
+   * A 5xx retries once and then PAUSES when the tab is not frontmost — neither erroring nor
+   * loading, with no data. This queue then fell through both branches to a green shield reading
+   * "Nothing is waiting for a decision", on the screen that gates destructive data-wipe approvals.
+   * A pending request nobody can see is the whole failure mode the two-person rule exists to stop.
+   */
+  const queueFailed = loadFailed(queueQuery);
 
   const requests = useMemo(
     () => (data ?? []).slice().sort(
@@ -260,7 +271,7 @@ export const Approvals: React.FC = () => {
 
       {isLoading ? (
         <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
-      ) : isError ? (
+      ) : queueFailed ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: '13px' }}>
           <div>Couldn&apos;t load the approval queue. {userMessage(error)}</div>
           <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: '12px' }} onClick={() => refetch()}>Try again</button>

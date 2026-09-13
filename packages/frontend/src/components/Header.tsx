@@ -112,7 +112,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
   const {
     projects, selectedProjectId, setSelectedProjectId, selectedProject,
     options, region, clientId, zoneId, state,
-    availableStates, availableZones, setScope, resetScope, activeCount, applies,
+    availableStates, availableZones, setScope, resetScope, activeCount, applies, optionsFailed,
   } = useScope();
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileAnchorRef = useRef<HTMLDivElement>(null);
@@ -328,6 +328,22 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                 {/* Geographic + client scope. Region sits first because it is the one an
                     operator sets once and leaves alone; the rest narrow within it. */}
                 <div style={{ padding: '10px', borderBottom: '1px solid var(--border-color)', display: 'grid', gap: '8px', background: 'var(--bg-primary)' }}>
+                  {/*
+                    An empty dropdown and an unreachable one look identical, and this provider sits
+                    above the router — so a failed `/scope/options` emptied every filter in the
+                    product at once and every screen behind them filtered to nothing, with nothing
+                    on screen to explain it.
+                  */}
+                  {optionsFailed && (
+                    <div style={{
+                      padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', fontSize: '12px',
+                      color: 'var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
+                      border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)',
+                    }}>
+                      The filter options could not be loaded, so these lists are empty. Screens are
+                      showing everything you are allowed to see.
+                    </div>
+                  )}
                   <ScopeSelect
                     label="Region"
                     value={region}

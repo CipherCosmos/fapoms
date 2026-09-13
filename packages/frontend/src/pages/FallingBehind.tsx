@@ -7,7 +7,9 @@ import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { counted } from '../utils/plural';
-import { AlertBanner, PageHeader } from '../components/ui';
+import { PageHeader } from '../components/ui';
+import { loadFailed } from '../queryClient';
+import { LoadFailure } from '../components/LoadFailure';
 
 /**
  * "Falling behind" — the chase list.
@@ -55,7 +57,7 @@ export const FallingBehind: React.FC = () => {
   const scopeQuery = withScope(scopeParams);
   const live = useSocketConnection();
 
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+  const boardQuery = useQuery({
     queryKey: [...queryKeys.desk.fallingBehind, scopeKey],
     queryFn: () => api.request<FallingBehindItem[]>(`/assignments/falling-behind?${scopeQuery}`),
     staleTime: 20_000,
@@ -64,6 +66,16 @@ export const FallingBehind: React.FC = () => {
     refetchInterval: live ? false : 60_000,
   });
 
+  const { data, isLoading, refetch, isFetching } = boardQuery;
+  /**
+   * `loadFailed`, not `isError`.
+   *
+   * A 5xx retries once and then PAUSES when the tab is not frontmost, which sets neither `isError`
+   * nor `isLoading` and leaves `data` undefined. `items` then became `[]` and this board — whose
+   * entire job is flagging work that has slipped — rendered a green tick reading "Nothing overdue,
+   * everything is on track". The one screen that must never invent good news.
+   */
+  const failed = loadFailed(boardQuery);
   const items = data ?? [];
 
   /** Route each row to where its next step actually happens — no new mutations on this board. */
@@ -102,16 +114,9 @@ export const FallingBehind: React.FC = () => {
         </>}
       />
 
-      {isError && (
-        <AlertBanner type="error">
-          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            Could not load the board.
-            <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '11px' }}>Retry</button>
-          </span>
-        </AlertBanner>
-      )}
-
-      {isLoading ? (
+      {failed ? (
+        <LoadFailure loads={[{ label: 'the board', query: boardQuery }]} />
+      ) : isLoading ? (
         <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-muted)' }}>
           <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} /> Loading the board…
         </div>

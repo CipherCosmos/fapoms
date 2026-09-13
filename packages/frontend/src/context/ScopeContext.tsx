@@ -29,6 +29,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Region } from '@fapoms/shared';
 import { api } from '../services/api';
 import { queryKeys } from '../hooks/queryKeys';
+import { loadFailed } from '../queryClient';
 
 export interface ProjectOption {
   id: string;
@@ -68,6 +69,15 @@ export const EMPTY_SCOPE: ScopeSelection = {
 interface ScopeContextValue extends ScopeSelection {
   options: ScopeOptions;
   loading: boolean;
+  /**
+   * The options could not be fetched, as opposed to there being none.
+   *
+   * This provider mounts above the router, so a failed `/scope/options` handed `EMPTY_OPTIONS` to
+   * every scope dropdown in the product at once: every list empty, every screen filtering to
+   * nothing, and no message anywhere saying why. The comment on the query below shows the PAUSED
+   * case was thought about; the failed case was not.
+   */
+  optionsFailed: boolean;
 
   setScope: (patch: Partial<ScopeSelection>) => void;
   resetScope: () => void;
@@ -192,7 +202,7 @@ export const ScopeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const { pathname } = useLocation();
   const applies = !isScopeExempt(pathname);
 
-  const { data, isLoading } = useQuery({
+  const optionsQuery = useQuery({
     queryKey: queryKeys.scope.options,
     queryFn: () =>
       api.request<{ data: ScopeOptions }>('/scope/options', { method: 'GET', withMeta: true }),
@@ -206,6 +216,9 @@ export const ScopeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // neither data nor error — when the tab is not in front. That state on THIS query is the worst
     // one available: it mounts above the router, so every screen in the app waits on it.
   });
+
+  const { data, isLoading } = optionsQuery;
+  const optionsFailed = loadFailed(optionsQuery);
 
   const options: ScopeOptions = useMemo(() => {
     const payload = (data as any)?.data ?? data;
@@ -273,6 +286,7 @@ export const ScopeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ...scope,
     options,
     loading: isLoading,
+    optionsFailed,
     setScope,
     resetScope,
     applies,
@@ -311,6 +325,7 @@ const FALLBACK_SCOPE: ScopeContextValue = {
   ...EMPTY_SCOPE,
   options: EMPTY_OPTIONS,
   loading: false,
+  optionsFailed: false,
   setScope: () => {},
   resetScope: () => {},
   applies: false,
