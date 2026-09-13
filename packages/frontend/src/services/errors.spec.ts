@@ -10,16 +10,41 @@ import {
 
 describe('ErrorTranslator', () => {
   describe('translateError', () => {
-    it('translates 409 concurrent modification to conflict with requiresRefresh = true', () => {
-      const err = fromResponse(409, { message: 'RECORD_CONCURRENTLY_MODIFIED' });
+    it('translates a stale-version conflict (via the code field) to conflict with requiresRefresh = true', () => {
+      const err = fromResponse(409, {
+        code: 'STALE_ASSIGNMENT_VERSION',
+        message: 'STALE_ASSIGNMENT_VERSION: Assignment has been updated to version 3 (client expected 2). Please refresh and try again.',
+      });
       const translated = translateError(err);
 
       expect(translated.category).toBe('conflict');
-      expect(translated.title).toBe('Concurrent Modification');
+      expect(translated.title).toBe('Assignment Changed');
       expect(translated.retryable).toBe(false);
       expect(translated.requiresRefresh).toBe(true);
-      expect(translated.message).toContain('modified by another operator');
-      expect(translated.action).toContain('Reload authoritative data');
+      expect(translated.message).toContain('updated by someone else');
+      expect(translated.action).toContain('Reload the assignment');
+    });
+
+    it('prefers the code field over message-text matching when both are present', () => {
+      const err = fromResponse(409, {
+        code: 'STALE_EMPANELMENT_VERSION',
+        // The message text alone would never match `STALE_ASSIGNMENT_VERSION`, but it does carry
+        // its own, different code — proving `code` wins rather than a text scan of `message`.
+        message: 'STALE_EMPANELMENT_VERSION: this client standing has been updated to version 3.',
+      });
+      expect(translateError(err).title).toBe('Empanelment Changed');
+    });
+
+    it('falls back to matching the message text when no code field is present', () => {
+      const err = fromResponse(409, {
+        message: 'DEFINITE_DUPLICATE: An assayer with PAN ABCDE1234F already exists (John Doe).',
+      });
+      expect(translateError(err).title).toBe('Already Registered');
+    });
+
+    it('ignores a code this build does not recognise', () => {
+      const err = fromResponse(409, { code: 'SOME_FUTURE_CODE_NOT_YET_SHIPPED', message: 'Conflict' });
+      expect(err.domainCode).toBeUndefined();
     });
 
     it('translates 401 session expiration to permission category without refresh', () => {
@@ -63,14 +88,17 @@ describe('ErrorTranslator', () => {
       expect(translated.requiresRefresh).toBe(false);
     });
 
-    it('translates business rule compliance codes into business_rule category', () => {
-      const err = fromResponse(400, { message: 'EMPANELMENT_REVOKED' });
+    it('translates business rule codes into business_rule category', () => {
+      const err = fromResponse(409, {
+        code: 'ASSIGNMENT_CANCELLED',
+        message: 'ASSIGNMENT_CANCELLED: this assignment was cancelled and cannot be reassigned.',
+      });
       const translated = translateError(err);
 
       expect(translated.category).toBe('business_rule');
-      expect(translated.title).toBe('Empanelment Revoked');
+      expect(translated.title).toBe('Assignment Cancelled');
       expect(translated.retryable).toBe(false);
-      expect(translated.message).toContain('revoked or terminated');
+      expect(translated.message).toContain('cancelled and cannot be reassigned');
     });
 
     it('translates validation error into validation category', () => {
@@ -102,11 +130,14 @@ describe('ErrorTranslator', () => {
 
   describe('backwards compatibility: userMessage & classifyError', () => {
     it('userMessage returns concise human sentence', () => {
-      const err = fromResponse(409, { message: 'RECORD_CONCURRENTLY_MODIFIED' });
+      const err = fromResponse(409, {
+        code: 'STALE_ASSIGNMENT_VERSION',
+        message: 'STALE_ASSIGNMENT_VERSION: Assignment has been updated to version 3.',
+      });
       const msg = userMessage(err);
       expect(typeof msg).toBe('string');
       expect(msg.length).toBeGreaterThan(10);
-      expect(msg).toContain('modified by another operator');
+      expect(msg).toContain('updated by someone else');
     });
 
     it('classifyError retains isConflict and isRetryable booleans', () => {

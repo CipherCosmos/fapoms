@@ -8,6 +8,8 @@
  * category, title, message, action, retryable, requiresRefresh.
  */
 
+import { isApiErrorCode, type ApiErrorCode } from '@fapoms/shared';
+
 export type ErrorTranslationCategory =
   | 'validation'
   | 'permission'
@@ -26,7 +28,7 @@ export interface ErrorTranslation {
   retryable: boolean;
   requiresRefresh?: boolean;
   statusCode?: number;
-  domainCode?: string;
+  domainCode?: ApiErrorCode;
   technical?: string;
 }
 
@@ -45,7 +47,7 @@ export interface ClassifiedError {
   isConflict: boolean;
   isRetryable: boolean;
   statusCode?: number;
-  domainCode?: string;
+  domainCode?: ApiErrorCode;
   technical?: string;
 }
 
@@ -56,7 +58,7 @@ export class AppError extends Error {
   readonly technical?: string;
   readonly status?: number;
   readonly category: ErrorCategory;
-  readonly domainCode?: string;
+  readonly domainCode?: ApiErrorCode;
   /**
    * The field keys a validation failure named, in the server's own spelling (`panNumber`, not
    * "Pan Number").
@@ -78,7 +80,7 @@ export class AppError extends Error {
     technical?: string,
     status?: number,
     category: ErrorCategory = 'user-correction-required',
-    domainCode?: string,
+    domainCode?: ApiErrorCode,
     fields: readonly string[] = [],
   ) {
     super(userMessage);
@@ -92,84 +94,44 @@ export class AppError extends Error {
   }
 }
 
-/** Specific domain error codes mapped to clear, actionable operator guidance */
-const DOMAIN_ERROR_TRANSLATIONS: Record<
-  string,
-  {
-    message: string;
-    category: ErrorCategory;
-    translationCategory: ErrorTranslationCategory;
-    title: string;
-    action: string;
-    requiresRefresh?: boolean;
-  }
-> = {
-  ASSAYER_NOT_ACTIVE: {
-    message: 'This assayer is no longer active and eligible for assignment dispatch.',
-    category: 'user-correction-required',
-    translationCategory: 'business_rule',
-    title: 'Assayer Ineligible',
-    action: 'Select an active assayer or check their onboarding/leave status in Workforce.',
-  },
-  EMPANELMENT_BLOCKED: {
-    message: 'Assignment is blocked: this assayer does not hold an active or recommended empanelment with this client bank.',
-    category: 'user-correction-required',
-    translationCategory: 'business_rule',
-    title: 'Empanelment Required',
-    action: 'Request client empanelment or managerial override before scheduling.',
-  },
-  EMPANELMENT_REVOKED: {
-    message: 'Empanelment has been revoked or terminated by the client bank. Managerial bypass is prohibited by compliance policy.',
-    category: 'non-retryable',
-    translationCategory: 'business_rule',
-    title: 'Empanelment Revoked',
-    action: 'Assign a different qualified assayer. Revoked empanelment cannot be bypassed.',
-  },
-  DOCUMENT_SUPERSEDED: {
-    message: 'A newer document version has already been submitted and is currently under review.',
-    category: 'conflict',
-    translationCategory: 'conflict',
-    title: 'Document Version Superseded',
-    action: 'Reload to review the latest uploaded version.',
-    requiresRefresh: true,
-  },
-  DOCUMENT_ALREADY_REVIEWED: {
-    message: 'This document version has already been reviewed and finalized by another operator.',
-    category: 'conflict',
-    translationCategory: 'conflict',
-    title: 'Already Finalized',
-    action: 'Reload the record to view the current verification verdict.',
-    requiresRefresh: true,
-  },
+interface DomainErrorEntry {
+  message: string;
+  category: ErrorCategory;
+  translationCategory: ErrorTranslationCategory;
+  title: string;
+  action: string;
+  requiresRefresh?: boolean;
+  /**
+   * Overrides `translateError`'s default (`translationCategory === 'rate_limit'`).
+   *
+   * A handful of these codes describe a write the server could not confirm landed — nothing was
+   * lost, nothing needs reloading, the right advice is simply "try again" — which the default
+   * conflates with `requiresRefresh` unless a code says otherwise here.
+   */
+  retryable?: boolean;
+}
+
+/**
+ * Specific domain error codes mapped to clear, actionable operator guidance.
+ *
+ * Keyed on `ApiErrorCode` (`@fapoms/shared/error-codes.ts`) rather than an arbitrary string, so a
+ * typo'd key is a compile error instead of a translation that silently never matches anything —
+ * which is exactly how this table drifted before: six of its entries named a code the backend has
+ * never sent (`EMPANELMENT_BLOCKED`, `EMPANELMENT_REVOKED`, `DOCUMENT_SUPERSEDED`,
+ * `PAYOUT_NOT_ELIGIBLE`, `ASSAYER_NOT_ACTIVE` — that one is a real code, but for a different
+ * response shape than this table is ever consulted against, see `fromResponse`'s callers) or the
+ * wrong one (`RECORD_CONCURRENTLY_MODIFIED` was meant to catch a version conflict, but the
+ * backend has only ever sent those under their real names, `STALE_ASSIGNMENT_VERSION` and
+ * siblings, below) — so every version-conflict message on this codebase's busiest write paths
+ * went untranslated from the day this table was written.
+ */
+const DOMAIN_ERROR_TRANSLATIONS: Partial<Record<ApiErrorCode, DomainErrorEntry>> = {
   IDENTITY_NOT_VERIFIED: {
     message: 'Mandatory KYC identity documents (PAN / Aadhaar) must be verified before this assayer can be activated.',
     category: 'user-correction-required',
     translationCategory: 'business_rule',
     title: 'KYC Verification Incomplete',
     action: 'Verify required identity documents in the assayer profile first.',
-  },
-  PAYOUT_NOT_ELIGIBLE: {
-    message: 'This payout cannot be approved until field attendance and verified bank details are confirmed.',
-    category: 'user-correction-required',
-    translationCategory: 'business_rule',
-    title: 'Payout Ineligible',
-    action: 'Confirm on-site check-in and bank account verification before approving payout.',
-  },
-  IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: {
-    message: 'This request key was already submitted with different details. Please reload and submit a fresh operation.',
-    category: 'conflict',
-    translationCategory: 'conflict',
-    title: 'Request Conflict',
-    action: 'Reload the page and re-apply your changes.',
-    requiresRefresh: true,
-  },
-  RECORD_CONCURRENTLY_MODIFIED: {
-    message: 'This record was modified by another operator while you were working on it. Your changes were not applied.',
-    category: 'conflict',
-    translationCategory: 'conflict',
-    title: 'Concurrent Modification',
-    action: 'Reload authoritative data from the server to reconcile differences before retrying.',
-    requiresRefresh: true,
   },
   ACCOUNT_ON_HOLD: {
     message: 'This account has been placed on hold or suspended. Operational actions are temporarily locked.',
@@ -185,7 +147,204 @@ const DOMAIN_ERROR_TRANSLATIONS: Record<
     title: 'Account Closed',
     action: 'Closed records cannot accept modifications.',
   },
+
+  // --- Optimistic concurrency: someone else's write landed first. Reload, then reapply. ---
+  MISSING_EXPECTED_VERSION: {
+    message: 'This edit did not include which version you were changing, so the server could not check for a conflicting update.',
+    category: 'user-correction-required',
+    translationCategory: 'validation',
+    title: 'Version Not Supplied',
+    action: 'Reload the record and try the edit again.',
+    requiresRefresh: true,
+  },
+  STALE_ASSIGNMENT_VERSION: {
+    message: 'This assignment was updated by someone else while you were working on it. Your change was not saved.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Assignment Changed',
+    action: 'Reload the assignment and reapply your change.',
+    requiresRefresh: true,
+  },
+  INVALID_ASSIGNMENT_VERSION: {
+    message: 'The version of this assignment your screen was using no longer matches the server.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Assignment Out of Sync',
+    action: 'Reload the assignment before making further changes.',
+    requiresRefresh: true,
+  },
+  STALE_EMPANELMENT_VERSION: {
+    message: 'This client standing was decided by someone else while you were working on it. Your decision was not saved.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Empanelment Changed',
+    action: 'Reload the empanelment record and reapply your decision.',
+    requiresRefresh: true,
+  },
+  INVALID_EMPANELMENT_VERSION: {
+    message: 'The version of this empanelment standing your screen was using no longer matches the server.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Empanelment Out of Sync',
+    action: 'Reload the record before making further changes.',
+    requiresRefresh: true,
+  },
+  STALE_CLIENT_BILLING_VERSION: {
+    message: "This client's billing profile was updated by someone else while you were working on it. Your change was not saved.",
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Billing Profile Changed',
+    action: 'Reload the billing profile and reapply your change.',
+    requiresRefresh: true,
+  },
+  INVALID_CLIENT_BILLING_VERSION: {
+    message: "The version of this client's billing profile your screen was using no longer matches the server.",
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Billing Profile Out of Sync',
+    action: 'Reload the billing profile before making further changes.',
+    requiresRefresh: true,
+  },
+  STALE_CLIENT_CONFIGURATION_VERSION: {
+    message: "This client's configuration was updated by someone else while you were working on it. Your change was not saved.",
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Configuration Changed',
+    action: 'Reload the configuration and reapply your change.',
+    requiresRefresh: true,
+  },
+  INVALID_CLIENT_CONFIGURATION_VERSION: {
+    message: "The version of this client's configuration your screen was using no longer matches the server.",
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Configuration Out of Sync',
+    action: 'Reload the configuration before making further changes.',
+    requiresRefresh: true,
+  },
+  DOCUMENT_VERSION_STALE: {
+    message: 'A newer version of this document has been uploaded since you loaded it.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Document Changed',
+    action: 'Reload the document before verifying it.',
+    requiresRefresh: true,
+  },
+  CANNOT_VERIFY_SUPERSEDED_VERSION: {
+    message: 'This document version has been superseded by a newer upload and can no longer be verified.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Document Superseded',
+    action: 'Reload to review and verify the current version instead.',
+    requiresRefresh: true,
+  },
+  CONTENT_HASH_MISMATCH: {
+    message: "This document's content has changed since you last loaded it, so the verification could not be applied.",
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Document Content Changed',
+    action: 'Reload the document and verify the current file.',
+    requiresRefresh: true,
+  },
+
+  // --- The server could not confirm a write landed. Nothing was lost — just retry. ---
+  RETRY_CONTENTION: {
+    message: 'This record was being changed by another operation at the same moment. Nothing was changed.',
+    category: 'retryable',
+    translationCategory: 'conflict',
+    title: 'Busy Right Now',
+    action: 'Try again in a moment.',
+    requiresRefresh: false,
+    retryable: true,
+  },
+  ASSIGNMENT_NOT_PERSISTED: {
+    message: 'The server could not confirm this assignment was recorded. Nothing has been changed.',
+    category: 'retryable',
+    translationCategory: 'conflict',
+    title: 'Assignment Not Saved',
+    action: 'Try creating the assignment again.',
+    requiresRefresh: false,
+    retryable: true,
+  },
+  REASSIGNMENT_NOT_PERSISTED: {
+    message: 'The server could not confirm this reassignment was recorded. Nothing has been changed.',
+    category: 'retryable',
+    translationCategory: 'conflict',
+    title: 'Reassignment Not Saved',
+    action: 'Try the reassignment again.',
+    requiresRefresh: false,
+    retryable: true,
+  },
+  REASSIGNMENT_VERSION_MISMATCH: {
+    message: 'The server could not confirm this reassignment was recorded correctly. Nothing has been changed.',
+    category: 'retryable',
+    translationCategory: 'conflict',
+    title: 'Reassignment Unconfirmed',
+    action: 'Try the reassignment again.',
+    requiresRefresh: false,
+    retryable: true,
+  },
+
+  // --- Duplicate detection and resubmission ---
+  IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: {
+    message: 'This request key was already submitted with different details. Please reload and submit a fresh operation.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Request Conflict',
+    action: 'Reload the page and re-apply your changes.',
+    requiresRefresh: true,
+  },
+  DEFINITE_DUPLICATE: {
+    message: 'An assayer with this PAN, Aadhaar, phone or email is already on the roster.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Already Registered',
+    action: 'Search the roster for the existing record instead of creating a new one.',
+  },
+  PROBABLE_DUPLICATE: {
+    message: 'This phone number is already registered to a different assayer.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Possible Shared Contact',
+    action: 'If this is an authorized shared household contact, mark it as such with a reason and resubmit.',
+  },
+
+  // --- Other business-rule conflicts ---
+  ASSIGNMENT_CANCELLED: {
+    message: 'This assignment was cancelled and cannot be reassigned.',
+    category: 'non-retryable',
+    translationCategory: 'business_rule',
+    title: 'Assignment Cancelled',
+    action: 'Create a new assignment for this branch instead.',
+    requiresRefresh: true,
+  },
+  NO_CLIENT_CONFIGURATION: {
+    message: 'This client has no active billing configuration, so its work cannot be priced.',
+    category: 'non-retryable',
+    translationCategory: 'business_rule',
+    title: 'No Billing Configuration',
+    action: "Restore or recreate the client's configuration before applying a rate card.",
+  },
+  UPLOAD_CHECKSUM_MISMATCH: {
+    message: 'The file received does not match what your device sent. Nothing was stored.',
+    category: 'user-correction-required',
+    translationCategory: 'validation',
+    title: 'Upload Incomplete',
+    action: 'Retry the upload.',
+  },
+  DOCUMENT_ALREADY_REVIEWED: {
+    message: 'This document version has already been reviewed and finalized by another operator.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Already Finalized',
+    action: 'Reload the record to view the current verification verdict.',
+    requiresRefresh: true,
+  },
 };
+
+/** Type-safe lookup: only ever consults the table with a string this build recognises as a code. */
+function domainTranslation(code: string | undefined): DomainErrorEntry | undefined {
+  return code !== undefined && isApiErrorCode(code) ? DOMAIN_ERROR_TRANSLATIONS[code] : undefined;
+}
 
 /** NestJS sends `message` as a string, or an array of validation failures. */
 /**
@@ -295,12 +454,20 @@ function sentence(s: string): string {
   return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 }
 
-function extractDomainCode(text: string): string | undefined {
+/**
+ * The last resort, for a response that arrived with no `code` field at all.
+ *
+ * Every error this backend's exception filter builds carries a `code` today (`fallbackCodeForStatus`
+ * guarantees it — see `shared/error-codes.ts`), so this should rarely fire. It stays as a safety
+ * net for anything that reaches here without one: an older cached response, a body some other
+ * service produced.
+ */
+function extractDomainCode(text: string): ApiErrorCode | undefined {
   const match = text.match(/\b([A-Z][A-Z0-9_]{3,35})\b/);
-  if (match && DOMAIN_ERROR_TRANSLATIONS[match[1]]) {
-    return match[1];
-  }
-  return undefined;
+  const candidate = match?.[1];
+  return candidate && isApiErrorCode(candidate) && DOMAIN_ERROR_TRANSLATIONS[candidate]
+    ? candidate
+    : undefined;
 }
 
 /**
@@ -451,7 +618,15 @@ const BY_STATUS: Record<
 /** Builds the error thrown by the API client for a failed HTTP response. */
 export function fromResponse(status: number, body: any): AppError {
   const serverText = joinServerMessage(body?.message);
-  const domainCode = extractDomainCode(serverText);
+  /**
+   * The `code` field is the primary signal — it is what `withCode()` attaches server-side and is
+   * present on every error response this backend sends, regardless of what the message happens to
+   * say. Matching on message text (`extractDomainCode`) is only the fallback for a response that
+   * somehow arrived without one.
+   */
+  const domainCode: ApiErrorCode | undefined = isApiErrorCode(body?.code)
+    ? body.code
+    : extractDomainCode(serverText);
 
   let friendly = '';
   let category: ErrorCategory = status >= 500 ? 'system-failure' : 'user-correction-required';
@@ -472,9 +647,10 @@ export function fromResponse(status: number, body: any): AppError {
   }
 
   // A domain code is more specific than the status, so it still wins both fields.
-  if (domainCode && DOMAIN_ERROR_TRANSLATIONS[domainCode]) {
-    friendly = DOMAIN_ERROR_TRANSLATIONS[domainCode].message;
-    category = DOMAIN_ERROR_TRANSLATIONS[domainCode].category;
+  const domainDef = domainTranslation(domainCode);
+  if (domainDef) {
+    friendly = domainDef.message;
+    category = domainDef.category;
   } else if (isHumanReadable(serverText)) {
     friendly = sentence(serverText);
   }
@@ -518,14 +694,14 @@ export function fromNetwork(err: unknown): AppError {
  */
 export function translateError(err: unknown): ErrorTranslation {
   if (err instanceof AppError) {
-    const domainDef = err.domainCode ? DOMAIN_ERROR_TRANSLATIONS[err.domainCode] : undefined;
+    const domainDef = domainTranslation(err.domainCode);
     if (domainDef) {
       return {
         category: domainDef.translationCategory,
         title: domainDef.title,
         message: domainDef.message,
         action: domainDef.action,
-        retryable: domainDef.translationCategory === 'rate_limit',
+        retryable: domainDef.retryable ?? (domainDef.translationCategory === 'rate_limit'),
         requiresRefresh: domainDef.requiresRefresh ?? (domainDef.translationCategory === 'conflict'),
         statusCode: err.status,
         domainCode: err.domainCode,
