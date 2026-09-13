@@ -105,6 +105,9 @@ function bareOptions(target: ProvisionTarget, username: string, password: string
     username,
     password,
     entities: [],
+    // No cert verification — see database.config.ts's fuller comment on this same line, repeated
+    // identically in 5 other places (this file has 2 more, plus data-source.ts, main.ts). Change
+    // all six together or none.
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
   };
 }
@@ -143,7 +146,7 @@ async function canSignIn(adminUrl: string, database: string, username: string, p
     username,
     password,
     entities: [],
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined, // see bareOptions() above
   });
   try {
     await probe.initialize();
@@ -174,7 +177,7 @@ export async function bootstrapRoles(
     type: 'postgres',
     url: adminUrl,
     entities: [],
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined, // see bareOptions() above
   });
 
   await using(admin, async (ds) => {

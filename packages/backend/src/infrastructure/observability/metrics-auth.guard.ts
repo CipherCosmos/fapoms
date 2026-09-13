@@ -10,9 +10,13 @@ import { timingSafeEqual } from 'crypto';
  * checks a dedicated `METRICS_TOKEN` sent as `Authorization: Bearer <token>` — exactly what
  * Prometheus's `bearer_token` config sends.
  *
- * When `METRICS_TOKEN` is unset the guard is a no-op, so local/dev scraping keeps working and
- * operators who instead restrict `/metrics` at the network layer are not forced into a token.
- * Production should set it (see `.env.production.example`).
+ * When `METRICS_TOKEN` is unset the guard is a no-op in development, so local/dev scraping keeps
+ * working and operators who instead restrict `/metrics` at the network layer are not forced into
+ * a token. In PRODUCTION an unset token now refuses every request instead — the same fail-safe
+ * `bull-board.setup.ts` already applies to its own dashboard (unset credentials there mean the
+ * board isn't mounted at all, rather than mounted open). Silently trusting "someone else surely
+ * restricted the network layer" is the one difference this guard used to have from that sibling,
+ * with no way to verify the assumption actually held.
  */
 @Injectable()
 export class MetricsAuthGuard implements CanActivate {
@@ -20,7 +24,14 @@ export class MetricsAuthGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const expected = this.config.get<string>('METRICS_TOKEN');
-    if (!expected) return true; // not configured → rely on network-level restriction
+    if (!expected) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new UnauthorizedException(
+          'METRICS_TOKEN is not configured. /metrics is never served unauthenticated in production.',
+        );
+      }
+      return true; // development convenience only
+    }
 
     const req = context.switchToHttp().getRequest();
     const header: string = req?.headers?.authorization ?? '';

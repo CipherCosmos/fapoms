@@ -35,6 +35,30 @@ import {
 import { DataSource } from 'typeorm';
 import { ROLE_PERMISSIONS } from './modules/auth/role-permissions';
 import { MIGRATION_ROLE, RUNTIME_ROLE, RUNTIME_ASSERTIONS } from './infrastructure/database/roles/role-model';
+import { errorAlerter } from './infrastructure/observability/error-alerter';
+
+/**
+ * A value long enough to pass a length check can still be an obvious placeholder — a name, a
+ * phrase, or a repeated character. This is a heuristic FLOOR, not a third entry appended to an
+ * exact-match denylist: the two burned secrets already known to have leaked are matched exactly,
+ * elsewhere, and always will be; this catches the placeholder nobody has thought to add to that
+ * list yet, the same way the next one won't be on it either. Two independent signals, either is
+ * disqualifying: real randomness spreads across its whole alphabet, so a value that reuses only a
+ * handful of distinct characters over its whole length was very likely typed by a person rather
+ * than generated (a repeated character or a short reused pattern brings this down close to the
+ * character-set size regardless of overall length); and a small set of words a randomly generated
+ * string would essentially never contain, but a placeholder often names itself with, in English.
+ * Deliberately excludes ordinary dictionary words like "password"/"default" — those are common
+ * enough in a genuinely random-looking human-chosen passphrase that flagging them costs more in
+ * false positives than it buys in caught placeholders; the exact-match denylists already catch
+ * the specific defaults this codebase has actually shipped.
+ */
+function looksHandTyped(value: string): boolean {
+  if (new Set(value.toLowerCase()).size < 12) return true;
+  const placeholderWords = ['secret', 'changeme', 'placeholder', 'example', 'insecure', 'yourkey', 'your-key'];
+  const lower = value.toLowerCase();
+  return placeholderWords.some((word) => lower.includes(word));
+}
 
 /**
  * Configuration that must never reach production, checked before anything connects.
@@ -55,6 +79,8 @@ export function assertProductionSafeConfig(): void {
     fatal.push('JWT_SECRET is unset or a value that was committed to this repository. Every access token would be forgeable by anyone who has read the git history. Rotate it.');
   } else if (jwtSecret.length < 32) {
     fatal.push('JWT_SECRET is shorter than 32 characters. Use a high-entropy random value.');
+  } else if (looksHandTyped(jwtSecret)) {
+    fatal.push('JWT_SECRET is long enough but does not look randomly generated (too little character variety, or reads like a placeholder rather than a generated value). A 40-character phrase still passes the length check on its own; use `openssl rand -hex 32` or similar.');
   }
 
   /**
@@ -129,6 +155,8 @@ export function assertProductionSafeConfig(): void {
   const dbPassword = process.env.DB_PASSWORD;
   if (!dbPassword || ['postgres', 'password', 'fapoms', 'fapoms_dev', 'changeme'].includes(dbPassword)) {
     fatal.push('DB_PASSWORD is unset, a well-known default, or a value committed to this repository.');
+  } else if (looksHandTyped(dbPassword)) {
+    fatal.push('DB_PASSWORD does not look randomly generated (too little character variety). It is not on the known-default list, but a low-variety value is easy to guess regardless of length; use a real generated password.');
   }
 
   /**
@@ -278,6 +306,8 @@ async function assertDatabaseIdentity(): Promise<void> {
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE || 'fapoms',
     entities: [],
+    // No cert verification — see database.config.ts's fuller comment on this same line, repeated
+    // identically in 5 other places (data-source.ts, roles/provision.ts ×3). Change together.
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
   });
 
@@ -670,17 +700,39 @@ async function pauseLocalQueues(app: INestApplication, logger: Logger): Promise<
  * Logged loudly rather than swallowed: an unhandled rejection is a real defect and must be
  * findable. `uncaughtException` is different — the process state is genuinely unknown after one,
  * so it exits, but only after the reason has been written down.
+ *
+ * A log line is where this used to stop, and nothing reads it until someone goes looking — the
+ * exact problem `ErrorAlerter` already exists to solve for an in-request 500 (see its own header
+ * comment). This is the same fault outside an HTTP request, so it gets the same alert rather than
+ * a second, silent path. `method`/`route` have no real value here (there is no request), so a
+ * fixed pseudo-route stands in — `alertKey()` only needs it to group repeats of the SAME
+ * background fault together, not to name a real endpoint.
+ *
+ * Split from `installProcessGuards` below so this behaviour is callable directly in a test,
+ * without a test having to attach a real listener to the shared process-wide `unhandledRejection`
+ * emitter — that would leak across every other spec file sharing this Jest worker.
  */
+export function handleUnhandledRejection(
+  reason: unknown,
+  logger: Logger,
+  alerter: Pick<typeof errorAlerter, 'report'> = errorAlerter,
+): void {
+  logger.error(
+    `Unhandled promise rejection — a fire-and-forget task failed without a catch: ${
+      reason instanceof Error ? `${reason.message}\n${reason.stack}` : String(reason)
+    }`,
+  );
+  alerter.report({
+    method: 'PROCESS',
+    route: '/unhandled-rejection',
+    errorName: reason instanceof Error ? reason.constructor?.name ?? 'Error' : 'UnhandledRejection',
+  });
+}
+
 function installProcessGuards(): void {
   const logger = new Logger('Process');
 
-  process.on('unhandledRejection', (reason: unknown) => {
-    logger.error(
-      `Unhandled promise rejection — a fire-and-forget task failed without a catch: ${
-        reason instanceof Error ? `${reason.message}\n${reason.stack}` : String(reason)
-      }`,
-    );
-  });
+  process.on('unhandledRejection', (reason: unknown) => handleUnhandledRejection(reason, logger));
 
   process.on('uncaughtException', (err: Error) => {
     logger.error(`Uncaught exception — exiting so the supervisor restarts a known-good process: ${err.message}`, err.stack);

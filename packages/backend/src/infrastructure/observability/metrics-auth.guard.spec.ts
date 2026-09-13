@@ -13,9 +13,21 @@ describe('MetricsAuthGuard', () => {
   const guardWith = (token?: string) =>
     new MetricsAuthGuard({ get: () => token } as any);
 
-  it('is a no-op (allows) when METRICS_TOKEN is unset', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+
+  it('is a no-op (allows) when METRICS_TOKEN is unset outside production', () => {
+    process.env.NODE_ENV = 'development';
     expect(guardWith(undefined).canActivate(ctx())).toBe(true);
     expect(guardWith(undefined).canActivate(ctx('Bearer anything'))).toBe(true);
+  });
+
+  it('refuses every request when METRICS_TOKEN is unset IN production — never fails open', () => {
+    process.env.NODE_ENV = 'production';
+    expect(() => guardWith(undefined).canActivate(ctx())).toThrow(UnauthorizedException);
+    expect(() => guardWith(undefined).canActivate(ctx('Bearer anything'))).toThrow(UnauthorizedException);
   });
 
   it('allows a request carrying the correct bearer token', () => {

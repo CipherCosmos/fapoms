@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { assertProductionSafeConfig } from './main';
 
 /**
@@ -10,7 +11,10 @@ describe('assertProductionSafeConfig', () => {
 
   const safeProduction = {
     NODE_ENV: 'production',
-    JWT_SECRET: 'a'.repeat(48),
+    // A real generated secret, not a repeated character — 'a'.repeat(48) passed the length check
+    // this fixture exists to satisfy, but is exactly the low-variety shape the entropy check below
+    // now also refuses, on purpose. See the "does not look randomly generated" tests.
+    JWT_SECRET: randomBytes(32).toString('hex'),
     DB_SYNCHRONIZE: 'false',
     CORS_ORIGINS: 'https://fapoms.example.com',
     DB_PASSWORD: 'a-genuinely-random-production-password',
@@ -59,6 +63,25 @@ describe('assertProductionSafeConfig', () => {
   it('refuses a short JWT secret', () => {
     process.env = { ...process.env, ...safeProduction, JWT_SECRET: 'tooshort' };
     expect(() => assertProductionSafeConfig()).toThrow(/32 characters/);
+  });
+
+  it('refuses a JWT secret that is long enough but is a repeated character, not real entropy', () => {
+    process.env = { ...process.env, ...safeProduction, JWT_SECRET: 'x'.repeat(40) };
+    expect(() => assertProductionSafeConfig()).toThrow(/does not look randomly generated/);
+  });
+
+  it('refuses a JWT secret that is long enough but reads like an unrotated placeholder', () => {
+    process.env = {
+      ...process.env,
+      ...safeProduction,
+      JWT_SECRET: 'thisIsTheSuperSecretProductionKeyChangeme1234567890',
+    };
+    expect(() => assertProductionSafeConfig()).toThrow(/does not look randomly generated/);
+  });
+
+  it('refuses a DB_PASSWORD long enough to dodge the known-default list but still low-variety', () => {
+    process.env = { ...process.env, ...safeProduction, DB_PASSWORD: 'zzzzzzzzzzzzzzzzzzzzzzzzzzzz' };
+    expect(() => assertProductionSafeConfig()).toThrow(/DB_PASSWORD does not look randomly generated/);
   });
 
   it('refuses a well-known database password', () => {

@@ -187,8 +187,12 @@ const REVIEWED: Record<string, string> = {
     '@Public() route — explicitly unauthenticated; everything else denies by default below',
   'modules/auth/guards.ts :: PermissionsGuard.canActivate':
     '@Public() route, or a route declaring no permission — RolesGuard has already refused an undeclared audience',
-  'infrastructure/observability/metrics-auth.guard.ts :: MetricsAuthGuard.canActivate':
-    'METRICS_TOKEN unset, which is the documented "restricted at the network layer instead" mode',
+  // metrics-auth.guard.ts's MetricsAuthGuard.canActivate used to be listed here ("METRICS_TOKEN
+  // unset, which is the documented network-layer-restricted mode") — removed 2026-09, not because
+  // the reasoning stopped applying but because the method no longer has the shape this list is
+  // about: the unset-token case now throws in production BEFORE the dev-only `return true`, so
+  // there is no longer any return that answers ahead of an authorization decision. Shrunk, per
+  // this file's own rule, rather than left as a name nothing points at anymore.
 
   // ── Business methods. Each shortcut was checked for what it hands back.
   'modules/assignment/assignment.service.ts :: AssignmentService.create':

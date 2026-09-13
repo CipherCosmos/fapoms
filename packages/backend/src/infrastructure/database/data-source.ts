@@ -29,6 +29,8 @@ export const AppDataSource = new DataSource({
         password: process.env.DB_PASSWORD || 'fapoms_dev',
         database: process.env.DB_DATABASE || 'fapoms',
       }),
+  // No cert verification — see database.config.ts's fuller comment on this same line, repeated
+  // identically in 5 places (this file, roles/provision.ts ×3, main.ts). Change together.
   ...(sslEnabled ? { ssl: { rejectUnauthorized: false } } : {}),
   synchronize: process.env.DB_SYNCHRONIZE === 'true',
   logging: process.env.DB_LOGGING === 'true',

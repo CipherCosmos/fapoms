@@ -42,7 +42,13 @@ export const databaseConfig = (
   // A single connection string (Neon, RDS, any managed Postgres) takes precedence over the
   // discrete DB_* vars. When it is set — or DB_SSL=true — TLS is turned on, which managed
   // providers like Neon require. `rejectUnauthorized: false` keeps it working across
-  // environments without shipping a CA bundle; the transport is still encrypted.
+  // environments without shipping a CA bundle; the transport is still encrypted, but this does
+  // NOT verify the server's certificate, so a network position able to intercept the connection
+  // could present its own cert unnoticed. Acceptable for Neon (a provider-terminated TLS
+  // endpoint reached over the public internet, where the alternative — no TLS at all — is
+  // strictly worse) but this exact line is repeated identically in 5 other places, and a future
+  // change to any of them (e.g. shipping a real CA bundle and turning verification back on)
+  // should update all six or none: data-source.ts, roles/provision.ts (×3), main.ts.
   const url = configService.get<string>('DATABASE_URL');
   const sslEnabled = configService.get<string>('DB_SSL', url ? 'true' : 'false') === 'true';
   return ({
