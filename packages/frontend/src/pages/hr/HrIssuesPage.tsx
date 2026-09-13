@@ -5,6 +5,7 @@ import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { useImportIssues } from './useImportIssues';
 import { useHr } from './HrLayout';
 import { counted } from '../../utils/plural';
+import { Page } from '../../components/ui/Page';
 
 /**
  * The review queue, as a place you can go to.
@@ -25,7 +26,7 @@ export const HrIssuesPage: React.FC = () => {
   const { openCount, loading, failed } = useImportIssues();
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <Page>
       <div>
         <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: 0 }}>Review queue</h2>
         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: '760px' }}>
@@ -49,7 +50,7 @@ export const HrIssuesPage: React.FC = () => {
       )}
 
       <ImportIssuesPanel canManage={canManage} standalone />
-    </div>
+    </Page>
   );
 };
 

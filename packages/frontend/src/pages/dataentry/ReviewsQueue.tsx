@@ -12,6 +12,7 @@ import { validationStatusLabel } from '@fapoms/shared';
 import { counted } from '../../utils/plural';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { CORRECTION_NOTE_SUGGESTIONS } from '../../utils/reviewReasonSuggestions';
+import { Page } from '../../components/ui/Page';
 
 /**
  * The review queue: validation cases as a server-paginated table.
@@ -190,7 +191,7 @@ export const ReviewsQueue: React.FC = () => {
   const hiddenNote = hiddenSelectionNote(hiddenCount, 'report');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <Page>
       {confirmDialog}
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         {STATUS_TABS.map((t) => (
@@ -344,7 +345,7 @@ export const ReviewsQueue: React.FC = () => {
             disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
         </span>
       </div>
-    </div>
+    </Page>
   );
 };
 

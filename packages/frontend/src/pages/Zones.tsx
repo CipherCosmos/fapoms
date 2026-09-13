@@ -9,6 +9,7 @@ import { Modal, AlertBanner, Select, ChipMultiSelect, useConfirm, PageHeader } f
 import { LoadFailure } from '../components/LoadFailure';
 import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageZones, canDeleteZones } from '../hooks/useCurrentRoles';
+import { Page } from '../components/ui/Page';
 
 interface Zone {
   id: string;
@@ -236,7 +237,7 @@ export const Zones: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <Page>
       {confirmDialog}
       <PageHeader
         icon={<Map size={20} />}
@@ -404,7 +405,7 @@ export const Zones: React.FC = () => {
           </div>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 };
 

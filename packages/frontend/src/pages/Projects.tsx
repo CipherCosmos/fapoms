@@ -30,6 +30,7 @@ import { useImportJob } from '../components/import/useImportJob';
 import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 import { fetchWholeBranchDirectory } from '../services/branch-directory';
+import { Page } from '../components/ui/Page';
 
 interface ClientOption {
   id: string;
@@ -913,7 +914,7 @@ export const Projects: React.FC = () => {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <Page>
       {confirmDialog}
 
       <PageHeader
@@ -1605,6 +1606,6 @@ export const Projects: React.FC = () => {
         )}
       </Modal>
 
-    </div>
+    </Page>
   );
 };

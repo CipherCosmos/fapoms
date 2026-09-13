@@ -11,6 +11,7 @@ import { api } from '../../services/api';
 import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { deskRole, deskCard, deskLabel, QueueCounts, PagedQueue } from './deskRoles';
+import { Page } from '../../components/ui/Page';
 
 /**
  * The desk dashboard: aggregates only, never rows.
@@ -239,7 +240,7 @@ export const DataEntryOverview: React.FC = () => {
   const deskIsClear = allLoaded && figures.every((n) => n === 0) && breachedBuckets.length === 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <Page>
       {/*
         First, before any number on this page gets to be believed. The tiles below stay — they are
         the links into the queues and a head still uses them to reach a queue — but a tile whose
@@ -449,7 +450,7 @@ export const DataEntryOverview: React.FC = () => {
           ))}
         </section>
       )}
-    </div>
+    </Page>
   );
 };
 

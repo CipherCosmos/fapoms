@@ -4,6 +4,7 @@ import { Clock, AlertTriangle, User, ArrowRight, ChevronDown, ChevronRight, Phon
 import { api } from '../../services/api';
 import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { counted } from '../../utils/plural';
+import { Page } from '../../components/ui/Page';
 
 /**
  * The clarification worklist.
@@ -166,7 +167,7 @@ export const ClarificationsPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <Page>
       {/* How to slice the list: by whose move it is, or by the person to call. */}
       <div style={{ display: 'flex', gap: 6 }}>
         {VIEWS.map((v) => {
@@ -284,7 +285,7 @@ export const ClarificationsPage: React.FC = () => {
           </div>
         )
       )}
-    </div>
+    </Page>
   );
 };
 

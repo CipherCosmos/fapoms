@@ -13,6 +13,7 @@ import { usePendingApplicationCount } from './applications/usePendingApplication
 import { fmtWhen } from './hr-ui';
 import { LEGACY_TABS, LEGACY_PATHS, resolveHrDestination } from './hr-destinations';
 import { LoadFailure } from '../../components/LoadFailure';
+import { Page } from '../../components/ui/Page';
 
 // Re-exported so existing importers keep working; the list itself lives in hr-destinations.ts.
 export { LEGACY_PATHS, resolveHrDestination };
@@ -181,12 +182,12 @@ export const HrLayout: React.FC = () => {
    */
   if (isLoading) {
     return (
-      <div style={{ padding: '20px 24px', maxWidth: '1500px', margin: '0 auto' }}>
+      <Page>
         <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>Workforce</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', marginTop: '10px' }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
           Getting the latest figures for everyone on the roster…
         </p>
-      </div>
+      </Page>
     );
   }
 
@@ -215,7 +216,7 @@ export const HrLayout: React.FC = () => {
   const d = data as HrWorkforceOverview;
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: '1500px', margin: '0 auto' }}>
+    <Page>
       <PageHeader
         icon={<Users size={20} />}
         title="Workforce"
@@ -324,6 +325,6 @@ export const HrLayout: React.FC = () => {
       </nav>
 
       <Outlet context={{ data: d, canManage, refetch: workforce.refetch } satisfies HrContext} />
-    </div>
+    </Page>
   );
 };

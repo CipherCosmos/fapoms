@@ -8,6 +8,7 @@ import { Modal, AlertBanner, useToast, Select, useConfirm, PageHeader } from '..
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { useCurrentRoles, canAdministerNotifications } from '../../hooks/useCurrentRoles';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Notification & Email Management.
@@ -191,7 +192,7 @@ export const NotificationAdmin: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <Page>
       {confirmDialog}
       <PageHeader
         icon={<Bell size={20} />}
@@ -355,7 +356,7 @@ export const NotificationAdmin: React.FC = () => {
           priorities={catalog?.priorities ?? []}
         />
       )}
-    </div>
+    </Page>
   );
 };
 

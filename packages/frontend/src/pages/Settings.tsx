@@ -14,6 +14,7 @@ import {
   CUSTOM_THEME_ID,
   useTheme,
 } from '../hooks/useTheme';
+import { Page } from '../components/ui/Page';
 
 type SettingsTab = 'PROFILE' | 'SECURITY' | 'SESSIONS' | 'APPEARANCE';
 
@@ -152,7 +153,7 @@ export const Settings: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '1000px', margin: '0 auto' }}>
+    <Page width="narrow">
       
       {/* Header Banner */}
       <div>
@@ -604,7 +605,7 @@ export const Settings: React.FC = () => {
         </div>
       )}
 
-    </div>
+    </Page>
   );
 };
 export default Settings;

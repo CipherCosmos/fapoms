@@ -12,6 +12,7 @@ import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Where an administrator suspends operational rules for testing.
@@ -274,7 +275,7 @@ export const RuleBypassPanel: React.FC = () => {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px', margin: '0 auto' }}>
+    <Page width="narrow">
       {confirmDialog}
       <PageHeader
         icon={<Unlock size={20} />}
@@ -530,6 +531,6 @@ export const RuleBypassPanel: React.FC = () => {
           {enable.isPending ? 'Suspending…' : `Suspend ${selected.size || 'no'} rule${selected.size === 1 ? '' : 's'} for ${hours}h`}
         </button>
       </div>
-    </div>
+    </Page>
   );
 };

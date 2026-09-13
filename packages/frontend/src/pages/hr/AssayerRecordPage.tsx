@@ -6,6 +6,7 @@ import { AssayerRecord } from './AssayerRecord';
 import { NotFound } from '../NotFound';
 import { defaultRouteFor } from '../../config/route-permissions';
 import { useCurrentRoles, useCurrentPermissions, canManageAssayers } from '../../hooks/useCurrentRoles';
+import { Page } from '../../components/ui/Page';
 
 /**
  * One person's whole record, at its own URL.
@@ -60,7 +61,7 @@ export const AssayerRecordPage: React.FC = () => {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <Page>
       <Link
         to="/hr/roster"
         onClick={(e) => {
@@ -91,6 +92,6 @@ export const AssayerRecordPage: React.FC = () => {
         onMissing={setMissingId}
         reloadKey={version}
       />
-    </div>
+    </Page>
   );
 };

@@ -15,6 +15,7 @@ import { useHr } from './HrLayout';
 import { queryKeys } from '../../hooks/queryKeys';
 import { CommercialProfileModal, formatMoney, type CommercialProfile } from './CommercialProfileModal';
 import type { SummaryGroupKey } from './record-sections';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Pay & terms.
@@ -231,7 +232,7 @@ export const HrPayPage: React.FC = () => {
   const phase = listPhase({ loading, rowCount: rows.length });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <Page>
       {/*
         Above the tiles, because it is the tiles it is about: if some of the roster is missing then
         every figure below is a count of part of it, and a wrong count with nothing beside it is
@@ -510,7 +511,7 @@ export const HrPayPage: React.FC = () => {
           onSaved={() => { setEditing(null); void payQuery.refetch(); }}
         />
       )}
-    </div>
+    </Page>
   );
 };
 

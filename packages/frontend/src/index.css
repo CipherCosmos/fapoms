@@ -131,6 +131,15 @@
   --focus-ring-inset: inset 0 0 0 2px var(--accent-primary);
 
   --sidebar-width: 260px;
+  /*
+    How wide content is allowed to get. `--content-max-width` is the app-wide cap the shell
+    applies to every page; the two narrower ones are for pages that read as a single column —
+    a settings form or a decision queue is unreadable stretched across a 27" monitor.
+  */
+  --content-max-width: 1600px;
+  --content-max-width-medium: 1200px;
+  --content-max-width-narrow: 960px;
+  --content-pad: var(--space-5);
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 
@@ -1456,11 +1465,39 @@ table, .data-table, .financial, .tabular-nums, td, th, .metric-value {
 .main-area {
   grid-area: main;
   min-height: 0;
-  overflow-y: auto;
-  /* Keeps a fast scroll at the end of the content pane from chaining out to the document. */
+  /*
+    The column is header + scrolling content + mobile nav. It does not scroll itself and it
+    carries no padding: both belong to `.page-scroll` below, so that the header stays put and
+    a suspended-rules banner cannot be scrolled away from. This rule used to set `padding: 32px`
+    and `overflow-y: auto`, and Layout.tsx overrode both inline — which is the same thing said
+    twice, with the stylesheet losing.
+  */
+  display: flex;
+  flex-direction: column;
   overscroll-behavior: contain;
   background-color: transparent;
-  padding: 32px;
+  padding: 0;
+}
+
+/* The one scrolling region. Everything a page draws is inside this. */
+.page-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--content-pad);
+  /* Clears the mobile bottom nav, which is fixed over the bottom of this region. */
+  padding-bottom: 70px;
+}
+
+/*
+  One centring container for every page. On a wide monitor content used to pin to the sidebar
+  and leave all the spare width as a right-hand gutter; capping and centring here — not per
+  page — is what keeps the gutters balanced app-wide and the left edge of every screen in the
+  same place as you navigate.
+*/
+.page-container {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin: 0 auto;
 }
 
 /* Button UI Components */

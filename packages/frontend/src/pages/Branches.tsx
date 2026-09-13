@@ -20,6 +20,7 @@ import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/
 import { userMessage } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { getZones } from '../services/planning';
+import { Page } from '../components/ui/Page';
 
 interface ClientOption {
   id: string;
@@ -525,7 +526,7 @@ export const Branches: React.FC = () => {
   const phase = listPhase({ loading: isLoading, rowCount: filteredBranches.length });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <Page>
       <PageHeader
         icon={<Building2 size={20} />}
         title="Branches"
@@ -858,7 +859,7 @@ export const Branches: React.FC = () => {
       {showContactModal && selectedBranch && (
         <AddBranchContactModal branchId={selectedBranch.id} onClose={() => setShowContactModal(false)} onAdded={() => { setShowContactModal(false); void loadBranchDetail(selectedBranch); }} />
       )}
-    </div>
+    </Page>
   );
 };
 

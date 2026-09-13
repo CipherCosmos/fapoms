@@ -28,6 +28,7 @@ import { useDuplicateCheck, type DuplicateCheckKey } from './useDuplicateCheck';
 import { DocumentsStep } from './DocumentsStep';
 import { ClientsStep } from './ClientsStep';
 import { relationshipOptions } from '../reference-vocabulary';
+import { Page } from '../../../components/ui/Page';
 
 /**
  * Collapses the vertical step rail to a horizontal scroller once the page cannot hold rail and
@@ -842,8 +843,9 @@ export const RegistrationWizard: React.FC<{
   };
 
   return (
-    <div style={{
-      padding: '20px 24px 24px', maxWidth: '1600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '18px',
+    <Page style={{
+      // The shell pads and caps this already (`.page-scroll` / `.page-container`); all that is
+      // left here is the floor below.
       // Tall enough to fill the visible page even on a short step (an empty "Who they can work
       // for" is a handful of lines) — otherwise the footer below has nothing to push it down to
       // the bottom and sits wherever the short content happens to end, which read as the footer
@@ -1175,7 +1177,7 @@ export const RegistrationWizard: React.FC<{
           )}
         </div>
       </div>
-    </div>
+    </Page>
   );
 };
 

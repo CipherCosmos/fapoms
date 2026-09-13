@@ -18,6 +18,7 @@ import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset,
 import { DangerZoneSection } from './DangerZone/DangerZoneSection';
 import { RulesSection } from '../Rules';
 import { TransportCostsSection } from '../TransportCosts';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Client-side-only nav entry — the data-reset domains have no corresponding "setting group" on
@@ -479,7 +480,7 @@ export const PlatformSettings: React.FC = () => {
   ));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+    <Page>
       {confirmDialog}
       <PageHeader
         icon={<SlidersHorizontal size={20} />}
@@ -653,7 +654,7 @@ export const PlatformSettings: React.FC = () => {
           )}
         </div>
       </div>
-    </div>
+    </Page>
   );
 };
 

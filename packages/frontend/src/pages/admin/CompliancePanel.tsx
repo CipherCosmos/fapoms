@@ -12,6 +12,7 @@ import {
 import { userMessage } from '../../services/errors';
 import { useCurrentRoles, canManageCompliance } from '../../hooks/useCurrentRoles';
 import { PageHeader } from '../../components/ui';
+import { Page } from '../../components/ui/Page';
 
 const fmt = (d: string | null) =>
   d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
@@ -84,7 +85,7 @@ export const CompliancePanel: React.FC = () => {
   const incidentsFailed = loadFailed(incidents);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1000, margin: '0 auto' }}>
+    <Page width="narrow">
       <PageHeader
         icon={<ShieldAlert size={20} />}
         title="Security & Compliance"
@@ -223,7 +224,7 @@ export const CompliancePanel: React.FC = () => {
         </div>
       )}
       </>)}
-    </div>
+    </Page>
   );
 };
 

@@ -12,6 +12,7 @@ import { BILLING_PAGE_SIZE } from '../../services/billing';
 import { Select } from '../../components/ui';
 import { payableStatusLabel } from '@fapoms/shared';
 import { AssayerInvoiceStatusPill } from './shared';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Assayer statement — what an assayer has earned, been paid, and is still owed.
@@ -75,7 +76,7 @@ export const AssayerStatementPage: React.FC = () => {
     : roster;
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: 1200, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <Page width="medium">
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
         <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>Assayer statement</h1>
         <Link to="/billing?tab=payouts" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none' }}>← Back to Billing</Link>
@@ -117,7 +118,7 @@ export const AssayerStatementPage: React.FC = () => {
       {assayerId && loadFailed(statement) && <LoadFailure loads={[{ label: "this assayer's statement", query: statement }]} />}
       {assayerId && !loadFailed(statement) && statement.isLoading && <div style={{ ...card, color: 'var(--text-muted)' }}>Loading statement…</div>}
       {statement.data && !loadFailed(statement) && <StatementBody data={statement.data} />}
-    </div>
+    </Page>
   );
 };
 

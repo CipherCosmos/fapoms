@@ -13,6 +13,7 @@ import {
 import { userMessage } from '../../services/errors';
 import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Container logs, in the browser.
@@ -296,7 +297,7 @@ export const ServiceLogs: React.FC = () => {
   const current = available.find((s) => s.service === service);
 
   return (
-    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+    <Page fills>
       <PageHeader
         icon={<ScrollText size={20} />}
         title="Service logs"
@@ -450,7 +451,7 @@ export const ServiceLogs: React.FC = () => {
       </div>
 
       <CommandLineHelp service={service} tail={tail} />
-    </div>
+    </Page>
   );
 };
 

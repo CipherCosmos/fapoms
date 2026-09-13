@@ -22,6 +22,7 @@ import { ConfigurationPanel } from './clients/ConfigurationPanel';
 import { useCurrentRoles, canDeleteClients, canManageClients } from '../hooks/useCurrentRoles';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 import { safeHttpUrl } from '../utils/url';
+import { Page } from '../components/ui/Page';
 
 const LIFECYCLE_COLORS: Record<string, { color: string; bg: string }> = {
   PROSPECT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -291,7 +292,7 @@ const Clients: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <Page>
       <PageHeader
         icon={<Building2 size={20} />}
         title="Clients"
@@ -618,7 +619,7 @@ const Clients: React.FC = () => {
           </div>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 };
 

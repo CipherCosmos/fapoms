@@ -11,6 +11,7 @@ import type { Column } from '../../../components/ui';
 import { humanizeStatus } from '../../../config/status-registry';
 import { ViewChips, useViewParam, fmtWhen } from '../hr-ui';
 import { ApplicationDetailDrawer } from './ApplicationDetailDrawer';
+import { Page } from '../../../components/ui/Page';
 
 /**
  * HR's review queue for self-registration applications — the Appraiser Recruitment spec's
@@ -172,7 +173,7 @@ export const HrApplicationsPage: React.FC = () => {
       page headers is what kept it out of the section in the first place. The sentence that lived
       here has moved to the tab's hover hint, where the rest of the section's explanations live.
     */
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <Page>
 
       {notice && (
         <AlertBanner type={notice.tone === 'ok' ? 'success' : 'error'} onClose={() => setNotice(null)}>
@@ -213,7 +214,7 @@ export const HrApplicationsPage: React.FC = () => {
           onSuccess={handleActionSuccess}
         />
       )}
-    </div>
+    </Page>
   );
 };
 

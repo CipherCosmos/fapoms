@@ -8,6 +8,7 @@ import { api, WebNotification, NotificationCategory, NotificationPreference } fr
 import { userMessage } from '../services/errors';
 import { connectSocket, getSocket } from '../services/socket';
 import { useToast, useConfirm } from '../components/ui';
+import { Page } from '../components/ui/Page';
 
 /**
  * The Notification Center.
@@ -170,7 +171,7 @@ export const Notifications: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <Page>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)', margin: 0 }}>
@@ -332,7 +333,7 @@ export const Notifications: React.FC = () => {
            effect, so a new key is the whole refresh mechanism and needs no prop drilling. */
         <PreferencesPanel key={prefsReloadKey} />
       )}
-    </div>
+    </Page>
   );
 };
 

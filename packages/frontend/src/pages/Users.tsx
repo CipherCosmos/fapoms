@@ -5,6 +5,7 @@ import { DirectoryPanel } from './users/DirectoryPanel';
 import { RolesPermissionsPanel } from './users/RolesPermissionsPanel';
 import { ActivityFeed } from './users/ActivityFeed';
 import { PageHeader } from '../components/ui';
+import { Page } from '../components/ui/Page';
 
 /**
  * User administration, as three views of the same IAM model rather than a
@@ -28,7 +29,7 @@ export const Users: React.FC = () => {
   const setTab = (t: TabKey) => { setFallbackTab(t); setParams(t === 'directory' ? {} : { tab: t }, { replace: true }); };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '16px' }}>
+    <Page>
       <PageHeader
         icon={<UsersRound size={20} />}
         title="User Administration"
@@ -59,7 +60,7 @@ export const Users: React.FC = () => {
       {tab === 'directory' && <DirectoryPanel />}
       {tab === 'roles' && <RolesPermissionsPanel />}
       {tab === 'activity' && <ActivityFeed />}
-    </div>
+    </Page>
   );
 };
 

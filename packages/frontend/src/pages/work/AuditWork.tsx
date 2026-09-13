@@ -16,6 +16,7 @@ import {
   type WorkItemAssignment,
   type WorkTabPath,
 } from './workTabs';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Audit Work — the single destination that used to be four.
@@ -244,7 +245,7 @@ export const AuditWork: React.FC = () => {
   const isHandingOver = isLocating && (isLoading || shouldHandOver);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <Page style={{ gap: 0 }}>
       {/*
         The strip is pulled out to the full width of the content area (Layout gives its children
         20px of padding) so it reads as the top of one screen rather than a widget floating on it.
@@ -327,7 +328,7 @@ export const AuditWork: React.FC = () => {
           </>
         )}
       </div>
-    </div>
+    </Page>
   );
 };
 

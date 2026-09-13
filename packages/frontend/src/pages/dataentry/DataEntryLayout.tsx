@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, Inbox, ClipboardCheck, MessagesSquare } from 'lucide-react';
 import { PageHeader } from '../../components/ui';
+import { Page } from '../../components/ui/Page';
 
 /**
  * The shell the data-entry & validation pages sit in.
@@ -23,7 +24,7 @@ const PAGES = [
 ] as const;
 
 export const DataEntryLayout: React.FC = () => (
-  <div style={{ padding: '20px 24px', maxWidth: 1500, margin: '0 auto' }}>
+  <Page>
     <PageHeader
       icon={<ClipboardCheck size={20} />}
       title="Data Entry & Validation"
@@ -52,5 +53,5 @@ export const DataEntryLayout: React.FC = () => (
     </nav>
 
     <Outlet />
-  </div>
+  </Page>
 );

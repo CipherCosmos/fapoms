@@ -26,6 +26,7 @@ import { getThread } from '../../services/feedback';
 import { Select } from '../../components/ui';
 
 import { FEEDBACK_STATUS_LABELS } from '@fapoms/shared';
+import { Page } from '../../components/ui/Page';
 const PAGE_SIZE = 25;
 // Mirrors FEEDBACK_TEAM_ROLES on the backend: the support desk is the people who answer the
 // tickets — DEVELOPER and PRODUCT_SUPPORT since the developer split (2026-09-05); ADMIN runs the
@@ -116,7 +117,7 @@ const ReporterView: React.FC<{ selectedId: string | null; setSelectedId: (id: st
   }, [load]);
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1100px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '16px', height: '100%', minHeight: 0 }}>
+    <Page width="medium" fills>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
         <div>
           <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 800, margin: 0 }}>My support requests</h1>
@@ -144,7 +145,7 @@ const ReporterView: React.FC<{ selectedId: string | null; setSelectedId: (id: st
             : <Empty icon={<MessageSquare size={30} />} text="Select a thread to see the conversation." />}
         </div>
       </div>
-    </div>
+    </Page>
   );
 };
 
@@ -219,7 +220,7 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', minHeight: 0 }}>
+    <Page fills>
       <div>
         <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 800, margin: 0 }}>Support desk</h1>
         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '4px 0 0' }}>Everything users have reported — triage, respond, and track to resolution.</p>
@@ -330,7 +331,7 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
           </div>
         )}
       </div>
-    </div>
+    </Page>
   );
 };
 

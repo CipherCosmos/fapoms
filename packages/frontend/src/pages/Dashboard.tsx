@@ -16,6 +16,7 @@ import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { formatRupees as money, activityEventLabel } from '@fapoms/shared';
 import { HBarChart, DonutChart, StackedColumnChart, type HBarDatum, type ColumnDatum } from '../components/charts';
+import { Page } from '../components/ui/Page';
 
 interface Attention {
   key: string; severity: 'critical' | 'high' | 'medium';
@@ -247,7 +248,7 @@ export const Dashboard: React.FC = () => {
     : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <Page>
       <DashboardStyles />
 
       {/* Hero masthead */}
@@ -544,7 +545,7 @@ export const Dashboard: React.FC = () => {
           )}
         </>
       )}
-    </div>
+    </Page>
   );
 };
 

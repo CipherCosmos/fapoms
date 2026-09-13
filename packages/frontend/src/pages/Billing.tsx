@@ -14,6 +14,7 @@ import { OverviewTab } from './billing/OverviewTab';
 import { PayoutsTab, type PayoutFilter } from './billing/PayoutsTab';
 import { InvoicesTab, type InvoiceFilter } from './billing/InvoicesTab';
 import { AssayerInvoicesTab, type AssayerInvoiceFilter } from './billing/AssayerInvoicesTab';
+import { Page } from '../components/ui/Page';
 
 /**
  * Billing — four tabs, because the business has four jobs: see the book (Overview), pay the
@@ -67,7 +68,7 @@ export const Billing: React.FC = () => {
   const [reconcileOpen, setReconcileOpen] = useState(false);
 
   return (
-    <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <Page>
       <PageHeader
         icon={<IndianRupee size={20} />}
         title="Billing"
@@ -110,7 +111,7 @@ export const Billing: React.FC = () => {
       {tab === 'assayer-invoices' && <AssayerInvoicesTab filter={assayerInvoiceFilter} onFilter={(f) => go('assayer-invoices', f === 'ALL' ? undefined : f)} canAct={canPay} />}
 
       {reconcileOpen && <ReconcileModal onClose={() => setReconcileOpen(false)} onDone={(msg) => { toast('success', msg); setReconcileOpen(false); }} />}
-    </div>
+    </Page>
   );
 };
 

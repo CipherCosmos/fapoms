@@ -10,6 +10,7 @@ import type { ConfirmOptions } from '../components/ui';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
+import { Page } from '../components/ui/Page';
 
 interface Holiday {
   id: string;
@@ -212,7 +213,7 @@ export const Holidays: React.FC = () => {
   const today = toISODate(new Date());
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <Page>
       {confirmDialog}
       <PageHeader
         icon={<Calendar size={20} />}
@@ -481,7 +482,7 @@ export const Holidays: React.FC = () => {
           </div>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 };
 

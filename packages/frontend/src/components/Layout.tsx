@@ -83,7 +83,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
         />
       </div>
 
-      <div className="main-area" style={{ display: 'flex', flexDirection: 'column', padding: 0 }}>
+      <div className="main-area">
         {/* Above the header, and outside the scrolling content, so a suspended control is the
             first thing on every screen and cannot be scrolled away from. */}
         <RuleBypassBanner />
@@ -92,13 +92,8 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
           onLogout={onLogout}
           onToggleSidebar={toggleSidebar}
         />
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px', paddingBottom: '70px' }}>
-          {/* One centering container for every page: on wide monitors content used to pin to
-              the sidebar and leave all the spare width as a right-hand gutter. Cap and centre
-              it here — not per page — so the gutters stay balanced app-wide. */}
-          <div style={{ maxWidth: '1600px', margin: '0 auto', width: '100%' }}>
-            {children}
-          </div>
+        <div className="page-scroll">
+          <div className="page-container">{children}</div>
         </div>
 
         {/* Mobile Bottom Navigation Bar */}

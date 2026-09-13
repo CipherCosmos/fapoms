@@ -10,6 +10,7 @@ import { counted } from '../utils/plural';
 import { PageHeader } from '../components/ui';
 import { loadFailed } from '../queryClient';
 import { LoadFailure } from '../components/LoadFailure';
+import { Page } from '../components/ui/Page';
 
 /**
  * "Falling behind" — the chase list.
@@ -97,7 +98,7 @@ export const FallingBehind: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '0 8px 16px' }}>
+    <Page>
       <PageHeader
         icon={<AlertTriangle size={20} />}
         title="Falling behind"
@@ -170,7 +171,7 @@ export const FallingBehind: React.FC = () => {
           })}
         </div>
       )}
-    </div>
+    </Page>
   );
 };
 

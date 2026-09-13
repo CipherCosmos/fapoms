@@ -3,6 +3,7 @@ import { ViewChips, useViewParam } from './hr-ui';
 import { HrUtilisationPage } from './HrUtilisationPage';
 import { HrDeploymentPage } from './HrDeploymentPage';
 import { HrActivityPage } from './HrActivityPage';
+import { Page } from '../../components/ui/Page';
 
 /**
  * Where people are — how loaded they are, where they sit against the work, and what has changed.
@@ -53,12 +54,12 @@ export const HrWherePeopleArePage: React.FC = () => {
   const [view, setView] = useViewParam<ViewKey>(KEYS, 'workload');
 
   return (
-    <div>
+    <Page>
       <ViewChips value={view} onChange={setView} options={VIEWS} />
 
       {view === 'workload' && <HrUtilisationPage />}
       {view === 'coverage' && <HrDeploymentPage />}
       {view === 'changes' && <HrActivityPage />}
-    </div>
+    </Page>
   );
 };

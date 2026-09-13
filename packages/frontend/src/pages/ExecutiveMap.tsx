@@ -16,6 +16,7 @@ import { queryKeys } from '../hooks/queryKeys';
 import { formatRupees as money } from '@fapoms/shared';
 import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
 import { Select } from '../components/ui';
+import { Page } from '../components/ui/Page';
 
 interface BranchPoint {
   id: string; projectBranchId: string; name: string; solId: string | null;
@@ -148,7 +149,7 @@ export const ExecutiveMap: React.FC = () => {
     : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <Page>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 14 }}>
         <div>
@@ -346,7 +347,7 @@ export const ExecutiveMap: React.FC = () => {
           </div>
         </>
       )}
-    </div>
+    </Page>
   );
 };
 

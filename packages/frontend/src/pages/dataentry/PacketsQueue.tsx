@@ -11,6 +11,7 @@ import {
   PagedQueue, PacketRow, TeamMember,
 } from './deskRoles';
 import { Select } from '../../components/ui';
+import { Page } from '../../components/ui/Page';
 
 /**
  * The packet queue: every returned audit packet, as a server-paginated table.
@@ -188,7 +189,7 @@ export const PacketsQueue: React.FC = () => {
   const visibleLanes = isHead ? LANES : LANES.filter((l) => l.key !== 'unassigned');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <Page>
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         {visibleLanes.map((l) => {
           const active = lane === l.key;
@@ -325,7 +326,7 @@ export const PacketsQueue: React.FC = () => {
             disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
         </span>
       </div>
-    </div>
+    </Page>
   );
 };
 

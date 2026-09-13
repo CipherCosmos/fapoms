@@ -11,6 +11,7 @@ import { AlertBanner, DataTable, StatusBadge, EmptyState } from '../../../compon
 import type { Column } from '../../../components/ui';
 import { getSemanticTokens } from '../../../config/status-registry';
 import { Section, Field, fieldInput, fmtWhen, InviteLinkBox } from '../hr-ui';
+import { Page } from '../../../components/ui/Page';
 
 /**
  * The Appraiser Recruitment spec's Module 1 — HR's own gate before a candidate can self-register.
@@ -167,7 +168,7 @@ export const AssayerInterviewsPage: React.FC = () => {
   return (
     /* A tab inside the Workforce section, under that section's header — see the Applications page
        for the same note. The subtitle now lives on the tab's hover hint. */
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <Page>
 
       {notice && (
         <AlertBanner type={notice.tone === 'ok' ? 'success' : 'error'} onClose={() => { setNotice(null); setInviteLink(null); }}>
@@ -279,7 +280,7 @@ export const AssayerInterviewsPage: React.FC = () => {
           />
         )}
       </Section>
-    </div>
+    </Page>
   );
 };
 

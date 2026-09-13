@@ -14,6 +14,7 @@ import { userMessage, AppError } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { uploadSizeProblem, SystemRole } from '@fapoms/shared';
 import { useCurrentRoles, useCurrentPermissions, canReadCustomerMaster, hasAnyRole } from '../hooks/useCurrentRoles';
+import { Page } from '../components/ui/Page';
 
 /**
  * The presigned PUT's own budget, longer than the API default because the file, not the network,
@@ -423,7 +424,7 @@ export const Documents: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <Page>
       {confirmDialog}
       <PageHeader
         icon={<FileText size={20} />}
@@ -545,6 +546,6 @@ export const Documents: React.FC = () => {
           )}
         </div>
       ) : null}
-    </div>
+    </Page>
   );
 };

@@ -10,6 +10,7 @@ import { userMessage } from '../../services/errors';
 import { loadFailed } from '../../queryClient';
 import { PageHeader, useConfirm, useToast } from '../../components/ui';
 import { useCurrentRoles, canApproveDestructiveActions } from '../../hooks/useCurrentRoles';
+import { Page } from '../../components/ui/Page';
 
 /**
  * The admin's half of the destructive-action two-person rule (destructive-action.ts in
@@ -250,7 +251,7 @@ export const Approvals: React.FC = () => {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px', margin: '0 auto' }}>
+    <Page width="narrow">
       {confirmDialog}
       <PageHeader
         icon={<ShieldCheck size={20} />}
@@ -300,7 +301,7 @@ export const Approvals: React.FC = () => {
           )}
         </>
       )}
-    </div>
+    </Page>
   );
 };
 
