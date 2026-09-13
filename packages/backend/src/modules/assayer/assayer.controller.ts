@@ -1197,11 +1197,28 @@ export class AssayerController {
     };
   }
 
+  /**
+   * Promotion, not intake. Nothing in either client calls this.
+   *
+   * It was the registration wizard's endpoint — a seven-step form wrote a live roster row here
+   * after step one, before any interview, application or review, which is how the whole recruitment
+   * pipeline came to look optional. The wizard fills in a candidate's application now, and the one
+   * remaining caller of `AssayerService.create` is `RegistrationApplicationService.approve`, in
+   * process: a person becomes real when somebody approves them, and in no other way.
+   *
+   * The route stays because `assayer-tenant-isolation.db.spec.ts` uses it as the create-through-
+   * the-API probe, and because `create()` carries the duplicate checks, the code allocation and
+   * the role guard — a lot of guarded logic with no direct HTTP surface to exercise otherwise.
+   * `no-second-front-door.spec.ts` in the frontend is what keeps a new screen off it.
+   *
+   * The roster import is not a caller: it writes `AssayerEntity` through the transaction manager
+   * directly (`roster-import.service.ts`) and never touches this path.
+   */
   @Post()
   @HttpCode(201)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
-  @ApiOperation({ summary: 'Register a new field assayer' })
+  @ApiOperation({ summary: 'Promote an approved application into a field assayer' })
   async create(@Body() dto: CreateAssayerRequestDto, @Req() req: any) {
     const userRoles = (req.user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
     const assayer = await this.assayerService.create(dto, req.user.id, req.user.organizationId, userRoles);
