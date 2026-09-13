@@ -21,7 +21,8 @@ import { ConfigurationResolver } from '../platform/configuration/configuration.r
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { assertPricingVersion, lockPricingRow, translateConcurrentCreate } from './pricing-version';
-import { EventCategory, ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { EventCategory, ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, OTHER_CONFLICT_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 export interface CreateClientDto {
   /** Optional. Blank means "allocate the next free one" — see `allocateClientCode()`. */
@@ -650,11 +651,11 @@ export class ClientService implements OnModuleInit {
          * was accepted and discarded is exactly the failure this task exists to remove, so it is
          * a refusal now, and one that says what to do about it.
          */
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           `NO_CLIENT_CONFIGURATION: client ${id} has no active configuration row, so there is nothing ` +
             `to apply this rate card to. Restore or recreate the client's configuration first — this ` +
             `request was NOT saved.`,
-        );
+        ), OTHER_CONFLICT_ERROR_CODES.NO_CLIENT_CONFIGURATION);
       }
       assertPricingVersion('client_configurations', locked, cfg.expectedVersion);
 

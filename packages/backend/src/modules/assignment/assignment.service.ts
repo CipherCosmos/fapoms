@@ -49,6 +49,10 @@ import { EventCategory, ScheduleStatus, AssignmentStatus, AssayerStatus, Project
   AssignmentRule, canOverrideAssignmentRule, overrideAdviceFor, ASSIGNMENT_ERROR_CODES,
   DEAD_PAYABLE_STATUSES,
   DEAD_BILLING_STATES,
+  CONCURRENCY_ERROR_CODES,
+  IDEMPOTENCY_ERROR_CODES,
+  WRITE_VERIFICATION_ERROR_CODES,
+  OTHER_CONFLICT_ERROR_CODES,
 } from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -413,9 +417,9 @@ export class AssignmentService {
         if (preCheck && preCheck.length > 0) {
           const rec = preCheck[0];
           if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-            );
+            ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
           }
           return rec.response_payload as AssignmentEntity;
         }
@@ -901,9 +905,9 @@ export class AssignmentService {
           if (inTxCheck && inTxCheck.length > 0) {
             const rec = inTxCheck[0];
             if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
-              throw new ConflictException(
+              throw withCode(new ConflictException(
                 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-              );
+              ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
             }
             return rec.response_payload as AssignmentEntity;
           }
@@ -990,10 +994,10 @@ export class AssignmentService {
       ) as Array<{ assayer_id: string; entity_version: number; status: string }>;
 
       if (!createPersisted || createPersisted.assayer_id !== dto.assayerId) {
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           `ASSIGNMENT_NOT_PERSISTED: the assignment was not written to ${dto.assayerId} `
           + `(row now holds ${createPersisted?.assayer_id ?? 'no row'}). Nothing has been recorded; retry.`,
-        );
+        ), WRITE_VERIFICATION_ERROR_CODES.ASSIGNMENT_NOT_PERSISTED);
       }
 
       const createdAssayerId = createPersisted.assayer_id;
@@ -1260,13 +1264,13 @@ export class AssignmentService {
       const currentVer = assignment.entityVersion || 1;
       if (dto.expectedVersion !== currentVer) {
         if (dto.expectedVersion < currentVer) {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${currentVer} (client expected ${dto.expectedVersion}). Please refresh and try again.`,
-          );
+          ), CONCURRENCY_ERROR_CODES.STALE_ASSIGNMENT_VERSION);
         } else {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${dto.expectedVersion} specified (current server version is ${currentVer}). Concurrency check rejected.`,
-          );
+          ), CONCURRENCY_ERROR_CODES.INVALID_ASSIGNMENT_VERSION);
         }
       }
     }
@@ -1374,9 +1378,9 @@ export class AssignmentService {
         if (preCheck && preCheck.length > 0) {
           const rec = preCheck[0];
           if (rec.command !== targetStatus || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-            );
+            ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
           }
           return { saved: rec.response_payload as AssignmentEntity, event: null };
         }
@@ -1496,9 +1500,9 @@ export class AssignmentService {
             if (inTxCheck && inTxCheck.length > 0) {
               const rec = inTxCheck[0];
               if (rec.command !== targetStatus || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-                throw new ConflictException(
+                throw withCode(new ConflictException(
                   'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-                );
+                ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
               }
               return {
                 assignment: rec.response_payload as AssignmentEntity,
@@ -1515,19 +1519,19 @@ export class AssignmentService {
         if (options?.expectedVersion !== undefined) {
           if (options.expectedVersion !== lockedVersion) {
             if (options.expectedVersion < lockedVersion) {
-              throw new ConflictException(
+              throw withCode(new ConflictException(
                 `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${lockedVersion} (client expected ${options.expectedVersion}). Please refresh and try again.`,
-              );
+              ), CONCURRENCY_ERROR_CODES.STALE_ASSIGNMENT_VERSION);
             } else {
-              throw new ConflictException(
+              throw withCode(new ConflictException(
                 `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${options.expectedVersion} specified (current server version is ${lockedVersion}). Concurrency check rejected.`,
-              );
+              ), CONCURRENCY_ERROR_CODES.INVALID_ASSIGNMENT_VERSION);
             }
           }
         } else if (options?.requireVersionProtection) {
-          throw new BadRequestException(
+          throw withCode(new BadRequestException(
             'MISSING_EXPECTED_VERSION: expectedVersion is required for state-changing assignment commands.',
-          );
+          ), CONCURRENCY_ERROR_CODES.MISSING_EXPECTED_VERSION);
         }
 
         if (lockedStatus !== prevStatus && lockedStatus !== targetStatus) {
@@ -1715,9 +1719,9 @@ export class AssignmentService {
           if (committed && committed.length > 0) {
             const rec = committed[0];
             if (rec.command !== targetStatus || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-              throw new ConflictException(
+              throw withCode(new ConflictException(
                 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-              );
+              ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
             }
             return { saved: rec.response_payload as AssignmentEntity, event: null };
           }
@@ -1965,9 +1969,9 @@ export class AssignmentService {
         if (preCheck && preCheck.length > 0) {
           const rec = preCheck[0];
           if (rec.command !== 'REOPEN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-            );
+            ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
           }
           return rec.response_payload as AssignmentEntity;
         }
@@ -1994,9 +1998,9 @@ export class AssignmentService {
           if (inTxCheck && inTxCheck.length > 0) {
             const rec = inTxCheck[0];
             if (rec.command !== 'REOPEN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-              throw new ConflictException(
+              throw withCode(new ConflictException(
                 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-              );
+              ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
             }
             return rec.response_payload as AssignmentEntity;
           }
@@ -2012,13 +2016,13 @@ export class AssignmentService {
       if (options?.expectedVersion !== undefined) {
         if (options.expectedVersion !== lockedVersion) {
           if (options.expectedVersion < lockedVersion) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${lockedVersion} (client expected ${options.expectedVersion}). Please refresh and try again.`,
-            );
+            ), CONCURRENCY_ERROR_CODES.STALE_ASSIGNMENT_VERSION);
           } else {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${options.expectedVersion} specified (current server version is ${lockedVersion}). Concurrency check rejected.`,
-            );
+            ), CONCURRENCY_ERROR_CODES.INVALID_ASSIGNMENT_VERSION);
           }
         }
       }
@@ -2142,9 +2146,9 @@ export class AssignmentService {
         if (committed && committed.length > 0) {
           const rec = committed[0];
           if (rec.command !== 'REOPEN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-            );
+            ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
           }
           return rec.response_payload as AssignmentEntity;
         }
@@ -2183,9 +2187,9 @@ export class AssignmentService {
         if (preCheck && preCheck.length > 0) {
           const rec = preCheck[0];
           if (rec.command !== 'REASSIGN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-            );
+            ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
           }
           return rec.response_payload as AssignmentEntity;
         }
@@ -2249,9 +2253,9 @@ export class AssignmentService {
           if (inTxCheck && inTxCheck.length > 0) {
             const rec = inTxCheck[0];
             if (rec.command !== 'REASSIGN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-              throw new ConflictException(
+              throw withCode(new ConflictException(
                 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-              );
+              ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
             }
             return rec.response_payload as AssignmentEntity;
           }
@@ -2278,13 +2282,13 @@ export class AssignmentService {
       if (options?.expectedVersion !== undefined) {
         if (options.expectedVersion !== lockedVersion) {
           if (options.expectedVersion < lockedVersion) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${lockedVersion} (client expected ${options.expectedVersion}). Please refresh.`,
-            );
+            ), CONCURRENCY_ERROR_CODES.STALE_ASSIGNMENT_VERSION);
           } else {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${options.expectedVersion} specified (current server version is ${lockedVersion}). Concurrency check rejected.`,
-            );
+            ), CONCURRENCY_ERROR_CODES.INVALID_ASSIGNMENT_VERSION);
           }
         }
       }
@@ -2316,11 +2320,11 @@ export class AssignmentService {
         throw new ConflictException('Cannot reassign an assignment that has already been completed.');
       }
       if (lockedStatus === AssignmentStatus.CANCELLED) {
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           'ASSIGNMENT_CANCELLED: this assignment was cancelled and cannot be reassigned. '
           + 'Reopening cancelled work is a separate, explicitly authorised action — create a new '
           + 'assignment for the branch instead.',
-        );
+        ), OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED);
       }
 
       const assignment = await manager.findOne(AssignmentEntity, {
@@ -2503,16 +2507,16 @@ export class AssignmentService {
       ) as Array<{ assayer_id: string; entity_version: number; status: string }>;
 
       if (!persisted || persisted.assayer_id !== newAssayerId) {
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           `REASSIGNMENT_NOT_PERSISTED: the assignment was not moved to ${newAssayerId} `
           + `(row now holds ${persisted?.assayer_id ?? 'no row'}). Nothing has been recorded; retry.`,
-        );
+        ), WRITE_VERIFICATION_ERROR_CODES.REASSIGNMENT_NOT_PERSISTED);
       }
       if (Number(persisted.entity_version) !== lockedVersion + 1) {
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           `REASSIGNMENT_VERSION_MISMATCH: expected version ${lockedVersion + 1} after the write, `
           + `found ${persisted.entity_version}. Nothing has been recorded; retry.`,
-        );
+        ), CONCURRENCY_ERROR_CODES.REASSIGNMENT_VERSION_MISMATCH);
       }
 
       /**
@@ -2703,9 +2707,9 @@ export class AssignmentService {
         if (committed && committed.length > 0) {
           const rec = committed[0];
           if (rec.command !== 'REASSIGN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
-            );
+            ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
           }
           return rec.response_payload as AssignmentEntity;
         }

@@ -1,4 +1,6 @@
 import { ConflictException } from '@nestjs/common';
+import { CONCURRENCY_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 /**
  * Turn a Postgres unique violation into the message for the constraint that actually fired.
@@ -92,8 +94,8 @@ export function isRetryableTransactionError(err: any): boolean {
  */
 export function throwIfRetryable(err: any): void {
   if (!isRetryableTransactionError(err)) return;
-  throw new ConflictException(
+  throw withCode(new ConflictException(
     'RETRY_CONTENTION: this assignment was being modified concurrently and the transaction was '
     + 'rolled back. Nothing was changed. Retry the request.',
-  );
+  ), CONCURRENCY_ERROR_CODES.RETRY_CONTENTION);
 }

@@ -6,6 +6,7 @@ import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
+  IDEMPOTENCY_ERROR_CODES,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -1334,9 +1335,9 @@ export class AssayerService implements OnModuleInit {
       if (existingIdemp && existingIdemp.length > 0) {
         const rec = existingIdemp[0];
         if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different assayer registration payload.',
-          );
+          ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
         }
         return rec.response_payload as AssayerEntity;
       }
@@ -1405,9 +1406,9 @@ export class AssayerService implements OnModuleInit {
       );
       if (committed?.[0]?.response_payload) {
         if (committed[0].request_hash !== createRequestHash) {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different assayer registration payload.',
-          );
+          ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
         }
         return committed[0].response_payload as AssayerEntity;
       }
@@ -1486,18 +1487,18 @@ export class AssayerService implements OnModuleInit {
           ? m.panFingerprint === panFingerprint
           : Boolean(normalizedPan && m.panNumber && m.panNumber.trim().toUpperCase() === normalizedPan);
         if (panMatches) {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             `DEFINITE_DUPLICATE: An assayer with PAN ${normalizedPan} already exists (${m.displayName || m.assayerCode}).`,
-          );
+          ), IDEMPOTENCY_ERROR_CODES.DEFINITE_DUPLICATE);
         }
         const aadhaarMatches = aadhaarFingerprint
           ? m.aadhaarFingerprint === aadhaarFingerprint
           : Boolean(normalizedAadhaar && m.aadhaarNumber
             && m.aadhaarNumber.replace(/\s+/g, '') === normalizedAadhaar);
         if (aadhaarMatches) {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             `DEFINITE_DUPLICATE: An assayer with that Aadhaar already exists (${m.displayName || m.assayerCode}).`,
-          );
+          ), IDEMPOTENCY_ERROR_CODES.DEFINITE_DUPLICATE);
         }
 
         const sameName =
@@ -1506,23 +1507,23 @@ export class AssayerService implements OnModuleInit {
           m.displayName.trim().toLowerCase() === authoredName.displayName.trim().toLowerCase();
 
         if (normalizedPhone && m.phone === normalizedPhone && sameName) {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             `DEFINITE_DUPLICATE: Assayer ${authoredName.displayName} is already registered with phone ${normalizedPhone} (${m.assayerCode}).`,
-          );
+          ), IDEMPOTENCY_ERROR_CODES.DEFINITE_DUPLICATE);
         }
 
         if (normalizedEmail && m.email && m.email.toLowerCase() === normalizedEmail && sameName) {
-          throw new ConflictException(
+          throw withCode(new ConflictException(
             `DEFINITE_DUPLICATE: Assayer ${authoredName.displayName} is already registered with email ${normalizedEmail} (${m.assayerCode}).`,
-          );
+          ), IDEMPOTENCY_ERROR_CODES.DEFINITE_DUPLICATE);
         }
 
         // Probable Duplicate / Shared Contact Check
         if (normalizedPhone && m.phone === normalizedPhone && !sameName) {
           if (!dto.allowSharedContact) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               `PROBABLE_DUPLICATE: Phone number ${normalizedPhone} is already registered to ${m.displayName || m.assayerCode}. If this is an authorized shared household contact, specify allowSharedContact=true with an authorized role and reason.`,
-            );
+            ), IDEMPOTENCY_ERROR_CODES.PROBABLE_DUPLICATE);
           }
           const authorizedRoles = [SystemRole.ADMIN, SystemRole.OPERATIONS, 'HR_MANAGER'];
           const hasPrivilegedRole = actorRoles?.some((r) => authorizedRoles.includes(r as any));
@@ -1638,9 +1639,9 @@ export class AssayerService implements OnModuleInit {
         if (inTxCheck && inTxCheck.length > 0) {
           const rec = inTxCheck[0];
           if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
-            throw new ConflictException(
+            throw withCode(new ConflictException(
               'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different assayer registration payload.',
-            );
+            ), IDEMPOTENCY_ERROR_CODES.IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST);
           }
           return rec.response_payload as AssayerEntity;
         }

@@ -1,5 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
+import { CONCURRENCY_ERROR_CODES, type ApiErrorCode } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 /**
  * Optimistic concurrency for the two client rows that decide what money is charged.
@@ -39,11 +41,25 @@ interface Subject {
   token: string;
   /** What a person calls it, for the sentence after the token. */
   noun: string;
+  /** The shared code matching this table's `STALE_${token}_VERSION` message prefix. */
+  staleCode: ApiErrorCode;
+  /** The shared code matching this table's `INVALID_${token}_VERSION` message prefix. */
+  invalidCode: ApiErrorCode;
 }
 
 const SUBJECTS: Record<VersionedPricingTable, Subject> = {
-  client_billing: { token: 'CLIENT_BILLING', noun: "this client's billing profile" },
-  client_configurations: { token: 'CLIENT_CONFIGURATION', noun: "this client's configuration" },
+  client_billing: {
+    token: 'CLIENT_BILLING',
+    noun: "this client's billing profile",
+    staleCode: CONCURRENCY_ERROR_CODES.STALE_CLIENT_BILLING_VERSION,
+    invalidCode: CONCURRENCY_ERROR_CODES.INVALID_CLIENT_BILLING_VERSION,
+  },
+  client_configurations: {
+    token: 'CLIENT_CONFIGURATION',
+    noun: "this client's configuration",
+    staleCode: CONCURRENCY_ERROR_CODES.STALE_CLIENT_CONFIGURATION_VERSION,
+    invalidCode: CONCURRENCY_ERROR_CODES.INVALID_CLIENT_CONFIGURATION_VERSION,
+  },
 };
 
 export interface LockedPricingRow {
@@ -84,35 +100,35 @@ export function assertPricingVersion(
   locked: LockedPricingRow,
   expectedVersion: number | undefined,
 ): void {
-  const { token, noun } = SUBJECTS[table];
+  const { token, noun, staleCode, invalidCode } = SUBJECTS[table];
 
   if (expectedVersion === undefined || expectedVersion === null) {
-    throw new BadRequestException(
+    throw withCode(new BadRequestException(
       `MISSING_EXPECTED_VERSION: editing ${noun} requires expectedVersion — the version you loaded. ` +
         `It is currently ${locked.version}. Without it a concurrent edit cannot be detected and one ` +
         `of the two pricing decisions would be discarded silently.`,
-    );
+    ), CONCURRENCY_ERROR_CODES.MISSING_EXPECTED_VERSION);
   }
 
   if (!Number.isInteger(expectedVersion)) {
-    throw new BadRequestException(
+    throw withCode(new BadRequestException(
       `INVALID_${token}_VERSION: expectedVersion must be a whole number; received ${expectedVersion}.`,
-    );
+    ), invalidCode);
   }
 
   if (expectedVersion === locked.version) return;
 
   if (expectedVersion < locked.version) {
-    throw new ConflictException(
+    throw withCode(new ConflictException(
       `STALE_${token}_VERSION: ${noun} has been updated to version ${locked.version} ` +
         `(you edited version ${expectedVersion}). Your change was NOT saved. Reload and reapply it.`,
-    );
+    ), staleCode);
   }
 
-  throw new ConflictException(
+  throw withCode(new ConflictException(
     `INVALID_${token}_VERSION: Future or non-existent version ${expectedVersion} specified ` +
       `(current server version is ${locked.version}). Concurrency check rejected.`,
-  );
+  ), invalidCode);
 }
 
 /** Postgres unique-violation. */
@@ -130,11 +146,11 @@ export function translateConcurrentCreate(err: unknown, table: VersionedPricingT
   const code = (err as { code?: string; driverError?: { code?: string } })?.code
     ?? (err as { driverError?: { code?: string } })?.driverError?.code;
   if (code === UNIQUE_VIOLATION) {
-    const { token, noun } = SUBJECTS[table];
-    throw new ConflictException(
+    const { token, noun, staleCode } = SUBJECTS[table];
+    throw withCode(new ConflictException(
       `STALE_${token}_VERSION: ${noun} was created by someone else while you were filling this in. ` +
         `Your change was NOT saved. Reload and reapply it.`,
-    );
+    ), staleCode);
   }
   throw err;
 }

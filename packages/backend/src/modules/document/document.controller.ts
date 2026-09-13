@@ -15,7 +15,8 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod } from '@fapoms/shared';
+import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
@@ -242,10 +243,10 @@ export class DocumentController {
     const integrity = deriveFileIntegrity(file.buffer, file.mimetype);
     const clientHash = verifyClientHash(integrity, (req?.body?.sha256 ?? null) as string | null);
     if (clientHash.supplied && !clientHash.matches) {
-      throw new BadRequestException(
+      throw withCode(new BadRequestException(
         'UPLOAD_CHECKSUM_MISMATCH: the bytes received do not match the sha256 supplied with them. '
         + 'Nothing was stored. Retry the upload.',
-      );
+      ), OTHER_CONFLICT_ERROR_CODES.UPLOAD_CHECKSUM_MISMATCH);
     }
 
     const savedPath = await this.storage.saveFile(file.originalname, file.buffer, integrity.effectiveMimeType);
@@ -554,10 +555,10 @@ export class DocumentController {
     const integrity = deriveFileIntegrity(file.buffer, file.mimetype || 'application/pdf');
     const clientHash = verifyClientHash(integrity, (req?.body?.sha256 ?? null) as string | null);
     if (clientHash.supplied && !clientHash.matches) {
-      throw new BadRequestException(
+      throw withCode(new BadRequestException(
         'UPLOAD_CHECKSUM_MISMATCH: the bytes received do not match the sha256 supplied with them. '
         + 'Nothing was stored. Retry the upload.',
-      );
+      ), OTHER_CONFLICT_ERROR_CODES.UPLOAD_CHECKSUM_MISMATCH);
     }
 
     const savedFilePath = await this.storage.saveFile(file.originalname, file.buffer, integrity.effectiveMimeType);

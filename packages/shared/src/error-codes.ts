@@ -189,6 +189,14 @@ export const CONCURRENCY_ERROR_CODES = {
   STALE_EMPANELMENT_VERSION: 'STALE_EMPANELMENT_VERSION',
   /** Same idea as `INVALID_ASSIGNMENT_VERSION`, for an empanelment standing. */
   INVALID_EMPANELMENT_VERSION: 'INVALID_EMPANELMENT_VERSION',
+  /** Same idea as `STALE_ASSIGNMENT_VERSION`, for a client's billing profile (`client_billing`). */
+  STALE_CLIENT_BILLING_VERSION: 'STALE_CLIENT_BILLING_VERSION',
+  /** Same idea as `INVALID_ASSIGNMENT_VERSION`, for a client's billing profile (`client_billing`). */
+  INVALID_CLIENT_BILLING_VERSION: 'INVALID_CLIENT_BILLING_VERSION',
+  /** Same idea as `STALE_ASSIGNMENT_VERSION`, for a client's configuration (`client_configurations`). */
+  STALE_CLIENT_CONFIGURATION_VERSION: 'STALE_CLIENT_CONFIGURATION_VERSION',
+  /** Same idea as `INVALID_ASSIGNMENT_VERSION`, for a client's configuration (`client_configurations`). */
+  INVALID_CLIENT_CONFIGURATION_VERSION: 'INVALID_CLIENT_CONFIGURATION_VERSION',
   /** A reassignment's own post-write read-back did not match the version the write should have produced. */
   REASSIGNMENT_VERSION_MISMATCH: 'REASSIGNMENT_VERSION_MISMATCH',
   /** A document verification decision was made against a version this document has moved past. */

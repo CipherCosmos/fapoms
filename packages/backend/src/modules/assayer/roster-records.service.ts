@@ -25,7 +25,7 @@ import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity'
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
-import { ASSAYER_ERROR_CODES, EventCategory } from '@fapoms/shared';
+import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
@@ -1654,9 +1654,9 @@ export class RosterRecordsService {
 
     // Row-level optimistic concurrency check
     if (attested?.expectedDocVersion !== undefined && (row as any).version !== attested.expectedDocVersion) {
-      throw new ConflictException(
+      throw withCode(new ConflictException(
         `DOCUMENT_VERSION_STALE: Expected document version ${attested.expectedDocVersion} but found ${(row as any).version}. The document was modified concurrently.`,
-      );
+      ), CONCURRENCY_ERROR_CODES.DOCUMENT_VERSION_STALE);
     }
 
     if (!isIdentityDocument(row.requirement)) {
@@ -1676,9 +1676,9 @@ export class RosterRecordsService {
       }
 
       if (targetVersionRecord.supersededByVersionId || (row.currentVersionId && row.currentVersionId !== targetVersionId)) {
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           `CANNOT_VERIFY_SUPERSEDED_VERSION: Document version v${targetVersionRecord.version} has been superseded by a newer upload. Only the current version can be verified.`,
-        );
+        ), CONCURRENCY_ERROR_CODES.CANNOT_VERIFY_SUPERSEDED_VERSION);
       }
 
       /**
@@ -1702,18 +1702,18 @@ export class RosterRecordsService {
       // Invariant: Verification must bind to exact document version AND content hash
       const versionHash = targetVersionRecord.contentSha256 ?? targetVersionRecord.fileChecksum;
       if (attested?.expectedContentHash && versionHash && versionHash !== attested.expectedContentHash) {
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           `CONTENT_HASH_MISMATCH: Document content hash has changed (${versionHash} vs expected ${attested.expectedContentHash}). Verification cannot silently apply to a different content hash.`,
-        );
+        ), CONCURRENCY_ERROR_CODES.CONTENT_HASH_MISMATCH);
       }
 
       if (
         targetVersionRecord.verificationStatus !== DocumentVerification.PENDING &&
         targetVersionRecord.verificationStatus !== verdict
       ) {
-        throw new ConflictException(
+        throw withCode(new ConflictException(
           `DOCUMENT_ALREADY_REVIEWED: This document version has already been marked ${targetVersionRecord.verificationStatus} by another reviewer.`,
-        );
+        ), OTHER_CONFLICT_ERROR_CODES.DOCUMENT_ALREADY_REVIEWED);
       }
     }
     /**

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
-import { EmpanelmentStatus } from '@fapoms/shared';
+import { EmpanelmentStatus, CONCURRENCY_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 /**
  * Optimistic concurrency for the row that decides whether a bank will accept somebody's work.
@@ -100,34 +101,34 @@ export function assertEmpanelmentVersion(
   expectedVersion: number | undefined | null,
 ): void {
   if (expectedVersion === undefined || expectedVersion === null) {
-    throw new BadRequestException(
+    throw withCode(new BadRequestException(
       'MISSING_EXPECTED_VERSION: changing a client standing requires expectedVersion — the version '
       + `you loaded. It is currently ${locked.version}. Without it a concurrent decision cannot be `
       + 'detected, and one of the two standings would be discarded silently while both authors were '
       + 'told theirs had saved.',
-    );
+    ), CONCURRENCY_ERROR_CODES.MISSING_EXPECTED_VERSION);
   }
 
   if (!Number.isInteger(expectedVersion)) {
-    throw new BadRequestException(
+    throw withCode(new BadRequestException(
       `INVALID_EMPANELMENT_VERSION: expectedVersion must be a whole number; received ${expectedVersion}.`,
-    );
+    ), CONCURRENCY_ERROR_CODES.INVALID_EMPANELMENT_VERSION);
   }
 
   if (expectedVersion === locked.version) return;
 
   if (expectedVersion < locked.version) {
-    throw new ConflictException(
+    throw withCode(new ConflictException(
       `STALE_EMPANELMENT_VERSION: this client standing has been updated to version ${locked.version} `
       + `(you decided against version ${expectedVersion}, when it read ${locked.status}). Your change `
       + 'was NOT saved. Reload and reapply it.',
-    );
+    ), CONCURRENCY_ERROR_CODES.STALE_EMPANELMENT_VERSION);
   }
 
-  throw new ConflictException(
+  throw withCode(new ConflictException(
     `INVALID_EMPANELMENT_VERSION: Future or non-existent version ${expectedVersion} specified `
     + `(current server version is ${locked.version}). Concurrency check rejected.`,
-  );
+  ), CONCURRENCY_ERROR_CODES.INVALID_EMPANELMENT_VERSION);
 }
 
 /**
@@ -143,11 +144,11 @@ export function translateConcurrentEmpanelmentCreate(err: unknown): never {
   const code = (err as { code?: string; driverError?: { code?: string } })?.code
     ?? (err as { driverError?: { code?: string } })?.driverError?.code;
   if (code === UNIQUE_VIOLATION) {
-    throw new ConflictException(
+    throw withCode(new ConflictException(
       'STALE_EMPANELMENT_VERSION: this client standing was recorded by someone else while you were '
       + 'filling this in. Your change was NOT saved. Reload it and reapply your decision on top of '
       + 'theirs.',
-    );
+    ), CONCURRENCY_ERROR_CODES.STALE_EMPANELMENT_VERSION);
   }
   throw err;
 }
