@@ -4460,14 +4460,31 @@ export class AssignmentService {
 
       if (saved.createdBy) {
         try {
+          // Existence checked first, same as before migrating this off a hand-rolled
+          // notificationService.create() call: RECORD_OWNER only adds ownerUserId to the
+          // recipient set, it does not itself confirm the row still exists, and this is the one
+          // notification in the whole product addressed to "whoever created this assignment"
+          // rather than a role — no fallback audience if that account is gone.
           const targetUser = await this.dataSource.getRepository(UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
           if (targetUser) {
-            await this.notificationService.create({
-              userId: saved.createdBy,
-              title: 'Assayer GPS Check-In',
-              message: `Assayer ${saved.assayer?.displayName || 'Field Assayer'} checked in at ${saved.projectBranch?.branch?.name || 'Branch'} (${lat}, ${lng}).`,
-              link: `/assignments?id=${saved.id}`,
-            }, userId || saved.assayerId);
+            this.notificationDispatch.emitSafe({
+              type: 'ASSIGNMENT_CHECKED_IN',
+              entityType: 'ASSIGNMENT',
+              entityId: saved.id,
+              actorUserId: userId || saved.assayerId,
+              ownerUserId: saved.createdBy,
+              // Dedupe rather than the catalog's usual type:entityId default: a flaky GPS fix
+              // retried by the phone must not read as three separate check-ins to the person
+              // who created the assignment, the way three raw create() calls used to.
+              dedupeKey: `ASSIGNMENT_CHECKED_IN:${saved.id}`,
+              payload: {
+                assignmentId: saved.id,
+                assayerName: saved.assayer?.displayName || 'Field Assayer',
+                branchName: saved.projectBranch?.branch?.name || 'Branch',
+                lat,
+                lng,
+              },
+            });
           }
         } catch (err) {
           console.error('Failed to dispatch check-in notification:', err);

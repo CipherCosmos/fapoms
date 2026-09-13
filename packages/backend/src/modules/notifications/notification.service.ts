@@ -131,13 +131,26 @@ export class NotificationService {
     }
 
     // Push is keyed by assayer id and is independent of whether a user account exists.
+    //
+    // Sent unconditionally until now — the one real gap this hand-rolled path had that the
+    // catalog/delivery-worker route does not: nothing here ever checked whether the assayer had
+    // turned push off. Bucketed under NotificationCategory.SYSTEM, the same category a caller-
+    // authored admin broadcast (AssayerService.bulkNotify, the one live caller with no catalog
+    // template to categorise itself by) is closest to — an assayer who has muted push for
+    // "system" notifications should not have that overridden just because this send happens to
+    // use a different code path than the queued one.
     try {
-      await this.pushNotificationService.sendToUser(
-        assayerId,
-        payload.title,
-        payload.message,
-        payload.data || (payload.link ? { link: payload.link } : undefined),
-      );
+      const pref = await this.preferenceRepository.findOne({
+        where: { assayerId, category: NotificationCategory.SYSTEM },
+      });
+      if (!pref || pref.push !== false) {
+        await this.pushNotificationService.sendToUser(
+          assayerId,
+          payload.title,
+          payload.message,
+          payload.data || (payload.link ? { link: payload.link } : undefined),
+        );
+      }
     } catch (err: any) {
       console.error('Failed to send push notification to assayer:', err?.message);
     }

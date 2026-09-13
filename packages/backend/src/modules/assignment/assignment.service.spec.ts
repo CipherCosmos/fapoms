@@ -1400,6 +1400,47 @@ const mockNotificationService = {
       expect(res.success).toBe(true);
     });
 
+    it('tells whoever created the assignment about the check-in, through the catalog rather than a hand-rolled create() call', async () => {
+      const assignment = acceptedAssignment({
+        createdBy: 'ops-1',
+        assayer: { displayName: 'Asha Rao' },
+        projectBranch: { branch: { latitude: '12.9716', longitude: '77.5946', name: 'Koramangala' } },
+      });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1' });
+
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1');
+
+      expect(mockNotificationDispatch.emitSafe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'ASSIGNMENT_CHECKED_IN',
+          entityType: 'ASSIGNMENT',
+          entityId: 'asn-1',
+          ownerUserId: 'ops-1',
+          dedupeKey: 'ASSIGNMENT_CHECKED_IN:asn-1',
+          payload: expect.objectContaining({
+            assignmentId: 'asn-1',
+            assayerName: 'Asha Rao',
+            branchName: 'Koramangala',
+          }),
+        }),
+      );
+    });
+
+    it('sends no check-in notification when the creating user no longer exists', async () => {
+      const assignment = acceptedAssignment({ createdBy: 'ops-gone' });
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      mockUserRepoViaDataSource.findOne.mockResolvedValue(null);
+
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1');
+
+      expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'ASSIGNMENT_CHECKED_IN' }),
+      );
+    });
+
     it('stores position in real columns and computes distance from the branch', async () => {
       // This used to be concatenated into free-text `remarks`, making the single most
       // important fact in the audit unqueryable and unusable as evidence.

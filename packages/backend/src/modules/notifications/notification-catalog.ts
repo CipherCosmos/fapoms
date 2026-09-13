@@ -240,6 +240,28 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
       link: '/assignments',
     },
   },
+  /**
+   * The assayer's GPS check-in, told to whoever created this assignment — not a role, since
+   * "whoever scheduled this particular job" has no fixed audience: any OPERATIONS account could
+   * have. `RECORD_OWNER` resolves that from `ownerUserId` at emit time, so `roles` is empty on
+   * purpose (there is no role audience to widen alongside a single named recipient).
+   *
+   * Migrated off a hand-rolled `NotificationService.create()` call — the one path in this
+   * product that could tell someone their assayer had checked in with no preference check, no
+   * dedupe (a flaky GPS fix retried by the phone could have sent this more than once for the
+   * same visit), and no role fan-out if `createdBy` ever went missing.
+   */
+  ASSIGNMENT_CHECKED_IN: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: BOTH_CHANNELS,
+    title: 'Assayer GPS Check-In',
+    body: '${assayerName} checked in at ${branchName} (${lat}, ${lng}).',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
   ASSIGNMENT_ACCEPTED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.NORMAL,
