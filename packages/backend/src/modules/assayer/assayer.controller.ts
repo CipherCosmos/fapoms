@@ -1205,10 +1205,7 @@ export class AssayerController {
   async create(@Body() dto: CreateAssayerRequestDto, @Req() req: any) {
     const userRoles = (req.user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
     const assayer = await this.assayerService.create(dto, req.user.id, req.user.organizationId, userRoles);
-    return {
-      success: true,
-      data: assayer,
-    };
+    return assayer;
   }
 
   // Was @Public(): returns the full roster and, until the entity was changed, each
@@ -1366,10 +1363,7 @@ export class AssayerController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const rows = await this.rosterQuery.search(q ?? '', limit, scope);
-    return {
-      success: true,
-      data: scopeAssayerListForRoles(rows as any[], rolesOf(req.user), req.user?.id),
-    };
+    return scopeAssayerListForRoles(rows as any[], rolesOf(req.user), req.user?.id);
   }
 
   /**
@@ -1387,7 +1381,7 @@ export class AssayerController {
       this.rosterQuery.countsByLifecycleStatus(filters, scope),
       this.rosterQuery.count(filters, scope),
     ]);
-    return { success: true, data: { total, byLifecycleStatus } };
+    return { total, byLifecycleStatus };
   }
 
   /**
@@ -1444,10 +1438,7 @@ export class AssayerController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const roster = await this.assayerService.mapRoster(scope, limit);
-    return {
-      success: true,
-      data: scopeAssayerListForRoles(roster as any[], rolesOf(req.user), req.user?.id),
-    };
+    return scopeAssayerListForRoles(roster as any[], rolesOf(req.user), req.user?.id);
   }
 
   /**
@@ -1586,7 +1577,7 @@ export class AssayerController {
       excludeId,
     });
 
-    return { success: true, data: { matches } };
+    return { matches };
   }
 
   /**
@@ -1616,10 +1607,7 @@ export class AssayerController {
     // — `findOne` filters `isActive: true`, ARCHIVED is the one state that clears it, and so the
     // roster's own `lifecycleStatus=ARCHIVED` filter offered a population it could never show.
     const assayer = await this.assayerService.findOneForReading(id);
-    return {
-      success: true,
-      data: scopeAssayerForRoles(assayer as any, rolesOf(req.user), req.user?.id === id),
-    };
+    return scopeAssayerForRoles(assayer as any, rolesOf(req.user), req.user?.id === id);
   }
 
   /**
@@ -1695,13 +1683,10 @@ export class AssayerController {
   getEditableFields(@Req() req: any) {
     const isStaff = isStaffAssayerEditor(req.user);
     return {
-      success: true,
-      data: {
-        selfEditable: isStaff ? null : SELF_EDITABLE_FIELDS,
-        hrMaintained: isStaff ? [] : HR_MAINTAINED_FIELDS,
-        // null selfEditable means "no restriction" — staff edit the whole record.
-        unrestricted: isStaff,
-      },
+      selfEditable: isStaff ? null : SELF_EDITABLE_FIELDS,
+      hrMaintained: isStaff ? [] : HR_MAINTAINED_FIELDS,
+      // null selfEditable means "no restriction" — staff edit the whole record.
+      unrestricted: isStaff,
     };
   }
 
@@ -1729,10 +1714,7 @@ export class AssayerController {
     assertSelfOrPrivileged(req.user, assayerId, 'view this profile');
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.getProfile(assayerId);
-    return {
-      success: true,
-      data: scopeAssayerForRoles(assayer as any, rolesOf(req.user), req.user?.id === assayerId),
-    };
+    return scopeAssayerForRoles(assayer as any, rolesOf(req.user), req.user?.id === assayerId);
   }
 
   /**
@@ -1813,14 +1795,11 @@ export class AssayerController {
 
     const updatedBy = req.user?.id && /^[0-9a-fA-F-]{36}$/.test(req.user.id) ? req.user.id : id;
     const assayer = await this.assayerService.update(id, dto, updatedBy);
-    return {
-      success: true,
-      // Unscoped by role, which is a pre-existing gap this change does not widen: the redaction
-      // interceptor walks this response like any other, so the save echo is masked for staff and
-      // stripped for anyone who may not read the fields at all. Without that it would be the
-      // easiest unaudited way to obtain a PAN — PUT the record back unchanged and read the reply.
-      data: assayer,
-    };
+    // Unscoped by role, which is a pre-existing gap this change does not widen: the redaction
+    // interceptor walks this response like any other, so the save echo is masked for staff and
+    // stripped for anyone who may not read the fields at all. Without that it would be the
+    // easiest unaudited way to obtain a PAN — PUT the record back unchanged and read the reply.
+    return assayer;
   }
 
   /**
@@ -1865,7 +1844,7 @@ export class AssayerController {
     const assayer = await this.assayerService.confirmBaseLocation(
       id, dto.latitude, dto.longitude, req.user?.id ?? id,
     );
-    return { success: true, data: assayer };
+    return assayer;
   }
 
   @Put(':id/live-location')
@@ -1918,7 +1897,7 @@ export class AssayerController {
         // already delivered.
         .catch(() => undefined);
     }
-    return { success: true, data: assayer };
+    return assayer;
   }
 
   /**
@@ -1950,7 +1929,7 @@ export class AssayerController {
     // `createdBy` on each row records who actually submitted it.
     assertSelfOrPrivileged(req.user, id, 'upload positions');
     const result = await this.locationTrail.ingest(id, dto.pings, req.user?.id ?? id);
-    return { success: true, data: result };
+    return result;
   }
 
   /**
@@ -1979,7 +1958,7 @@ export class AssayerController {
     const assayer = await this.assayerService.setLiveTracking(
       id, dto.enabled, req.user?.id ?? id,
     );
-    return { success: true, data: assayer };
+    return assayer;
   }
 
   /**
@@ -2014,7 +1993,7 @@ export class AssayerController {
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: "Every assayer's commercial terms in force today, in one call" })
   async getRosterCommercialProfiles() {
-    return { success: true, data: await this.assayerService.getRosterCommercialProfiles() };
+    return await this.assayerService.getRosterCommercialProfiles();
   }
 
   @Post(':assayerId/commercial')
@@ -2030,10 +2009,7 @@ export class AssayerController {
   ) {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const profile = await this.assayerService.createCommercialProfile(assayerId, dto, req.user.id);
-    return {
-      success: true,
-      data: profile,
-    };
+    return profile;
   }
 
   @Put('commercial/:id')
@@ -2052,10 +2028,7 @@ export class AssayerController {
     // `assertCommercialProfileInScope` was written.
     await this.regionGuard.assertCommercialProfileInScope(id, scope);
     const profile = await this.assayerService.updateCommercialProfile(id, dto, req.user.id);
-    return {
-      success: true,
-      data: profile,
-    };
+    return profile;
   }
 
   // Fee rates are commercially sensitive — staff only.
@@ -2066,10 +2039,7 @@ export class AssayerController {
   async getCommercials(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const profiles = await this.assayerService.getCommercialProfiles(assayerId);
-    return {
-      success: true,
-      data: profiles,
-    };
+    return profiles;
   }
 
   @Get(':assayerId/commercial/active')
@@ -2084,10 +2054,7 @@ export class AssayerController {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const date = dateStr ? new Date(dateStr) : new Date();
     const profile = await this.assayerService.getActiveCommercialProfile(assayerId, date);
-    return {
-      success: true,
-      data: profile,
-    };
+    return profile;
   }
 
   // Workforce Attribute CRUD APIs
@@ -2101,7 +2068,7 @@ export class AssayerController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Distinct skills, languages and certifications already in use across the roster' })
   async getWorkforceAttributeVocabulary() {
-    return { success: true, data: await this.assayerService.getWorkforceAttributeVocabulary() };
+    return await this.assayerService.getWorkforceAttributeVocabulary();
   }
 
   @Post(':assayerId/workforce-attribute')
@@ -2117,10 +2084,7 @@ export class AssayerController {
   ) {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const attr = await this.assayerService.addWorkforceAttribute(assayerId, dto, req.user.id);
-    return {
-      success: true,
-      data: attr,
-    };
+    return attr;
   }
 
   @Put('workforce-attribute/:id')
@@ -2137,10 +2101,7 @@ export class AssayerController {
     // work on, so editing one changes who gets sent where. Keyed on the attribute row.
     await this.regionGuard.assertWorkforceAttributeInScope(id, scope);
     const attr = await this.assayerService.updateWorkforceAttribute(id, dto, req.user.id);
-    return {
-      success: true,
-      data: attr,
-    };
+    return attr;
   }
 
   @Delete('workforce-attribute/:id')
@@ -2154,10 +2115,7 @@ export class AssayerController {
   ) {
     await this.regionGuard.assertWorkforceAttributeInScope(id, scope);
     await this.assayerService.removeWorkforceAttribute(id, req.user.id);
-    return {
-      success: true,
-      data: { message: 'Workforce attribute removed successfully' },
-    };
+    return { message: 'Workforce attribute removed successfully' };
   }
 
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
@@ -2171,10 +2129,7 @@ export class AssayerController {
   ) {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const attrs = await this.assayerService.getWorkforceAttributes(assayerId, type);
-    return {
-      success: true,
-      data: attrs,
-    };
+    return attrs;
   }
 
   // Lifecycle management
@@ -2219,7 +2174,7 @@ export class AssayerController {
       await this.regionGuard.assertAssayerInScope(id, scope);
     }
     const result = await this.assayerService.bulkTransitionLifecycle(dto.ids, dto.targetStatus, req.user.id, dto.reason);
-    return { success: true, data: result };
+    return result;
   }
 
   @Post(':id/lifecycle')
@@ -2237,7 +2192,7 @@ export class AssayerController {
     const assayer = await this.assayerService.transitionLifecycle(
       id, dto.targetStatus, req.user.id, dto.reason, dto.expectedVersion,
     );
-    return { success: true, data: assayer };
+    return assayer;
   }
 
   @Post(':id/recovery/reset-onboarding-stage')
@@ -2252,7 +2207,7 @@ export class AssayerController {
   ) {
     await this.regionGuard.assertAssayerInScope(id, scope);
     const assayer = await this.assayerService.operatorResetOnboardingStage(id, body.targetStage, body.reason, req.user.id);
-    return { success: true, data: assayer };
+    return assayer;
   }
 
   @Post(':id/recovery/revoke-invitation')
@@ -2267,7 +2222,7 @@ export class AssayerController {
   ) {
     await this.regionGuard.assertAssayerInScope(id, scope);
     const assayer = await this.assayerService.operatorRevokeInvitation(id, body.reason, req.user.id);
-    return { success: true, data: assayer };
+    return assayer;
   }
 
   @Post(':id/recovery/reconcile-empanelments')
@@ -2282,7 +2237,7 @@ export class AssayerController {
   ) {
     await this.regionGuard.assertAssayerInScope(id, scope);
     const closedCount = await this.assayerService.operatorReconcileDepartedEmpanelments(id, body.reason, req.user.id);
-    return { success: true, data: { closedCount } };
+    return { closedCount };
   }
 
   // ── Roster records: references, client standing, vetting, paperwork ───
@@ -2987,7 +2942,7 @@ export class AssayerController {
         sheetName,
         overwrite,
       });
-      return { success: true, data: summary };
+      return summary;
     }
 
     /**
@@ -3018,16 +2973,13 @@ export class AssayerController {
     // 202: accepted, not done. The body says where to watch.
     res.status(202);
     return {
-      success: true,
-      data: {
-        ...job,
-        queued: true,
-        statusUrl: `/assayers/roster/import-jobs/${job.jobId}`,
-        message:
-          `This roster has ${inspection.rowsRead} row(s). Each one writes a person along with their ` +
-          `references, checks, documents and empanelments, and their address is looked up — so the ` +
-          `import is running in the background. It does not need this page kept open.`,
-      },
+      ...job,
+      queued: true,
+      statusUrl: `/assayers/roster/import-jobs/${job.jobId}`,
+      message:
+        `This roster has ${inspection.rowsRead} row(s). Each one writes a person along with their ` +
+        `references, checks, documents and empanelments, and their address is looked up — so the ` +
+        `import is running in the background. It does not need this page kept open.`,
     };
   }
 
@@ -3044,7 +2996,7 @@ export class AssayerController {
   @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'State and result of a queued roster import' })
   async getRosterImportJob(@Param('jobId') jobId: string, @Req() req: any) {
-    return { success: true, data: await this.importJobService.getRosterImportStatus(req.user.id, jobId) };
+    return await this.importJobService.getRosterImportStatus(req.user.id, jobId);
   }
 
   /**

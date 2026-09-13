@@ -81,7 +81,7 @@ describe('AssayerController — getProfile', () => {
 
     const result: any = await controller.getProfile('assayer-1', req);
 
-    expect(result.success).toBe(true);
+    expect(result.id).toBe('assayer-1');
     expect(assayerService.getProfile).toHaveBeenCalledWith('assayer-1');
   });
 
@@ -90,7 +90,7 @@ describe('AssayerController — getProfile', () => {
 
     const result: any = await controller.getProfile('assayer-1', req);
 
-    expect(result.success).toBe(true);
+    expect(result.id).toBe('assayer-1');
     expect(assayerService.getProfile).toHaveBeenCalledWith('assayer-1');
   });
 
@@ -99,7 +99,7 @@ describe('AssayerController — getProfile', () => {
 
     const result: any = await controller.getProfile('assayer-1', req);
 
-    expect(result.success).toBe(true);
+    expect(result.id).toBe('assayer-1');
     expect(assayerService.getProfile).toHaveBeenCalledWith('assayer-1');
   });
 });

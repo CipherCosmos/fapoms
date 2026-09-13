@@ -103,7 +103,7 @@ describe('GET /assayers/identifier-check', () => {
     it('empty when nothing is asked — no phone, PAN or Aadhaar supplied', async () => {
       const result: any = await controller.checkIdentifiers();
 
-      expect(result).toEqual({ success: true, data: { matches: [] } });
+      expect(result).toEqual({ matches: [] });
       expect(dataIntegrity.findIdentifierMatches).toHaveBeenCalledWith({
         phone: undefined,
         panNumber: undefined,
@@ -117,7 +117,7 @@ describe('GET /assayers/identifier-check', () => {
 
       const result: any = await controller.checkIdentifiers('9876500011');
 
-      expect(result.data.matches).toEqual([]);
+      expect(result.matches).toEqual([]);
       expect(dataIntegrity.findIdentifierMatches).toHaveBeenCalledWith({
         phone: '9876500011',
         panNumber: undefined,
@@ -134,12 +134,9 @@ describe('GET /assayers/identifier-check', () => {
       const result: any = await controller.checkIdentifiers('9876500011');
 
       expect(result).toEqual({
-        success: true,
-        data: {
-          matches: [
-            { id: 'asr-1', assayerCode: 'AS0001', displayName: 'Rajesh Gupta', lifecycleStatus: 'ACTIVE', matchedOn: 'phone' },
-          ],
-        },
+        matches: [
+          { id: 'asr-1', assayerCode: 'AS0001', displayName: 'Rajesh Gupta', lifecycleStatus: 'ACTIVE', matchedOn: 'phone' },
+        ],
       });
     });
 
@@ -151,8 +148,8 @@ describe('GET /assayers/identifier-check', () => {
 
       const result: any = await controller.checkIdentifiers('9876500011');
 
-      expect(result.data.matches).toHaveLength(2);
-      expect(result.data.matches.every((m: any) => m.matchedOn === 'phone')).toBe(true);
+      expect(result.matches).toHaveLength(2);
+      expect(result.matches.every((m: any) => m.matchedOn === 'phone')).toBe(true);
     });
 
     it('passes excludeId through, so the record being edited or resumed cannot match itself', async () => {
@@ -174,12 +171,9 @@ describe('GET /assayers/identifier-check', () => {
       const result: any = await controller.checkIdentifiers(undefined, 'ABCDE1234F', '999941057058');
 
       expect(result).toEqual({
-        success: true,
-        data: {
-          matches: [
-            { id: 'asr-3', assayerCode: 'AS0003', displayName: 'Anil Kumar', lifecycleStatus: 'ACTIVE', matchedOn: 'panNumber' },
-          ],
-        },
+        matches: [
+          { id: 'asr-3', assayerCode: 'AS0003', displayName: 'Anil Kumar', lifecycleStatus: 'ACTIVE', matchedOn: 'panNumber' },
+        ],
       });
       expect(dataIntegrity.findIdentifierMatches).toHaveBeenCalledWith({
         phone: undefined,
