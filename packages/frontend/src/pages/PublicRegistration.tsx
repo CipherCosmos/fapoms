@@ -875,7 +875,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <div style={{ flex: '1 1 160px', minWidth: 0 }}>
                         <div style={{ fontSize: '13px', fontWeight: 600 }}>{label}</div>
                         <div style={{ fontSize: '12px', color: uploaded ? 'var(--success)' : 'var(--text-muted)', marginTop: '2px' }}>
-                          {uploaded ? `Uploaded (${doc!.filePaths.length} ${doc!.filePaths.length === 1 ? 'file' : 'files'})` : 'Nothing uploaded yet'}
+                          {uploaded
+                            ? `Uploaded (${doc!.filePaths.length} ${doc!.filePaths.length === 1 ? 'file' : 'files'})`
+                            : requirement === 'PHOTOGRAPH'
+                              ? 'Needed before you can be approved — this is the face on your ID card'
+                              : 'Nothing uploaded yet'}
                         </div>
                         {uploadErrors[requirement] && (
                           <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '4px' }}>{uploadErrors[requirement]}</div>
@@ -890,7 +894,10 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         <input
                           type="file"
                           accept={SCAN_UPLOAD_ACCEPT}
-                          capture="environment"
+                          // The rear camera for a document held in front of you, the front one for
+                          // a portrait of yourself. A selfie taken on the rear camera is taken
+                          // blind, and this photograph is the face printed on their ID card.
+                          capture={requirement === 'PHOTOGRAPH' ? 'user' : 'environment'}
                           style={{ display: 'none' }}
                           disabled={busy}
                           onChange={(e) => {

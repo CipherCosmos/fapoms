@@ -52,6 +52,16 @@ const OTP_SEND_MAX_PER_WINDOW = 5;
  * HR's, at review (`requestMoreInfo` exists precisely for "you're missing X").
  */
 const COMMON_REGISTRATION_DOCUMENTS: readonly OnboardingDocument[] = [
+  /**
+   * A face, first.
+   *
+   * The ID card printed "Photo unavailable" for every person who joined remotely, because
+   * `assayers.photograph` is written only as a side effect of attaching a PHOTOGRAPH document and
+   * registration never asked for one. A field identity card with no face on it is not an identity
+   * card, and it is the thing a bank's security desk actually looks at. This is the one document
+   * approval refuses without.
+   */
+  OnboardingDocument.PHOTOGRAPH,
   OnboardingDocument.PAN_CARD,
   OnboardingDocument.AADHAAR_FRONT,
   OnboardingDocument.AADHAAR_BACK,
@@ -808,6 +818,25 @@ export class RegistrationApplicationService {
      * shape it guarded.
      */
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
+
+    /**
+     * The one refusal at approval.
+     *
+     * Everything else about an incomplete application is promoted and chased afterwards — the
+     * owner's decision, and the right one: a person who cannot yet be paid can still be trained
+     * and vetted. A photograph is different because the artefact it feeds is an identity card
+     * shown at a bank's security desk, and one with no face on it is not an identity card. The
+     * card printed "Photo unavailable" for everyone who joined this way.
+     */
+    const hasPhotograph = documents.some(
+      (d) => d.requirement === OnboardingDocument.PHOTOGRAPH && (d.filePaths?.length ?? 0) > 0,
+    );
+    if (!hasPhotograph) {
+      throw new BadRequestException(
+        'This application has no photograph. Ask the candidate for one — their ID card cannot be '
+        + 'issued without it, and a field card with no face on it is not an identity card.',
+      );
+    }
 
     const notesParts = [
       application.expertise ? `Expertise: ${application.expertise}.` : null,

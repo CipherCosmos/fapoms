@@ -48,11 +48,20 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
     save: jest.fn(async (v: Row) => ({ ...v, id: v.id ?? 'app-new' })),
     find: jest.fn(async () => (application ? [application] : [])),
   };
+  /**
+   * A photograph by default, because approval refuses without one.
+   *
+   * Every promotion fixture needs a face on file, so the harness supplies one rather than making
+   * thirty tests repeat it. The refusal itself is tested by overriding this to an empty list —
+   * see "approval refuses an application with no photograph".
+   */
   const applicationDocuments = {
     findOne: jest.fn(async () => null),
     create: jest.fn((v: Row) => ({ ...v })),
     save: jest.fn(async (v: Row) => ({ ...v, id: 'doc-1' })),
-    find: jest.fn(async () => []),
+    find: jest.fn(async () => ([
+      { requirement: OnboardingDocument.PHOTOGRAPH, filePaths: ['uploads/face.jpg'] },
+    ] as Row[])),
   };
   const assayerService = {
     create: jest.fn(async (_dto: Row, _userId?: string, _org?: string | null, _roles?: string[]) =>
@@ -395,13 +404,14 @@ describe('promotion to a real assayer', () => {
      */
     const ctx = makeService({ application: approved() });
     ctx.applicationDocuments.find.mockResolvedValue([
+      { requirement: OnboardingDocument.PHOTOGRAPH, filePaths: ['uploads/face.jpg'] },
       { requirement: OnboardingDocument.PAN_CARD, filePaths: ['uploads/pan.png'] },
       { requirement: OnboardingDocument.AADHAAR_FRONT, filePaths: ['uploads/a1.png', 'uploads/a2.png'] },
     ] as any);
 
     await ctx.service.approve('app-1', 'user-1', ['ADMIN']);
 
-    expect(ctx.rosterRecords.attachFile).toHaveBeenCalledTimes(3);
+    expect(ctx.rosterRecords.attachFile).toHaveBeenCalledTimes(4);
     expect(ctx.rosterRecords.attachFile).toHaveBeenCalledWith(
       'assayer-1', OnboardingDocument.PAN_CARD, 'uploads/pan.png', 'user-1',
     );
@@ -666,5 +676,42 @@ describe('the candidate owns their own phone number', () => {
     const ctx = makeService();
     await ctx.service.updateDraft(RAW_TOKEN, { mobile: '9800000001' } as never);
     expect(ctx.applications.save.mock.calls.at(-1)![0].mobile).toBe('9800000001');
+  });
+});
+
+describe('a face on file', () => {
+  const submitted = () => ({
+    id: 'app-1', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
+    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+  });
+
+  it('is asked for, whatever the candidate is engaged as', () => {
+    for (const category of [undefined, EmploymentCategory.FREELANCER, EmploymentCategory.PROPRIETOR]) {
+      expect(documentsRequestedFor(category)).toContain(OnboardingDocument.PHOTOGRAPH);
+    }
+  });
+
+  /**
+   * The one thing approval refuses over. Everything else incomplete is promoted and chased
+   * afterwards; a card with no face on it is not a card, and it is what a bank's security desk
+   * actually looks at.
+   */
+  it('is required before anybody can be approved', async () => {
+    const ctx = makeService({ application: submitted() });
+    ctx.applicationDocuments.find.mockResolvedValue([
+      { requirement: OnboardingDocument.PAN_CARD, filePaths: ['uploads/pan.png'] },
+    ] as any);
+
+    await expect(ctx.service.approve('app-1', 'hr-1', ['ADMIN'])).rejects.toThrow(/photograph/i);
+    expect(ctx.assayerService.create).not.toHaveBeenCalled();
+  });
+
+  it('is not satisfied by a requirement row with no file behind it', async () => {
+    const ctx = makeService({ application: submitted() });
+    ctx.applicationDocuments.find.mockResolvedValue([
+      { requirement: OnboardingDocument.PHOTOGRAPH, filePaths: [] },
+    ] as any);
+
+    await expect(ctx.service.approve('app-1', 'hr-1', ['ADMIN'])).rejects.toThrow(/photograph/i);
   });
 });
