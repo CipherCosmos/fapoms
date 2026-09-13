@@ -52,9 +52,31 @@ export interface AssayerApplicationDocumentRow {
   filePaths: string[];
 }
 
+/** A gap the record dictionary ranks as critical, with what it stops. */
+export interface RegistrationGap {
+  key: string;
+  label: string;
+  blocks: string;
+}
+
 export interface AssayerApplicationDetail {
-  application: AssayerApplicationRow;
+  application: AssayerApplicationRow & {
+    /**
+     * Everything the candidate answered beyond the application's own columns — identity numbers,
+     * bank details, emergency contact, qualification. The row type did not carry it, so the person
+     * approving could not see the PAN or the bank account they were approving.
+     */
+    extendedProfile?: { fields?: Record<string, string | number | null> } | null;
+  };
   documents: AssayerApplicationDocumentRow[];
+  /** What is still missing, judged against the record this is about to become. */
+  gaps: RegistrationGap[];
+  /**
+   * The number HR typed at the interview, present only when it differs from the one the candidate
+   * confirmed. The candidate's answer wins — they know their own number — but a mismatch is worth
+   * a reviewer's eye.
+   */
+  invitedMobile: string | null;
 }
 
 /**

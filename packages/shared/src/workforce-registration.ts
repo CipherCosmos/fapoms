@@ -39,10 +39,11 @@ export const REGISTRATION_RECORD_FIELD_KEYS = [
   // Duty of care. A field worker with no reachable contact is the gap nobody notices until it
   // is the only thing that matters.
   'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
-  // Terms and competence.
-  'qualification', 'joiningDate', 'employmentType', 'experienceYears',
+  // Competence. Terms are NOT here — see `EMPLOYMENT_TERM_FIELD_KEYS`: a candidate must not be
+  // able to set their own joining date, employment type or region by putting one in their form.
+  'qualification', 'experienceYears',
   // Where they are and what they can take on.
-  'latitude', 'longitude', 'district', 'region', 'preferredRegions', 'languages', 'skills',
+  'latitude', 'longitude', 'district', 'preferredRegions', 'languages', 'skills',
 ] as const;
 
 export type RegistrationRecordFieldKey = typeof REGISTRATION_RECORD_FIELD_KEYS[number];
@@ -66,6 +67,44 @@ export function pickRegistrationRecordFields(
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     if (!isRegistrationRecordField(key)) continue;
+    if (value === undefined) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * What only the desk can decide, entered when the application is approved.
+ *
+ * These are not registration answers and never were: a joining date is an employment decision, a
+ * reporting line is an org chart, and a workload ceiling is a scheduling policy. They were
+ * therefore collected by nothing at all — `joiningDate` is a CRITICAL record field, is on the
+ * registration allow-list, and no form in the product has ever asked for it, so every person
+ * promoted through the pipeline landed with it blank.
+ *
+ * Approval is where they belong: it is the moment somebody with the authority to hire is looking
+ * at the person, and the alternative was a reviewer who had to remember to open the new record
+ * afterwards and fill in the half the candidate could not.
+ *
+ * Kept separate from `REGISTRATION_RECORD_FIELD_KEYS` deliberately. A candidate must never be able
+ * to set their own joining date or workload ceiling by putting it in their form.
+ */
+export const EMPLOYMENT_TERM_FIELD_KEYS = [
+  'joiningDate', 'employmentType', 'engagementType',
+  'managerId', 'department', 'region', 'hrOwnerName',
+  'maxDailyWorkload', 'maxWeeklyWorkload',
+] as const;
+
+export type EmploymentTermFieldKey = typeof EMPLOYMENT_TERM_FIELD_KEYS[number];
+
+/** Keep only the terms the desk may set at approval, from an object that may hold anything. */
+export function pickEmploymentTermFields(
+  input: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  if (!input) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!(EMPLOYMENT_TERM_FIELD_KEYS as readonly string[]).includes(key)) continue;
     if (value === undefined) continue;
     out[key] = value;
   }

@@ -2,7 +2,7 @@ import {
   Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { SystemRole, ApplicationStatus } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { RegistrationApplicationService } from './registration-application.service';
@@ -10,6 +10,31 @@ import { RegistrationApplicationService } from './registration-application.servi
 class RejectApplicationDto {
   @IsString() @MinLength(1) @MaxLength(2000)
   reason: string;
+}
+
+/**
+ * What the reviewer fills in as they approve.
+ *
+ * Deliberately loose as a shape: each group is filtered server-side against one shared list
+ * (`pickRegistrationRecordFields`, `pickEmploymentTermFields`), and thirty decorators repeating
+ * those lists here is exactly how a form and its server drift apart.
+ */
+class ApproveApplicationDto {
+  /** Record fields the candidate got wrong. */
+  @IsOptional() @IsObject()
+  corrections?: Record<string, unknown>;
+
+  /** Joining date, employment type, reporting line, workload ceilings. */
+  @IsOptional() @IsObject()
+  terms?: Record<string, unknown>;
+
+  /** The rate card, filed in the same action. */
+  @IsOptional() @IsObject()
+  commercial?: Record<string, unknown>;
+
+  /** First client standings. Without one, nobody can be given work for anybody. */
+  @IsOptional() @IsArray()
+  empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
 }
 
 class RequestMoreInfoDto {
@@ -54,10 +79,18 @@ export class HrApplicationsController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Approve and promote to a real assayer record' })
-  async approve(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async approve(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ApproveApplicationDto,
+    @Req() req: any,
+  ) {
     const userRoles = (req.user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
-    const assayer = await this.registrationApplications.approve(id, req.user.id, userRoles, req.user.organizationId);
-    return { success: true, data: assayer };
+    const { assayer, gaps } = await this.registrationApplications.approve(
+      id, req.user.id, userRoles, req.user.organizationId, dto,
+    );
+    // `gaps` goes back to the caller, not only to the audit trail. A promotion whose rate card or
+    // identity fields were refused used to read as a clean success on the screen that approved it.
+    return { success: true, data: { ...assayer, gaps } };
   }
 
   @Post(':id/resend-invite')

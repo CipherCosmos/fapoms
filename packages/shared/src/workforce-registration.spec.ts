@@ -3,6 +3,8 @@ import {
   missingAssayerRecordFields,
 } from './assayer-record';
 import {
+  EMPLOYMENT_TERM_FIELD_KEYS,
+  pickEmploymentTermFields,
   REGISTRATION_RECORD_FIELD_KEYS,
   isRegistrationRecordField,
   pickRegistrationRecordFields,
@@ -31,11 +33,16 @@ describe('registration collects everything the record calls critical', () => {
    * hand-copied list does.
    */
   it.each(CRITICAL_ASSAYER_RECORD_FIELDS.map((f) => [f.key, f.label, f.blocks]))(
-    '%s (%s) is collectable at registration — otherwise %s is blocked for every new hire',
+    '%s (%s) has exactly one owner — otherwise %s is blocked for every new hire',
     (key) => {
-      const collectable = isRegistrationRecordField(key as string)
-        || APPLICATION_OWN_RECORD_KEYS.includes(key as string);
-      expect(collectable).toBe(true);
+      const owners = [
+        isRegistrationRecordField(key as string) && 'the candidate',
+        APPLICATION_OWN_RECORD_KEYS.includes(key as string) && 'the application',
+        (EMPLOYMENT_TERM_FIELD_KEYS as readonly string[]).includes(key as string) && 'the desk',
+      ].filter(Boolean);
+      // Not "at least one": two owners is how a field ends up with two writers and no single
+      // answer to "who fills this in", which is the drift this file exists to prevent.
+      expect(owners).toHaveLength(1);
     },
   );
 
@@ -132,5 +139,28 @@ describe('mergedRegistrationView', () => {
     expect(missingRegistrationFields(view).map((f) => f.key)).toEqual([
       'bankAccountNumber', 'ifscCode', 'joiningDate', 'emergencyContactPhone', 'latitude',
     ]);
+  });
+});
+
+describe('employment terms are the desk‘s, not the candidate‘s', () => {
+  it('keeps the terms a reviewer sets at approval', () => {
+    expect(pickEmploymentTermFields({ joiningDate: '2026-10-01', maxDailyWorkload: 3 }))
+      .toEqual({ joiningDate: '2026-10-01', maxDailyWorkload: 3 });
+  });
+
+  it('refuses anything else, including record fields the candidate already answered', () => {
+    expect(pickEmploymentTermFields({ joiningDate: '2026-10-01', panNumber: 'ABCDE1234F' }))
+      .toEqual({ joiningDate: '2026-10-01' });
+  });
+
+  /**
+   * The two lists must not overlap. A candidate who could put a joining date or a workload ceiling
+   * in their own form would be setting their own employment terms, and a term that also travelled
+   * on the registration allow-list would have two writers and no single owner.
+   */
+  it('shares no key at all with what registration collects', () => {
+    const shared = EMPLOYMENT_TERM_FIELD_KEYS
+      .filter((k) => (REGISTRATION_RECORD_FIELD_KEYS as readonly string[]).includes(k));
+    expect(shared).toEqual([]);
   });
 });

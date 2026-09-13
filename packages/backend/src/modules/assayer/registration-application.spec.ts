@@ -81,14 +81,18 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
   const settings = { getNumber: jest.fn(async (_k: string, fallback?: number) => fallback ?? 0) };
   const storage = { saveFile: jest.fn(async () => 'uploads/scan.png') };
 
+  /** Read only so the reviewer sees the number HR typed beside the one the candidate confirmed. */
+  const interviews = { findOne: jest.fn(async () => ({ mobile: '9822014455' })) };
+
   const service = new RegistrationApplicationService(
-    applications as any, applicationDocuments as any, assayerService as any, rosterRecords as any,
+    applications as any, applicationDocuments as any, interviews as any,
+    assayerService as any, rosterRecords as any,
     auditService as any, notificationDispatch as any, emailProvider as any,
     cache as any, settings as any, storage as any,
   );
 
   return {
-    service, application, applications, applicationDocuments, assayerService, rosterRecords,
+    service, application, applications, applicationDocuments, interviews, assayerService, rosterRecords,
     auditService, notificationDispatch, emailProvider, cache, settings, storage, cacheData,
   };
 }
@@ -536,7 +540,10 @@ describe('the extended profile the wizard collects', () => {
 
     const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
 
-    expect(result.id).toBe('assayer-1'); // approved despite the gap
+    expect(result.assayer.id).toBe('assayer-1'); // approved despite the gap
+    // And the reviewer is TOLD. The gap used to reach only an audit remark, so a promotion whose
+    // rate card was refused read to the person who approved it as a clean success.
+    expect(result.gaps).toEqual([expect.stringContaining('commercial rates (rate outside policy)')]);
     expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: 'ASSAYER_APPLICATION_APPROVED',
@@ -713,5 +720,104 @@ describe('a face on file', () => {
     ] as any);
 
     await expect(ctx.service.approve('app-1', 'hr-1', ['ADMIN'])).rejects.toThrow(/photograph/i);
+  });
+});
+
+/**
+ * Approving is the moment the person is hired, so it is the moment the terms are set.
+ *
+ * The reviewer could previously add nothing at all: the drawer was read-only and the call carried
+ * no body, so a joining date — critical, and collected by no form in the product — was blank on
+ * every person promoted through this queue.
+ */
+describe('the desk completes the person as it approves', () => {
+  const ready = () => ({
+    id: 'app-1', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
+    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+  });
+
+  it('applies the employment terms through the guarded update', async () => {
+    const ctx = makeService({ application: ready() });
+    (ctx.assayerService as any).update = jest.fn(async () => ({}));
+
+    await ctx.service.approve('app-1', 'hr-1', ['ADMIN'], 'org-1', {
+      terms: { joiningDate: '2026-10-01', maxDailyWorkload: 3 },
+    });
+
+    expect((ctx.assayerService as any).update).toHaveBeenCalledWith(
+      'assayer-1', { joiningDate: '2026-10-01', maxDailyWorkload: 3 }, 'hr-1',
+    );
+  });
+
+  it('refuses a term that is really a candidate answer, so ownership stays single', async () => {
+    const ctx = makeService({ application: ready() });
+    (ctx.assayerService as any).update = jest.fn(async () => ({}));
+
+    await ctx.service.approve('app-1', 'hr-1', ['ADMIN'], 'org-1', {
+      terms: { joiningDate: '2026-10-01', panNumber: 'ABCDE1234F' },
+    });
+
+    expect((ctx.assayerService as any).update).toHaveBeenCalledWith(
+      'assayer-1', { joiningDate: '2026-10-01' }, 'hr-1',
+    );
+  });
+
+  it('corrects what the candidate got wrong, through the registration allow-list', async () => {
+    const ctx = makeService({ application: ready() });
+    (ctx.assayerService as any).update = jest.fn(async () => ({}));
+
+    await ctx.service.approve('app-1', 'hr-1', ['ADMIN'], 'org-1', {
+      corrections: { ifscCode: 'SBIN0001234' },
+    });
+
+    expect((ctx.assayerService as any).update).toHaveBeenCalledWith(
+      'assayer-1', expect.objectContaining({ ifscCode: 'SBIN0001234' }), 'hr-1',
+    );
+  });
+
+  it('files the rate card and the first standing in the same action', async () => {
+    const ctx = makeService({ application: ready() });
+    (ctx.assayerService as any).update = jest.fn(async () => ({}));
+    (ctx.assayerService as any).createCommercialProfile = jest.fn(async () => ({}));
+    (ctx.rosterRecords as any).setEmpanelment = jest.fn(async () => ({}));
+
+    await ctx.service.approve('app-1', 'hr-1', ['ADMIN'], 'org-1', {
+      commercial: { baseFee: 1200 },
+      empanelments: [{ clientId: 'client-1', status: 'RECOMMENDED' }],
+    });
+
+    expect((ctx.assayerService as any).createCommercialProfile).toHaveBeenCalled();
+    expect((ctx.rosterRecords as any).setEmpanelment).toHaveBeenCalledWith(
+      'assayer-1', 'client-1', expect.objectContaining({ status: 'RECOMMENDED' }), 'hr-1',
+    );
+  });
+
+  it('hands a refused term back as a named gap rather than failing the hire', async () => {
+    const ctx = makeService({ application: ready() });
+    (ctx.assayerService as any).update = jest.fn(async () => { throw new Error('joining date is in the future'); });
+
+    const { assayer, gaps } = await ctx.service.approve('app-1', 'hr-1', ['ADMIN'], 'org-1', {
+      terms: { joiningDate: '2099-01-01' },
+    });
+
+    expect(assayer.id).toBe('assayer-1');
+    expect(gaps).toEqual([expect.stringContaining('employment terms (joining date is in the future)')]);
+  });
+
+  it('shows the reviewer the interview number when it differs from the confirmed one', async () => {
+    const ctx = makeService({ application: { ...ready(), mobile: '9812345678', interviewId: 'iv-1' } });
+    ctx.interviews.findOne.mockResolvedValue({ mobile: '9822014455' } as never);
+
+    const detail = await ctx.service.getApplication('app-1');
+
+    expect(detail.invitedMobile).toBe('9822014455');
+    expect(detail.gaps.map((g) => g.key)).toContain('panNumber');
+  });
+
+  it('says nothing when the two numbers agree', async () => {
+    const ctx = makeService({ application: { ...ready(), interviewId: 'iv-1' } });
+    ctx.interviews.findOne.mockResolvedValue({ mobile: '9822014455' } as never);
+
+    expect((await ctx.service.getApplication('app-1')).invitedMobile).toBeNull();
   });
 });

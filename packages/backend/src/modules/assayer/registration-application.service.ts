@@ -12,6 +12,7 @@ import {
   ApplicationSource,
   ASSAYER_ERROR_CODES,
   pickRegistrationRecordFields,
+  pickEmploymentTermFields,
   mergedRegistrationView,
   missingRegistrationFields,
   isValidPan,
@@ -21,6 +22,7 @@ import {
 import { withCode } from '../../infrastructure/http/api-error';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
+import { AssayerInterviewEntity } from './assayer-interview.entity';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerService, CreateAssayerDto } from './assayer.service';
 import { RosterRecordsService } from './roster-records.service';
@@ -112,6 +114,21 @@ function filterExtendedProfile(
   return Object.keys(fields).length > 0 ? { ...rest, fields } : { ...rest };
 }
 
+/**
+ * What a reviewer may add when they approve — see `approve()` for why the three groups are kept
+ * apart rather than merged into one bag of fields.
+ */
+export interface ApproveApplicationInput {
+  /** Record fields the candidate answered wrongly. Filtered by the registration allow-list. */
+  corrections?: Record<string, unknown>;
+  /** What only the desk decides. Filtered by `EMPLOYMENT_TERM_FIELD_KEYS`. */
+  terms?: Record<string, unknown>;
+  /** The rate card, filed in the same action rather than remembered afterwards. */
+  commercial?: Record<string, unknown>;
+  /** First client standings. Without at least one, nobody can be given work for anybody. */
+  empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+}
+
 export interface UpdateApplicationDraftDto {
   fullName?: string;
   /** The candidate's own number. Confirmed by `verifyOtp`, which is what writes it for good. */
@@ -167,6 +184,9 @@ export class RegistrationApplicationService {
     private readonly applications: Repository<AssayerApplicationEntity>,
     @InjectRepository(AssayerApplicationDocumentEntity)
     private readonly applicationDocuments: Repository<AssayerApplicationDocumentEntity>,
+    /** Read only to show the reviewer the number HR typed beside the one the candidate confirmed. */
+    @InjectRepository(AssayerInterviewEntity)
+    private readonly interviews: Repository<AssayerInterviewEntity>,
     private readonly assayerService: AssayerService,
     private readonly rosterRecords: RosterRecordsService,
     private readonly auditService: AuditService,
@@ -633,14 +653,40 @@ export class RegistrationApplicationService {
     });
   }
 
+  /**
+   * Everything the reviewer needs in front of them to decide.
+   *
+   * It used to return the application row and its documents, and the row type on the screen did
+   * not even carry `extendedProfile` — so the person approving could not see the PAN, the bank
+   * details or the emergency contact they were approving. `gaps` was computed by a method with no
+   * callers whose own docblock claimed it was "offered to every screen that shows an application".
+   *
+   * `invitedMobile` is the number HR typed at the interview, shown beside the number the candidate
+   * confirmed. The candidate's answer wins — they know their own number — but a mismatch should be
+   * somebody's decision rather than a silent overwrite.
+   */
   async getApplication(id: string): Promise<{
     application: AssayerApplicationEntity;
     documents: AssayerApplicationDocumentEntity[];
+    gaps: Array<{ key: string; label: string; blocks: string }>;
+    invitedMobile: string | null;
   }> {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found.');
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
-    return { application, documents };
+
+    let invitedMobile: string | null = null;
+    if (application.interviewId) {
+      const interview = await this.interviews.findOne({ where: { id: application.interviewId } });
+      invitedMobile = interview?.mobile ?? null;
+    }
+
+    return {
+      application,
+      documents,
+      gaps: this.registrationGaps(application),
+      invitedMobile: invitedMobile === application.mobile ? null : invitedMobile,
+    };
   }
 
   private async mustBeReviewable(id: string): Promise<AssayerApplicationEntity> {
@@ -796,13 +842,41 @@ export class RegistrationApplicationService {
     return gaps;
   }
 
+  /**
+   * Approving is the moment the person is hired, so it is the moment the terms are set.
+   *
+   * The reviewer could previously add NOTHING. The drawer was read-only, the call carried no body,
+   * and this method took no patch — so a `joiningDate`, which is a critical record field, was
+   * collected by no form anywhere and every promoted person landed with it blank. The reviewer had
+   * to remember to open the new record afterwards and fill in the half the candidate could not
+   * supply, and nothing told them to.
+   *
+   * Three kinds of thing arrive here, and they are kept apart on purpose:
+   *  - `corrections` — record fields the candidate answered and got wrong. Filtered by the same
+   *    registration allow-list their own form is filtered by.
+   *  - `terms` — what only the desk decides. A separate list, so a candidate cannot set their own
+   *    joining date by putting one in their form.
+   *  - `commercial` / `empanelments` — the rate card and the first client standings. These feed
+   *    branches `applyExtendedProfile` has always had and nothing could reach.
+   */
   async approve(
     id: string,
     actorUserId: string,
     actorRoles: string[] | undefined,
     organizationId?: string | null,
-  ): Promise<AssayerEntity> {
+    input?: ApproveApplicationInput,
+  ): Promise<{ assayer: AssayerEntity; gaps: string[] }> {
     const application = await this.mustBeReviewable(id);
+
+    // Folded into the application BEFORE promotion so the existing applier handles them, rather
+    // than a second write path that would have to be kept in step with the first.
+    this.mergeRecordFields(application, input?.corrections);
+    if (input?.commercial || input?.empanelments) {
+      const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
+      if (input.commercial) profile.commercial = input.commercial;
+      if (input.empanelments) profile.empanelments = input.empanelments;
+      application.extendedProfile = profile as never;
+    }
 
     /**
      * There is no maker–checker here, and that is a statement rather than an omission.
@@ -882,6 +956,23 @@ export class RegistrationApplicationService {
 
     const profileGaps = await this.applyExtendedProfile(assayer.id, application, actorUserId);
 
+    /**
+     * The desk's own half, applied through the same guarded update the record screen uses.
+     *
+     * Separate from the extended profile because these are not the candidate's answers and must
+     * not travel on the list their form is filtered by. A failure is a NAMED gap rather than a
+     * failed approval: the person is hired either way, and a missing joining date is chased on the
+     * record, not by refusing to create them.
+     */
+    const terms = pickEmploymentTermFields(input?.terms);
+    if (Object.keys(terms).length > 0) {
+      try {
+        await this.assayerService.update(assayer.id, terms as never, actorUserId);
+      } catch (err: any) {
+        profileGaps.push(`employment terms (${err?.message ?? 'refused'})`);
+      }
+    }
+
     application.status = ApplicationStatus.APPROVED;
     application.reviewedBy = actorUserId;
     application.reviewedAt = new Date();
@@ -924,6 +1015,6 @@ export class RegistrationApplicationService {
       });
     }
 
-    return assayer;
+    return { assayer, gaps: profileGaps };
   }
 }
