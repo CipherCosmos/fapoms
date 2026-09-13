@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
-import { AssignmentStatus, calculateHaversineDistance } from '@fapoms/shared';
+import { AssignmentStatus, calculateHaversineDistance, PLATFORM_LIMIT_FALLBACK, type PlatformLimits } from '@fapoms/shared';
 // The assayer-invoicing payload shapes come from @fapoms/shared so this app, the ops web app
 // and the backend agree on THE money-reveal contract without re-declaring a field of it here.
 import type { AssayerInvoiceInvitation, AssayerInvoiceSummary } from '@fapoms/shared';
@@ -779,10 +779,11 @@ export class MobileApiService {
    * counter-offer button (fee negotiation has been removed from the app entirely) — which this
    * build deliberately does not read: it has nothing left to gate with it.
    */
-  static async getPlatformLimits(): Promise<{ checkInGeofenceMeters: number; maxSingleExpenseClaim: number }> {
-    // Shipped defaults, matching the server registry, so a failed lookup is never worse than the
-    // hardcoded values this replaced.
-    const fallback = { checkInGeofenceMeters: 2000, maxSingleExpenseClaim: 50_000 };
+  static async getPlatformLimits(): Promise<PlatformLimits> {
+    // @fapoms/shared's copy, matching the server registry, so a failed lookup is never worse
+    // than the hardcoded values this replaced — and never a second copy of the same object the
+    // web hook (usePlatformLimits.ts) already fell back to independently.
+    const fallback = PLATFORM_LIMIT_FALLBACK;
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/platform-settings/limits`);
       const data = await response.json().catch(() => ({}));

@@ -1,24 +1,16 @@
 import { useEffect, useState } from 'react';
 import { api } from '../services/api';
-
-export interface PlatformLimits {
-  // `maxNegotiationRounds` is gone from this type on purpose: in-app fee negotiation was
-  // removed (2026-09). The endpoint still returns it as a literal 0 — an old-APK kill-switch
-  // the mobile builds read — but no web screen has a round counter left to feed.
-  checkInGeofenceMeters: number;
-  maxSingleExpenseClaim: number;
-}
+import { PLATFORM_LIMIT_FALLBACK, type PlatformLimits } from '@fapoms/shared';
 
 /**
  * The shipped defaults, used until the server answers.
  *
  * They match the registry's defaults so a first paint is never wrong for an unconfigured
  * platform — but they are a starting value, not the rule. The rule is whatever the server says.
+ * `@fapoms/shared`'s copy, not a second one: mobile's `getPlatformLimits()` hand-declared the
+ * same object independently until both were pointed at it.
  */
-const FALLBACK: PlatformLimits = {
-  checkInGeofenceMeters: 2000,
-  maxSingleExpenseClaim: 50_000,
-};
+const FALLBACK: PlatformLimits = PLATFORM_LIMIT_FALLBACK;
 
 let cached: PlatformLimits | null = null;
 let inFlight: Promise<PlatformLimits> | null = null;

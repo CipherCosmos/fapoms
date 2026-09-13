@@ -17,6 +17,8 @@ export * from './destructive-action';
 // Upload ceilings and the scan accept-list — one source for server guard and pickers
 export * from './upload-limits';
 
+// Operational limits (check-in geofence, expense claim cap) and their shipped fallback
+export * from './platform-limits';
 
 // Canonical geographic regions and the state → region map
 export * from './regions';
