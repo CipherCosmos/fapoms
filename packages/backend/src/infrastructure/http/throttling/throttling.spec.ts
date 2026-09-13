@@ -32,12 +32,12 @@ describe('ResilientThrottlerStorage', () => {
 
 describe('UserAwareThrottlerGuard tracker', () => {
   const secret = 'test-secret-that-is-long-enough-for-hs256';
-  const config = { get: (_k: string, d?: string) => secret ?? d } as any;
+  const jwt = new JwtService({ secret });
   const metrics = { httpThrottled: { inc: jest.fn() } } as any;
   const options = { throttlers: [{ ttl: 60_000, limit: 300 }] } as any;
   const storage = { increment: jest.fn() } as any;
 
-  const guard = new UserAwareThrottlerGuard(options, storage, new Reflector(), config, metrics);
+  const guard = new UserAwareThrottlerGuard(options, storage, new Reflector(), jwt, metrics);
   const tracker = (req: any) => (guard as any).getTracker(req) as Promise<string>;
 
   it('keys an authenticated request by the token subject', async () => {

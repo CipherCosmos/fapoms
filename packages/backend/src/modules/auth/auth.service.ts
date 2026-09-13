@@ -1418,17 +1418,6 @@ export class AuthService implements OnModuleInit {
     return null;
   }
 
-  /**
-   * Verify an access token and return its payload.
-   */
-  async verifyJwtToken(token: string): Promise<JwtPayload | null> {
-    try {
-      return this.jwtService.verify<JwtPayload>(token);
-    } catch {
-      return null;
-    }
-  }
-
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------

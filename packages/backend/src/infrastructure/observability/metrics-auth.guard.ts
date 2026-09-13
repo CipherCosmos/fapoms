@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { timingSafeEqual } from 'crypto';
+import { constantTimeEqual } from '../security/token-utils';
 
 /**
  * Guards the Prometheus scrape endpoint with a static bearer token.
@@ -37,15 +37,7 @@ export class MetricsAuthGuard implements CanActivate {
     const header: string = req?.headers?.authorization ?? '';
     const provided = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 
-    if (provided && safeEqual(provided, expected)) return true;
+    if (provided && constantTimeEqual(provided, expected)) return true;
     throw new UnauthorizedException('A valid metrics token is required.');
   }
-}
-
-/** Constant-time string comparison that tolerates differing lengths without throwing. */
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
 }

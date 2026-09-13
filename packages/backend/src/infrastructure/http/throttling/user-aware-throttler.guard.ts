@@ -1,5 +1,4 @@
 import { ExecutionContext, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import {
@@ -11,6 +10,7 @@ import {
   ThrottlerStorage,
 } from '@nestjs/throttler';
 import { MetricsService } from '../../observability/metrics.service';
+import { verifyAccessToken } from '../../security/jwt-verify';
 
 /**
  * Rate limiting keyed by WHO is calling, not by which proxy forwarded the call.
@@ -46,32 +46,27 @@ import { MetricsService } from '../../observability/metrics.service';
  */
 @Injectable()
 export class UserAwareThrottlerGuard extends ThrottlerGuard {
-  private readonly jwt: JwtService;
-
   constructor(
     @InjectThrottlerOptions() options: ThrottlerModuleOptions,
     @InjectThrottlerStorage() storage: ThrottlerStorage,
     reflector: Reflector,
-    config: ConfigService,
+    // The shared AppJwtModule registration (same secret AuthModule's JwtService signs with) —
+    // imported into AppModule directly rather than this guard building its own JwtService, so a
+    // global guard still does not have to import the auth module graph to verify a token.
+    private readonly jwt: JwtService,
     private readonly metrics: MetricsService,
   ) {
     super(options, storage, reflector);
-    // Same secret as AuthModule's JwtModule; constructed locally so a global guard does not
-    // have to import the auth module graph.
-    this.jwt = new JwtService({ secret: config.get<string>('JWT_SECRET', 'dev-secret') });
   }
 
   protected async getTracker(req: Record<string, any>): Promise<string> {
     const auth = req?.headers?.authorization;
     if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
-      try {
-        const payload = this.jwt.verify<{ sub?: string; id?: string }>(auth.slice(7));
-        const sub = payload?.sub ?? payload?.id;
-        if (sub) return `user:${sub}`;
-      } catch {
-        // Not a valid token → fall through to the address. An expired token on a refresh call is
-        // the common case here, and refresh is deliberately IP-limited.
-      }
+      // Not a valid token → fall through to the address. An expired token on a refresh call is
+      // the common case here, and refresh is deliberately IP-limited.
+      const payload = await verifyAccessToken<{ sub?: string; id?: string }>(this.jwt, auth.slice(7));
+      const sub = payload?.sub ?? payload?.id;
+      if (sub) return `user:${sub}`;
     }
     return `ip:${req?.ip ?? 'unknown'}`;
   }

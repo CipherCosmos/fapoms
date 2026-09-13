@@ -26,6 +26,7 @@ const AUTH_CHANGE_EVENTS = new Set<string>([
 ]);
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { RegionGuardService, RoomVerdict } from '../../infrastructure/scope/region-guard.service';
+import { verifyAccessToken } from '../../infrastructure/security/jwt-verify';
 import { REGION_ORDER } from '@fapoms/shared';
 import { FEEDBACK_TEAM_ROLE_NAMES } from '../feedback/feedback-roles';
 
@@ -124,11 +125,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      let payload: any;
-      try {
-        payload = await this.jwtService.verifyAsync(token as string);
-      } catch {
-        // No valid, signed JWT — never trust an unsigned decode or the raw token string.
+      // No valid, signed JWT — never trust an unsigned decode or the raw token string.
+      const payload = await verifyAccessToken<any>(this.jwtService, token as string);
+      if (!payload) {
         client.emit('error', { message: 'Invalid or expired token' });
         client.disconnect();
         return;

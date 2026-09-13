@@ -62,6 +62,7 @@ import { CallsModule } from './modules/calls/calls.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { AssayerRemarksModule } from './modules/assayer-remarks/assayer-remarks.module';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { AppJwtModule } from './infrastructure/security/jwt.module';
 import { UserAwareThrottlerGuard } from './infrastructure/http/throttling/user-aware-throttler.guard';
 import { createResilientThrottlerStorage } from './infrastructure/http/throttling/resilient-throttler-storage';
 import { MetricsService } from './infrastructure/observability/metrics.service';
@@ -158,6 +159,11 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
         ),
       }),
     }),
+    // UserAwareThrottlerGuard below verifies the bearer token to key its tracker by user rather
+    // than by (proxy) IP. It is registered as an APP_GUARD provider of this module directly, so
+    // the JwtService it needs must be visible here — the shared registration, not a re-import of
+    // the whole AuthModule graph into a global guard.
+    AppJwtModule,
 
     // Database connection
     TypeOrmModule.forRootAsync({

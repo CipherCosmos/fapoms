@@ -1,5 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac } from 'crypto';
+import { constantTimeEqual } from '../../infrastructure/security/token-utils';
 
 /**
  * Short-lived signed tokens for document downloads.
@@ -62,10 +63,7 @@ export class DocumentAccessTokenService {
 
     // Binding the signature to documentId is what stops a token issued for a document the
     // caller may legitimately read being replayed against one they may not.
-    const expected = Buffer.from(this.sign(documentId, expiresAt));
-    const provided = Buffer.from(signature);
-    // timingSafeEqual throws on length mismatch, so guard before comparing.
-    if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) {
+    if (!constantTimeEqual(this.sign(documentId, expiresAt), signature)) {
       throw new UnauthorizedException('Invalid download token.');
     }
   }

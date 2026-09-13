@@ -3,11 +3,10 @@
  */
 
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
 
+import { AppJwtModule } from '../../infrastructure/security/jwt.module';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
@@ -26,16 +25,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET', 'dev-secret'),
-        signOptions: {
-          expiresIn: configService.get<number>('JWT_ACCESS_EXPIRATION', 900),
-        },
-      }),
-    }),
+    AppJwtModule,
     TypeOrmModule.forFeature([UserEntity, RefreshTokenEntity, AssayerEntity, UserSessionEntity, UserMfaEntity, MfaRecoveryCodeEntity]),
     // For the lockout alert. Safe direction: NotificationsModule pulls guards as plain
     // class imports, never this module.

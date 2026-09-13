@@ -165,9 +165,10 @@ describe('security controls are still wired', () => {
     {
       id: 'document-access-token-hmac',
       file: `${B}/modules/document/document-access-token.service.ts`,
-      marker: 'timingSafeEqual',
+      marker: 'constantTimeEqual',
       why: 'Download links are HMAC-signed and short-lived rather than guessable object keys, and '
-        + 'the comparison is constant-time so the signature cannot be recovered a byte at a time.',
+        + 'the comparison is constant-time (infrastructure/security/token-utils.ts, shared with '
+        + 'MetricsAuthGuard) so the signature cannot be recovered a byte at a time.',
     },
     {
       id: 'audit-repository-is-append-only',
