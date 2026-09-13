@@ -130,27 +130,24 @@ export class ScopeController {
       .map((r) => ({ value: r, label: REGION_LABELS[r], count: counts.get(r) ?? 0 }));
 
     return {
-      success: true,
-      data: {
-        /** Null when the account holds every region; an array when it is assigned a subset. */
-        assignedRegions: allowed as Region[] | null,
-        regions,
-        states: stateRows.map((s) => ({
-          value: s.value,
-          region: s.region,
-          count: Number(s.count),
-        })),
-        zones: zones
-          .map((z) => ({ id: z.id, name: z.name, clientId: z.clientId }))
-          .sort((a, b) => a.name.localeCompare(b.name)),
-        clients: clientRows.map((c) => ({ id: c.id, name: c.name, clientCode: c.clientCode })),
-        projects: projectRows.map((p) => ({
-          id: p.id,
-          name: p.name,
-          projectNumber: p.projectNumber,
-          clientId: p.clientId,
-        })),
-      },
+      /** Null when the account holds every region; an array when it is assigned a subset. */
+      assignedRegions: allowed as Region[] | null,
+      regions,
+      states: stateRows.map((s) => ({
+        value: s.value,
+        region: s.region,
+        count: Number(s.count),
+      })),
+      zones: zones
+        .map((z) => ({ id: z.id, name: z.name, clientId: z.clientId }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      clients: clientRows.map((c) => ({ id: c.id, name: c.name, clientCode: c.clientCode })),
+      projects: projectRows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        projectNumber: p.projectNumber,
+        clientId: p.clientId,
+      })),
     };
   }
 }

@@ -45,6 +45,6 @@ export class HrController {
     // caller's regions from their JWT principal when no `?region=` is on the query string, so a
     // region-scoped account narrows here for free; an unrestricted staff account still sees
     // everything, exactly as before.
-    return { success: true, data: await this.hrWorkforceService.overview(scope) };
+    return this.hrWorkforceService.overview(scope);
   }
 }
