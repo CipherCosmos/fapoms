@@ -39,11 +39,9 @@ export let callingAvailable = false;
  */
 export function initializeCalling(): void {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const lk = require('@livekit/react-native');
     lk.registerGlobals();
     // Room/connect come from livekit-client, which needs the globals registered above.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     livekitClient = require('livekit-client');
     livekit = lk;
     callingAvailable = true;

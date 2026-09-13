@@ -74,6 +74,28 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   }, [visible]);
 
   /**
+   * The platform's own ceiling on a single claim, checked here rather than only at the server.
+   *
+   * `getPlatformLimits` already fetched `maxSingleExpenseClaim` and nothing read it, so an
+   * over-limit claim was typed out in full, submitted, and refused on the round trip — in the
+   * field, on a phone, often on a slow connection. The number is configurable per deployment
+   * (Administration → Platform Settings), so it is asked for rather than hardcoded, and a failed
+   * lookup falls back to the same default the server registry ships.
+   *
+   * The server still enforces it; this only means the assayer finds out while they are looking
+   * at the form.
+   */
+  const [maxClaim, setMaxClaim] = useState<number | null>(null);
+  useEffect(() => {
+    if (!visible) return;
+    let live = true;
+    MobileApiService.getPlatformLimits()
+      .then((l) => { if (live) setMaxClaim(l.maxSingleExpenseClaim ?? null); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [visible]);
+
+  /**
    * After the hooks, not before.
    *
    * The early return sat above these `useState` calls, so React saw a different hook count
@@ -104,28 +126,6 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   // here, `Number` at the call site — and they disagreed on exactly the input an Indian user is
   // most likely to type: "1,000" validated as 1 and submitted as NaN. See `parseRupeeInput`.
   const amountValue = parseRupeeInput(amt);
-
-  /**
-   * The platform's own ceiling on a single claim, checked here rather than only at the server.
-   *
-   * `getPlatformLimits` already fetched `maxSingleExpenseClaim` and nothing read it, so an
-   * over-limit claim was typed out in full, submitted, and refused on the round trip — in the
-   * field, on a phone, often on a slow connection. The number is configurable per deployment
-   * (Administration → Platform Settings), so it is asked for rather than hardcoded, and a failed
-   * lookup falls back to the same default the server registry ships.
-   *
-   * The server still enforces it; this only means the assayer finds out while they are looking
-   * at the form.
-   */
-  const [maxClaim, setMaxClaim] = useState<number | null>(null);
-  useEffect(() => {
-    if (!visible) return;
-    let live = true;
-    MobileApiService.getPlatformLimits()
-      .then((l) => { if (live) setMaxClaim(l.maxSingleExpenseClaim ?? null); })
-      .catch(() => undefined);
-    return () => { live = false; };
-  }, [visible]);
 
   const overLimit = amountValue !== null && maxClaim !== null && amountValue > maxClaim;
   const amountValid = amountValue !== null && !overLimit;

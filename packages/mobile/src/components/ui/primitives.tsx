@@ -365,7 +365,7 @@ export const Button: React.FC<{
   // gradation of feedback iOS gives its own buttons.
   const handlePress = onPress
     ? () => {
-        (variant === 'primary' || variant === 'accent') ? haptics.commit() : haptics.tap();
+        if (variant === 'primary' || variant === 'accent') haptics.commit(); else haptics.tap();
         onPress();
       }
     : undefined;

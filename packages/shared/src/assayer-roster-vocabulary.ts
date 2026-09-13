@@ -678,7 +678,7 @@ export function readWorkingBanks(raw: unknown): string[] {
   const cell = blankToNull(raw);
   if (!cell) return [];
   const out = new Set<string>();
-  for (const piece of String(cell).split(/[\/,]/)) {
+  for (const piece of String(cell).split(/[/,]/)) {
     const cleaned = piece.trim().replace(/\s+/g, ' ');
     if (!cleaned) continue;
     const key = cleaned.toLowerCase();

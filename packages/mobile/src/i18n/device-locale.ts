@@ -18,7 +18,6 @@
  */
 export function getDeviceLanguageTags(): string[] {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const Localization = require('expo-localization');
     const locales: Array<{ languageTag?: string | null; languageCode?: string | null }> =
       Localization.getLocales?.() ?? [];

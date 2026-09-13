@@ -606,15 +606,17 @@ const AttributeChipPicker: React.FC<{
   const [query, setQuery] = useState('');
   const [focus, setFocus] = useState(false);
   const items = useMemo(() => parseAttributeList(value), [value]);
+  // Computed unconditionally, ahead of the `readOnly` early return below — a hook cannot be
+  // called only on some renders, and this field's own lock status can change between them.
+  const suggestions = useMemo(
+    () => attributeSuggestions(vocabulary, items, query).slice(0, 8),
+    [vocabulary, items, query],
+  );
 
   if (readOnly) {
     return <FieldInput label={label} value={composeAttributeList(items)} onChange={() => {}} readOnly />;
   }
 
-  const suggestions = useMemo(
-    () => attributeSuggestions(vocabulary, items, query).slice(0, 8),
-    [vocabulary, items, query],
-  );
   const trimmedQuery = query.trim();
   const alreadyAdded = items.some((i) => i.toLowerCase() === trimmedQuery.toLowerCase());
 

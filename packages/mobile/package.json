@@ -15,6 +15,7 @@
     "build:ios": "eas build --platform ios --profile production",
     "build:web": "expo export",
     "test": "jest",
+    "lint": "eslint src",
     "eas-build-post-install": "cd ../shared && npm run build"
   },
   "dependencies": {
@@ -51,8 +52,12 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/react": "~18.3.12",
     "eas-cli": "^21.8.0",
-    "typescript": "^5.7.2"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.66.0"
   }
 }
