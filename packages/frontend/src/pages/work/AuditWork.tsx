@@ -17,6 +17,7 @@ import {
   type WorkTabPath,
 } from './workTabs';
 import { Page } from '../../components/ui/Page';
+import { SkeletonList } from '../../components/ui/Loading';
 
 /**
  * Audit Work — the single destination that used to be four.
@@ -322,7 +323,9 @@ export const AuditWork: React.FC = () => {
                 </QuietNote>
               </div>
             )}
-            <Suspense fallback={<div style={{ padding: '24px', color: 'var(--text-muted)' }}>Loading…</div>}>
+            {/* The tab bodies are code-split too, so this is the second blank a first visit used
+                to hit — the strip stayed and everything under it went grey and empty. */}
+            <Suspense fallback={<div className="deferred-appear" style={{ padding: '24px 0' }}><SkeletonList rows={6} height={46} /></div>}>
               <ActivePage />
             </Suspense>
           </>

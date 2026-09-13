@@ -6,6 +6,7 @@ import { contractStatusLabel, todayDateKey } from '../../utils/statusLabels';
 import type { ClientContract } from '@fapoms/shared';
 import { ContractStatus } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { SkeletonList } from '../../components/ui/Loading';
 
 const CONTRACT_STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   [ContractStatus.DRAFT]: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -84,7 +85,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
       </div>
 
       {isLoading ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+        <div className="deferred-appear" style={{ padding: 20 }}><SkeletonList rows={3} height={44} /></div>
       ) : contracts.length === 0 ? (
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
           No contracts registered

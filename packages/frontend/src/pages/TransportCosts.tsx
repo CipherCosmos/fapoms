@@ -17,6 +17,7 @@ import { Modal, AlertBanner, Select, useConfirm } from '../components/ui';
 import { LoadFailure } from '../components/LoadFailure';
 import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageTransportRates } from '../hooks/useCurrentRoles';
+import { SkeletonList } from '../components/ui/Loading';
 
 /**
  * The transport rate card: what a kilometre costs by each way of travelling, per part of the
@@ -458,7 +459,7 @@ export const TransportCostsSection: React.FC = () => {
         {loadFailed(ratesQuery) ? (
           <LoadFailure loads={[{ label: 'the transport rate card', query: ratesQuery }]} />
         ) : isLoading ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
+          <div className="deferred-appear" style={{ padding: '16px' }}><SkeletonList rows={6} height={40} /></div>
         ) : visibleRates.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
             No {showRetired ? '' : 'active '}transport rates yet.

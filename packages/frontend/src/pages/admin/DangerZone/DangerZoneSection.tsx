@@ -12,6 +12,7 @@ import { useConfirm, useToast } from '../../../components/ui';
 import { useCurrentUserId } from '../../../hooks/useCurrentRoles';
 import { DataResetModal } from './DataResetModal';
 import { loadFailed } from '../../../queryClient';
+import { SkeletonList } from '../../../components/ui/Loading';
 
 export interface WipeDomain {
   key: string;
@@ -303,7 +304,7 @@ export const DangerZoneSection: React.FC = () => {
         }
       >
         {isLoading ? (
-          <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+          <div className="deferred-appear" style={{ padding: '16px' }}><SkeletonList rows={5} height={38} /></div>
         ) : domainsFailed ? (
           <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
             <div>Couldn&apos;t load what can be cleared. {userMessage(error)}</div>

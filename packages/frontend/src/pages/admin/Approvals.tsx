@@ -11,6 +11,7 @@ import { loadFailed } from '../../queryClient';
 import { PageHeader, useConfirm, useToast } from '../../components/ui';
 import { useCurrentRoles, canApproveDestructiveActions } from '../../hooks/useCurrentRoles';
 import { Page } from '../../components/ui/Page';
+import { SkeletonList } from '../../components/ui/Loading';
 
 /**
  * The admin's half of the destructive-action two-person rule (destructive-action.ts in
@@ -271,7 +272,7 @@ export const Approvals: React.FC = () => {
       )}
 
       {isLoading ? (
-        <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+        <div className="deferred-appear" style={card}><SkeletonList rows={3} height={52} /></div>
       ) : queueFailed ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
           <div>Couldn&apos;t load the approval queue. {userMessage(error)}</div>

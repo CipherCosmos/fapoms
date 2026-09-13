@@ -7,6 +7,7 @@ import { AssayerMultiSelect } from './AssayerMultiSelect';
 import { userMessage } from '../../services/errors';
 import { loadFailed } from '../../queryClient';
 import { LoadFailure } from '../../components/LoadFailure';
+import { SkeletonList } from '../../components/ui/Loading';
 
 const WORKING_DAY_OPTIONS = [
   { value: 0, label: 'Sun' },
@@ -238,7 +239,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
     return <LoadFailure loads={[{ label: "this client's configuration", query: clientQuery }]} />;
   }
   if (clientQuery.isPending || !client) {
-    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>;
+    return <div className="deferred-appear" style={{ padding: 20 }}><SkeletonList rows={4} height={48} /></div>;
   }
 
   // Shown on the collapsed disclosure so an override in force is never invisible.

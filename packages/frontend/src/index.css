@@ -2047,6 +2047,26 @@ html, body {
   .skeleton-bar { animation: none; }
 }
 
+/*
+  A placeholder that only appears if the wait is real.
+  
+  Most lazy chunks and cached reads land in well under a tenth of a second, and a skeleton that
+  flashes on and off in that time reads as a glitch — worse than the blank it replaced. This holds
+  it invisible for 140ms and then fades it in, so a fast navigation shows nothing at all and a slow
+  one shows the shape of the page that is coming. `both` is what keeps it hidden during the delay.
+*/
+@keyframes deferred-appear {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.deferred-appear {
+  animation: deferred-appear 140ms ease 140ms both;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still waited for, still not animated: it steps into view at the same moment. */
+  .deferred-appear { animation: deferred-appear 1ms linear 140ms both; }
+}
+
 /* ===========================================================================
    TYPOGRAPHY CONTRACTS (Shared hierarchy)
    =========================================================================== */

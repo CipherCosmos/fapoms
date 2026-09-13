@@ -11,6 +11,7 @@ import { DetailDrawer, AlertBanner, StatusBadge, useConfirm } from '../../../com
 import { humanizeStatus } from '../../../config/status-registry';
 import { Field, fmtDate, fmtWhen, InviteLinkBox } from '../hr-ui';
 import type { AssayerApplicationDetail } from './HrApplicationsPage';
+import { SkeletonList } from '../../../components/ui/Loading';
 
 /**
  * The detail view HR reviews an application from — every submitted field, the document
@@ -259,7 +260,7 @@ export const ApplicationDetailDrawer: React.FC<{
         {loadFailed(detailQuery) ? (
           <LoadFailure loads={[{ label: 'this application', query: detailQuery }]} />
         ) : !detail || !app ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+          <div className="deferred-appear"><SkeletonList rows={5} height={40} /></div>
         ) : (
           <>
             {actionError && (

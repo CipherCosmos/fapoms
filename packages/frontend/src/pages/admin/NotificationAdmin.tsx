@@ -9,6 +9,7 @@ import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { useCurrentRoles, canAdministerNotifications } from '../../hooks/useCurrentRoles';
 import { Page } from '../../components/ui/Page';
+import { SkeletonList } from '../../components/ui/Loading';
 
 /**
  * Notification & Email Management.
@@ -255,7 +256,7 @@ export const NotificationAdmin: React.FC = () => {
             {loadFailed(catalogQuery) ? (
               <LoadFailure loads={[{ label: 'the event catalog', query: catalogQuery }]} />
             ) : loadingCatalog ? (
-              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
+              <div className="deferred-appear" style={{ padding: '16px' }}><SkeletonList rows={6} height={40} /></div>
             ) : types.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
                 No events match what you are filtering on.

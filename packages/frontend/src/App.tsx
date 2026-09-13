@@ -57,6 +57,7 @@ const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel')
 const CompliancePanel = React.lazy(() => import('./pages/admin/CompliancePanel').then((m) => ({ default: m.CompliancePanel })));
 const Approvals = React.lazy(() => import('./pages/admin/Approvals').then((m) => ({ default: m.Approvals })));
 import { LEGACY_PATHS as HR_LEGACY_PATHS } from './pages/hr/hr-destinations';
+import { PageSkeleton } from './components/ui/PageSkeleton';
 
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
@@ -145,19 +146,11 @@ const RouteErrorBoundary: React.FC<{ children: React.ReactNode }> = ({ children 
 };
 
 /** Lightweight fallback shown while a route chunk is fetched. Mirrors ProtectedRoute's loader. */
-const RouteFallback: React.FC = () => (
-  <div
-    style={{
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      height: '60vh',
-      color: 'var(--text-muted)',
-    }}
-  >
-    Loading…
-  </div>
-);
+/**
+ * What is on screen while a route's chunk is still arriving — see `PageSkeleton`, which holds the
+ * page's shape rather than replacing the content area with one grey word in 60vh of nothing.
+ */
+const RouteFallback: React.FC = () => <PageSkeleton />;
 
 interface UserProfile {
   displayName: string;

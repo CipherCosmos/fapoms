@@ -11,6 +11,7 @@ import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { loadFailed } from '../queryClient';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
 import { Page } from '../components/ui/Page';
+import { SkeletonList } from '../components/ui/Loading';
 
 interface Holiday {
   id: string;
@@ -271,7 +272,7 @@ export const Holidays: React.FC = () => {
           {loadFailed(holidaysQuery) ? (
             <LoadFailure loads={[{ label: 'the holiday calendar', query: holidaysQuery }]} />
           ) : isLoading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading…</div>
+            <div className="deferred-appear" style={{ padding: '16px' }}><SkeletonList rows={6} height={40} /></div>
           ) : (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '4px' }}>

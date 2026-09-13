@@ -19,6 +19,7 @@ import { DangerZoneSection } from './DangerZone/DangerZoneSection';
 import { RulesSection } from '../Rules';
 import { TransportCostsSection } from '../TransportCosts';
 import { Page } from '../../components/ui/Page';
+import { SkeletonList } from '../../components/ui/Loading';
 
 /**
  * Client-side-only nav entry — the data-reset domains have no corresponding "setting group" on
@@ -611,7 +612,7 @@ export const PlatformSettings: React.FC = () => {
             {loadFailed(settingsQuery) ? (
               <LoadFailure style={{ margin: '14px' }} loads={[{ label: 'the platform settings', query: settingsQuery }]} />
             ) : isLoading ? (
-              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+              <div className="deferred-appear" style={{ padding: '12px' }}><SkeletonList rows={4} height={40} /></div>
             ) : inGroup.length === 0 ? (
               <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
                 Nothing is configurable in this section.

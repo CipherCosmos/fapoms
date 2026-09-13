@@ -5,6 +5,7 @@ import { api } from '../../services/api';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { activityEventLabel, anyStatusLabel } from '@fapoms/shared';
+import { SkeletonList } from '../../components/ui/Loading';
 
 /**
  * The audit trail, made reachable.
@@ -130,7 +131,7 @@ export const ActivityFeed: React.FC = () => {
         {loadFailed(feed) ? (
           <LoadFailure style={{ margin: 12 }} loads={[{ label: 'the activity log', query: feed }]} />
         ) : isLoading ? (
-          <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>
+          <div className="deferred-appear" style={{ padding: '12px' }}><SkeletonList rows={5} height={34} /></div>
         ) : events.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
             <ShieldAlert size={28} style={{ opacity: 0.35 }} />

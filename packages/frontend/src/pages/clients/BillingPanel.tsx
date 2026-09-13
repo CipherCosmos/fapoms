@@ -9,6 +9,7 @@ import { isValidIfsc } from '@fapoms/shared';
 import { applyPlaceToAddressGroup, composeAddress, emptyAddressGroup, stateOptionsFor, type AddressGroup } from './address-group';
 import { taxIdHint, taxIdGstinConsequenceHint } from './field-hints';
 import { loadFailed } from '../../queryClient';
+import { SkeletonList } from '../../components/ui/Loading';
 
 /**
  * A client's billing, in one place: what they are billed per audit (the rate card), the tax
@@ -170,7 +171,9 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
     );
   };
 
-  if (isLoading || detail.isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>;
+  if (isLoading || detail.isLoading) {
+    return <div className="deferred-appear" style={{ padding: 20 }}><SkeletonList rows={4} height={48} /></div>;
+  }
 
   /**
    * A failed fetch must not fall through to the form below: `form` was seeded from `billing`

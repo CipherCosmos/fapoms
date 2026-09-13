@@ -4,6 +4,7 @@ import { Modal, StyledInput, useToast, useConfirm } from '../../components/ui';
 import { useClientContacts, useAddContact, useDeleteContact } from '../../hooks/useClients';
 import type { ClientContact } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { SkeletonList } from '../../components/ui/Loading';
 
 /** Digits only, then a `+91` unless the number already carries the country code. */
 const normalisePhone = (raw: string): string => {
@@ -107,7 +108,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       </div>
 
       {isLoading ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+        <div className="deferred-appear" style={{ padding: 20 }}><SkeletonList rows={3} height={44} /></div>
       ) : contacts.length === 0 ? (
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
           No contacts registered
