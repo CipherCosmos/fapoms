@@ -21,6 +21,7 @@ import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
+import { workTabLabel } from './work/workTabs';
 
 /**
  * Why an audit gets moved — previously not captured at all: `handleConfirmReschedule` only ever
@@ -608,7 +609,7 @@ export const Scheduling: React.FC = () => {
       <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
         <PageHeader
           icon={<Calendar size={20} />}
-          title="Scheduling Workspace"
+          title={workTabLabel('/scheduling')}
           /*
             A count is a claim. Where a load failed there is no count to make, and printing
             "0 active schedules" is the single most confident wrong sentence this page can say.

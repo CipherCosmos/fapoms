@@ -80,6 +80,27 @@ export const WORK_TABS: readonly WorkTab[] = [
  */
 export const WORK_TAB_STRIP_HEIGHT = 43;
 
+/**
+ * What this tab is called — the one name for it, wherever the name appears.
+ *
+ * Each of these screens carried a second title of its own inside the tab it lives in, so
+ * `/assignments` was "Audit Work" in the sidebar, "Audit Work" in the breadcrumb, "Field work" on
+ * the tab and "Field Execution Workspace" in the page heading directly beneath it — four names
+ * within about 120 vertical pixels, two of them invented. `/inbox` said "Operations Inbox" and
+ * `/scheduling` said "Scheduling Workspace" for the same reason.
+ *
+ * Reading the label from here means the tab somebody clicked and the heading they land on are the
+ * same words by construction, and renaming a tab renames the screen.
+ */
+export function workTabLabel(path: WorkTabPath): string {
+  return WORK_TABS.find((t) => t.path === path)?.label ?? '';
+}
+
+/** The one line of help that tab carries, for a page that wants to say the same thing larger. */
+export function workTabHint(path: WorkTabPath): string {
+  return WORK_TABS.find((t) => t.path === path)?.hint ?? '';
+}
+
 const WORK_TAB_PATH_SET = new Set<string>(WORK_TABS.map((t) => t.path));
 
 /** Whether a pathname is one of the Audit Work tabs. */

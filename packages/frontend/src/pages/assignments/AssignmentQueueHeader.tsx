@@ -17,6 +17,7 @@ import {
   TERMINAL_FILTER,
 } from './useAssignmentQueue';
 import type { FieldIssue } from './types';
+import { workTabHint, workTabLabel } from '../work/workTabs';
 
 export interface AssignmentQueueHeaderProps {
   totalCount: number;
@@ -77,8 +78,8 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
       <PageHeader
         icon={<ClipboardList size={20} />}
-        title="Field Execution Workspace"
-        subtitle="Track and manage live field audits from acceptance through check-in, submission, and closure."
+        title={workTabLabel('/assignments')}
+        subtitle={workTabHint('/assignments')}
         actions={
           <>
             <button

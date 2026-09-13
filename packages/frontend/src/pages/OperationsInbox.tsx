@@ -84,6 +84,7 @@ interface Candidate {
 }
 
 import { money as inr } from '../utils/money';
+import { workTabLabel } from './work/workTabs';
 const age = (h: number) => (h < 1 ? 'just now' : h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`);
 
 /**
@@ -454,7 +455,7 @@ export const OperationsInbox: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '0 8px 16px' }}>
       <PageHeader
         icon={<InboxIcon size={20} />}
-        title="Operations Inbox"
+        title={workTabLabel('/inbox')}
         subtitle="Every assignment waiting on a desk decision. Phone-channel assayers appear as call tasks — record the call's outcome and the system does the rest. An empty inbox is a healthy operation."
         actions={<>
           {data0.waitingOnApp > 0 && (
