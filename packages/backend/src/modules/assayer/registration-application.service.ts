@@ -11,6 +11,12 @@ import {
   OnboardingDocument,
   ApplicationSource,
   ASSAYER_ERROR_CODES,
+  pickRegistrationRecordFields,
+  mergedRegistrationView,
+  missingRegistrationFields,
+  isValidPan,
+  isValidIfsc,
+  isValidAadhaar,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AssayerApplicationEntity } from './assayer-application.entity';
@@ -76,6 +82,23 @@ const EDITABLE_DRAFT_FIELDS = [
   'experienceYears', 'currentEmployer', 'expertise', 'availability', 'employmentCategory',
 ] as const;
 
+/**
+ * An extended profile with its record fields filtered to what a registration may set.
+ *
+ * Returns the profile unchanged apart from `fields`, and drops `fields` entirely when nothing
+ * survives the filter — an empty object stored there would read as "asked and left blank".
+ */
+function filterExtendedProfile(
+  profile: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!profile) return null;
+  const fields = pickRegistrationRecordFields(
+    (profile as { fields?: Record<string, unknown> }).fields,
+  );
+  const { fields: _ignored, ...rest } = profile as Record<string, unknown>;
+  return Object.keys(fields).length > 0 ? { ...rest, fields } : { ...rest };
+}
+
 export interface UpdateApplicationDraftDto {
   fullName?: string;
   email?: string;
@@ -90,6 +113,18 @@ export interface UpdateApplicationDraftDto {
   expertise?: string;
   availability?: string;
   employmentCategory?: EmploymentCategory;
+  /**
+   * Everything else the person will need once they are real — identity numbers, bank details,
+   * emergency contact, qualification, map pin — keyed by the ASSAYER RECORD's own field names and
+   * filtered through `pickRegistrationRecordFields` before it is stored.
+   *
+   * It goes under `extendedProfile.fields`, which promotion already applies through the guarded
+   * `AssayerService.update`. That is why a candidate filling this in on their phone and a clerk
+   * filling it in at the desk produce the same person: there is one storage, one filter and one
+   * applier, rather than a wizard that wrote the record directly and a candidate form that could
+   * not reach half of it.
+   */
+  record?: Record<string, unknown>;
 }
 
 /**
@@ -390,7 +425,6 @@ export class RegistrationApplicationService {
   // ── Draft ────────────────────────────────────────────────────────────────
 
   async updateDraft(rawToken: string, patch: UpdateApplicationDraftDto): Promise<AssayerApplicationEntity> {
-    await this.assertOtpVerified(rawToken);
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
@@ -401,11 +435,106 @@ export class RegistrationApplicationService {
       (application as unknown as Record<string, unknown>)[key] =
         key === 'dateOfBirth' && typeof incoming === 'string' ? new Date(incoming) : incoming;
     }
+    this.mergeRecordFields(application, patch.record);
     return this.applications.save(application);
   }
 
+  /**
+   * Fold the record-shaped answers into `extendedProfile.fields`, one patch at a time.
+   *
+   * Merged rather than replaced, because both intake paths save as the person types: a candidate
+   * fills identity on one screen and bank on the next, and a replace would drop whichever they
+   * filled in first. Filtered on the way in, so the stored object can never hold a key promotion
+   * would refuse — the application is not a back door into fields the desk cannot set itself.
+   */
+  private mergeRecordFields(
+    application: AssayerApplicationEntity,
+    incoming: Record<string, unknown> | undefined,
+  ): void {
+    const accepted = pickRegistrationRecordFields(incoming);
+    if (Object.keys(accepted).length === 0) return;
+    /**
+     * Checked here, at the moment it is typed, rather than only when promotion applies it.
+     *
+     * The same three rules the record enforces — a mistyped PAN refused weeks later, on a screen
+     * the candidate cannot see, is a gap nobody can close. Blank clears the field and is allowed:
+     * a candidate correcting their own mistake must be able to empty the box.
+     */
+    const invalid: string[] = [];
+    const filled = (v: unknown) => v != null && String(v).trim() !== '';
+    if (filled(accepted.panNumber) && !isValidPan(accepted.panNumber)) invalid.push('PAN');
+    if (filled(accepted.ifscCode) && !isValidIfsc(accepted.ifscCode)) invalid.push('IFSC');
+    if (filled(accepted.aadhaarNumber) && !isValidAadhaar(accepted.aadhaarNumber)) invalid.push('Aadhaar');
+    if (invalid.length > 0) {
+      throw new BadRequestException(
+        `Check the ${invalid.join(' and ')} — ${invalid.length > 1 ? 'those do' : 'that does'} not look right.`,
+      );
+    }
+    const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
+    const fields = (profile.fields ?? {}) as Record<string, unknown>;
+    application.extendedProfile = { ...profile, fields: { ...fields, ...accepted } } as never;
+  }
+
+  /**
+   * The desk's own save, as the clerk moves through the registration.
+   *
+   * The same merge the candidate's form uses, plus the three things only a desk can decide: the
+   * pay rates, the references it took up, and which clients the person may be put in front of.
+   * All of it lands in the application, and promotion applies it — so the wizard no longer writes
+   * a live assayer at the end of its first step, and a half-finished registration is a visible
+   * application in the review queue rather than an incomplete person on the roster.
+   *
+   * One route rather than four. A separate endpoint per section is how the old flow ended up
+   * with a record, a commercial profile and a set of references that could each exist without the
+   * others, and no screen that could tell you which had saved.
+   */
+  async updateDeskDraft(
+    id: string,
+    patch: UpdateApplicationDraftDto & {
+      mobile?: string;
+      commercial?: Record<string, unknown>;
+      references?: Array<Record<string, unknown>>;
+      empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+    },
+    actorUserId: string,
+  ): Promise<AssayerApplicationEntity> {
+    const application = await this.applications.findOne({ where: { id } });
+    if (!application) throw new NotFoundException('Application not found.');
+    if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
+      throw new BadRequestException('This application has already been decided — there is nothing left to edit.');
+    }
+
+    for (const key of EDITABLE_DRAFT_FIELDS) {
+      const incoming = (patch as Record<string, unknown>)[key];
+      if (incoming === undefined) continue;
+      (application as unknown as Record<string, unknown>)[key] =
+        key === 'dateOfBirth' && typeof incoming === 'string' ? new Date(incoming) : incoming;
+    }
+    if (patch.mobile !== undefined) application.mobile = patch.mobile;
+    this.mergeRecordFields(application, patch.record);
+
+    const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
+    if (patch.commercial !== undefined) profile.commercial = patch.commercial;
+    if (patch.references !== undefined) profile.references = patch.references;
+    if (patch.empanelments !== undefined) profile.empanelments = patch.empanelments;
+    application.extendedProfile = profile as never;
+    application.updatedBy = actorUserId;
+
+    return this.applications.save(application);
+  }
+
+  /**
+   * What this application is still missing, seen as the person it will become.
+   *
+   * Offered to every screen that shows an application so HR can chase a gap while the candidate is
+   * still in the conversation, rather than discovering it weeks later when a payout refuses.
+   */
+  registrationGaps(application: AssayerApplicationEntity): Array<{ key: string; label: string; blocks: string }> {
+    return missingRegistrationFields(mergedRegistrationView(application as never))
+      .map((f) => ({ key: f.key, label: f.label, blocks: f.blocks }));
+  }
+
   async acceptConsent(rawToken: string, consentVersion: string): Promise<AssayerApplicationEntity> {
-    await this.assertOtpVerified(rawToken);
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
@@ -422,7 +551,6 @@ export class RegistrationApplicationService {
     requirement: OnboardingDocument,
     file: { originalname: string; buffer: Buffer; mimetype: string; size: number },
   ): Promise<AssayerApplicationDocumentEntity> {
-    await this.assertOtpVerified(rawToken);
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
@@ -523,7 +651,10 @@ export class RegistrationApplicationService {
       expertise: dto.expertise ?? null,
       availability: dto.availability ?? null,
       source: ApplicationSource.HR_DESK,
-      extendedProfile: dto.extendedProfile ?? null,
+      // Through the same filter the candidate's own form uses — one intake, one rule about what a
+      // registration may set, whoever is typing. An empty `fields` is left off rather than stored
+      // as an empty object: the stored profile should say what was collected, not that a filter ran.
+      extendedProfile: filterExtendedProfile(dto.extendedProfile),
       status: ApplicationStatus.PENDING_VALIDATION,
       createdBy: actorUserId,
       updatedBy: actorUserId,
@@ -543,6 +674,19 @@ export class RegistrationApplicationService {
 
   // ── Submit ───────────────────────────────────────────────────────────────
 
+  /**
+   * Where the verification code is actually required, and the only place.
+   *
+   * It gated every candidate action — typing a name, ticking consent, attaching a scan. That made
+   * the code a prerequisite for the form rather than a check on the person submitting it, and it
+   * had a consequence nobody intended: on a deployment whose email was switched off, a candidate
+   * holding a valid link could not enter a single character. The code is delivered by email to the
+   * same mailbox the link arrived in, so gating the typing proved nothing the link had not already
+   * proved, while making an undelivered code a total block instead of a last-step block.
+   *
+   * The link is still the authorisation for everything before this. Nothing is filed, reviewed or
+   * promoted until the code confirms the person at the other end.
+   */
   async submit(rawToken: string): Promise<AssayerApplicationEntity> {
     await this.assertOtpVerified(rawToken);
     const application = await this.findByRawToken(rawToken);
@@ -692,6 +836,7 @@ export class RegistrationApplicationService {
     const profile = (application.extendedProfile ?? null) as {
       fields?: Record<string, unknown>;
       commercial?: Record<string, unknown>;
+      references?: Array<Record<string, unknown>>;
       empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
     } | null;
     if (!profile) return [];
@@ -722,6 +867,14 @@ export class RegistrationApplicationService {
         await this.assayerService.createCommercialProfile(assayerId, commercial as never, actorUserId);
       } catch (err: any) {
         gaps.push(`commercial rates (${err?.message ?? 'refused'})`);
+      }
+    }
+
+    for (const reference of profile.references ?? []) {
+      try {
+        await this.rosterRecords.saveReference(assayerId, reference as never, actorUserId);
+      } catch (err: any) {
+        gaps.push(`reference ${(reference as { name?: string }).name ?? ''} (${err?.message ?? 'refused'})`);
       }
     }
 

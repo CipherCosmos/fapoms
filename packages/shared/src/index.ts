@@ -46,6 +46,7 @@ export * from './gst';
 export * from './billing-liveness';
 export * from './assayer-lifecycle';
 export * from './assayer-record';
+export * from './workforce-registration';
 export * from './rule-bypass';
 
 // The roster spreadsheet's own words, and the vocabularies they are read into

@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req,
+  BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req,
   UploadedFile, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -131,6 +131,18 @@ export class HrApplicationsController {
       id, requirement as OnboardingDocument, file,
     );
     return { success: true, data: doc };
+  }
+
+  @Patch(':id')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Save what the desk has typed so far, without deciding the application' })
+  async updateFromDesk(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: Record<string, unknown>,
+    @Req() req: any,
+  ) {
+    return { success: true, data: await this.registrationApplications.updateDeskDraft(id, dto as never, req.user.id) };
   }
 
   @Get()

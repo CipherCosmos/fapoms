@@ -6,7 +6,7 @@ import { memoryStorage } from 'multer';
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import {
-  IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength,
+  IsEnum, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, MinLength,
 } from 'class-validator';
 import { OnboardingDocument, EmploymentCategory } from '@fapoms/shared';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
@@ -70,6 +70,17 @@ class UpdateDraftRequestDto implements UpdateApplicationDraftDto {
 
   @IsOptional() @IsEnum(EmploymentCategory)
   employmentCategory?: EmploymentCategory;
+
+  /**
+   * The rest of the person, keyed by the assayer record's own field names.
+   *
+   * Unvalidated as a shape on purpose: the allow-list is a single shared rule
+   * (`pickRegistrationRecordFields`), and duplicating it as thirty decorators here is exactly how
+   * the candidate form and the desk wizard drifted apart in the first place. The service filters
+   * what it will keep and checks PAN, IFSC and Aadhaar before storing any of it.
+   */
+  @IsOptional() @IsObject()
+  record?: Record<string, unknown>;
 }
 
 class AcceptConsentDto {

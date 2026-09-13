@@ -173,16 +173,26 @@ describe('pre-account OTP', () => {
     expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455' });
   });
 
-  it('gates every write behind verification — a link alone is not enough', async () => {
+  /**
+   * The code gates FILING, not typing.
+   *
+   * It used to gate every write, which made an undelivered code a total block: a candidate holding
+   * a valid link could not enter a character. The code reaches the same mailbox the link did, so
+   * gating the form proved nothing the link had not, while turning a mail outage into "nobody can
+   * register at all". Nothing is reviewed or promoted until the code confirms the person.
+   */
+  it('gates the filing, and lets the candidate fill the form with the link alone', async () => {
     const { service } = makeService();
-    await expect(service.updateDraft(RAW_TOKEN, { fullName: 'X' })).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(service.acceptConsent(RAW_TOKEN, 'v1')).rejects.toBeInstanceOf(ForbiddenException);
+
     await expect(service.submit(RAW_TOKEN)).rejects.toBeInstanceOf(ForbiddenException);
+
+    await expect(service.updateDraft(RAW_TOKEN, { fullName: 'X' })).resolves.toBeDefined();
+    await expect(service.acceptConsent(RAW_TOKEN, 'v1')).resolves.toBeDefined();
     await expect(
       service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, {
         originalname: 'x.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 1,
       }),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    ).resolves.toBeDefined();
   });
 });
 
@@ -594,5 +604,121 @@ describe('the desk files an application instead of writing the roster', () => {
       originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 1,
     })).rejects.toThrow(/already been decided/);
     expect(ctx.storage.saveFile).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * One registration, whoever is typing.
+ *
+ * These cover the thing the pipeline previously could not do: carry the WHOLE person. A candidate
+ * approved before this collected 48 of the record's 86 columns and reached the roster unable to be
+ * paid, assigned, carded or signed in, because the candidate's form had no box for a PAN, a bank
+ * account or an emergency contact and the desk's wizard wrote the record directly instead.
+ */
+describe('the application carries the whole person', () => {
+  const patch = (record: Record<string, unknown>) => ({ record });
+
+  it('stores the record-shaped answers the candidate typed', async () => {
+    const ctx = makeService({ cache: verified() });
+    await ctx.service.updateDraft(RAW_TOKEN, patch({
+      panNumber: 'ABCDE1234F',
+      bankAccountNumber: '123456789012',
+      ifscCode: 'SBIN0001234',
+      emergencyContactPhone: '9876500000',
+    }) as never);
+
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    expect(saved.extendedProfile.fields).toEqual({
+      panNumber: 'ABCDE1234F',
+      bankAccountNumber: '123456789012',
+      ifscCode: 'SBIN0001234',
+      emergencyContactPhone: '9876500000',
+    });
+  });
+
+  it('merges across saves, because the form is filled one screen at a time', async () => {
+    const ctx = makeService({ cache: verified() });
+    ctx.application!.extendedProfile = { fields: { panNumber: 'ABCDE1234F' } };
+
+    await ctx.service.updateDraft(RAW_TOKEN, patch({ ifscCode: 'SBIN0001234' }) as never);
+
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    expect(saved.extendedProfile.fields).toEqual({ panNumber: 'ABCDE1234F', ifscCode: 'SBIN0001234' });
+  });
+
+  it('refuses a key registration may not set, rather than smuggling it into promotion', async () => {
+    const ctx = makeService({ cache: verified() });
+    await ctx.service.updateDraft(RAW_TOKEN, patch({
+      panNumber: 'ABCDE1234F', lifecycleStatus: 'ACTIVE', qualificationScore: 99,
+    }) as never);
+
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    expect(saved.extendedProfile.fields).toEqual({ panNumber: 'ABCDE1234F' });
+  });
+
+  it('checks the identifier while the candidate is still looking at the box', async () => {
+    const ctx = makeService({ cache: verified() });
+    await expect(ctx.service.updateDraft(RAW_TOKEN, patch({ panNumber: 'NOPE' }) as never))
+      .rejects.toThrow(/PAN/i);
+    await expect(ctx.service.updateDraft(RAW_TOKEN, patch({ ifscCode: 'nope' }) as never))
+      .rejects.toThrow(/IFSC/i);
+  });
+
+  it('lets a candidate clear a field they got wrong', async () => {
+    const ctx = makeService({ cache: verified() });
+    await expect(ctx.service.updateDraft(RAW_TOKEN, patch({ panNumber: '' }) as never))
+      .resolves.toBeDefined();
+  });
+
+  it('names what is still missing, and what each gap stops', async () => {
+    const ctx = makeService();
+    ctx.application!.extendedProfile = { fields: { panNumber: 'ABCDE1234F' } };
+
+    const gaps = ctx.service.registrationGaps(ctx.application as never);
+    expect(gaps.map((g) => g.key)).toEqual([
+      'bankAccountNumber', 'ifscCode', 'joiningDate', 'emergencyContactPhone', 'latitude',
+    ]);
+    expect(gaps.find((g) => g.key === 'ifscCode')!.blocks).toMatch(/payout/i);
+  });
+
+  it('counts the phone the application already holds, so HR is not sent chasing it', async () => {
+    const ctx = makeService();
+    expect(ctx.service.registrationGaps(ctx.application as never).map((g) => g.key))
+      .not.toContain('phone');
+  });
+});
+
+describe('the desk saves into the application, not onto the roster', () => {
+  it('keeps the clerk work in one place: fields, rates, references and standings', async () => {
+    const ctx = makeService();
+    await ctx.service.updateDeskDraft('app-1', {
+      fullName: 'Desk Person',
+      mobile: '9822000002',
+      record: { panNumber: 'ABCDE1234F', latitude: 18.52, longitude: 73.85 },
+      commercial: { baseFee: 1200 },
+      references: [{ name: 'Prior employer', phone: '9876500001' }],
+      empanelments: [{ clientId: 'client-1', status: 'RECOMMENDED' }],
+    } as never, 'hr-1');
+
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    expect(saved.fullName).toBe('Desk Person');
+    expect(saved.mobile).toBe('9822000002');
+    expect(saved.extendedProfile.fields).toEqual({ panNumber: 'ABCDE1234F', latitude: 18.52, longitude: 73.85 });
+    expect(saved.extendedProfile.commercial).toEqual({ baseFee: 1200 });
+    expect(saved.extendedProfile.references).toHaveLength(1);
+    expect(saved.extendedProfile.empanelments).toHaveLength(1);
+    expect(saved.updatedBy).toBe('hr-1');
+  });
+
+  it('refuses to edit an application that has already been decided', async () => {
+    const ctx = makeService({ application: { id: 'app-1', status: ApplicationStatus.APPROVED } });
+    await expect(ctx.service.updateDeskDraft('app-1', { fullName: 'Too late' } as never, 'hr-1'))
+      .rejects.toThrow(/already been decided/i);
+  });
+
+  it('needs no verification code — the clerk is signed in and the candidate is at the desk', async () => {
+    const ctx = makeService();
+    await expect(ctx.service.updateDeskDraft('app-1', { fullName: 'No code needed' } as never, 'hr-1'))
+      .resolves.toBeDefined();
   });
 });
