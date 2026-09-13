@@ -8,6 +8,7 @@ import { BrandLogo } from '../components/BrandLogo';
 import { Select } from '../components/ui/Select';
 import { AlertBanner } from '../components/ui/AlertBanner';
 import { userMessage } from '../services/errors';
+import { identityFormatHint, normaliseIdentityOnBlur } from '../config/identity-fields';
 import {
   hydrateRegistration, requestRegistrationOtp, verifyRegistrationOtp, updateRegistrationDraft,
   acceptRegistrationConsent, uploadRegistrationDocument, submitRegistration, isOtpVerificationLost,
@@ -66,6 +67,27 @@ const SECTION_NOTE_STYLE: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
   lineHeight: 1.5,
+};
+
+/**
+ * What the app says about an identifier while the candidate is still holding the card.
+ *
+ * This form asks for a PAN, an Aadhaar, an IFSC code and a pincode and checked none of them. The
+ * HR desk's own wizard has checked all four for a while, against the shared rulebook the API uses
+ * — so the candidate-facing door, the one filled in by the person least able to interpret a
+ * server error, was the only one that let a transposed digit through to be refused later.
+ *
+ * Advisory, exactly as on the desk's form: it never blocks the draft save, because a blocked draft
+ * is how somebody loses everything they have typed.
+ */
+const FieldHint: React.FC<{ field: string; value: string }> = ({ field, value }) => {
+  const hint = identityFormatHint(field, value);
+  if (!hint) return null;
+  return (
+    <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', marginTop: '4px', lineHeight: 1.4 }}>
+      {hint}
+    </div>
+  );
 };
 
 const LABEL_STYLE: React.CSSProperties = {
@@ -414,6 +436,20 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
    */
   const commitField = (key: keyof FormState) => () => {
     if (!form) return;
+    /*
+      Tidy first, save the tidied value. Somebody typing an Aadhaar off the card puts spaces in it,
+      and `isValidAadhaar` takes twelve digits and nothing else — so the spaced version showed no
+      hint (the hint strips before asking) and was then refused by the server. Same for a PAN
+      pasted with a dash, and a phone number written with the country code spaced out.
+    */
+    const cleaned = typeof form[key] === 'string'
+      ? normaliseIdentityOnBlur(key as string, form[key] as string)
+      : null;
+    if (cleaned !== null) {
+      updateField(key, cleaned as FormState[keyof FormState]);
+      void saveDraft(fieldPatch(key, cleaned));
+      return;
+    }
     void saveDraft(fieldPatch(key, form[key]));
   };
 
@@ -759,6 +795,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                 <div>
                   <label htmlFor="reg-pincode" style={LABEL_STYLE}>Pincode</label>
                   <input id="reg-pincode" value={form.pincode} onChange={(e) => updateField('pincode', e.target.value)} onBlur={commitField('pincode')} inputMode="numeric" style={INPUT_STYLE} />
+                  <FieldHint field="pincode" value={form.pincode} />
                 </div>
               </div>
 
@@ -810,6 +847,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     onChange={(e) => updateField('panNumber', e.target.value.toUpperCase())}
                     onBlur={commitField('panNumber')} autoCapitalize="characters" style={INPUT_STYLE}
                   />
+                  <FieldHint field="panNumber" value={form.panNumber} />
                 </div>
                 <div>
                   <label htmlFor="reg-aadhaar" style={LABEL_STYLE}>Aadhaar</label>
@@ -818,6 +856,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     onChange={(e) => updateField('aadhaarNumber', e.target.value)}
                     onBlur={commitField('aadhaarNumber')} style={INPUT_STYLE}
                   />
+                  <FieldHint field="aadhaarNumber" value={form.aadhaarNumber} />
                 </div>
               </div>
               <div style={FIELD_GRID_STYLE}>
@@ -836,6 +875,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     onChange={(e) => updateField('ifscCode', e.target.value.toUpperCase())}
                     onBlur={commitField('ifscCode')} autoCapitalize="characters" style={INPUT_STYLE}
                   />
+                  <FieldHint field="ifscCode" value={form.ifscCode} />
                 </div>
               </div>
               <div style={FIELD_GRID_STYLE}>

@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import {
   INDIAN_STATES, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason,
-  isValidPan, isValidIfsc, isValidAadhaar, AADHAAR_PATTERN, CRITICAL_ASSAYER_RECORD_FIELDS,
-  normalisePhone, todayDateKey, EMERGENCY_CONTACT_RELATIONS as EMERGENCY_RELATION_NAMES,
+  isValidIfsc, CRITICAL_ASSAYER_RECORD_FIELDS,
+  todayDateKey, EMERGENCY_CONTACT_RELATIONS as EMERGENCY_RELATION_NAMES,
 } from '@fapoms/shared';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { fetchStaffDirectory } from '../../services/staff-directory';
@@ -15,6 +15,7 @@ import { blocksPhrase, parseListValue, type Assayer } from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { fetchWithTimeout } from '../../services/http';
 import { api } from '../../services/api';
+import { identityFormatHint, normaliseIdentityOnBlur, PHONE_FIELD_KEYS } from '../../config/identity-fields';
 
 /**
  * Assayer field definitions and the one renderer that draws them.
@@ -41,7 +42,7 @@ const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-input)', bo
 
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
 const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode']);
-const FIELD_TEL = new Set(['phone', 'alternatePhone', 'emergencyContactPhone']);
+const FIELD_TEL = PHONE_FIELD_KEYS;
 const FIELD_NUM = new Set(['experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload']);
 const FIELD_TIME = new Set(['workingHoursStart', 'workingHoursEnd']);
 
@@ -248,36 +249,8 @@ export const useHrOwnerOptions = (enabled: boolean) => {
  */
 export const stringifyList = (list: string[]): string => (list.length > 0 ? JSON.stringify(list) : '');
 
-/**
- * Format checks that tell the operator what is wrong while they are still in the field.
- *
- * These are advisory hints, never a submit blocker: the server is the authority, and a
- * legitimate-but-unusual value must not be made unsaveable by a regex on this screen.
- *
- * They call the SHARED rulebook (`@fapoms/shared/identity-validation`) — the same functions
- * `POST/PUT /assayers` runs through `IsPanFormat` / `IsAadhaarNumber` / `IsIfscFormat`. This
- * file used to carry its own three regexes, and one of them was weaker than the server's: the
- * local Aadhaar check was twelve digits and nothing else, so a mistyped or transposed digit
- * showed no hint here and was then refused by the Verhoeff checksum on save — after the whole
- * form had been filled. Sharing the rule means the hint appears while the card is still in the
- * clerk's hand, and the two can never disagree about what "looks right" means.
- */
-const formatHint = (key: string, value: string): string | null => {
-  const v = (value || '').trim();
-  if (!v) return null;
-  if (key === 'panNumber' && !isValidPan(v)) return 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.';
-  if (key === 'ifscCode' && !isValidIfsc(v)) return 'An IFSC code looks like HDFC0001234 — four letters, a zero, then six characters.';
-  if (key === 'aadhaarNumber' && !isValidAadhaar(v.replace(/\s/g, ''))) {
-    // Two failure modes, two sentences: a wrong-length value is a typing slip the clerk can see,
-    // while twelve digits that fail the checksum look perfectly right on screen — that one has to
-    // send them back to the card rather than back to the keyboard.
-    return AADHAAR_PATTERN.test(v.replace(/\s/g, ''))
-      ? 'These 12 digits do not add up to a real Aadhaar number — check them against the card.'
-      : 'An Aadhaar number is 12 digits.';
-  }
-  if (key === 'pincode' && !/^\d{6}$/.test(v)) return 'A pincode is exactly 6 digits.';
-  return null;
-};
+/* `formatHint` moved to `config/identity-fields.ts` — four doors collect these identifiers and
+   two of them were not checking the shape at all. See `identityFormatHint` there. */
 
 /**
  * Ask the postal directory what a pincode actually is, and hand the answer back.
@@ -621,33 +594,7 @@ const linkBtnStyle: React.CSSProperties = {
 };
 
 /** Trims and drops the spaces and dashes a clerk pastes from a printed card — nothing cleverer. */
-const stripSeparators = (v: string): string => v.trim().replace(/[\s-]/g, '');
-
-/**
- * What leaving the box should tidy up, and whether that actually changed anything — the caller
- * only shows the "Cleaned up: X → Y" caption when this returns non-null.
- *
- * Deliberately narrow: this fixes the punctuation a person pastes from a printed card or a phone's
- * own contact sheet, never a genuinely wrong value. A PAN that still fails after the spaces and
- * dashes are gone is `formatHint`'s job to flag, not this function's to keep guessing at.
- */
-const normaliseOnBlur = (key: string, raw: string): string | null => {
-  const v = raw ?? '';
-  if (!v.trim()) return null;
-  if (key === 'pincode') {
-    const clean = stripSeparators(v);
-    return clean !== v ? clean : null;
-  }
-  if (key === 'panNumber' || key === 'ifscCode') {
-    const clean = stripSeparators(v).toUpperCase();
-    return clean !== v ? clean : null;
-  }
-  if (FIELD_TEL.has(key)) {
-    const clean = normalisePhone(v);
-    return clean && clean !== v ? clean : null;
-  }
-  return null;
-};
+/* `normaliseOnBlur` moved to `config/identity-fields.ts` alongside the hints it defers to. */
 
 /** Nobody currently on any roster this system holds was born before 1930. */
 const DOB_MIN = '1930-01-01';
@@ -738,7 +685,7 @@ const FieldRenderer: React.FC<{
    */
   const finishBlur = (raw: string) => {
     setTouched(true);
-    const cleaned = normaliseOnBlur(field.key, raw);
+    const cleaned = normaliseIdentityOnBlur(field.key, raw);
     const next = cleaned ?? raw;
     if (cleaned) {
       setForm({ ...form, [field.key]: cleaned });
@@ -774,7 +721,7 @@ const FieldRenderer: React.FC<{
    * match) once the clerk has actually left the box with it still wrong. Before that, or once the
    * value is fine, it is exactly the muted routine hint every other field shows.
    */
-  const rawHint = formatHint(field.key, val);
+  const rawHint = identityFormatHint(field.key, val);
   const captionText = rawHint || field.hint;
   const showInvalid = Boolean(rawHint) && touched;
 

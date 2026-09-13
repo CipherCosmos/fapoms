@@ -61,6 +61,7 @@ import { EmpanelmentStandingCard } from './record/EmpanelmentStandingCard';
 import { CurrentAssignmentsCard } from './record/CurrentAssignmentsCard';
 import { RecentTimelineCard, type TimelineEvent } from './record/RecentTimelineCard';
 import { DeleteAssayerModal } from './record/DeleteAssayerModal';
+import { identityFormatHint, normaliseIdentityOnBlur } from '../../config/identity-fields';
 
 const ENGAGEMENT_LABELS: Record<string, string> = {
   [AssayerEngagementType.REGULAR]: 'Regular',
@@ -1594,16 +1595,34 @@ const InlineControl: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey,
     return <IfscInlineControl val={val} onChange={onChange} ctx={ctx} />;
   }
   const type = def.type === 'date' ? 'date' : def.type === 'number' ? 'number' : 'text';
+  /*
+    The record is the third door onto the same identifiers, and it was the second one not checking
+    their shape: a PAN or an Aadhaar edited here showed nothing until the save came back refused.
+    Same shared rulebook the desk's wizard and the candidate's own form use — advisory, and the
+    blur tidies the punctuation people paste off a card rather than arguing with them about it.
+  */
+  const hint = identityFormatHint(fieldKey, val);
   return (
-    <input
-      type={type}
-      style={{ ...inlineControl, fontFamily: FIELD_MONO_KEYS.has(fieldKey) ? 'monospace' : undefined,
-        textTransform: (fieldKey === 'panNumber' || fieldKey === 'ifscCode') ? 'uppercase' : undefined }}
-      value={val}
-      placeholder={def.placeholder}
-      inputMode={type === 'number' || fieldKey === 'pincode' || fieldKey.toLowerCase().includes('phone') ? 'numeric' : fieldKey === 'email' ? 'email' : undefined}
-      onChange={(e) => onChange(e.target.value)}
-    />
+    <>
+      <input
+        type={type}
+        style={{ ...inlineControl, fontFamily: FIELD_MONO_KEYS.has(fieldKey) ? 'monospace' : undefined,
+          textTransform: (fieldKey === 'panNumber' || fieldKey === 'ifscCode') ? 'uppercase' : undefined }}
+        value={val}
+        placeholder={def.placeholder}
+        inputMode={type === 'number' || fieldKey === 'pincode' || fieldKey.toLowerCase().includes('phone') ? 'numeric' : fieldKey === 'email' ? 'email' : undefined}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => {
+          const cleaned = normaliseIdentityOnBlur(fieldKey, val);
+          if (cleaned !== null) onChange(cleaned);
+        }}
+      />
+      {hint && (
+        <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', marginTop: '3px', lineHeight: 1.35 }}>
+          {hint}
+        </div>
+      )}
+    </>
   );
 };
 
