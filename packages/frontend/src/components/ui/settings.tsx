@@ -168,21 +168,31 @@ export const Pill: React.FC<{ tone?: 'accent' | 'muted' | 'success' | 'warning';
   tone = 'muted',
   children,
 }) => {
+  /**
+   * Tinted from the tone's own colour, not from a colour typed once and frozen.
+   *
+   * `accent` was a hard-coded gold — right in the theme it was sampled from and wrong in the
+   * eighteen others, so this pill stayed gold on flame, emerald, sapphire and the rest while
+   * everything beside it followed the accent. `success` carried a hex fallback of the same kind.
+   * The theme engine computes and contrast-checks an accent per theme; three literals here were
+   * quietly opting out of it.
+   */
   const colours: Record<string, { bg: string; fg: string }> = {
-    accent: { bg: 'rgba(216,174,71,0.14)', fg: 'var(--accent)' },
+    accent: { bg: 'color-mix(in srgb, var(--accent) 14%, transparent)', fg: 'var(--accent)' },
     muted: { bg: 'var(--border-hair, rgba(255,255,255,0.06))', fg: 'var(--text-muted)' },
-    success: { bg: 'rgba(52,168,83,0.14)', fg: 'var(--success, #34a853)' },
-    warning: { bg: 'rgba(216,120,71,0.14)', fg: 'var(--warning)' },
+    success: { bg: 'color-mix(in srgb, var(--success) 14%, transparent)', fg: 'var(--success)' },
+    warning: { bg: 'color-mix(in srgb, var(--warning) 14%, transparent)', fg: 'var(--warning)' },
   };
   const c = colours[tone];
   return (
     <span
       style={{
-        fontSize: '9.5px',
+        // On the scale, rather than half a pixel off it in three places.
+        fontSize: 'var(--text-3xs)',
         fontWeight: 800,
         letterSpacing: '0.03em',
         padding: '2px 7px',
-        borderRadius: '9px',
+        borderRadius: 'var(--radius-full)',
         background: c.bg,
         color: c.fg,
         whiteSpace: 'nowrap',

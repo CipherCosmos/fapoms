@@ -134,7 +134,9 @@ export const Autocomplete: React.FC<{
         <div style={{
           position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 30,
           background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '8px',
-          boxShadow: '0 12px 30px rgba(0,0,0,0.35)', maxHeight: 260, overflow: 'auto',
+          /* The token, not a black slab tuned for the dark themes and dropped onto the six light
+             ones as a bruise under the dropdown. */
+          boxShadow: 'var(--shadow-lg)', maxHeight: 260, overflow: 'auto',
         }}>
           {opts.map((r, i) => (
             <button

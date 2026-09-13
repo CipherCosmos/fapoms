@@ -222,6 +222,15 @@
   --card-blur:    var(--surface-blur);
 
   --status-active: var(--success);
+  /*
+    SHADOWS THE CANONICAL TRIAD ABOVE, for `:root` only.
+    `--status-active-bg` and `--status-pending-bg` are also declared in the canonical status block
+    (search `Canonical Semantic Status Tokens`), and this block's selector includes `:root`, so on
+    the default theme the foreground and border come from there while the background comes from
+    here. The two values are within a few percent of each other, which is why nobody has noticed.
+    Left as it is rather than deleted: this block is shared with `[data-theme="gold"]`, so removing
+    the line would change that theme too, and a colour change nobody asked for is not a tidy-up.
+  */
   --status-active-bg: rgba(63, 125, 83, 0.12);
   --status-completed: var(--success);
   --status-completed-bg: rgba(63, 125, 83, 0.12);
@@ -1493,6 +1502,72 @@ table, .data-table, .financial, .tabular-nums, td, th, .metric-value {
 .btn-secondary:hover {
   background: var(--bg-surface-2);
   border-color: var(--border-color-hover);
+}
+
+/**
+ * Four variants the markup has always asked for and this stylesheet never defined.
+ *
+ * `.btn-ghost` (11 uses), `.btn-icon` (3), `.btn-sm` (3) and `.btn-danger` (1) appear across the
+ * app; grep for them here returned nothing. Eighteen buttons therefore rendered in a state nobody
+ * chose: a ghost button fell back to `.btn`'s transparent border with no background, `.btn-sm` was
+ * full size, `.btn-icon` had no `.btn` base at all and was completely unstyled, and — the one that
+ * matters — a destructive action wearing `.btn-danger` looked exactly like a neutral one.
+ *
+ * Defined against the tokens rather than by eye, so all four move with the nineteen themes.
+ */
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+.btn-ghost:hover {
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+}
+
+/* Destructive. Filled, because a quiet outline is not what "this cannot be undone" looks like. */
+.btn-danger {
+  background: var(--danger);
+  color: var(--on-gradient, #fff);
+  border-color: var(--danger);
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 85%, black);
+  border-color: color-mix(in srgb, var(--danger) 85%, black);
+}
+
+/* A modifier, not a variant: it changes the size and leaves the colour to whatever it sits with. */
+.btn-sm {
+  padding: 6px 12px;
+  font-size: var(--text-xs);
+}
+
+/*
+ * Square, for a button that is one icon. Carries its own base because the three call sites use it
+ * WITHOUT `.btn`, which is why it rendered as unstyled text.
+ */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch-target-min, 36px);
+  height: var(--touch-target-min, 36px);
+  padding: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast, 120ms), color var(--transition-fast, 120ms);
+}
+.btn-icon:hover {
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+}
+.btn-icon:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /**
