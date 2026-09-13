@@ -875,6 +875,26 @@ export class RegistrationApplicationService {
   ): Promise<{ assayer: AssayerEntity; gaps: string[] }> {
     const application = await this.mustBeReviewable(id);
 
+    /**
+     * A candidate who has not filed cannot be hired.
+     *
+     * `mustBeReviewable` refuses only a DECIDED application, so a DRAFT — somebody mid-form, who
+     * has not accepted the declaration and has not confirmed the code — could be approved straight
+     * out of the queue. Found by running the journey against the live server: an application the
+     * candidate had never submitted promoted cleanly to `AS0122`. That routes around both of
+     * `submit()`'s checks at once, and the consent is the one with a compliance life of its own.
+     *
+     * `AWAITING_INFO` stays approvable: HR asked for more, and deciding to proceed without it is a
+     * judgement they are allowed to make. `DRAFT` is not a judgement, it is an unfinished form.
+     */
+    if (application.status === ApplicationStatus.DRAFT) {
+      throw new BadRequestException(
+        'This candidate has not submitted their application yet — they have not accepted the '
+        + 'declaration or confirmed their code. Ask them to finish it, or use Request info to '
+        + 'prompt them.',
+      );
+    }
+
     // Folded into the application BEFORE promotion so the existing applier handles them, rather
     // than a second write path that would have to be kept in step with the first.
     this.mergeRecordFields(application, input?.corrections);

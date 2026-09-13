@@ -926,3 +926,34 @@ describe('consent follows the person onto the roster', () => {
     expect(ctx.assayers.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Somebody mid-form is not somebody to hire.
+ *
+ * `mustBeReviewable` refuses a DECIDED application and nothing else, so a DRAFT could be approved
+ * straight out of the queue — routing around both of `submit()`'s checks at once, the declaration
+ * and the verification code. Found by running the journey against the live server, where an
+ * application the candidate had never submitted promoted cleanly to a real appraiser code.
+ */
+describe('an unfinished application cannot be approved', () => {
+  const at = (status: ApplicationStatus) => ({
+    id: 'app-d', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
+    state: 'Maharashtra', status, organizationId: 'org-1',
+  });
+
+  it('refuses a draft, and says what the candidate still has to do', async () => {
+    const ctx = makeService({ application: at(ApplicationStatus.DRAFT) });
+
+    await expect(ctx.service.approve('app-d', 'hr-1', ['ADMIN']))
+      .rejects.toThrow(/has not submitted|declaration/i);
+    expect(ctx.assayerService.create).not.toHaveBeenCalled();
+  });
+
+  it('still allows one HR asked more of — deciding to proceed is theirs to make', async () => {
+    const ctx = makeService({ application: at(ApplicationStatus.AWAITING_INFO) });
+
+    await ctx.service.approve('app-d', 'hr-1', ['ADMIN']);
+
+    expect(ctx.assayerService.create).toHaveBeenCalled();
+  });
+});
