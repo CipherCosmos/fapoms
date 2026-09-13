@@ -94,7 +94,12 @@ const IMPORTS_TYPEORM = [
   'modules/assayer/roster-records.service.ts',
   // The Appraiser Recruitment application layer: plain repository access over its three own
   // tables (interviews, applications, application documents) — `Repository`/`InjectRepository`
-  // only, no DataSource, no transactions.
+  // only, no DataSource.
+  //
+  // The interview service does now write transactionally, and takes `UnitOfWork` to do it rather
+  // than a DataSource of its own: the interview, the application its PASS spawns and the link
+  // between them are one write, and the invite email goes out only after it commits. That is
+  // exactly the shape the sharper list below is asking for, which is why it is not on it.
   'modules/assayer/assayer-interview.service.ts',
   'modules/assayer/registration-application.service.ts',
   // The roster's filtered/paginated query path, built with `createQueryBuilder` directly over

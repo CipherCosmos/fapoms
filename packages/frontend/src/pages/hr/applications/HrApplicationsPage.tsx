@@ -12,6 +12,7 @@ import { humanizeStatus } from '../../../config/status-registry';
 import { ViewChips, useViewParam, fmtWhen } from '../hr-ui';
 import { ApplicationDetailDrawer } from './ApplicationDetailDrawer';
 import { Page } from '../../../components/ui/Page';
+import { useSearchParams } from 'react-router-dom';
 
 /**
  * HR's review queue for self-registration applications — the Appraiser Recruitment spec's
@@ -102,7 +103,16 @@ const STATUS_KEYS = STATUS_FILTERS.map((f) => f.key);
 export const HrApplicationsPage: React.FC = () => {
   const queryClient = useQueryClient();
   const [status, setStatus] = useViewParam<ApplicationStatus>(STATUS_KEYS, ApplicationStatus.PENDING_VALIDATION);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  /**
+   * `?id=` opens one application directly.
+   *
+   * The interview log links here, and the candidate it links to is almost always in DRAFT — they
+   * were invited a moment ago and have not started. The default filter is "waiting on a decision",
+   * so a link that only named the page would land on a list that deliberately excludes the very
+   * person it was pointing at. Naming the application opens it regardless of which filter is on.
+   */
+  const [params, setParams] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string | null>(params.get('id'));
   const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
 
   const applicationsQuery = useQuery({
@@ -115,9 +125,19 @@ export const HrApplicationsPage: React.FC = () => {
    * Not always a success: a resend can generate a fresh link and still fail to deliver it, and
    * that outcome has to reach the operator rather than be reported as done.
    */
+  /** Closing drops `?id=` too, so a reload does not reopen what was just decided. */
+  const closeDetail = () => {
+    setSelectedId(null);
+    if (params.get('id')) {
+      const next = new URLSearchParams(params);
+      next.delete('id');
+      setParams(next, { replace: true });
+    }
+  };
+
   const handleActionSuccess = (n: { tone: 'ok' | 'err'; text: string }) => {
     setNotice(n);
-    setSelectedId(null);
+    closeDetail();
     void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
   };
 
@@ -210,7 +230,7 @@ export const HrApplicationsPage: React.FC = () => {
       {selectedId && (
         <ApplicationDetailDrawer
           id={selectedId}
-          onClose={() => setSelectedId(null)}
+          onClose={closeDetail}
           onSuccess={handleActionSuccess}
         />
       )}

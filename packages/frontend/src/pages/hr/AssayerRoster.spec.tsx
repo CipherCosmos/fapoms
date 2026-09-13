@@ -573,10 +573,15 @@ describe('finishing a registration somebody abandoned', () => {
 });
 
 /**
- * Registering is a page now (`/hr/register`, `/hr/register/:assayerId`), not a modal this
- * component mounts — see `RegistrationPage.tsx`. These walk the real navigation rather than
- * asserting on component state that no longer exists, with a probe standing in for the page the
- * router would actually load.
+ * Registering is a page, not a modal this component mounts. These walk the real navigation rather
+ * than asserting on component state that no longer exists, with a probe standing in for the page
+ * the router would actually load.
+ *
+ * Where it goes changed. "Add assayer" opened `/hr/register`, a seven-step form that wrote a live
+ * roster row after step one with no interview, no application and no review — so the bypass was
+ * the path everybody found, and the rest of the pipeline looked optional. Adding somebody now
+ * starts where the spec says it starts: `/hr/interviews`, where a candidate's name, number and
+ * interview outcome produce the application and the registration link.
  */
 describe('the roster sends registration to its own page', () => {
   const Probe: React.FC = () => <div data-testid="landed">{useLocation().pathname}</div>;
@@ -590,20 +595,24 @@ describe('the roster sends registration to its own page', () => {
             <Route path="/hr/roster" element={<AssayerRoster />} />
             <Route path="/hr/roster/:id" element={<Probe />} />
             <Route path="/hr/register" element={<Probe />} />
+            <Route path="/hr/interviews" element={<Probe />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     );
   };
 
-  it('"Add assayer" navigates to /hr/register rather than opening a modal in place', async () => {
+  it('"Add assayer" navigates to the candidate screen rather than opening a modal in place', async () => {
     serve([person({ id: 'a-1', displayName: 'Someone' })]);
     renderWithRegisterRoute();
     await screen.findByText('Someone');
 
     fireEvent.click(screen.getByRole('button', { name: /Add assayer/ }));
 
-    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/register');
+    const landed = await screen.findByTestId('landed');
+    expect(landed).toHaveTextContent('/hr/interviews');
+    // The old destination, named so this cannot drift back to the door that skipped the pipeline.
+    expect(landed).not.toHaveTextContent('/hr/register');
   });
 
   /**

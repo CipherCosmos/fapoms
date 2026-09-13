@@ -125,9 +125,18 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
               <span>Import</span>
             </button>
 
+            {/*
+              The door, and the reason this line matters more than it looks.
+
+              It opened `/hr/register` — a seven-step form that wrote a live roster row after step
+              one, with no interview, no application and no review. That made the bypass the path
+              everybody found, and made the rest of the pipeline look optional. Adding somebody now
+              starts where the spec says it starts: a candidate, an interview outcome, and a
+              registration link they fill in themselves.
+            */}
             <button
               type="button"
-              onClick={() => navigate('/hr/register')}
+              onClick={() => navigate('/hr/interviews')}
               className="btn btn-primary"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-sm)', padding: '7px 14px' }}
             >

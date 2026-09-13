@@ -1,6 +1,6 @@
 import { Injectable, Inject, Logger, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import {
   EventCategory,
@@ -34,6 +34,7 @@ import { PlatformSettingsService } from '../../infrastructure/settings/platform-
 import { hashCode, numericCode, hashesEqual } from '../auth/otp-codes';
 import { assertUploadAllowed, SCAN_UPLOAD_TYPES } from '../document/upload-validation';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+import { tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
 
 const TOKEN_BYTES = 32;
 const OTP_TTL_SECONDS = 300;
@@ -266,19 +267,70 @@ export class RegistrationApplicationService {
     return !!result?.success;
   }
 
+  private static readonly INVITE_INTRO = 'Use the link below to complete your Appraiser '
+    + 'registration — from your phone or any computer, no app required.';
+
   /**
-   * Called by `AssayerInterviewService` on a PASS outcome.
+   * The row behind an interview, for the desk's correction window.
    *
-   * `emailed` is reported rather than assumed, so the interview screen can say what actually
-   * happened instead of announcing a delivery on the strength of an address being present.
+   * Read rather than guarded here because the caller is the one that knows what it is about to
+   * change; `AssayerInterviewService.amend` decides whether the window is still open from
+   * `tokenConsumedAt` and the status. Returns null for an interview whose application has been
+   * deleted, which no code path does today.
    */
-  async createInvite(input: {
-    interviewId?: string | null;
-    fullName?: string | null;
-    mobile: string;
-    email?: string | null;
-    organizationId?: string | null;
-  }): Promise<{ application: AssayerApplicationEntity; emailed: boolean; inviteLink: string }> {
+  async findApplicationForAmend(id: string): Promise<AssayerApplicationEntity | null> {
+    return this.applications.findOne({ where: { id } });
+  }
+
+  /**
+   * Is this person already partway in?
+   *
+   * Asked before an interview PASS mints anything. Two PASS verdicts for one candidate — a second
+   * interview, or simply somebody pressing Record twice — used to produce two applications and two
+   * live invite links for one person, with no unique index, no idempotency key and nothing to
+   * notice. Whichever link the candidate happened to open became the real one, and the other
+   * application sat in the queue as a phantom.
+   *
+   * Terminal applications are ignored on purpose: somebody rejected a year ago and interviewed
+   * again is a new candidate, and refusing them would be the wrong kind of memory.
+   */
+  async openApplicationForMobile(
+    mobile: string,
+    organizationId?: string | null,
+  ): Promise<AssayerApplicationEntity | null> {
+    const trimmed = (mobile ?? '').trim();
+    if (!trimmed) return null;
+    const found = await this.applications.find({
+      where: { mobile: trimmed, ...(organizationId ? { organizationId } : {}) },
+      order: { createdAt: 'DESC' },
+    });
+    return found.find((a) => !APPLICATION_TERMINAL_STATUSES.includes(a.status)) ?? null;
+  }
+
+  /**
+   * The application and its token, written and nothing else.
+   *
+   * Split from the send below because the two must not share a fate. Minting used to save the row
+   * and email the link in one call, inside a hand-off that then had a second write to do
+   * (`AssayerInterviewService` links the interview back to the application it spawned) — so a
+   * failure after the email left a candidate holding a working link to an application the desk's
+   * own log did not know about. The write now happens on the caller's transaction and the email
+   * goes out after it commits, which is the only order in which an unsendable email is the worse
+   * outcome rather than the unrecallable one.
+   *
+   * `manager` is the caller's transaction when there is one. There is no version of this that
+   * sends anything.
+   */
+  async createInviteRecord(
+    input: {
+      interviewId?: string | null;
+      fullName?: string | null;
+      mobile: string;
+      email?: string | null;
+      organizationId?: string | null;
+    },
+    manager?: EntityManager,
+  ): Promise<{ application: AssayerApplicationEntity; rawToken: string }> {
     const application = this.applications.create({
       interviewId: input.interviewId ?? null,
       fullName: input.fullName ?? null,
@@ -288,13 +340,41 @@ export class RegistrationApplicationService {
       status: ApplicationStatus.DRAFT,
     });
     const rawToken = await this.mintToken(application);
-    const saved = await this.applications.save(application);
-    const emailed = await this.sendInviteEmail(
-      saved,
-      rawToken,
-      'Use the link below to complete your Appraiser registration — from your phone or any computer, no app required.',
-    );
-    return { application: saved, emailed, inviteLink: this.inviteLink(rawToken) };
+    const saved = manager
+      ? await manager.save(AssayerApplicationEntity, application)
+      : await this.applications.save(application);
+    return { application: saved, rawToken };
+  }
+
+  /**
+   * Deliver a minted link, and say whether it actually went.
+   *
+   * Called after the transaction that created the row has committed. `emailed` is reported rather
+   * than assumed, so the interview screen can say what happened instead of announcing a delivery
+   * on the strength of an address being present.
+   */
+  async deliverInvite(
+    application: AssayerApplicationEntity,
+    rawToken: string,
+  ): Promise<{ emailed: boolean; inviteLink: string }> {
+    const emailed = await this.sendInviteEmail(application, rawToken, RegistrationApplicationService.INVITE_INTRO);
+    return { emailed, inviteLink: this.inviteLink(rawToken) };
+  }
+
+  /**
+   * Mint and send in one call — the composition of the two above, for a caller with no transaction
+   * of its own to join.
+   */
+  async createInvite(input: {
+    interviewId?: string | null;
+    fullName?: string | null;
+    mobile: string;
+    email?: string | null;
+    organizationId?: string | null;
+  }): Promise<{ application: AssayerApplicationEntity; emailed: boolean; inviteLink: string }> {
+    const { application, rawToken } = await this.createInviteRecord(input);
+    const { emailed, inviteLink } = await this.deliverInvite(application, rawToken);
+    return { application, emailed, inviteLink };
   }
 
   /**
@@ -653,9 +733,16 @@ export class RegistrationApplicationService {
 
   // ── HR review ────────────────────────────────────────────────────────────
 
+  /**
+   * `tenantWhere` because this list had no organisation predicate at all: an OPERATIONS user in
+   * one organisation was served every other organisation's candidates — names, mobile numbers and
+   * email addresses of people who have not been hired anywhere. The rows carry `organizationId`
+   * and always did; nothing read it. ADMIN and DEVELOPER still read across by design, which is
+   * what `tenantWhere` returning the clause unchanged means for them.
+   */
   async listApplications(status?: ApplicationStatus): Promise<AssayerApplicationEntity[]> {
     return this.applications.find({
-      where: status ? { status } : {},
+      where: tenantWhere<AssayerApplicationEntity>(status ? { status } : {}),
       order: { createdAt: 'DESC' },
     });
   }

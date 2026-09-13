@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource } from '@fapoms/shared';
 
 import { RegistrationApplicationService, documentsRequestedFor } from './registration-application.service';
+import { runWithRequestContext } from '../../core/context/request-context';
 
 /**
  * The self-registration application layer.
@@ -955,5 +956,75 @@ describe('an unfinished application cannot be approved', () => {
     await ctx.service.approve('app-d', 'hr-1', ['ADMIN']);
 
     expect(ctx.assayerService.create).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The review queue is a list of people who have applied for a job and not got one. It was served
+ * with no organisation predicate at all, so an OPERATIONS user in one organisation read every
+ * other organisation's candidates — names, mobile numbers, email addresses, and whatever they had
+ * filled in about themselves.
+ *
+ * The rows have carried `organizationId` since the table was created. Nothing read it back.
+ */
+describe('whose applications the queue returns', () => {
+  const asPrincipal = (roleNames: string[], organizationId: string | undefined, fn: () => unknown) =>
+    runWithRequestContext(
+      { method: 'GET', route: '/hr/applications', roleNames, organizationId } as never,
+      fn as never,
+    );
+
+  it('confines an OPERATIONS user to their own organisation', async () => {
+    const ctx = makeService();
+    await asPrincipal(['OPERATIONS'], 'org-a', () => ctx.service.listApplications());
+    expect(ctx.applications.find).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a' } }),
+    );
+  });
+
+  it('keeps the status filter alongside it rather than replacing it', async () => {
+    const ctx = makeService();
+    await asPrincipal(['OPERATIONS'], 'org-a', () =>
+      ctx.service.listApplications(ApplicationStatus.PENDING_VALIDATION));
+    expect(ctx.applications.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-a' },
+      }),
+    );
+  });
+
+  it('lets ADMIN read across, which is what the platform operator is for', async () => {
+    const ctx = makeService();
+    await asPrincipal(['ADMIN'], 'org-a', () => ctx.service.listApplications());
+    expect(ctx.applications.find).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+  });
+});
+
+/**
+ * Two PASS verdicts for one candidate, from the application layer's side.
+ *
+ * `openApplicationForMobile` is what stops a second interview minting a rival application. It
+ * deliberately ignores terminal ones: somebody rejected a year ago and interviewed again is a new
+ * candidate, and remembering that against them would be the wrong kind of memory.
+ */
+describe('openApplicationForMobile', () => {
+  it('finds an application the candidate has not finished', async () => {
+    const ctx = makeService({ application: {
+      id: 'app-open', mobile: '9822014455', status: ApplicationStatus.DRAFT, organizationId: 'org-1',
+    } });
+    expect(await ctx.service.openApplicationForMobile('9822014455', 'org-1')).toMatchObject({ id: 'app-open' });
+  });
+
+  it('ignores one that was already decided', async () => {
+    const ctx = makeService({ application: {
+      id: 'app-done', mobile: '9822014455', status: ApplicationStatus.REJECTED, organizationId: 'org-1',
+    } });
+    expect(await ctx.service.openApplicationForMobile('9822014455', 'org-1')).toBeNull();
+  });
+
+  it('answers null for a blank number rather than searching for one', async () => {
+    const ctx = makeService();
+    expect(await ctx.service.openApplicationForMobile('  ', 'org-1')).toBeNull();
+    expect(ctx.applications.find).not.toHaveBeenCalled();
   });
 });

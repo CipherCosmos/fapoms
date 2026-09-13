@@ -12,6 +12,7 @@ import type { Column } from '../../../components/ui';
 import { getSemanticTokens } from '../../../config/status-registry';
 import { Section, Field, fieldInput, fmtWhen, InviteLinkBox } from '../hr-ui';
 import { Page } from '../../../components/ui/Page';
+import { Link } from 'react-router-dom';
 
 /**
  * The Appraiser Recruitment spec's Module 1 — HR's own gate before a candidate can self-register.
@@ -147,9 +148,22 @@ export const AssayerInterviewsPage: React.FC = () => {
     {
       key: 'invite',
       header: 'Application',
+      /*
+        This printed the literal words "Invite sent" and stopped there, which is why nobody could
+        answer "how does somebody come to be in Applications" from the interface: the one screen
+        that knows the answer showed a full stop where the link belonged. `spawnedApplicationId`
+        has been on every passing row since the table was created and was read by nothing.
+      */
       render: (r) => (
         r.spawnedApplicationId
-          ? <span style={{ fontSize: 'var(--text-xs)', color: 'var(--status-active-fg, var(--success))' }}>Invite sent</span>
+          ? (
+            <Link
+              to={`/hr/applications?id=${r.spawnedApplicationId}`}
+              style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', fontWeight: 600 }}
+            >
+              Open their application
+            </Link>
+          )
           : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>—</span>
       ),
     },
@@ -177,7 +191,17 @@ export const AssayerInterviewsPage: React.FC = () => {
         </AlertBanner>
       )}
 
-      <Section title="Record an interview">
+      {/*
+        This screen is the front door, and until now nothing said so — it was called "Interviews"
+        and read as a side-record, while the roster's "Add assayer" button opened a seven-step form
+        that wrote straight to the roster and skipped all of this. A pass here is what creates the
+        application, mints the link and puts somebody in the Applications queue; nothing else in
+        the product does. Two lines of plain English are cheaper than the question it kept raising.
+      */}
+      <Section
+        title="Add a candidate"
+        hint="This is how somebody enters the roster. Record what the interview decided — a pass creates their application and a registration link you can send or read out. Nothing about them is on the roster until HR approves what they fill in."
+      >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
             <Field title="Candidate name">
