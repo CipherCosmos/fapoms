@@ -1,14 +1,17 @@
+import { EMERGENCY_CONTACT_RELATIONS } from '@fapoms/shared';
+
 /**
- * `emergencyRelation` as a fixed choice, matching the web's `EMERGENCY_CONTACT_RELATIONS`
- * (`packages/frontend/src/pages/hr/AssayerForms.tsx`) so the same six relationships mean the
- * same thing on both sides of the same record.
+ * `emergencyRelation` as a fixed choice, matching the web's `AssayerForms.tsx` dropdown so the
+ * same six relationships mean the same thing on both sides of the same record.
  *
- * There is no shared-package home for this list (unlike regions): it is a plain 7-value UI
- * convenience, not a server-enforced enum - `emergencyContactRelation` is a free-text column and
- * the API stores whatever string arrives. Hardcoded here for that reason, matching the web's own
- * hardcoded copy rather than inventing a shared export for a list nothing server-side reads.
+ * The six names are `@fapoms/shared`'s `EMERGENCY_CONTACT_RELATIONS` — not a server-enforced enum
+ * (`emergencyContactRelation` is a free-text column and the API stores whatever string arrives),
+ * but shared anyway, because a UI convenience two clients both offer is exactly how "the same six
+ * relationships" quietly stops being true: nothing before this stopped one side from adding a
+ * seventh option the other never gained. Re-exported under this file's existing name so
+ * `ProfileScreen.tsx` and this file's own spec need no change.
  */
-export const EMERGENCY_RELATIONS = ['Spouse', 'Parent', 'Sibling', 'Child', 'Friend', 'Colleague'] as const;
+export const EMERGENCY_RELATIONS = EMERGENCY_CONTACT_RELATIONS;
 
 export const EMERGENCY_RELATION_OTHER = 'Other';
 

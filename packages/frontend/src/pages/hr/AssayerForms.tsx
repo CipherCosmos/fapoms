@@ -3,7 +3,7 @@ import { AlertCircle } from 'lucide-react';
 import {
   INDIAN_STATES, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason,
   isValidPan, isValidIfsc, isValidAadhaar, AADHAAR_PATTERN, CRITICAL_ASSAYER_RECORD_FIELDS,
-  normalisePhone, todayDateKey,
+  normalisePhone, todayDateKey, EMERGENCY_CONTACT_RELATIONS as EMERGENCY_RELATION_NAMES,
 } from '@fapoms/shared';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { fetchStaffDirectory } from '../../services/staff-directory';
@@ -88,12 +88,11 @@ const UNAVAILABLE_OPTIONS: { value: string; label: string }[] = [
   { value: AssayerUnavailableReason.MOVED_TO_COMPANY, label: 'Now engaged through a company' },
 ];
 
-const EMERGENCY_CONTACT_RELATIONS: { value: string; label: string }[] = [
-  { value: 'Spouse', label: 'Spouse' }, { value: 'Parent', label: 'Parent' },
-  { value: 'Sibling', label: 'Sibling' }, { value: 'Child', label: 'Child' },
-  { value: 'Friend', label: 'Friend' }, { value: 'Colleague', label: 'Colleague' },
-  { value: 'Other', label: 'Other' },
-];
+// 'Other' is appended here, not in the shared list: mobile treats it as a separate sentinel
+// (its own free-text box), and this dropdown is the one place that also wants it as a plain
+// option alongside the six real relations.
+const EMERGENCY_CONTACT_RELATIONS: { value: string; label: string }[] =
+  [...EMERGENCY_RELATION_NAMES, 'Other'].map((v) => ({ value: v, label: v }));
 
 // Exported so the record's Summary can print the same words ("4 - Good") the edit dropdown
 // offers, rather than a bare number nobody has defined the scale for on that screen.

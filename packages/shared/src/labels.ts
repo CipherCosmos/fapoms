@@ -922,3 +922,15 @@ export function callOutcomeLabel(outcome?: string | null): string {
   if (!outcome) return '—';
   return CALL_OUTCOME_LABELS[outcome] ?? humanize(outcome);
 }
+
+/**
+ * The fixed choices offered for an assayer's emergency-contact relationship.
+ *
+ * Not a server-enforced enum — `emergencyContactRelation` is a free-text column and the API
+ * stores whatever string arrives — which is exactly why this belongs here rather than nowhere:
+ * with no shared source, web and mobile each hardcoded their own copy of "the six relationships
+ * this app offers", and nothing stopped the two lists from drifting apart one added option at a
+ * time. An "Other" choice, with its own free-text box, is deliberately NOT one of these six: both
+ * clients treat it as a separate sentinel value, not a seventh relationship.
+ */
+export const EMERGENCY_CONTACT_RELATIONS = ['Spouse', 'Parent', 'Sibling', 'Child', 'Friend', 'Colleague'] as const;
