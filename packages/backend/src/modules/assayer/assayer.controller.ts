@@ -90,10 +90,13 @@ import {
   AUTH_ERROR_CODES,
   DocumentVerification, DocumentRejectionReason,
   EmpanelmentStatus,
+  ONBOARDING_STAGES,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { deriveFileIntegrity } from '../document/document-integrity';
-import { buildIdCardPdf, streamToBuffer } from './id-card';
+import {
+  buildIdCardPdf, idCardDownloadVerdict, idCardPdfInput, idCardPreview, streamToBuffer, type IdCardPreview,
+} from './id-card';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
@@ -241,6 +244,23 @@ class VerifyDocumentRequestDto {
   /** Optimistic concurrency version check */
   @IsOptional() @IsInt()
   expectedDocVersion?: number;
+
+  /**
+   * The content hash of the scan the reviewer actually looked at.
+   *
+   * WHY THIS BEING ABSENT BROKE EVERYTHING. The reviewing screen has always sent it, the service
+   * has always checked it — "verification cannot silently apply to a different content hash" — and
+   * this DTO never declared it. The global validation pipe rejects unknown properties, so every
+   * verification POST came back `400: property expectedContentHash should not exist`, and NOTHING
+   * could be verified through the product at all. The service's own tests called the service
+   * directly and passed throughout, which is why it stayed hidden: the wire was never tested.
+   *
+   * Forwarded below, so the integrity check the service describes is finally reachable end to end:
+   * if the scan on file changed between being read and being attested to, the attestation is
+   * refused rather than quietly applying to different bytes.
+   */
+  @IsOptional() @IsString() @MaxLength(128)
+  expectedContentHash?: string;
 
   @IsOptional() @IsString() @MaxLength(2000)
   remarks?: string;
@@ -954,6 +974,9 @@ export class TransitionLifecycleDto {
   @IsOptional() @IsString() @MaxLength(LIFECYCLE_REASON_MAX_LENGTH)
   reason?: string;
 
+  @IsOptional() @IsString() @MaxLength(LIFECYCLE_REASON_MAX_LENGTH)
+  remarks?: string;
+
   /**
    * The version the client believed it was acting on, if it wants the stronger guarantee.
    *
@@ -988,6 +1011,9 @@ export class BulkTransitionLifecycleDto {
 
   @IsOptional() @IsString() @MaxLength(LIFECYCLE_REASON_MAX_LENGTH)
   reason?: string;
+
+  @IsOptional() @IsString() @MaxLength(LIFECYCLE_REASON_MAX_LENGTH)
+  remarks?: string;
 }
 
 /**
@@ -1183,11 +1209,22 @@ export class AssayerController {
     };
     const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
 
+    const rawLifecycle = csv(query.lifecycleStatus);
+    const validLifecycles = new Set(Object.values(AssayerLifecycleStatus) as string[]);
+    const lifecycleStatus = rawLifecycle
+      ? rawLifecycle.flatMap((s) => {
+          if (s.toLowerCase() === 'onboarding') {
+            return ONBOARDING_STAGES as string[];
+          }
+          return validLifecycles.has(s) ? [s] : [];
+        })
+      : undefined;
+
     return {
       q: str(query.q),
       state: csv(query.state),
       region: csv(query.region),
-      lifecycleStatus: csv(query.lifecycleStatus),
+      lifecycleStatus: lifecycleStatus?.length ? lifecycleStatus : undefined,
       engagementType: csv(query.engagementType),
       unavailableReason: csv(query.unavailableReason),
       empanelmentStatus: csv(query.empanelmentStatus),
@@ -2190,7 +2227,8 @@ export class AssayerController {
     for (const id of dto.ids) {
       await this.regionGuard.assertAssayerInScope(id, scope);
     }
-    const result = await this.assayerService.bulkTransitionLifecycle(dto.ids, dto.targetStatus, req.user.id, dto.reason);
+    const effectiveReason = dto.reason || dto.remarks;
+    const result = await this.assayerService.bulkTransitionLifecycle(dto.ids, dto.targetStatus, req.user.id, effectiveReason);
     return result;
   }
 
@@ -2206,8 +2244,9 @@ export class AssayerController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertAssayerInScope(id, scope);
+    const effectiveReason = dto.reason || dto.remarks;
     const assayer = await this.assayerService.transitionLifecycle(
-      id, dto.targetStatus, req.user.id, dto.reason, dto.expectedVersion,
+      id, dto.targetStatus, req.user.id, effectiveReason, dto.expectedVersion,
     );
     return assayer;
   }
@@ -2274,6 +2313,8 @@ export class AssayerController {
    */
   @RequirePermissions('assayer:view:organization')
   @Get(':assayerId/dossier')
+  // The dossier carries the name, date of birth and address as printed on each identity card.
+  @AuditRead({ resource: 'ASSAYER_DOSSIER', idParam: 'assayerId', eventType: 'ASSAYER_DOSSIER_VIEWED' })
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Everything the roster holds about one person beyond their own row' })
@@ -2616,6 +2657,8 @@ export class AssayerController {
    * reason to create one when the only viewer is a logged-in workspace tab.
    */
   @Get('document/:id/file/:index')
+  // Opening an identity scan is recorded: "who looked at whose Aadhaar card" had no answer at all.
+  @AuditRead({ resource: 'ASSAYER_DOCUMENT', idParam: 'id', eventType: 'ASSAYER_DOCUMENT_SCAN_VIEWED' })
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   // A file download, but not `document:download`: that resource is the audit packet pipeline, and
   // a role granted it would then also read staff Aadhaar and PAN scans. This is one page of a
@@ -2641,6 +2684,8 @@ export class AssayerController {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', `inline; filename="${found.requirement}"`);
+    // Never cached: an identity scan must not survive in a shared machine's browser cache.
+    res.setHeader('Cache-Control', 'private, no-store');
     stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
     res.on('close', () => stream.destroy());
     stream.pipe(res);
@@ -2713,13 +2758,15 @@ export class AssayerController {
      * fresh each download — see `idCardIssuance` for the December-31st grace rule.
      */
     const issuance = await this.rosterRecords.idCardIssuance(assayerId, req?.user?.id ?? 'unknown');
-    if (issuance.refusals.length > 0) {
-      throw new ConflictException(`This ID card cannot be issued: ${issuance.refusals.join('; ')}.`);
-    }
-    if (issuance.gated.length > 0 && issuance.gateMode === 'enforce') {
+    // `idCardDownloadVerdict` is the one statement of "may this card leave the building" — the
+    // preview route below reports the same verdict, so the screen and this route cannot disagree.
+    if (!idCardDownloadVerdict(issuance).canDownload) {
+      if (issuance.refusals.length > 0) {
+        throw new ConflictException(`This ID card cannot be issued: ${issuance.refusals.join('; ')}.`);
+      }
       throw new ConflictException(
         `This ID card cannot be issued until vetting is complete: ${issuance.gated.join('; ')}. `
-        + 'Complete the verification on the vetting screen, or review the identity gate under Admin → Settings.',
+        + 'Finish the checks on the Documents and Background tabs of their record first.',
       );
     }
 
@@ -2735,20 +2782,45 @@ export class AssayerController {
       }
     }
 
-    const pdf = await buildIdCardPdf({
-      fullName: assayer.displayName,
-      assayerCode: assayer.assayerCode,
-      city: assayer.city,
-      state: assayer.state,
-      photograph,
-      generatedOn: issuance.issuedOn,
-      validTill: issuance.validTill,
-    });
+    // The PDF prints the preview's own values, built the same way the preview route builds them.
+    const face = idCardPreview(assayer, issuance, await this.rosterRecords.idCardPrintedText());
+    const pdf = await buildIdCardPdf(idCardPdfInput(face, assayer, issuance, photograph));
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${assayer.assayerCode}-id-card.pdf"`);
     res.setHeader('Content-Length', String(pdf.length));
     res.end(pdf);
+  }
+
+  /**
+   * What the ID card would print right now, and whether it may be downloaded — as JSON, so the
+   * on-screen card renders ONLY what the PDF prints. The screen used to invent its own validity
+   * date, signatory and helpline; this route is what replaces that.
+   *
+   * Read-only by construction: it calls `idCardTerms`, not `idCardIssuance`, so looking at a card
+   * never writes the "issued with gaps" audit row, and it carries no `@AuditRead` — nothing leaves
+   * the building here. Open to the same roles and permission as the photograph route above;
+   * `canDownload` reports the gate verdict, not whether THIS caller's role may download.
+   *
+   * `findOneForReading`, not `findOne`: an archived person's file still opens, and their card
+   * preview should say why it cannot be issued rather than 404.
+   */
+  @RequirePermissions('assayer:view:organization')
+  @Get(':assayerId/id-card/preview')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @ApiOperation({ summary: 'Preview the ID card: what it would print, and whether it can be downloaded' })
+  async previewIdCard(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<IdCardPreview> {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    const assayer = await this.assayerService.findOneForReading(assayerId);
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+    const [terms, printed] = await Promise.all([
+      this.rosterRecords.idCardTerms(assayerId),
+      this.rosterRecords.idCardPrintedText(),
+    ]);
+    return idCardPreview(assayer, terms, printed);
   }
 
   /**
@@ -2762,6 +2834,8 @@ export class AssayerController {
    * record, reached by a different index.
    */
   @Get('document/:id/version/:versionId/file')
+  // Opening an identity scan is recorded: "who looked at whose Aadhaar card" had no answer at all.
+  @AuditRead({ resource: 'ASSAYER_DOCUMENT', idParam: 'id', eventType: 'ASSAYER_DOCUMENT_VERSION_VIEWED' })
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Fetch the scan a particular version was verified against' })
@@ -2781,6 +2855,8 @@ export class AssayerController {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', `inline; filename="${found.requirement}-v${found.version}"`);
+    // Never cached: an identity scan must not survive in a shared machine's browser cache.
+    res.setHeader('Cache-Control', 'private, no-store');
     stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
     res.on('close', () => stream.destroy());
     stream.pipe(res);
@@ -2854,6 +2930,7 @@ export class AssayerController {
         nameMismatchNote: body?.nameMismatchNote,
         targetVersionId: body?.targetVersionId,
         expectedDocVersion: body?.expectedDocVersion,
+        expectedContentHash: body?.expectedContentHash,
       },
     );
     return { success: true, data };

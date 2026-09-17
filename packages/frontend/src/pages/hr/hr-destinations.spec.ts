@@ -14,7 +14,8 @@ describe('resolving an HR destination', () => {
   it('sends the retired concern pages to the chip that lists the same people', () => {
     expect(resolveHrDestination('/hr/records')).toBe('/hr/roster?segment=incomplete');
     expect(resolveHrDestination('/hr/compliance')).toBe('/hr/roster?segment=lapsed');
-    expect(resolveHrDestination('/hr/onboarding')).toBe('/hr/roster?segment=onboarding');
+    // Onboarding is a stage of the hiring pipeline now, not a destination of its own.
+    expect(resolveHrDestination('/hr/onboarding')).toBe('/hr/hiring');
     expect(resolveHrDestination('/hr/capability')).toBe('/hr/roster?segment=lapsed');
     expect(resolveHrDestination('/hr/paperwork')).toBe('/hr/roster?segment=incomplete');
   });

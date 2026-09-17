@@ -171,7 +171,7 @@ describe('HrPayPage — the strict "Cannot be paid" rule', () => {
     expect(screen.getByText('No PAN on file — add it')).toBeInTheDocument();
   });
 
-  it('puts a departed, unbanked person in the looser tile — never under the strict label', async () => {
+  it('folds a departed, unbanked person into the strict tile’s sub-line — never as a second tile', async () => {
     serve([person({
       displayName: 'Gone Unbanked', lifecycleStatus: 'RESIGNED', bankAccountNumber: null, ifscCode: null,
     }) as any]);
@@ -180,11 +180,11 @@ describe('HrPayPage — the strict "Cannot be paid" rule', () => {
 
     await waitFor(() => expect(screen.getByText('Gone Unbanked')).toBeInTheDocument());
     expect(screen.getByText('Cannot be paid').previousSibling).toHaveTextContent('0');
-    expect(screen.getByText('Missing bank details (including people who left)').previousSibling)
-      .toHaveTextContent('1');
+    expect(screen.getByText('+1 who left · settlement may still be owed')).toBeInTheDocument();
+    expect(screen.queryByText(/Missing bank details/)).not.toBeInTheDocument();
   });
 
-  it('shows neither tile once every payout-blocking field is on file', async () => {
+  it('shows neither the tile’s warning nor the sub-line once every payout-blocking field is on file', async () => {
     serve([person({ displayName: 'Fully Payable' }) as any]);
 
     renderPage();
@@ -192,5 +192,6 @@ describe('HrPayPage — the strict "Cannot be paid" rule', () => {
     await waitFor(() => expect(screen.getByText('Fully Payable')).toBeInTheDocument());
     expect(screen.getByText('Cannot be paid').previousSibling).toHaveTextContent('0');
     expect(screen.queryByText(/Missing bank details/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/who left/)).not.toBeInTheDocument();
   });
 });

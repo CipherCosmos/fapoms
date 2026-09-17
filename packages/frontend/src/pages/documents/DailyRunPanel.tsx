@@ -15,7 +15,7 @@ const ACTION_META: Record<string, { label: string; color: string; bg: string; hi
   GENERATE_PDF: { label: 'Generate packet', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Client data is in. Produce the audit PDF in the external app, then upload it here.' },
   DISPATCH: { label: 'Send to assayer', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Packet is ready but the assayer cannot see it until it is sent.' },
   AWAITING_ASSAYER_RETURN: { label: 'With assayer', color: 'var(--warning)', bg: 'var(--status-pending-bg)', hint: 'Sent. Waiting for the scanned paperwork to come back.' },
-  SEND_TO_OCR: { label: 'Send to OCR', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Paperwork is back. Push it to the external OCR application.' },
+  SEND_TO_OCR: { label: 'Send for scanning', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Paperwork is back. Push it to the external OCR application.' },
   IN_PROGRESS: { label: 'In processing', color: 'var(--success)', bg: 'var(--status-completed-bg)', hint: 'With OCR / data entry.' },
 };
 
@@ -423,7 +423,7 @@ export const DailyRunPanel: React.FC<{
                   {b.nextAction === 'SEND_TO_OCR' && b.pdf && canSendToOcr && (
                     <button onClick={() => withActing(b.projectBranchId, () => onSendToOcr(b.pdf!.id))} disabled={busy}
                       className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent)', borderColor: 'var(--status-pending-bg)' }}>
-                      <ArrowRightCircle size={11} /> {busy ? '…' : 'Send to OCR'}
+                      <ArrowRightCircle size={11} /> {busy ? '…' : 'Send for scanning'}
                     </button>
                   )}
                   {b.pdf && (

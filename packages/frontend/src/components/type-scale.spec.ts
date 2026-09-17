@@ -21,11 +21,23 @@ const SRC = join(__dirname, '..');
 const STYLESHEET = join(SRC, 'index.css');
 
 /**
+ * Documents that leave this app and are rendered by something else.
+ *
  * A print window is its own document and never sees `:root`, so `var(--text-xs)` would resolve to
- * nothing there and the sheet would fall back to the browser default. These two build standalone
- * HTML for `window.print()` and legitimately carry their own px sizes.
+ * nothing there and the sheet would fall back to the browser default. An email is the same
+ * argument carried further: it is rendered by Gmail, Outlook and a dozen phone clients, none of
+ * which has this stylesheet — and several of which strip `<style>` entirely, which is why email
+ * HTML carries its sizes inline as literal pixels.
+ *
+ * Each entry is a file that produces a foreign document and nothing else. That is the test for
+ * belonging here: `email-template-html.ts` was split out of the admin screen precisely so the
+ * exemption covers the email and not the screen around it.
  */
-const OFF_SCALE_BY_DESIGN = ['pages/hr/assayerProfilePrint.ts', 'pages/billing/invoicePrint.ts'];
+const OFF_SCALE_BY_DESIGN = [
+  'pages/hr/assayerProfilePrint.ts',
+  'pages/billing/invoicePrint.ts',
+  'pages/admin/email-template-html.ts',
+];
 
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {

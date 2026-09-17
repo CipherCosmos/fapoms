@@ -11,7 +11,7 @@ import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assaye
 import { AssayerService } from '../assayer/assayer.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
-import { AssayerStatus, ProjectBranchStatus } from '@fapoms/shared';
+import { AssayerStatus, AssayerLifecycleStatus, ProjectBranchStatus } from '@fapoms/shared';
 import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 
 @Injectable()
@@ -101,6 +101,7 @@ export class PlanningAntiCorruptionLayer
       where: {
         isActive: true,
         status: AssayerStatus.ACTIVE,
+        lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
         ...(regionsToQuery?.length ? { region: In(regionsToQuery) } : {}),
       },
     });

@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Badge, Button, Card, EmptyState, FadeIn, GroupedRow, GroupedSection, Icon, Section, Tappable } from '../components/ui/primitives';
+import { AppText, Badge, Button, Card, EmptyState, FadeIn, GroupedRow, GroupedSection, Icon, MetaChip, Section, Tappable } from '../components/ui/primitives';
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { relativeDay, RelativeDay } from '../utils/dates';
@@ -360,13 +360,13 @@ const AssignmentMeta: React.FC<{
       {/* The concrete date stays for anything not today — "In 8 days" alone would make the
           assayer open Details just to write the date down. */}
       {when.diffDays !== 0 && (
-        <Meta icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
+        <MetaChip icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
       )}
       {assignment.distanceKm != null && (
-        <Meta icon="navigate-outline" label={tr('home.distanceKm', { km: assignment.distanceKm.toFixed(1) })} />
+        <MetaChip icon="navigate-outline" label={tr('home.distanceKm', { km: assignment.distanceKm.toFixed(1) })} />
       )}
       {assignment.estimatedCustomerCount > 0 && (
-        <Meta icon="people-outline" label={tr('home.customers', { count: assignment.estimatedCustomerCount })} />
+        <MetaChip icon="people-outline" label={tr('home.customers', { count: assignment.estimatedCustomerCount })} />
       )}
     </View>
   );
@@ -492,30 +492,6 @@ const CurrentJobCard: React.FC<{
         </View>
       </View>
     </Card>
-  );
-};
-
-/**
- * A meta fact as a neon chip — time, distance, customers.
- *
- * Was a bare icon+label row that dissolved into the card. As a tinted pill with a cyan glyph
- * it reads as a scannable tag, the pattern every modern field/delivery app uses to surface the
- * few numbers that matter at a glance.
- */
-const Meta: React.FC<{ icon: string; label: string }> = ({ icon, label }) => {
-  const t = useTheme();
-  return (
-    <View style={{
-      flexDirection: 'row', alignItems: 'center', gap: 6,
-      backgroundColor: t.colors.surfaceAlt,
-      borderWidth: 1, borderColor: t.colors.border,
-      paddingHorizontal: 10, paddingVertical: 6, borderRadius: t.radius.pill,
-    }}>
-      <Icon name={icon} size={13} color={t.colors.accent} />
-      <AppText variant="caption" tone="muted">
-        {label}
-      </AppText>
-    </View>
   );
 };
 

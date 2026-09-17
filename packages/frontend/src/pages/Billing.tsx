@@ -160,7 +160,7 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
 
   const count = preview.data?.count;
   return (
-    <Modal open onClose={onClose} title={<><RefreshCw size={18} /> Reconcile the book</>} width="520px" footer={
+    <Modal open onClose={onClose} title={<><RefreshCw size={18} /> Reconcile payouts</>} width="520px" footer={
       <>
         <button type="button" onClick={onClose} className="btn btn-secondary">Close</button>
         <button type="button" onClick={run} disabled={!!jobId || reconcile.isPending || !count} className="btn btn-primary">

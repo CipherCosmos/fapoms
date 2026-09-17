@@ -1,19 +1,36 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Loader2, Paperclip, Phone, ShieldCheck } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Check, Loader2, Phone, ShieldCheck, Eye, ArrowLeft,
+  CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck,
+  MapPin, Landmark, GraduationCap, Users, Info, Lock, Camera,
+  HelpCircle, Award,
+} from 'lucide-react';
 import {
   ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS,
-  SCAN_UPLOAD_ACCEPT, uploadSizeProblem,
+  uploadSizeProblem, isValidIfsc, normalisePhone, scanMimeType,
 } from '@fapoms/shared';
 import { BrandLogo } from '../components/BrandLogo';
 import { Select } from '../components/ui/Select';
+import { ScanOrAttach } from '../components/scanner/ScanOrAttach';
 import { AlertBanner } from '../components/ui/AlertBanner';
 import { userMessage } from '../services/errors';
 import { identityFormatHint, normaliseIdentityOnBlur } from '../config/identity-fields';
 import {
+  STATE_OPTIONS, GENDER_OPTIONS, EXPERIENCE_OPTIONS, EXPERIENCE_MIN, EXPERIENCE_MAX,
+  RELATION_OPTIONS, OTHER_SENTINEL, isOtherValue,
+  resolvePincode, pincodeStateConflict, resolveIfsc,
+  mobileHint, mobileHelper, normaliseMobile, DOB_MIN, dobMaxToday, dobHint,
+  isSixDigitPin, isBankAccountNumber, FIELD_LIMITS, limitHint,
+} from '../config/registration-options';
+import {
   hydrateRegistration, requestRegistrationOtp, verifyRegistrationOtp, updateRegistrationDraft,
+  checkRegistrationPhoneConflict,
   acceptRegistrationConsent, uploadRegistrationDocument, submitRegistration, isOtpVerificationLost,
+  getRegistrationDocumentFileBlob,
   type RegistrationApplication, type RegistrationApplicationDocument, type UpdateRegistrationDraftInput,
 } from '../services/public-registration';
+import { DocumentPreviewModal, type DocumentPreviewItem } from '../components/DocumentPreviewModal';
+import { LocationPicker } from '../components/LocationPicker';
 
 /**
  * Appraiser self-registration — public, reachable by the emailed invite link alone.
@@ -22,64 +39,177 @@ import {
  * whatever device is in their hand, with no app and no account: verify a mobile number by OTP,
  * fill in a profile, attach a few scans, tick a consent box, submit for HR review. Everything this
  * page calls lives under `/public/registration/:token/...` and carries no auth of any kind besides
- * that token — see `services/public-registration.ts` for why it does not go through the app's
- * normal `ApiClient`.
+ * that token.
  *
- * Mounted by `App.tsx` in the same early-return branch `/view-mark` uses, above the sign-in gate:
- * this component must render correctly with no token in `localStorage` at all. The consent version
- * is a single literal here rather than a setting — Draft/AwaitingInfo is the only editable window
- * this exists for, and there is exactly one version of the declaration in force.
+ * Which fields are dropdowns and which are text is the DATA MODEL's decision, not this page's:
+ * state, relation, experience range and employment category are enumerated in shared/backend, so
+ * they are picks. Qualification, employer, expertise and availability are free text ON PURPOSE
+ * (the roster holds 104 distinct qualifications; forcing an enum would lose detail), so they stay
+ * text — with the desk wizard's own placeholders — while the error-prone identifiers (pincode,
+ * IFSC, phones, PAN/Aadhaar) are automated and validated instead.
+ *
+ * Form contract: every completed field is PATCHed to `/draft` on blur/select, and the patch
+ * shape (`fieldPatch`/`wholeFormPatch`) is exactly what the backend allow-lists — picks store the
+ * same plain strings the old text boxes stored, so the server needs no change.
  */
 const CONSENT_VERSION = 'v1';
-
-const CONTAINER_STYLE: React.CSSProperties = {
-  minHeight: '100vh',
-  background: 'var(--bg-page)',
-  color: 'var(--text-primary)',
-  padding: '20px 16px 48px',
-};
-
-const CARD_STYLE: React.CSSProperties = {
-  maxWidth: '560px',
-  margin: '0 auto',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '20px',
-};
-
-const SECTION_STYLE: React.CSSProperties = {
-  border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-md)',
-  background: 'var(--bg-card)',
-  padding: '16px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '12px',
-};
 
 const SECTION_TITLE_STYLE: React.CSSProperties = {
   fontSize: 'var(--text-md)',
   fontWeight: 700,
   color: 'var(--text-primary)',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
 };
 
 const SECTION_NOTE_STYLE: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
-  color: 'var(--text-muted)',
-  lineHeight: 1.5,
+  color: 'var(--text-secondary)',
+  lineHeight: 1.55,
+};
+
+const EYEBROW_STYLE: React.CSSProperties = {
+  fontSize: 'var(--text-2xs)',
+  fontWeight: 700,
+  letterSpacing: '0.1em',
+  textTransform: 'uppercase',
+  color: 'var(--accent)',
+};
+
+const LABEL_STYLE: React.CSSProperties = {
+  display: 'block',
+  fontSize: 'var(--text-xs)',
+  fontWeight: 600,
+  color: 'var(--text-primary)',
+  marginBottom: '6px',
+};
+
+const INPUT_STYLE: React.CSSProperties = {
+  width: '100%',
+  padding: '12px 14px',
+  fontSize: 'var(--text-md)',
+  minHeight: '48px',
+  fontFamily: 'inherit',
+  background: 'var(--bg-input)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 'var(--radius-sm, 8px)',
+  outline: 'none',
+  boxSizing: 'border-box',
+  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+};
+
+const INPUT_ERROR_STYLE: React.CSSProperties = {
+  ...INPUT_STYLE,
+  borderColor: 'var(--danger)',
+};
+
+const FIELD_GRID_STYLE: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+  gap: '16px',
+};
+
+const HINT_STYLE: React.CSSProperties = {
+  fontSize: 'var(--text-2xs)',
+  color: 'var(--text-secondary)',
+  marginTop: '5px',
+  lineHeight: 1.45,
+};
+
+const AUTO_NOTE_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: '6px',
+  fontSize: 'var(--text-2xs)',
+  color: 'var(--accent)',
+  marginTop: '6px',
+  lineHeight: 1.45,
+};
+
+const ERROR_TEXT_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '4px',
+  fontSize: 'var(--text-2xs)',
+  color: 'var(--danger)',
+  marginTop: '5px',
+  lineHeight: 1.4,
+  fontWeight: 600,
 };
 
 /**
- * What the app says about an identifier while the candidate is still holding the card.
+ * Focus ring, input placeholders, and card interaction styles.
  *
- * This form asks for a PAN, an Aadhaar, an IFSC code and a pincode and checked none of them. The
- * HR desk's own wizard has checked all four for a while, against the shared rulebook the API uses
- * — so the candidate-facing door, the one filled in by the person least able to interpret a
- * server error, was the only one that let a transposed digit through to be refused later.
+ * WRITTEN FOR A GROUND THIS PAGE DOES NOT HAVE. These rules used to set near-white placeholders
+ * and borders — `rgba(247, 239, 231, 0.48)` and `rgba(255, 236, 220, 0.22)` — which suit a dark
+ * page. App.tsx returns this screen early, with no account and no session, so the app never
+ * applies a theme and it always renders on the default LIGHT palette: white on white. The
+ * one-time-code box had no visible outline and no visible placeholder, so there was nothing on
+ * screen to type into. Everything here draws from the palette now, and `PublicRegistration.otp.
+ * spec.ts` refuses a near-white literal creeping back.
  *
- * Advisory, exactly as on the desk's form: it never blocks the draft save, because a blocked draft
- * is how somebody loses everything they have typed.
+ * Kept out of the template literal below on purpose: a comment inside it is shipped to every
+ * candidate as part of the stylesheet.
  */
+const FORM_CSS = `
+.pub-reg-root input::placeholder,
+.pub-reg-root textarea::placeholder {
+  color: var(--text-muted) !important;
+  opacity: 1 !important;
+}
+.pub-reg-root input,
+.pub-reg-root select,
+.pub-reg-root textarea {
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+  background: var(--bg-input) !important;
+}
+.pub-reg-root input:focus,
+.pub-reg-root select:focus,
+.pub-reg-root textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+.reg-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+.reg-code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.4em;
+  text-indent: 0.4em;
+  text-align: center;
+  font-weight: 700;
+  border-width: 2px !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color)) !important;
+  background: var(--bg-surface) !important;
+}
+.reg-code-input:disabled {
+  opacity: 0.7;
+}
+.reg-cat-card {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  background: var(--bg-surface-2) !important;
+  border: 1.5px solid var(--border-color) !important;
+}
+.reg-cat-card:hover {
+  border-color: var(--accent) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+}
+.reg-cat-selected {
+  border-color: var(--accent) !important;
+  background: rgba(245, 158, 11, 0.12) !important;
+  box-shadow: 0 0 0 2px var(--accent) !important;
+}
+`;
+
 const FieldHint: React.FC<{ field: string; value: string }> = ({ field, value }) => {
   const hint = identityFormatHint(field, value);
   if (!hint) return null;
@@ -90,32 +220,54 @@ const FieldHint: React.FC<{ field: string; value: string }> = ({ field, value })
   );
 };
 
-const LABEL_STYLE: React.CSSProperties = {
-  display: 'block',
-  fontSize: 'var(--text-xs)',
-  fontWeight: 600,
-  color: 'var(--text-secondary)',
-  marginBottom: '4px',
+const FieldError: React.FC<{ message?: string | null; id?: string }> = ({ message, id }) => {
+  if (!message) return null;
+  return (
+    <div id={id} role="alert" style={ERROR_TEXT_STYLE}>
+      <AlertCircle size={12} style={{ flexShrink: 0 }} />
+      <span>{message}</span>
+    </div>
+  );
 };
 
-const INPUT_STYLE: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  fontSize: 'var(--text-md)',
-  fontFamily: 'inherit',
-  background: 'var(--bg-input)',
-  color: 'var(--text-primary)',
-  border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-sm)',
-  outline: 'none',
-  boxSizing: 'border-box',
-};
-
-const FIELD_GRID_STYLE: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-  gap: '12px',
-};
+/** Phone box with a fixed +91 prefix so candidates stop typing it (and re-typing it wrong). */
+const PhoneInput: React.FC<{
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  placeholder?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
+}> = ({ id, value, onChange, onBlur, placeholder, disabled, invalid, describedBy }) => (
+  <div style={{ position: 'relative' }}>
+    <span
+      aria-hidden
+      style={{
+        position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)',
+        color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', fontWeight: 600, pointerEvents: 'none',
+      }}
+    >
+      +91
+    </span>
+    <input
+      id={id}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      inputMode="tel"
+      autoComplete="tel"
+      maxLength={16}
+      placeholder={placeholder ?? '10-digit mobile number'}
+      disabled={disabled}
+      aria-invalid={Boolean(invalid)}
+      aria-describedby={describedBy}
+      className="reg-input"
+      style={{ ...(invalid ? INPUT_ERROR_STYLE : INPUT_STYLE), paddingLeft: '48px' }}
+    />
+  </div>
+);
 
 interface FormState {
   fullName: string;
@@ -130,15 +282,6 @@ interface FormState {
   expertise: string;
   availability: string;
   employmentCategory: EmploymentCategory | '';
-  /**
-   * The half the candidate's form never asked for.
-   *
-   * A person approved without these reached the roster unable to be paid (no account, no IFSC),
-   * unreachable in an emergency, and with no PAN to deduct tax against — while the form had
-   * cheerfully collected a photograph of the PAN card. The scan proves the number; it is not the
-   * number, and nothing downstream can read it.
-   */
-  /** The application's own column, asked for on the phone form and — until now — not on this one. */
   email: string;
   alternatePhone: string;
   district: string;
@@ -153,20 +296,9 @@ interface FormState {
   emergencyContactRelation: string;
 }
 
-/**
- * The record-shaped half of the form, by the record's own field names.
- *
- * Exported for `PublicRegistration.spec.ts`, which fails if this stops covering a field the record
- * dictionary calls critical — the guard against the candidate form quietly collecting less than
- * the person needs, which is exactly how it came to ask for a photograph of a PAN card and never
- * for the number.
- */
 export const RECORD_KEYS = [
   'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
   'qualification', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
-  // A second number, and the district the address sits in. `district` is NOT NULL on the record
-  // and defaults to an empty string when nobody supplies it, so every remote registrant landed
-  // with a blank one; `alternatePhone` matters because `phone` is critical and often the only one.
   'alternatePhone', 'district',
 ] as const;
 
@@ -189,25 +321,17 @@ const seedForm = (app: RegistrationApplication): FormState => ({
   ) as Pick<FormState, typeof RECORD_KEYS[number]>,
 });
 
-/**
- * One box, one request.
- *
- * `buildDraftPatch` serialised the whole form on every blur and dropped every empty box, which
- * cost three different things: overlapping saves overwrote each other with stale values, a
- * candidate could not clear a field they had mistyped, and one invalid value made every later
- * save fail with a complaint about a box they were no longer looking at.
- *
- * A blank IS sent. The server treats it as "clear this" and says so in as many words.
- */
 function fieldPatch(key: keyof FormState, value: string): UpdateRegistrationDraftInput {
   const trimmed = (value ?? '').trim();
 
+  if (key === 'dateOfBirth') {
+    return { dateOfBirth: trimmed };
+  }
   if (key === 'experienceYears') {
-    if (trimmed === '') return {};
+    if (trimmed === '') return { experienceYears: null };
     const years = Number(trimmed);
     return Number.isNaN(years) ? {} : { experienceYears: years };
   }
-  // The server enumerates what it will accept; anything else is refused rather than guessed at.
   if (key === 'employmentCategory') {
     return trimmed ? { employmentCategory: trimmed as EmploymentCategory } : {};
   }
@@ -217,7 +341,6 @@ function fieldPatch(key: keyof FormState, value: string): UpdateRegistrationDraf
   return { [key]: trimmed } as UpdateRegistrationDraftInput;
 }
 
-/** Every box at once, for the explicit "Save draft" button. */
 function wholeFormPatch(f: FormState): UpdateRegistrationDraftInput {
   const patch: UpdateRegistrationDraftInput = {};
   const record: Record<string, string> = {};
@@ -230,46 +353,57 @@ function wholeFormPatch(f: FormState): UpdateRegistrationDraftInput {
   return patch;
 }
 
-const GENDER_OPTIONS = [
-  { value: 'Male', label: 'Male' },
-  { value: 'Female', label: 'Female' },
-  { value: 'Other', label: 'Other' },
-  { value: 'Prefer not to say', label: 'Prefer not to say' },
-];
-
-const EMPLOYMENT_CATEGORY_OPTIONS = [
-  { value: EmploymentCategory.FREELANCER, label: 'Freelancer' },
-  { value: EmploymentCategory.PROPRIETOR, label: 'Proprietor' },
+const CATEGORY_CARDS: Array<{
+  value: EmploymentCategory;
+  title: string;
+  desc: string;
+  docs: string;
+}> = [
+  {
+    value: EmploymentCategory.FREELANCER,
+    title: 'Freelancer',
+    desc: 'You work independently and take valuation assignments as scheduled.',
+    docs: 'Required scan: Experience Certificate / Letter',
+  },
+  {
+    value: EmploymentCategory.PROPRIETOR,
+    title: 'Proprietor',
+    desc: 'You own or run a registered jewellery shop or assaying firm.',
+    docs: 'Required scans: Shop Establishment Proof + Association Letter',
+  },
 ];
 
 const STATUS_COPY: Partial<Record<ApplicationStatus, (app: RegistrationApplication) => string>> = {
   [ApplicationStatus.PENDING_VALIDATION]: () =>
-    'Submitted. Your application is under review — HR will get back to you.',
+    'Your application has been successfully submitted and is currently under review by our Operations & Compliance team.',
   [ApplicationStatus.APPROVED]: () =>
-    'Your application was approved — HR will contact you about next steps.',
+    'Congratulations! Your Sumeru Global Appraiser application has been officially approved.',
   [ApplicationStatus.REJECTED]: (app) =>
-    `Your application was not approved.${app.reviewNotes ? ` ${app.reviewNotes}` : ''}`,
+    `Your application was not approved.${app.reviewNotes ? ` Review note: ${app.reviewNotes}` : ''}`,
 };
 
-/** A full-width primary button, matching the app's own `.btn`/`.btn-primary` classes. */
-/**
- * Who is asking.
- *
- * This is the only screen in the product an OUTSIDER sees, reached from a link in an email, and
- * the next thing it asks them for is a PAN, an Aadhaar number and a bank account. It carried no
- * company name and no mark — so did the dead-link state, which rendered one small box in an empty
- * dark page and looked exactly like a phishing attempt or a broken site.
- *
- * The same mark the signed-in product uses, so the page a candidate lands on is recognisably from
- * the same company as the app they will be given.
- */
 const PublicMasthead: React.FC = () => (
-  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', marginBottom: '18px' }}>
-    <BrandLogo size="md" showSubtext={false} />
-    <div style={{ fontSize: 'var(--text-xs)', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-      Appraiser registration
+  <header className="pub-reg-header">
+    <div className="pub-reg-header-inner">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <BrandLogo size="md" showSubtext={false} />
+        <div style={{ borderLeft: '1px solid var(--border-hair)', paddingLeft: '14px', display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--accent)' }}>
+            Appraiser Onboarding Portal
+          </span>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
+            Sumeru Global &middot; Bullion &amp; Collateral Verification
+          </span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)', padding: '5px 10px', borderRadius: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
+          <Lock size={12} style={{ color: 'var(--success)' }} />
+          <span>Secure Session</span>
+        </div>
+      </div>
     </div>
-  </div>
+  </header>
 );
 
 const PrimaryButton: React.FC<{
@@ -277,18 +411,207 @@ const PrimaryButton: React.FC<{
   disabled?: boolean;
   busy?: boolean;
   children: React.ReactNode;
-}> = ({ onClick, disabled, busy, children }) => (
+  style?: React.CSSProperties;
+}> = ({ onClick, disabled, busy, children, style }) => (
   <button
     type="button"
     onClick={onClick}
     disabled={disabled || busy}
     className="btn btn-primary"
-    style={{ width: '100%', padding: '11px 16px', fontSize: 'var(--text-base)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+    style={{
+      padding: '12px 22px',
+      minHeight: '48px',
+      fontSize: 'var(--text-sm)',
+      fontWeight: 600,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
+      cursor: disabled || busy ? 'not-allowed' : 'pointer',
+      ...style,
+    }}
   >
-    {busy && <Loader2 size={15} className="spin" />}
+    {busy && <Loader2 size={16} className="spin" />}
     {children}
   </button>
 );
+
+const WIZARD_STEPS = [
+  { id: 1, title: 'Personal & Contact', shortTitle: 'Personal', icon: User, desc: 'Identity & Mobile Verification' },
+  { id: 2, title: 'Experience & Address', shortTitle: 'Experience', icon: Briefcase, desc: 'Experience & Pincode Auto-Fill' },
+  { id: 3, title: 'Statutory & Bank', shortTitle: 'Bank & ID', icon: CreditCard, desc: 'PAN, Aadhaar & Bank IFSC' },
+  { id: 4, title: 'Documents & Submit', shortTitle: 'Documents', icon: FileCheck, desc: 'Scans, Photo & Declaration' },
+] as const;
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CONDITIONAL_DOCS = new Set(['RENT_AGREEMENT', 'ELECTRICITY_BILL']);
+
+type StepErrors = Record<string, string>;
+
+const getStepStorageKey = (token: string) => `fapoms_reg_step_${token}`;
+const getMaxStepStorageKey = (token: string) => `fapoms_reg_max_${token}`;
+
+const getStoredStep = (token: string): number | null => {
+  try {
+    if (typeof window !== 'undefined' && window.location?.hash) {
+      const match = window.location.hash.match(/step-?([1-4])/i);
+      if (match) {
+        const s = parseInt(match[1], 10);
+        if (s >= 1 && s <= 4) return s;
+      }
+    }
+    if (typeof localStorage !== 'undefined' && token) {
+      const raw = localStorage.getItem(getStepStorageKey(token));
+      if (raw) {
+        const s = parseInt(raw, 10);
+        if (s >= 1 && s <= 4) return s;
+      }
+    }
+  } catch {
+    // Ignore storage/hash read errors
+  }
+  return null;
+};
+
+const getStoredMaxStep = (token: string, initial: number): number => {
+  try {
+    if (typeof localStorage !== 'undefined' && token) {
+      const raw = localStorage.getItem(getMaxStepStorageKey(token));
+      if (raw) {
+        const s = parseInt(raw, 10);
+        if (s >= 1 && s <= 4) return Math.max(s, initial);
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return initial;
+};
+
+const saveStepPosition = (token: string, step: number) => {
+  try {
+    if (typeof localStorage !== 'undefined' && token) {
+      localStorage.setItem(getStepStorageKey(token), String(step));
+      const currentMax = parseInt(localStorage.getItem(getMaxStepStorageKey(token)) || '1', 10);
+      localStorage.setItem(getMaxStepStorageKey(token), String(Math.max(currentMax, step)));
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+  try {
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      const currentUrl = new URL(window.location.href);
+      currentUrl.hash = `step-${step}`;
+      window.history.replaceState(null, '', currentUrl.toString());
+    }
+  } catch {
+    // Ignore history errors
+  }
+};
+
+function inferProgressStep(app: RegistrationApplication, docs: RegistrationApplicationDocument[]): number {
+  if (app.status !== ApplicationStatus.DRAFT && app.status !== ApplicationStatus.AWAITING_INFO) {
+    return 1;
+  }
+  if ((docs && docs.some((d) => d.filePaths && d.filePaths.length > 0)) || app.consentAcceptedAt) {
+    return 4;
+  }
+  const hasStep3 = Boolean(
+    app.employmentCategory ||
+    app.extendedProfile?.fields?.panNumber ||
+    app.extendedProfile?.fields?.aadhaarNumber ||
+    app.extendedProfile?.fields?.bankAccountNumber ||
+    app.extendedProfile?.fields?.ifscCode ||
+    app.extendedProfile?.fields?.bankName,
+  );
+  if (hasStep3) return 3;
+
+  const hasStep2 = Boolean(
+    app.address ||
+    app.pincode ||
+    app.state ||
+    app.city ||
+    app.experienceYears != null ||
+    app.currentEmployer ||
+    app.expertise ||
+    app.availability,
+  );
+  if (hasStep2) return 2;
+
+  return 1;
+}
+
+function validateRegistrationStep(step: number, f: FormState): StepErrors {
+  const errs: StepErrors = {};
+  const tooLong = (key: keyof FormState) => {
+    const message = limitHint(key as string, String(f[key] ?? ''));
+    if (message) errs[key as string] = message;
+  };
+  if (step === 1) {
+    if (!f.fullName.trim()) errs.fullName = 'Enter your full name exactly as on your Aadhaar or PAN.';
+    else if (f.fullName.trim().length < 3) errs.fullName = 'That name looks too short — enter your full legal name.';
+    else tooLong('fullName');
+    if (f.email.trim() && !EMAIL_PATTERN.test(f.email.trim())) errs.email = 'That email address does not look right.';
+    else tooLong('email');
+    /*
+      Required, not optional. HR chased a missing date of birth afterwards anyway — it is one of
+      the roster sweep's own findings — and the age rule below has nothing to judge without it.
+    */
+    if (!f.dateOfBirth.trim()) errs.dateOfBirth = 'Enter your date of birth as printed on your Aadhaar or PAN.';
+    else {
+      const dobProblem = dobHint(f.dateOfBirth);
+      if (dobProblem) errs.dateOfBirth = dobProblem;
+    }
+  }
+  if (step === 2) {
+    if (!f.pincode.trim()) {
+      errs.pincode = 'Enter your 6-digit postal pincode.';
+    } else if (!isSixDigitPin(f.pincode)) {
+      errs.pincode = 'A pincode is exactly 6 digits.';
+    }
+    if (!f.state.trim()) {
+      errs.state = 'Select your state.';
+    }
+    if (!f.city.trim()) {
+      errs.city = 'Enter your city or town.';
+    }
+    if (!f.address.trim()) {
+      errs.address = 'Enter your full residential street address (flat/house no., building, street).';
+    } else if (f.address.trim().length < 8) {
+      errs.address = 'Please enter a complete street address so we can locate you accurately.';
+    }
+    if (f.experienceYears.trim()) {
+      const n = Number(f.experienceYears);
+      if (!Number.isInteger(n) || n < EXPERIENCE_MIN || n > EXPERIENCE_MAX) {
+        errs.experienceYears = `Enter ${EXPERIENCE_MIN} for fresher, up to ${EXPERIENCE_MAX} years.`;
+      }
+    }
+    (['city', 'currentEmployer', 'expertise', 'availability'] as const).forEach(tooLong);
+  }
+  if (step === 3) {
+    if (!f.employmentCategory) errs.employmentCategory = 'Choose Freelancer or Proprietor — it decides which documents we ask for.';
+    if (f.panNumber.trim() && identityFormatHint('panNumber', f.panNumber)) {
+      errs.panNumber = 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.';
+    }
+    if (f.aadhaarNumber.trim() && identityFormatHint('aadhaarNumber', f.aadhaarNumber)) {
+      errs.aadhaarNumber = 'An Aadhaar number is 12 digits — check it against the card.';
+    }
+    if (f.ifscCode.trim() && identityFormatHint('ifscCode', f.ifscCode)) {
+      errs.ifscCode = 'An IFSC code looks like HDFC0001234 — four letters, a zero, then six characters.';
+    }
+    if (f.bankAccountNumber.trim() && !isBankAccountNumber(f.bankAccountNumber)) {
+      errs.bankAccountNumber = 'A bank account number is 9–18 digits.';
+    }
+    if (f.alternatePhone.trim() && mobileHint(f.alternatePhone)) {
+      errs.alternatePhone = mobileHint(f.alternatePhone) as string;
+    }
+    if (f.emergencyContactPhone.trim() && mobileHint(f.emergencyContactPhone)) {
+      errs.emergencyContactPhone = mobileHint(f.emergencyContactPhone) as string;
+    }
+    (['bankName', 'qualification', 'emergencyContactName', 'emergencyContactRelation'] as const).forEach(tooLong);
+  }
+  return errs;
+}
 
 export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'error'>('loading');
@@ -299,6 +622,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [documentsRequested, setDocumentsRequested] = useState<string[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
 
+  const [activeStep, setActiveStep] = useState<number>(() => getStoredStep(token) ?? 1);
+  const [maxStepVisited, setMaxStepVisited] = useState<number>(() => getStoredMaxStep(token, getStoredStep(token) ?? 1));
+  const [stepErrors, setStepErrors] = useState<StepErrors>({});
+  const [stepAttempted, setStepAttempted] = useState(false);
+
   const [phone, setPhone] = useState('');
   const [otpVerified, setOtpVerified] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
@@ -306,6 +634,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [otpBusy, setOtpBusy] = useState(false);
   const [otpError, setOtpError] = useState<string | null>(null);
   const [otpInfo, setOtpInfo] = useState<string | null>(null);
+  const [otpSentTo, setOtpSentTo] = useState<string | null>(null);
+  const [phoneConflict, setPhoneConflict] = useState<string | null>(null);
+  const [checkingPhone, setCheckingPhone] = useState(false);
 
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -320,24 +651,106 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  const [relationOtherOpen, setRelationOtherOpen] = useState(false);
+
+  // Optional map pin — stored in the draft's record fields.
+  const [pinLatitude, setPinLatitude] = useState<number | null>(
+    application?.extendedProfile?.fields?.latitude != null
+      ? Number(application.extendedProfile.fields.latitude)
+      : null,
+  );
+  const [pinLongitude, setPinLongitude] = useState<number | null>(
+    application?.extendedProfile?.fields?.longitude != null
+      ? Number(application.extendedProfile.fields.longitude)
+      : null,
+  );
+
+  const [pincodeState, setPincodeState] = useState<'idle' | 'looking' | 'found' | 'notfound' | 'unavailable'>('idle');
+  const [pincodeNote, setPincodeNote] = useState<string | null>(null);
+  /** What the directory holds when it disagrees with what is already typed — offered, never forced. */
+  const [pincodeOffer, setPincodeOffer] = useState<{ state: string; district: string; city: string | null } | null>(null);
+
+  const [ifscState, setIfscState] = useState<'idle' | 'looking' | 'found' | 'notfound'>('idle');
+  const [ifscNote, setIfscNote] = useState<string | null>(null);
+  const [bankLocked, setBankLocked] = useState(false);
+  const lastResolvedBank = useRef<string>('');
+  const lookupSeq = useRef(0);
+  const formRef = useRef<FormState | null>(null);
+
+  // Scan preview modal state
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewItems, setPreviewItems] = useState<DocumentPreviewItem[]>([]);
+  const [previewIndex, setPreviewIndex] = useState(0);
+  const [previewLoading, setPreviewLoading] = useState<string | null>(null);
+  const previewUrlsRef = useRef<string[]>([]);
+  const revokePreviewUrls = useCallback(() => {
+    previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrlsRef.current = [];
+  }, []);
+
   const onVerificationLost = useCallback((err: unknown) => {
     if (isOtpVerificationLost(err)) {
       setOtpVerified(false);
       setCodeSent(false);
+      setOtpSentTo(null);
       setOtpError('Your verification has expired. Request a new code to continue.');
     }
   }, []);
 
   const load = useCallback(async () => {
-    setLoadState('loading');
-    setLoadError(null);
     try {
+      setLoadState('loading');
+      setLoadError(null);
       const result = await hydrateRegistration(token);
       setApplication(result.application);
-      setDocuments(result.documents);
       setDocumentsRequested(result.documentsRequested);
-      setForm(seedForm(result.application));
+      setDocuments(result.documents);
+      const seeded = seedForm(result.application);
+      setForm(seeded);
       setPhone(result.application.mobile ?? '');
+      if (result.otpVerified) {
+        setOtpVerified(true);
+      }
+
+      const fields = result.application?.extendedProfile?.fields;
+      if (fields?.latitude != null && fields.latitude !== '') {
+        setPinLatitude(Number(fields.latitude));
+      }
+      if (fields?.longitude != null && fields.longitude !== '') {
+        setPinLongitude(Number(fields.longitude));
+      }
+
+      // Check stored step and draft progress
+      const currentStored = getStoredStep(token);
+      const inferred = inferProgressStep(result.application, result.documents);
+      const target = currentStored !== null ? currentStored : inferred;
+
+      // Validate prerequisite steps before restoring position
+      let safeStep = 1;
+      if (target >= 2) {
+        const s1 = validateRegistrationStep(1, seeded);
+        if (Object.keys(s1).length === 0) {
+          safeStep = 2;
+          if (target >= 3) {
+            const s2 = validateRegistrationStep(2, seeded);
+            if (Object.keys(s2).length === 0) {
+              safeStep = 3;
+              if (target >= 4) {
+                const s3 = validateRegistrationStep(3, seeded);
+                if (Object.keys(s3).length === 0) {
+                  safeStep = 4;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const finalStep = Math.max(safeStep, 1);
+      setActiveStep(finalStep);
+      setMaxStepVisited((prev) => Math.max(prev, finalStep, inferred));
+      saveStepPosition(token, finalStep);
+
       setLoadState('loaded');
     } catch (err) {
       setLoadError(userMessage(err));
@@ -346,35 +759,86 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   }, [token]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { formRef.current = form; }, [form]);
 
-  /** Re-reads only the requested-documents checklist and status, without disturbing unsaved typing. */
-  /** Returns the newly requested list, so a caller can say what a change stopped counting. */
-  const refreshDocumentChecklist = useCallback(async (): Promise<string[] | null> => {
+  const refreshDocumentChecklist = useCallback(async () => {
     try {
       const result = await hydrateRegistration(token);
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
       setApplication((prev) => (prev ? { ...prev, ...result.application } : result.application));
-      return result.documentsRequested;
+      if (result.otpVerified) {
+        setOtpVerified(true);
+      }
+      return result;
     } catch {
-      // Non-fatal — the checklist just stays as it was until the next successful reload.
       return null;
+    }
+  }, [token]);
+
+  const currentPhone = useCallback(() => normaliseMobile(phone), [phone]);
+
+  /**
+   * The code box takes the cursor the moment it appears.
+   *
+   * The candidate has just left the page for their email and come back holding six digits; asking
+   * them to find and click the box first is a step that exists only because nobody removed it.
+   */
+  const codeRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (codeSent && !otpVerified) codeRef.current?.focus();
+  }, [codeSent, otpVerified]);
+
+  /**
+   * Asks the server whether this number is free, and returns the sentence it gave — not a boolean.
+   *
+   * A boolean left each caller to invent its own wording, and `handleSendCode` did: it reached for
+   * `phoneConflict` (state, one render behind, so null on the first press) and fell back to a
+   * hard-coded "already registered with someone else". The candidate then saw the clash described
+   * twice, in two different sentences, one of them the server's and one of them not.
+   */
+  const checkPhoneConflictFn = useCallback(async (phoneValue: string): Promise<string | null> => {
+    const norm = normalisePhone(phoneValue);
+    if (!norm) {
+      setPhoneConflict(null);
+      return null;
+    }
+    setCheckingPhone(true);
+    try {
+      const res = await checkRegistrationPhoneConflict(token, norm);
+      const message = res.conflict
+        ? (res.message ?? 'That number cannot be used here. Contact the office and they can sort it out.')
+        : null;
+      setPhoneConflict(message);
+      return message;
+    } catch {
+      // A check that could not run is not a refusal: let the send attempt answer for itself.
+      setPhoneConflict(null);
+      return null;
+    } finally {
+      setCheckingPhone(false);
     }
   }, [token]);
 
   const handleSendCode = async () => {
     setOtpError(null);
     setOtpInfo(null);
-    const trimmed = phone.trim();
-    if (trimmed.length < 6) {
-      setOtpError('Enter a valid mobile number.');
+    const trimmed = currentPhone();
+    const norm = normalisePhone(trimmed);
+    if (norm === null) {
+      setOtpError('Enter a valid 10-digit mobile number first.');
       return;
     }
+    if (trimmed !== phone) setPhone(trimmed);
     setOtpBusy(true);
     try {
+      // The clash is already shown under the number itself, which is where it belongs and where
+      // the candidate is looking. Repeating it under the button said the same thing twice.
+      if (await checkPhoneConflictFn(norm)) return;
       await requestRegistrationOtp(token, trimmed);
       setCodeSent(true);
-      setOtpInfo(`A verification code has been emailed to ${application?.email ?? 'your email address'}.`);
+      setOtpSentTo(trimmed);
+      setOtpInfo(`A 6-digit code has been emailed to ${application?.email ?? 'your email address'}. It expires in 5 minutes.`);
     } catch (err) {
       setOtpError(userMessage(err));
     } finally {
@@ -382,18 +846,28 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     }
   };
 
-  const handleVerifyCode = async () => {
+  const handleVerifyCode = async (submitted?: string) => {
     setOtpError(null);
-    const trimmed = phone.trim();
-    if (!code.trim()) {
-      setOtpError('Enter the code you received.');
+    const entered = (submitted ?? code).trim();
+    const trimmed = currentPhone();
+    if (!entered) {
+      setOtpError('Enter the 6-digit code you received.');
+      return;
+    }
+    const sentTo = otpSentTo ?? trimmed;
+    if (trimmed !== sentTo) {
+      setOtpError(
+        `That code was sent for +91 ${sentTo}, but the number above now reads +91 ${trimmed}. `
+        + 'Change it back, or press Resend code for the new number.',
+      );
       return;
     }
     setOtpBusy(true);
     try {
-      await verifyRegistrationOtp(token, trimmed, code.trim());
+      await verifyRegistrationOtp(token, sentTo, entered);
       setOtpVerified(true);
       setOtpInfo(null);
+      if (sentTo !== phone) setPhone(sentTo);
     } catch (err) {
       setOtpError(userMessage(err));
     } finally {
@@ -401,7 +875,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     }
   };
 
-  const saveDraft = async (patch: UpdateRegistrationDraftInput) => {
+  const saveDraft = useCallback(async (patch: UpdateRegistrationDraftInput) => {
     if (Object.keys(patch).length === 0) return;
     setSavingDraft(true);
     setDraftError(null);
@@ -416,70 +890,267 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     } finally {
       setSavingDraft(false);
     }
-  };
+  }, [token, onVerificationLost]);
 
   const updateField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
     setDraftSaved(false);
   };
 
-  /**
-   * One field per blur, and a blank is a real answer.
-   *
-   * This sent the WHOLE form on every blur, which is the race the phone form documents fixing:
-   * two overlapping saves, the wider one carrying an empty box, and the narrower one's value
-   * overwritten a few milliseconds after it landed. It also dropped blanks — so a candidate who
-   * mistyped their PAN and then cleared the box kept the wrong PAN on the server, under a "Saved"
-   * tick, while the server has always been willing to clear it. And because one bad value went
-   * out with every subsequent save, a single mistyped PAN made saving the BANK NAME fail with a
-   * complaint about the PAN.
-   */
-  const commitField = (key: keyof FormState) => () => {
+  const commitField = (key: keyof FormState) => (
+    e?: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ) => {
     if (!form) return;
-    /*
-      Tidy first, save the tidied value. Somebody typing an Aadhaar off the card puts spaces in it,
-      and `isValidAadhaar` takes twelve digits and nothing else — so the spaced version showed no
-      hint (the hint strips before asking) and was then refused by the server. Same for a PAN
-      pasted with a dash, and a phone number written with the country code spaced out.
-    */
-    const cleaned = typeof form[key] === 'string'
-      ? normaliseIdentityOnBlur(key as string, form[key] as string)
-      : null;
-    if (cleaned !== null) {
-      updateField(key, cleaned as FormState[keyof FormState]);
-      void saveDraft(fieldPatch(key, cleaned));
+    const raw = typeof e?.target?.value === 'string' ? e.target.value : (form[key] as string);
+    const cleaned = typeof raw === 'string' ? normaliseIdentityOnBlur(key as string, raw) : null;
+    if (cleaned !== null && cleaned !== raw) updateField(key, cleaned as FormState[keyof FormState]);
+    else if (raw !== form[key]) updateField(key, raw as FormState[keyof FormState]);
+    void saveDraft(fieldPatch(key, cleaned ?? raw));
+  };
+
+  const commitSelect = (key: keyof FormState, value: string) => {
+    updateField(key, value as FormState[keyof FormState]);
+    void saveDraft(fieldPatch(key, value));
+  };
+
+  // ── Automations (live directories, advisory — never blocking) ────────────
+
+  const runPincodeLookup = useCallback(async (pincode: string) => {
+    const clean = (pincode || '').trim();
+    if (!isSixDigitPin(clean)) {
+      setPincodeState('idle');
+      setPincodeNote(null);
       return;
     }
-    void saveDraft(fieldPatch(key, form[key]));
+    const seq = ++lookupSeq.current;
+    setPincodeState('looking');
+    setPincodeNote(null);
+    setPincodeOffer(null);
+    const answer = await resolvePincode(token, clean);
+    if (seq !== lookupSeq.current) return;
+    if (answer.status !== 'found') {
+      /*
+        Two different failures, two different sentences. "Check the digits" is right when the
+        directory has answered and has no such pincode; it is wrong — and was what everybody saw —
+        when the lookup itself could not run, because the deployed container could not reach the
+        postal API at all. Neither blocks: the address below is always typeable.
+      */
+      setPincodeState(answer.status === 'not-found' ? 'notfound' : 'unavailable');
+      setPincodeNote(answer.status === 'not-found'
+        ? `There is no ${clean} in the postal directory — check the six digits, or just fill the address in below.`
+        : 'We could not check that pincode just now. Fill in the state, district and town below — nothing is held up by this.');
+      return;
+    }
+    const place = answer.place;
+    setPincodeState('found');
+    const current = formRef.current;
+    const patch: UpdateRegistrationDraftInput = {};
+    const filled: string[] = [];
+    const next: Partial<FormState> = {};
+    if (current && !current.state.trim() && place.state) {
+      next.state = place.state;
+      patch.state = place.state;
+      filled.push(place.state);
+    }
+    if (current && !current.district.trim() && place.district) {
+      next.district = place.district;
+      patch.record = { ...(patch.record ?? {}), district: place.district };
+      filled.push(`${place.district} district`);
+    }
+    if (current && !current.city.trim() && place.city) {
+      next.city = place.city;
+      patch.city = place.city;
+      filled.push(place.city);
+    }
+    if (Object.keys(next).length > 0) {
+      setForm((prev) => (prev ? { ...prev, ...next } : prev));
+      /*
+        WHERE IT CAME FROM IS PART OF THE ANSWER. India Post defines what a pincode means, so a
+        `directory` fill is stated plainly. The map is only standing in when the directory cannot
+        be reached, and it is wrong often enough on the wrong side of a border — it reads 160017
+        as Punjab where the directory reads Chandigarh — that saying so and asking for a glance is
+        the difference between a checked address and a confidently wrong one.
+      */
+      setPincodeNote(place.source === 'directory'
+        ? `Filled in from the postal directory: ${filled.join(' · ')}. Change any of it below if it is not right.`
+        : `The postal directory did not answer just now, so this came from the map: ${filled.join(' · ')}. Please check the state and district are right before you continue.`);
+      void saveDraft(patch);
+    } else {
+      // Everything was already typed. Say what the directory holds and offer it in one press,
+      // rather than announcing a "verified match" the candidate cannot act on.
+      const held = [place.city, place.district, place.state].filter(Boolean).join(' · ');
+      const differs = !!current
+        && ((place.state && current.state.trim() && current.state.trim() !== place.state)
+          || (place.district && current.district.trim() && current.district.trim() !== place.district)
+          || (place.city && current.city.trim() && current.city.trim() !== place.city));
+      const register = place.source === 'directory' ? 'The postal directory has' : 'The map has';
+      setPincodeNote(differs
+        ? `${register} ${clean} as ${held}. Yours reads differently — keep it if you know better, or use theirs.`
+        : place.source === 'directory'
+          ? `${clean} is ${held} in the postal directory.`
+          : `${clean} looks like ${held} on the map — the postal directory did not answer, so please check it yourself.`);
+      setPincodeOffer(differs ? place : null);
+    }
+  }, [token, saveDraft]);
+
+  const runIfscLookup = useCallback(async (code: string) => {
+    const clean = (code || '').trim().toUpperCase();
+    if (!clean) {
+      setIfscState('idle');
+      setIfscNote(null);
+      return;
+    }
+    if (!isValidIfsc(clean)) {
+      setIfscState('idle');
+      setIfscNote(null);
+      return;
+    }
+    const seq = ++lookupSeq.current;
+    setIfscState('looking');
+    setIfscNote(null);
+    const found = await resolveIfsc(token, clean);
+    if (seq !== lookupSeq.current) return;
+    if (!found) {
+      setIfscState('notfound');
+      setIfscNote('We could not recognise this IFSC code — check it against your passbook, or type the bank name below.');
+      setBankLocked(false);
+      return;
+    }
+    setIfscState('found');
+    const previousResolved = lastResolvedBank.current;
+    lastResolvedBank.current = found.bankName;
+    const currentBank = (formRef.current?.bankName ?? '').trim();
+    if (currentBank && currentBank !== previousResolved && currentBank !== found.bankName) {
+      setBankLocked(false);
+      setIfscNote(
+        `Belongs to ${found.bankName}${found.branchName ? `, ${found.branchName}` : ''} — retaining your entered "${currentBank}".`,
+      );
+      return;
+    }
+    setBankLocked(true);
+    setIfscNote(
+      `Belongs to ${found.bankName}${found.branchName ? `, ${found.branchName}` : ''}${found.city ? ` (${found.city})` : ''} — auto-populated below.`,
+    );
+    updateField('bankName', found.bankName);
+    void saveDraft({ record: { bankName: found.bankName } });
+  }, [token, saveDraft]);
+
+  const handlePincodeBlur = () => {
+    if (!form) return;
+    const cleaned = normaliseIdentityOnBlur('pincode', form.pincode);
+    const value = cleaned ?? form.pincode;
+    if (cleaned !== null) updateField('pincode', cleaned);
+    void saveDraft(fieldPatch('pincode', value));
+    void runPincodeLookup(value);
   };
+
+  const handleIfscBlur = () => {
+    if (!form) return;
+    const cleaned = normaliseIdentityOnBlur('ifscCode', form.ifscCode);
+    const value = (cleaned ?? form.ifscCode).toUpperCase();
+    if (value !== form.ifscCode) updateField('ifscCode', value);
+    void saveDraft(fieldPatch('ifscCode', value));
+    void runIfscLookup(value);
+  };
+
+  // ── Per-step validation (blocks Continue, never blocks typing) ───────────
+
+  const validateStep = useCallback(
+    (step: number, f: FormState): StepErrors => validateRegistrationStep(step, f),
+    [],
+  );
+
+  const scrollToFirstError = (errs: StepErrors) => {
+    const first = Object.keys(errs)[0];
+    if (!first) return;
+    requestAnimationFrame(() => {
+      document.getElementById(`reg-${first}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      (document.getElementById(`reg-${first}-input`) as HTMLElement | null)?.focus?.();
+    });
+  };
+
+  const attemptGoToStep = (step: number) => {
+    if (form && step > activeStep) {
+      const errs = validateStep(activeStep, form);
+      setStepErrors(errs);
+      setStepAttempted(true);
+      if (Object.keys(errs).length > 0) {
+        scrollToFirstError(errs);
+        return;
+      }
+      const patch = wholeFormPatch(form);
+      if (pinLatitude != null && pinLongitude != null) {
+        patch.record = {
+          ...(patch.record ?? {}),
+          latitude: pinLatitude,
+          longitude: pinLongitude,
+        };
+      }
+      void saveDraft(patch);
+    } else {
+      setStepErrors({});
+      setStepAttempted(false);
+    }
+    setActiveStep(step);
+    setMaxStepVisited((prev) => Math.max(prev, step));
+    saveStepPosition(token, step);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const goToStep = (step: number) => {
+    if (form && step > activeStep) {
+      attemptGoToStep(step);
+      return;
+    }
+    setStepErrors({});
+    setStepAttempted(false);
+    setActiveStep(step);
+    setMaxStepVisited((prev) => Math.max(prev, step));
+    saveStepPosition(token, step);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    const handleHash = () => {
+      const match = window.location.hash.match(/step-?([1-4])/i);
+      if (match) {
+        const target = parseInt(match[1], 10);
+        if (target >= 1 && target <= 4 && target !== activeStep) {
+          if (target <= maxStepVisited) {
+            goToStep(target);
+          }
+        }
+      }
+    };
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, [activeStep, maxStepVisited]);
 
   const handleEmploymentCategoryChange = async (value: string) => {
     if (!form) return;
     const next: FormState = { ...form, employmentCategory: (value as EmploymentCategory) || '' };
     setForm(next);
+    setStepErrors((prev) => {
+      if (!prev.employmentCategory) return prev;
+      const rest = { ...prev };
+      delete rest.employmentCategory;
+      return rest;
+    });
     setSavingDraft(true);
     setDraftError(null);
     try {
       const saved = await updateRegistrationDraft(token, fieldPatch('employmentCategory', value));
       setApplication(saved);
       setDraftSaved(true);
-      const stillAsked = await refreshDocumentChecklist();
-      /**
-       * Say when a change to this box stops counting something already sent.
-       *
-       * The requested list depends on the employment category — a freelancer is asked for an
-       * experience letter, a proprietor for a shop proof and an association letter. Switching
-       * after uploading left those files in place and simply removed them from the checklist, so
-       * the candidate saw a requirement they had already met disappear and a new empty one take
-       * its place, with nothing said about either.
-       */
-      if (stillAsked) {
-        const orphaned = documents
+      const refreshed = await refreshDocumentChecklist();
+      if (refreshed) {
+        const stillAsked = refreshed.documentsRequested;
+        const orphaned = refreshed.documents
           .filter((d) => d.filePaths.length > 0 && !stillAsked.includes(d.requirement))
           .map((d) => ONBOARDING_DOCUMENT_LABELS[d.requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? d.requirement);
         setDraftError(orphaned.length === 0 ? null : (
           `What you have already sent for ${orphaned.join(' and ')} is not asked for as a `
-          + `${value.toLowerCase()}. It stays on your application, and HR can still see it.`
+          + `${value.toLowerCase()}. It stays on your application, and HR can still review it.`
         ));
       }
     } catch (err) {
@@ -507,6 +1178,47 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     } finally {
       setUploading((prev) => ({ ...prev, [requirement]: false }));
     }
+  };
+
+  const openDocumentPreview = async (requirement: string, filePaths: string[]) => {
+    if (previewLoading) return;
+    revokePreviewUrls();
+    setPreviewLoading(requirement);
+    try {
+      const items: DocumentPreviewItem[] = [];
+      for (let i = 0; i < filePaths.length; i++) {
+        const filePath = filePaths[i];
+        const fileName = filePath.split('/').pop() ?? `${requirement}-${i + 1}`;
+        const blob = await getRegistrationDocumentFileBlob(token, requirement, i);
+        /*
+          Re-typed from the filename before it becomes a URL. The route streams the bytes with no
+          usable `Content-Type`, so `blob.type` is empty and the viewer — which decides what to
+          render from exactly that — offered a download for every scan a candidate tried to check.
+        */
+        const type = scanMimeType(fileName);
+        const url = URL.createObjectURL(type ? new Blob([blob], { type }) : blob);
+        previewUrlsRef.current.push(url);
+        items.push({
+          title: `${ONBOARDING_DOCUMENT_LABELS[requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? requirement}${filePaths.length > 1 ? ` (File ${i + 1} of ${filePaths.length})` : ''}`,
+          url,
+          fileName,
+          mimeType: type ?? blob.type,
+        });
+      }
+      setPreviewItems(items);
+      setPreviewIndex(0);
+      setPreviewOpen(true);
+    } catch (err) {
+      setUploadErrors((prev) => ({ ...prev, [requirement]: `Could not open scan preview: ${userMessage(err)}` }));
+    } finally {
+      setPreviewLoading(null);
+    }
+  };
+
+  const handleClosePreview = () => {
+    setPreviewOpen(false);
+    revokePreviewUrls();
+    setPreviewItems([]);
   };
 
   const handleConsentToggle = async (checked: boolean) => {
@@ -539,32 +1251,90 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   };
 
   const consentAccepted = Boolean(application?.consentAcceptedAt);
+  const hasPhotograph = Boolean(
+    documents.find((d) => d.requirement === 'PHOTOGRAPH')?.filePaths?.length,
+  );
   const canSubmit = useMemo(
-    () => Boolean(form?.fullName.trim()) && Boolean(form?.employmentCategory) && consentAccepted
-      && otpVerified,
-    [form, consentAccepted, otpVerified],
+    () => Boolean(form?.fullName.trim()) && Boolean(form?.employmentCategory) && consentAccepted && otpVerified && hasPhotograph,
+    [form, consentAccepted, otpVerified, hasPhotograph],
   );
 
+  const relationSelectValue = form
+    ? (!form.emergencyContactRelation.trim()
+      ? ''
+      : RELATION_OPTIONS.some((o) => o.value === form.emergencyContactRelation)
+        ? form.emergencyContactRelation
+        : OTHER_SENTINEL)
+    : '';
+  const showRelationOther = Boolean(
+    relationOtherOpen
+    || (form && form.emergencyContactRelation.trim()
+      && isOtherValue(form.emergencyContactRelation, RELATION_OPTIONS)),
+  );
+
+  const handleRelationSelect = (v: string) => {
+    if (v === OTHER_SENTINEL) {
+      setRelationOtherOpen(true);
+      updateField('emergencyContactRelation', '');
+      void saveDraft(fieldPatch('emergencyContactRelation', ''));
+      return;
+    }
+    setRelationOtherOpen(false);
+    commitSelect('emergencyContactRelation', v);
+  };
+
+  const circleConflict = form ? pincodeStateConflict(form.pincode, form.state) : null;
+
+  // ── Loading Screen ────────────────────────────────────────────────────────
   if (loadState === 'loading') {
     return (
-      <div style={CONTAINER_STYLE}>
+      <div className="pub-reg-root">
+        <style>{FORM_CSS}</style>
         <PublicMasthead />
-        <div style={{ ...CARD_STYLE, textAlign: 'center', paddingTop: '80px', color: 'var(--text-muted)' }}>
-          Opening your registration…
+        <div className="pub-reg-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+          <div className="pub-reg-card" style={{ maxWidth: '440px', width: '100%', textAlign: 'center', padding: '40px 24px' }}>
+            <Loader2 size={32} className="spin" style={{ margin: '0 auto 16px', color: 'var(--accent)' }} />
+            <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+              Opening Your Registration Portal
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+              Verifying your invitation session…
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
+  // ── Error Screen (Invalid / Expired Token) ─────────────────────────────────
   if (loadState === 'error' || !application || !form) {
     return (
-      <div style={CONTAINER_STYLE}>
+      <div className="pub-reg-root">
+        <style>{FORM_CSS}</style>
         <PublicMasthead />
-        <div style={CARD_STYLE}>
-          <div style={{ ...SECTION_STYLE, borderColor: 'var(--danger)' }}>
-            <div style={SECTION_TITLE_STYLE}>This link is not valid</div>
-            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-              {loadError || 'Ask HR to resend your registration link.'}
+        <div className="pub-reg-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+          <div className="pub-reg-card" style={{ maxWidth: '520px', width: '100%', borderColor: 'var(--danger)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--danger)' }}>
+              <AlertCircle size={24} style={{ flexShrink: 0 }} />
+              <div>
+                <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>
+                  This Registration Link is Not Valid
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                  Invitation Token Verification Failed
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              {loadError || 'This link may have expired, already been completed, or was entered incorrectly.'}
+            </div>
+            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-secondary)' }}>
+                What should you do?
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Please contact the HR team member or coordinator who invited you to request a new registration link.
+              </div>
             </div>
           </div>
         </div>
@@ -572,26 +1342,175 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     );
   }
 
+  // ── Terminal States (Submitted, Approved, Rejected) ───────────────────────
   const statusMessage = STATUS_COPY[application.status]?.(application);
   if (statusMessage) {
+    const isSubmitted = application.status === ApplicationStatus.PENDING_VALIDATION;
+    const isApproved = application.status === ApplicationStatus.APPROVED;
+    const isRejected = application.status === ApplicationStatus.REJECTED;
+
     return (
-      <div style={CONTAINER_STYLE}>
+      <div className="pub-reg-root">
+        <style>{FORM_CSS}</style>
         <PublicMasthead />
-        <div style={CARD_STYLE}>
-          <div style={{
-            ...SECTION_STYLE,
-            borderColor: application.status === ApplicationStatus.REJECTED ? 'var(--danger)' : 'var(--success)',
+        <div className="pub-reg-container" style={{ maxWidth: '840px' }}>
+          <div className="pub-reg-card" style={{
+            borderColor: isRejected ? 'var(--danger)' : 'var(--success)',
+            padding: '32px 28px',
           }}>
-            <div style={{
-              ...SECTION_TITLE_STYLE,
-              color: application.status === ApplicationStatus.REJECTED ? 'var(--danger)' : 'var(--success)',
-            }}>
-              {application.status === ApplicationStatus.PENDING_VALIDATION && 'Application submitted'}
-              {application.status === ApplicationStatus.APPROVED && 'Application approved'}
-              {application.status === ApplicationStatus.REJECTED && 'Application not approved'}
+            {/* Status Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+              <div style={{
+                width: '54px', height: '54px', borderRadius: '50%',
+                background: isRejected ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                {isRejected ? (
+                  <AlertCircle size={30} style={{ color: 'var(--danger)' }} />
+                ) : (
+                  <CheckCircle2 size={30} style={{ color: 'var(--success)' }} />
+                )}
+              </div>
+              <div>
+                <div style={{
+                  fontSize: 'var(--text-xs)',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  color: isRejected ? 'var(--danger)' : 'var(--success)',
+                  marginBottom: '2px',
+                }}>
+                  {isSubmitted && 'Application Submitted & Under Active Verification'}
+                  {isApproved && 'Official Appraiser Empanelment Approved'}
+                  {isRejected && 'Application Review Concluded'}
+                </div>
+                <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                  {isSubmitted && `Thank you, ${application.fullName || 'Candidate'}`}
+                  {isApproved && `Congratulations, ${application.fullName || 'Appraiser'}`}
+                  {isRejected && 'Application Decision Notice'}
+                </h1>
+              </div>
             </div>
-            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, margin: '8px 0 0' }}>
               {statusMessage}
+            </p>
+
+            {/* Candidate Metadata Snapshot */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '12px',
+              padding: '14px 18px',
+              background: 'var(--bg-surface-2)',
+              borderRadius: '10px',
+              border: '1px solid var(--border-color)',
+              marginTop: '12px',
+            }}>
+              <div>
+                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Application Ref
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                  #APP-{(application.id || '').slice(0, 8).toUpperCase()}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Verified Mobile
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  +91 {application.mobile}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Employment Category
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {application.employmentCategory || 'Assayer'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Registered Email
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {application.email || '—'}
+                </div>
+              </div>
+            </div>
+
+            {/* 3-Stage Lifecycle Timeline for Submitted status */}
+            {isSubmitted && (
+              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--border-hair)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                  Next Steps &amp; Review Process
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                    <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--success)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, flexShrink: 0, marginTop: '2px' }}>
+                      <Check size={14} strokeWidth={3} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Stage 1: Registration Profile Submitted
+                      </div>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        Your details, statutory IDs, bank information, and uploaded documents have been securely recorded.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                    <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(245,158,11,0.15)', border: '2px solid #f59e0b', color: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, flexShrink: 0, marginTop: '2px' }}>
+                      2
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Stage 2: HR Document Verification (In Progress)
+                      </div>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        The HR operations team reviews your submitted documents (Aadhaar, PAN, Bank details) for verification.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                    <div style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--bg-surface-2)', border: '1.5px solid var(--border-color)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, flexShrink: 0, marginTop: '2px' }}>
+                      3
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Stage 3: Approval &amp; Roster Activation
+                      </div>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        Once verified, your profile is approved and activated onto the appraiser roster.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isApproved && (
+              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--border-hair)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)', fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: '8px' }}>
+                  <Award size={18} /> Appraiser Profile Approved &amp; Active
+                </div>
+                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>
+                  Your application has been approved by the HR team. Your assayer profile is now active on the system.
+                  Your operations coordinator will reach out directly regarding field assignments and next steps.
+                </p>
+              </div>
+            )}
+
+            {/* Support Desk Footer */}
+            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                Need updates or assistance? Reach out to the Sumeru Global HR coordinator who issued your invitation.
+              </div>
             </div>
           </div>
         </div>
@@ -599,482 +1518,1329 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     );
   }
 
+  const stepErrorCount = Object.keys(stepErrors).length;
+
   return (
-    <div style={CONTAINER_STYLE}>
+    <div className="pub-reg-root">
+      <style>{FORM_CSS}</style>
       <PublicMasthead />
-      <div style={CARD_STYLE}>
-        <div>
-          <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700 }}>Your registration</div>
-          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
-            Confirm your email with the code we send, then fill in your details and attach your documents. You can
-            come back to this same link at any time before you submit.
-          </div>
-        </div>
 
-        {application.status === ApplicationStatus.AWAITING_INFO && (
-          <AlertBanner type="error">
-            <strong>HR needs something from you:</strong> {application.reviewNotes || 'Please review and complete your application.'}
-          </AlertBanner>
-        )}
-
-        {/* ── Mobile verification ─────────────────────────────────────────── */}
-        <div style={SECTION_STYLE}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Phone size={16} style={{ color: 'var(--text-muted)' }} aria-hidden />
-            <div style={SECTION_TITLE_STYLE}>Confirm it&apos;s you</div>
-            {otpVerified && (
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', color: 'var(--success)', fontWeight: 600 }}>
-                <Check size={13} aria-hidden /> Verified
-              </span>
-            )}
-          </div>
-          {!otpVerified ? (
-            <>
-              <div>
-                {/* The code goes to the mailbox that received the invite, not to this number —
-                    SMS is not configured, and email is the channel for everything here. The number
-                    is still collected because the record needs it. */}
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '10px' }}>
-                  We&apos;ll email a 6-digit code to <strong>{application.email ?? 'your email address'}</strong>.
-                </div>
-                <label htmlFor="reg-phone" style={LABEL_STYLE}>Your mobile number</label>
-                <input
-                  id="reg-phone"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  // Saved like every other box. It used to key the verification cache and nothing
-                  // else, so the number the candidate typed here was discarded and the record kept
-                  // whatever HR entered at the interview — for the first critical field there is.
-                  // Verifying the code is what makes it final; this keeps a corrected number from
-                  // being lost if they wander off before verifying.
-                  onBlur={() => phone.trim() && void saveDraft({ mobile: phone.trim() })}
-                  inputMode="tel"
-                  placeholder="10-digit mobile number"
-                  style={INPUT_STYLE}
-                  disabled={otpBusy}
-                />
-              </div>
-              {!codeSent ? (
-                <PrimaryButton onClick={() => void handleSendCode()} busy={otpBusy}>
-                  Send code
-                </PrimaryButton>
-              ) : (
-                <>
-                  <div>
-                    <label htmlFor="reg-code" style={LABEL_STYLE}>Verification code</label>
-                    <input
-                      id="reg-code"
-                      value={code}
-                      onChange={(e) => setCode(e.target.value)}
-                      inputMode="numeric"
-                      placeholder="6-digit code"
-                      style={INPUT_STYLE}
-                      disabled={otpBusy}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <div style={{ flex: '1 1 160px' }}>
-                      <PrimaryButton onClick={() => void handleVerifyCode()} busy={otpBusy}>
-                        Verify
-                      </PrimaryButton>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleSendCode()}
-                      disabled={otpBusy}
-                      className="btn btn-secondary"
-                      style={{ flex: '1 1 140px', padding: '11px 16px', fontSize: 'var(--text-sm)' }}
-                    >
-                      Resend code
-                    </button>
-                  </div>
-                </>
-              )}
-              {otpInfo && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>{otpInfo}</div>}
-              {otpError && <AlertBanner type="error" message={otpError} onClose={() => setOtpError(null)} />}
-            </>
-          ) : (
-            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-              {phone} is verified for this application.
-            </div>
-          )}
-        </div>
-
-        {/*
-          The form is open before the code is.
-
-          Everything below used to be hidden until `otpVerified`, which defeated the server's own
-          rule: it gates FILING, not typing (`registration-application.service.ts`, "Where the
-          verification code is actually required"). The code is emailed to the mailbox the link
-          arrived in, so gating the form proved nothing the link had not — and on a deployment with
-          email switched off, a candidate holding a valid link could not enter a single character.
-          That is not a hypothetical: this deployment ran with email off until today.
-
-          Submitting still needs the code. See `canSubmit`.
-        */}
-        <>
-            {/* ── Profile ────────────────────────────────────────────────── */}
-            <div style={SECTION_STYLE}>
-              <div style={SECTION_TITLE_STYLE}>Your details</div>
-              <div style={SECTION_NOTE_STYLE}>Saved automatically as you move between fields.</div>
-
-              <div style={FIELD_GRID_STYLE}>
-                <div>
-                  <label htmlFor="reg-fullName" style={LABEL_STYLE}>Full name (as on Aadhaar/PAN)</label>
-                  <input
-                    id="reg-fullName"
-                    value={form.fullName}
-                    onChange={(e) => updateField('fullName', e.target.value)}
-                    onBlur={commitField('fullName')}
-                    style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-dob" style={LABEL_STYLE}>Date of birth</label>
-                  <input
-                    id="reg-dob"
-                    type="date"
-                    value={form.dateOfBirth}
-                    onChange={(e) => updateField('dateOfBirth', e.target.value)}
-                    onBlur={commitField('dateOfBirth')}
-                    style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  {/* The phone form has always asked for this; this one did not, so the same
-                      registration produced a different person depending on the device. */}
-                  <label htmlFor="reg-email" style={LABEL_STYLE}>Email</label>
-                  <input
-                    id="reg-email" value={form.email} type="email" autoCapitalize="none"
-                    onChange={(e) => updateField('email', e.target.value)}
-                    onBlur={commitField('email')} style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-gender" style={LABEL_STYLE}>Gender</label>
-                  <Select
-                    value={form.gender}
-                    onChange={(v) => { updateField('gender', v); void saveDraft(fieldPatch('gender', v)); }}
-                    options={GENDER_OPTIONS}
-                    placeholder="Select…"
-                    aria-label="Gender"
-                    id="reg-gender"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="reg-address" style={LABEL_STYLE}>Address</label>
-                <textarea
-                  id="reg-address"
-                  value={form.address}
-                  onChange={(e) => updateField('address', e.target.value)}
-                  onBlur={commitField('address')}
-                  rows={2}
-                  style={{ ...INPUT_STYLE, resize: 'vertical' }}
-                />
-              </div>
-
-              <div style={FIELD_GRID_STYLE}>
-                <div>
-                  <label htmlFor="reg-state" style={LABEL_STYLE}>State</label>
-                  <input id="reg-state" value={form.state} onChange={(e) => updateField('state', e.target.value)} onBlur={commitField('state')} style={INPUT_STYLE} />
-                </div>
-                <div>
-                  <label htmlFor="reg-city" style={LABEL_STYLE}>City</label>
-                  <input id="reg-city" value={form.city} onChange={(e) => updateField('city', e.target.value)} onBlur={commitField('city')} style={INPUT_STYLE} />
-                </div>
-                <div>
-                  <label htmlFor="reg-district" style={LABEL_STYLE}>District</label>
-                  <input
-                    id="reg-district" value={form.district}
-                    onChange={(e) => updateField('district', e.target.value)}
-                    onBlur={commitField('district')} style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-pincode" style={LABEL_STYLE}>Pincode</label>
-                  <input id="reg-pincode" value={form.pincode} onChange={(e) => updateField('pincode', e.target.value)} onBlur={commitField('pincode')} inputMode="numeric" style={INPUT_STYLE} />
-                  <FieldHint field="pincode" value={form.pincode} />
-                </div>
-              </div>
-
-              <div style={{ borderTop: '1px solid var(--border-color)', margin: '4px 0' }} />
-
-              <div style={FIELD_GRID_STYLE}>
-                <div>
-                  <label htmlFor="reg-experience" style={LABEL_STYLE}>Years of experience</label>
-                  <input id="reg-experience" type="number" min={0} max={60} value={form.experienceYears} onChange={(e) => updateField('experienceYears', e.target.value)} onBlur={commitField('experienceYears')} style={INPUT_STYLE} />
-                </div>
-                <div>
-                  <label htmlFor="reg-employer" style={LABEL_STYLE}>Current employer</label>
-                  <input id="reg-employer" value={form.currentEmployer} onChange={(e) => updateField('currentEmployer', e.target.value)} onBlur={commitField('currentEmployer')} style={INPUT_STYLE} />
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="reg-expertise" style={LABEL_STYLE}>Expertise</label>
-                <input id="reg-expertise" value={form.expertise} onChange={(e) => updateField('expertise', e.target.value)} onBlur={commitField('expertise')} style={INPUT_STYLE} />
-              </div>
-              <div>
-                <label htmlFor="reg-availability" style={LABEL_STYLE}>Availability</label>
-                <input id="reg-availability" value={form.availability} onChange={(e) => updateField('availability', e.target.value)} onBlur={commitField('availability')} style={INPUT_STYLE} />
-              </div>
-
+      <div className="pub-reg-container">
+        <div className="pub-reg-grid">
+          {/* ══════════════════════════════════════════════════════════════════════
+              LEFT INSTITUTIONAL SIDEBAR (Desktop Sticky)
+             ══════════════════════════════════════════════════════════════════════ */}
+          <aside className="pub-reg-sidebar">
+            <div className="pub-reg-sidebar-sticky">
               {/*
-                Identity, pay and next-of-kin.
+                ONE PANEL, ONE PROGRESS.
 
-                These are not extras. Without the PAN there is no TDS deduction and no statutory
-                filing; without the account and IFSC there is no payout at all; without a reachable
-                contact there is no duty of care for somebody sent alone to a branch. The form used
-                to ask for a photograph of the PAN card and never for the number on it, so every
-                person who registered here arrived on the roster unable to be paid.
-
-                Asked here rather than left to HR because the candidate is the one holding the
-                documents. Anything left blank is chased on the record afterwards — an approval is
-                not refused over it.
+                This rail carried four cards: who you are, a roadmap with a progress bar and a
+                percentage, document guidelines, and a help note — while the column beside it
+                repeated the step, the percentage and the bar a second time. Progress was stated
+                three times on one screen and the form itself started below all of it. What a
+                candidate needs here is: this is my application, this is where I am, this is who to
+                ask. Three things, one panel each for the first two.
               */}
-              <div style={SECTION_TITLE_STYLE}>Identity and payment</div>
-              <div style={SECTION_NOTE_STYLE}>
-                We need these to pay you and to deduct tax correctly. They are stored encrypted and
-                shown masked.
-              </div>
-              <div style={FIELD_GRID_STYLE}>
-                <div>
-                  <label htmlFor="reg-pan" style={LABEL_STYLE}>PAN</label>
-                  <input
-                    id="reg-pan" value={form.panNumber} placeholder="ABCDE1234F"
-                    onChange={(e) => updateField('panNumber', e.target.value.toUpperCase())}
-                    onBlur={commitField('panNumber')} autoCapitalize="characters" style={INPUT_STYLE}
-                  />
-                  <FieldHint field="panNumber" value={form.panNumber} />
+              <div className="pub-reg-card pub-reg-rail-card">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div className="pub-reg-avatar">
+                    {(form.fullName.trim() || application.fullName || 'A').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="pub-reg-eyebrow">Your application</div>
+                    <div className="pub-reg-rail-name">
+                      {form.fullName.trim() || application.fullName || 'New applicant'}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="reg-aadhaar" style={LABEL_STYLE}>Aadhaar</label>
-                  <input
-                    id="reg-aadhaar" value={form.aadhaarNumber} inputMode="numeric" placeholder="12 digits"
-                    onChange={(e) => updateField('aadhaarNumber', e.target.value)}
-                    onBlur={commitField('aadhaarNumber')} style={INPUT_STYLE}
-                  />
-                  <FieldHint field="aadhaarNumber" value={form.aadhaarNumber} />
-                </div>
-              </div>
-              <div style={FIELD_GRID_STYLE}>
-                <div>
-                  <label htmlFor="reg-bank-account" style={LABEL_STYLE}>Bank account number</label>
-                  <input
-                    id="reg-bank-account" value={form.bankAccountNumber} inputMode="numeric"
-                    onChange={(e) => updateField('bankAccountNumber', e.target.value)}
-                    onBlur={commitField('bankAccountNumber')} style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-ifsc" style={LABEL_STYLE}>IFSC</label>
-                  <input
-                    id="reg-ifsc" value={form.ifscCode} placeholder="SBIN0001234"
-                    onChange={(e) => updateField('ifscCode', e.target.value.toUpperCase())}
-                    onBlur={commitField('ifscCode')} autoCapitalize="characters" style={INPUT_STYLE}
-                  />
-                  <FieldHint field="ifscCode" value={form.ifscCode} />
-                </div>
-              </div>
-              <div style={FIELD_GRID_STYLE}>
-                <div>
-                  <label htmlFor="reg-alt-phone" style={LABEL_STYLE}>Another number we can try</label>
-                  <input
-                    id="reg-alt-phone" value={form.alternatePhone} inputMode="tel"
-                    onChange={(e) => updateField('alternatePhone', e.target.value)}
-                    onBlur={commitField('alternatePhone')} style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-bank-name" style={LABEL_STYLE}>Bank name</label>
-                  <input
-                    id="reg-bank-name" value={form.bankName}
-                    onChange={(e) => updateField('bankName', e.target.value)}
-                    onBlur={commitField('bankName')} style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-qualification" style={LABEL_STYLE}>Qualification</label>
-                  <input
-                    id="reg-qualification" value={form.qualification} placeholder="Certificate or degree"
-                    onChange={(e) => updateField('qualification', e.target.value)}
-                    onBlur={commitField('qualification')} style={INPUT_STYLE}
-                  />
-                </div>
-              </div>
 
-              <div style={SECTION_TITLE_STYLE}>Emergency contact</div>
-              <div style={SECTION_NOTE_STYLE}>
-                Somebody we can reach if something happens while you are out at a branch.
-              </div>
-              <div style={FIELD_GRID_STYLE}>
-                <div>
-                  <label htmlFor="reg-ec-name" style={LABEL_STYLE}>Name</label>
-                  <input
-                    id="reg-ec-name" value={form.emergencyContactName}
-                    onChange={(e) => updateField('emergencyContactName', e.target.value)}
-                    onBlur={commitField('emergencyContactName')} style={INPUT_STYLE}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-ec-phone" style={LABEL_STYLE}>Phone</label>
-                  <input
-                    id="reg-ec-phone" value={form.emergencyContactPhone} inputMode="tel"
-                    onChange={(e) => updateField('emergencyContactPhone', e.target.value)}
-                    onBlur={commitField('emergencyContactPhone')} style={INPUT_STYLE}
-                  />
-                </div>
-              </div>
-              <div>
-                <label htmlFor="reg-ec-relation" style={LABEL_STYLE}>Relationship</label>
-                <input
-                  id="reg-ec-relation" value={form.emergencyContactRelation} placeholder="Spouse, parent, sibling…"
-                  onChange={(e) => updateField('emergencyContactRelation', e.target.value)}
-                  onBlur={commitField('emergencyContactRelation')} style={INPUT_STYLE}
-                />
-              </div>
+                <div className="pub-reg-rail-steps">
+                  {WIZARD_STEPS.map((s) => {
+                    const isCurrent = activeStep === s.id;
+                    const isCompleted = activeStep > s.id;
+                    const isClickable = s.id <= maxStepVisited;
+                    const IconComp = s.icon;
 
-              <div>
-                <label htmlFor="reg-employment-category" style={LABEL_STYLE}>Employment category</label>
-                <Select
-                  value={form.employmentCategory}
-                  onChange={(v) => void handleEmploymentCategoryChange(v)}
-                  options={EMPLOYMENT_CATEGORY_OPTIONS}
-                  placeholder="Freelancer or Proprietor?"
-                  aria-label="Employment category"
-                  id="reg-employment-category"
-                />
-                <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
-                  Decides which documents you are asked for below.
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => isClickable && goToStep(s.id)}
+                        disabled={!isClickable}
+                        className={`pub-reg-roadmap-item ${isCurrent ? 'is-active' : ''} ${isCompleted ? 'is-completed' : ''}`}
+                        aria-current={isCurrent ? 'step' : undefined}
+                        style={{ cursor: isClickable ? 'pointer' : 'default' }}
+                      >
+                        <div className="pub-reg-roadmap-icon">
+                          {isCompleted ? <Check size={14} strokeWidth={3} /> : <IconComp size={15} />}
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div className={`pub-reg-rail-step-title ${isCurrent ? 'is-active' : ''}`}>{s.title}</div>
+                          <div className="pub-reg-rail-step-desc">{s.desc}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
-              </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  // "Save draft" is the one place the whole form legitimately goes at once — the
-                  // candidate asked for it, so there is no concurrent blur to race with.
-                  onClick={() => form && void saveDraft(wholeFormPatch(form))}
-                  disabled={savingDraft}
-                  className="btn btn-secondary"
-                  style={{ padding: '9px 16px', fontSize: 'var(--text-sm)' }}
-                >
-                  {savingDraft ? 'Saving…' : 'Save draft'}
-                </button>
-                {draftSaved && !savingDraft && (
-                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                    <Check size={13} aria-hidden /> Saved
+                {/* The quiet facts: the reference to quote, and whether their typing is safe. */}
+                <div className="pub-reg-rail-foot">
+                  <span>Ref #APP-{(application.id || '').slice(0, 8).toUpperCase()}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <span className={`pub-reg-pulse-dot ${savingDraft ? 'is-saving' : 'is-active'}`} />
+                    {savingDraft ? 'Saving…' : draftSaved ? 'Saved' : 'Saves as you type'}
                   </span>
-                )}
+                </div>
               </div>
-              {draftError && <AlertBanner type="error" message={draftError} onClose={() => setDraftError(null)} />}
+
+              <div className="pub-reg-card pub-reg-rail-card">
+                <div className="pub-reg-rail-head">
+                  <HelpCircle size={16} style={{ color: 'var(--accent)' }} />
+                  <span>If you get stuck</span>
+                </div>
+                <p className="pub-reg-rail-body">
+                  Contact the HR coordinator who sent you this link — they can change your registered
+                  phone number, resend the link, or tell you which document is still outstanding.
+                </p>
+              </div>
+            </div>
+          </aside>
+
+          {/* ══════════════════════════════════════════════════════════════════════
+              RIGHT COLUMN: STEP WIZARD FORM
+             ══════════════════════════════════════════════════════════════════════ */}
+          <main className="pub-reg-main">
+            {/*
+              The compact header, and ONLY where the rail is not.
+
+              Below 1080px the sidebar collapses away, so the step and the progress have to be said
+              here. Above it they are already in the rail two inches to the left — this used to say
+              them anyway: a second progress bar, a second percentage and a second row of step
+              buttons, stacked above a form that then started below the fold.
+            */}
+            <div className="pub-reg-card pub-reg-compact-head">
+              <div className="pub-reg-compact-row">
+                <span className="pub-reg-step-pill">Step {activeStep} of {WIZARD_STEPS.length}</span>
+                <span className="pub-reg-compact-title">{WIZARD_STEPS[activeStep - 1]?.title}</span>
+              </div>
+              <div className="pub-reg-progress" role="progressbar" aria-valuemin={1} aria-valuemax={WIZARD_STEPS.length} aria-valuenow={activeStep}>
+                <div className="pub-reg-progress-fill" style={{ width: `${(activeStep / WIZARD_STEPS.length) * 100}%` }} />
+              </div>
             </div>
 
-            {/* ── Documents ──────────────────────────────────────────────── */}
-            <div style={SECTION_STYLE}>
-              <div style={SECTION_TITLE_STYLE}>Documents</div>
-              <div style={SECTION_NOTE_STYLE}>
-                A clear photo or scan of each one below. You can replace or add pages later from this
-                same link.
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {documentsRequested.map((requirement) => {
-                  const doc = documents.find((d) => d.requirement === requirement);
-                  const uploaded = Boolean(doc && doc.filePaths.length > 0);
-                  const busy = Boolean(uploading[requirement]);
-                  const label = ONBOARDING_DOCUMENT_LABELS[requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? requirement;
-                  return (
-                    <div
-                      key={requirement}
-                      style={{
-                        border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
-                        padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
-                      }}
-                    >
-                      <div style={{ flex: '1 1 160px', minWidth: 0 }}>
-                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{label}</div>
-                        <div style={{ fontSize: 'var(--text-xs)', color: uploaded ? 'var(--success)' : 'var(--text-muted)', marginTop: '2px' }}>
-                          {uploaded
-                            ? `Uploaded (${doc!.filePaths.length} ${doc!.filePaths.length === 1 ? 'file' : 'files'})`
-                            : requirement === 'PHOTOGRAPH'
-                              ? 'Needed before you can be approved — this is the face on your ID card'
-                              : 'Nothing uploaded yet'}
+            {application.status === ApplicationStatus.AWAITING_INFO && (
+              <AlertBanner type="error">
+                <strong>HR requested clarification:</strong> {application.reviewNotes || 'Please review and update your application details.'}
+              </AlertBanner>
+            )}
+
+            {draftError && (
+              <AlertBanner type="error" message={draftError} onClose={() => setDraftError(null)} />
+            )}
+
+            {stepAttempted && stepErrorCount > 0 && (
+              <AlertBanner type="error">
+                <strong>Please fix {stepErrorCount} field{stepErrorCount === 1 ? '' : 's'} to continue</strong> — highlighted below in red.
+              </AlertBanner>
+            )}
+
+            {/* ══════════════════════════════════════════════════════════════════════
+                STEP 1: Personal & Contact Details (with Mobile Verification)
+               ══════════════════════════════════════════════════════════════════════ */}
+            {activeStep === 1 && (
+              <>
+                {/* Contact Verification Box */}
+                <div className="pub-reg-card">
+                  <div style={SECTION_TITLE_STYLE}>
+                    <Phone size={18} style={{ color: 'var(--accent)' }} />
+                    <span>Mobile phone verification</span>
+                    {otpVerified && (
+                      <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-xs)', color: 'var(--success)', fontWeight: 600 }}>
+                        <CheckCircle2 size={15} /> Verified
+                      </span>
+                    )}
+                  </div>
+
+                  {!otpVerified ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                        We will email a 6-digit verification code to <strong style={{ color: 'var(--text-primary)' }}>{application.email ?? 'your email address'}</strong> to
+                        confirm your identity. Enter your 10-digit mobile number below — it will be recorded on your appraiser profile.
+                      </div>
+                      <div id="reg-phone">
+                        <label htmlFor="reg-phone-input" style={LABEL_STYLE}>Your mobile number *</label>
+                        <PhoneInput
+                          id="reg-phone-input"
+                          value={phone}
+                          onChange={(v) => {
+                            setPhone(v);
+                            if (phoneConflict) setPhoneConflict(null);
+                            if (otpError) setOtpError(null);
+                          }}
+                          onBlur={() => {
+                            const n = currentPhone();
+                            if (n !== phone) setPhone(n);
+                            if (n.trim()) {
+                              void (async () => {
+                                const norm = normalisePhone(n);
+                                if (norm && await checkPhoneConflictFn(norm)) return;
+                                void saveDraft({ mobile: n.trim() });
+                              })();
+                            }
+                          }}
+                          disabled={otpBusy}
+                          invalid={Boolean(mobileHint(phone)) || Boolean(phoneConflict)}
+                          describedBy="reg-phone-hint"
+                        />
+                        <div id="reg-phone-hint" style={HINT_STYLE}>
+                          {checkingPhone ? (
+                            <span style={{ color: 'var(--primary)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <Loader2 size={12} className="animate-spin" /> Checking availability…
+                            </span>
+                          ) : (
+                            mobileHint(phone) ?? mobileHelper(phone)
+                          )}
                         </div>
-                        {uploadErrors[requirement] && (
-                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '4px' }}>{uploadErrors[requirement]}</div>
+                        {phoneConflict && (
+                          <div style={{ marginTop: '8px' }}>
+                            <AlertBanner type="error" message={phoneConflict} />
+                          </div>
                         )}
                       </div>
-                      <label
-                        className="btn btn-secondary"
-                        style={{ fontSize: 'var(--text-xs)', padding: '7px 12px', cursor: busy ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto' }}
-                      >
-                        <Paperclip size={13} aria-hidden />
-                        {busy ? 'Uploading…' : uploaded ? 'Replace' : 'Attach'}
-                        <input
-                          type="file"
-                          accept={SCAN_UPLOAD_ACCEPT}
-                          // The rear camera for a document held in front of you, the front one for
-                          // a portrait of yourself. A selfie taken on the rear camera is taken
-                          // blind, and this photograph is the face printed on their ID card.
-                          capture={requirement === 'PHOTOGRAPH' ? 'user' : 'environment'}
-                          style={{ display: 'none' }}
-                          disabled={busy}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            e.target.value = '';
-                            if (file) void handleUpload(requirement, file);
-                          }}
-                        />
-                      </label>
+
+                      {!codeSent ? (
+                        <PrimaryButton
+                          onClick={() => void handleSendCode()}
+                          busy={otpBusy || checkingPhone}
+                          disabled={Boolean(phoneConflict) || Boolean(mobileHint(phone))}
+                        >
+                          Send verification code
+                        </PrimaryButton>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {otpSentTo && (
+                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                              Code sent for <strong style={{ color: 'var(--text-primary)' }}>+91 {otpSentTo}</strong>
+                              {currentPhone() !== otpSentTo && ' — you edited the number since; resend for the new one.'}
+                            </div>
+                          )}
+                          <div>
+                            <label htmlFor="reg-code" style={LABEL_STYLE}>6-digit code from your email</label>
+                            <input
+                              id="reg-code"
+                              ref={codeRef}
+                              value={code}
+                              onChange={(e) => {
+                                const next = e.target.value.replace(/\D/g, '').slice(0, 6);
+                                setCode(next);
+                                if (otpError) setOtpError(null);
+                                /*
+                                  Six digits is the whole answer, so nothing is gained by asking
+                                  for a click as well — the code is either right or it is not, and
+                                  the form can find that out the moment it has one. Pasting the
+                                  code from the email lands here too.
+                                */
+                                if (next.length === 6 && !otpBusy) void handleVerifyCode(next);
+                              }}
+                              inputMode="numeric"
+                              autoComplete="one-time-code"
+                              aria-label="The 6-digit code from your email"
+                              maxLength={6}
+                              placeholder="000000"
+                              className="reg-input reg-code-input"
+                              style={{ ...INPUT_STYLE, fontSize: 'var(--text-xl)' }}
+                              disabled={otpBusy}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <div style={{ flex: '1 1 160px' }}>
+                              <PrimaryButton onClick={() => void handleVerifyCode()} busy={otpBusy}>
+                                Verify code
+                              </PrimaryButton>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleSendCode()}
+                              disabled={otpBusy || checkingPhone || Boolean(phoneConflict)}
+                              className="btn btn-secondary"
+                              style={{ flex: '1 1 140px', padding: '10px 16px', minHeight: '48px', fontSize: 'var(--text-sm)' }}
+                            >
+                              Resend code
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {otpInfo && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>{otpInfo}</div>}
+                      {otpError && <AlertBanner type="error" message={otpError} onClose={() => setOtpError(null)} />}
                     </div>
-                  );
-                })}
-              </div>
-            </div>
+                  ) : (
+                    <div style={{
+                      padding: '14px 16px', borderRadius: '8px',
+                      background: 'color-mix(in srgb, var(--success) 10%, transparent)',
+                      border: '1px solid var(--success)',
+                      fontSize: 'var(--text-sm)', color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '10px',
+                    }}>
+                      <CheckCircle2 size={18} style={{ flexShrink: 0 }} />
+                      <span><strong>+91 {phone}</strong> is confirmed and verified for this application.</span>
+                    </div>
+                  )}
+                </div>
 
-            {/* ── Consent ────────────────────────────────────────────────── */}
-            <div style={SECTION_STYLE}>
-              <div style={SECTION_TITLE_STYLE}>Declaration and consent</div>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5, cursor: consentAccepted ? 'default' : 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={consentAccepted}
-                  disabled={consentAccepted || consentBusy}
-                  onChange={(e) => void handleConsentToggle(e.target.checked)}
-                  style={{ marginTop: '2px', flexShrink: 0 }}
+                {/* Personal Profile Details */}
+                <div className="pub-reg-card">
+                  <div style={EYEBROW_STYLE}>Personal details</div>
+                  <div style={SECTION_TITLE_STYLE}>
+                    <User size={18} style={{ color: 'var(--accent)' }} />
+                    <span>Identity details</span>
+                  </div>
+                  <div style={SECTION_NOTE_STYLE}>
+                    Enter your name exactly as stated on your Aadhaar or PAN card — our verification team compares it letter-for-letter with your official documents.
+                  </div>
+
+                  <div style={FIELD_GRID_STYLE}>
+                    <div id="reg-fullName">
+                      <label htmlFor="reg-fullName-input" style={LABEL_STYLE}>Full name (as on official ID) *</label>
+                      <input
+                        id="reg-fullName-input"
+                        value={form.fullName}
+                        onChange={(e) => updateField('fullName', e.target.value)}
+                        onBlur={commitField('fullName')}
+                        placeholder="e.g. Ramesh Kumar Sharma"
+                        autoComplete="name"
+                        maxLength={FIELD_LIMITS.fullName}
+                        aria-invalid={Boolean(stepErrors.fullName)}
+                        aria-describedby={stepErrors.fullName ? 'reg-fullName-error' : undefined}
+                        className="reg-input"
+                        style={stepErrors.fullName ? INPUT_ERROR_STYLE : INPUT_STYLE}
+                      />
+                      <FieldError id="reg-fullName-error" message={stepErrors.fullName} />
+                    </div>
+                    <div id="reg-dateOfBirth">
+                      <label htmlFor="reg-dateOfBirth-input" style={LABEL_STYLE}>Date of birth</label>
+                      <input
+                        id="reg-dateOfBirth-input"
+                        type="date"
+                        value={form.dateOfBirth}
+                        min={DOB_MIN}
+                        max={dobMaxToday()}
+                        onChange={(e) => updateField('dateOfBirth', e.target.value)}
+                        onBlur={commitField('dateOfBirth')}
+                        aria-invalid={Boolean(stepErrors.dateOfBirth)}
+                        aria-describedby={stepErrors.dateOfBirth ? 'reg-dateOfBirth-error' : undefined}
+                        className="reg-input"
+                        style={stepErrors.dateOfBirth ? INPUT_ERROR_STYLE : INPUT_STYLE}
+                      />
+                      <FieldError id="reg-dateOfBirth-error" message={stepErrors.dateOfBirth} />
+                    </div>
+                    <div id="reg-email">
+                      <label htmlFor="reg-email-input" style={LABEL_STYLE}>Email address</label>
+                      <input
+                        id="reg-email-input"
+                        value={form.email}
+                        type="email"
+                        autoCapitalize="none"
+                        autoComplete="email"
+                        onChange={(e) => updateField('email', e.target.value)}
+                        onBlur={commitField('email')}
+                        placeholder="you@example.com"
+                        maxLength={FIELD_LIMITS.email}
+                        aria-invalid={Boolean(stepErrors.email)}
+                        aria-describedby={stepErrors.email ? 'reg-email-error' : undefined}
+                        className="reg-input"
+                        style={stepErrors.email ? INPUT_ERROR_STYLE : INPUT_STYLE}
+                      />
+                      <FieldError id="reg-email-error" message={stepErrors.email} />
+                    </div>
+                    <div>
+                      <label htmlFor="reg-gender" style={LABEL_STYLE}>Gender</label>
+                      <Select
+                        value={form.gender}
+                        onChange={(v) => commitSelect('gender', v)}
+                        options={GENDER_OPTIONS}
+                        placeholder="Select gender…"
+                        aria-label="Gender"
+                        id="reg-gender"
+                        clearable
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '10px',
+                    flexWrap: 'wrap',
+                    marginTop: '6px',
+                    paddingTop: '16px',
+                    borderTop: '1px solid var(--border-color)',
+                  }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }} aria-live="polite">
+                      {savingDraft ? 'Saving…' : draftSaved ? <span style={{ color: 'var(--success)' }}>✓ Saved automatically</span> : 'Progress saves automatically'}
+                    </div>
+                    <PrimaryButton onClick={() => attemptGoToStep(2)}>
+                      Continue to Experience &amp; Address &rarr;
+                    </PrimaryButton>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* ══════════════════════════════════════════════════════════════════════
+                STEP 2: Experience & Address
+               ══════════════════════════════════════════════════════════════════════ */}
+            {activeStep === 2 && (
+              <div className="pub-reg-card">
+                <div style={SECTION_TITLE_STYLE}>
+                  <Briefcase size={18} style={{ color: 'var(--accent)' }} />
+                  <span>Professional experience</span>
+                </div>
+
+                <div style={FIELD_GRID_STYLE}>
+                  <div id="reg-experienceYears">
+                    <label htmlFor="reg-experienceYears-input" style={LABEL_STYLE}>Years of experience</label>
+                    <Select
+                      value={form.experienceYears}
+                      onChange={(v) => commitSelect('experienceYears', v)}
+                      options={EXPERIENCE_OPTIONS}
+                      placeholder="Select years…"
+                      searchPlaceholder="Type years…"
+                      aria-label="Years of experience"
+                      id="reg-experienceYears-input"
+                      clearable
+                      error={Boolean(stepErrors.experienceYears)}
+                    />
+                    <FieldError id="reg-experienceYears-error" message={stepErrors.experienceYears} />
+                  </div>
+                  <div>
+                    <label htmlFor="reg-currentEmployer-input" style={LABEL_STYLE}>Current employer (if any)</label>
+                    <input
+                      id="reg-currentEmployer-input"
+                      value={form.currentEmployer}
+                      onChange={(e) => updateField('currentEmployer', e.target.value)}
+                      onBlur={commitField('currentEmployer')}
+                      placeholder="Current jeweller or valuation firm"
+                      autoComplete="organization"
+                      maxLength={FIELD_LIMITS.currentEmployer}
+                      className="reg-input"
+                      style={INPUT_STYLE}
+                    />
+                  </div>
+                </div>
+
+                <div style={FIELD_GRID_STYLE}>
+                  <div>
+                    <label htmlFor="reg-expertise-input" style={LABEL_STYLE}>Core expertise</label>
+                    <input
+                      id="reg-expertise-input"
+                      value={form.expertise}
+                      onChange={(e) => updateField('expertise', e.target.value)}
+                      onBlur={commitField('expertise')}
+                      placeholder="Gold purity testing, hallmarking, diamond grading…"
+                      autoComplete="off"
+                      maxLength={FIELD_LIMITS.expertise}
+                      className="reg-input"
+                      style={INPUT_STYLE}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="reg-availability-input" style={LABEL_STYLE}>Availability for branch audits</label>
+                    <input
+                      id="reg-availability-input"
+                      value={form.availability}
+                      onChange={(e) => updateField('availability', e.target.value)}
+                      onBlur={commitField('availability')}
+                      placeholder="Weekdays, alternate Saturdays, full-time…"
+                      autoComplete="off"
+                      maxLength={FIELD_LIMITS.availability}
+                      className="reg-input"
+                      style={INPUT_STYLE}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border-color)', margin: '6px 0' }} />
+
+                <div>
+                  <div style={SECTION_TITLE_STYLE}>
+                    <MapPin size={18} style={{ color: 'var(--accent)' }} />
+                    <span>Residential address</span>
+                  </div>
+                  <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
+                    Type your 6-digit pincode first — our postal directory will automatically look up your district, city, and state.
+                  </div>
+                </div>
+
+                <div style={FIELD_GRID_STYLE}>
+                  <div id="reg-pincode">
+                    <label htmlFor="reg-pincode-input" style={LABEL_STYLE}>
+                      Pincode <span style={{ color: 'var(--danger)' }}>*</span>
+                    </label>
+                    <input
+                      id="reg-pincode-input"
+                      value={form.pincode}
+                      onChange={(e) => updateField('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      onBlur={handlePincodeBlur}
+                      inputMode="numeric"
+                      autoComplete="postal-code"
+                      placeholder="6-digit pincode"
+                      aria-invalid={Boolean(stepErrors.pincode)}
+                      aria-describedby={stepErrors.pincode ? 'reg-pincode-error reg-pincode-status' : 'reg-pincode-status'}
+                      className="reg-input"
+                      style={stepErrors.pincode ? INPUT_ERROR_STYLE : INPUT_STYLE}
+                    />
+                    <FieldError id="reg-pincode-error" message={stepErrors.pincode} />
+                    <div id="reg-pincode-status" aria-live="polite">
+                      {pincodeState === 'looking' && (
+                        <div style={HINT_STYLE}><Loader2 size={11} className="spin" style={{ display: 'inline', verticalAlign: '-1px' }} /> Checking postal directory…</div>
+                      )}
+                      {pincodeState !== 'looking' && pincodeNote && (
+                        <div style={pincodeState === 'notfound' ? { ...HINT_STYLE, color: 'var(--warning)' } : AUTO_NOTE_STYLE}>
+                          <Info size={12} style={{ flexShrink: 0, marginTop: '1px' }} />
+                          <span>{pincodeNote}</span>
+                        </div>
+                      )}
+                      {/* The directory's answer, one press away — the candidate keeps the last word. */}
+                      {pincodeOffer && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const place = pincodeOffer;
+                            setForm((prev) => (prev ? {
+                              ...prev, state: place.state, district: place.district, city: place.city ?? prev.city,
+                            } : prev));
+                            void saveDraft({
+                              state: place.state,
+                              city: place.city ?? undefined,
+                              record: { district: place.district },
+                            });
+                            setPincodeOffer(null);
+                            setPincodeNote(`Filled in for you: ${[place.city, place.district, place.state].filter(Boolean).join(' · ')}.`);
+                          }}
+                          style={{
+                            marginTop: '6px', padding: '4px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600,
+                            borderRadius: '6px', cursor: 'pointer', color: 'var(--accent)',
+                            background: 'transparent', border: '1px solid var(--accent)',
+                          }}
+                        >
+                          Use {[pincodeOffer.city, pincodeOffer.district, pincodeOffer.state].filter(Boolean).join(' · ')}
+                        </button>
+                      )}
+                      {!pincodeNote && pincodeState !== 'looking' && <FieldHint field="pincode" value={form.pincode} />}
+                    </div>
+                  </div>
+                  <div id="reg-state">
+                    <label htmlFor="reg-state" style={LABEL_STYLE}>
+                      State <span style={{ color: 'var(--danger)' }}>*</span>
+                    </label>
+                    <Select
+                      value={form.state}
+                      onChange={(v) => {
+                        commitSelect('state', v);
+                        if (stepErrors.state) {
+                          setStepErrors((prev) => {
+                            const rest = { ...prev };
+                            delete rest.state;
+                            return rest;
+                          });
+                        }
+                      }}
+                      options={
+                        form.state && !STATE_OPTIONS.some((o) => o.value === form.state)
+                          ? [...STATE_OPTIONS, { value: form.state, label: `${form.state} (as recorded)` }]
+                          : STATE_OPTIONS
+                      }
+                      placeholder="Select state…"
+                      searchPlaceholder="Search states…"
+                      aria-label="State"
+                      id="reg-state"
+                      clearable
+                    />
+                    <FieldError id="reg-state-error" message={stepErrors.state} />
+                  </div>
+                  <div id="reg-district">
+                    <label htmlFor="reg-district-input" style={LABEL_STYLE}>District</label>
+                    <input
+                      id="reg-district-input"
+                      value={form.district}
+                      onChange={(e) => updateField('district', e.target.value)}
+                      onBlur={commitField('district')}
+                      placeholder="e.g. Thane"
+                      autoComplete="address-level2"
+                      className="reg-input"
+                      style={INPUT_STYLE}
+                    />
+                  </div>
+                  <div id="reg-city">
+                    <label htmlFor="reg-city-input" style={LABEL_STYLE}>
+                      City / Town <span style={{ color: 'var(--danger)' }}>*</span>
+                    </label>
+                    <input
+                      id="reg-city-input"
+                      value={form.city}
+                      onChange={(e) => {
+                        updateField('city', e.target.value);
+                        if (stepErrors.city) {
+                          setStepErrors((prev) => {
+                            const rest = { ...prev };
+                            delete rest.city;
+                            return rest;
+                          });
+                        }
+                      }}
+                      onBlur={commitField('city')}
+                      placeholder="e.g. Mumbai"
+                      autoComplete="address-level2"
+                      maxLength={FIELD_LIMITS.city}
+                      aria-invalid={Boolean(stepErrors.city)}
+                      className="reg-input"
+                      style={stepErrors.city ? INPUT_ERROR_STYLE : INPUT_STYLE}
+                    />
+                    <FieldError id="reg-city-error" message={stepErrors.city} />
+                  </div>
+                </div>
+
+                {circleConflict && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontSize: 'var(--text-2xs)', color: 'var(--warning)', lineHeight: 1.5 }}>
+                    <AlertCircle size={12} style={{ flexShrink: 0, marginTop: '1px' }} />
+                    <span>{circleConflict}</span>
+                  </div>
+                )}
+
+                <div id="reg-address">
+                  <label htmlFor="reg-address-input" style={LABEL_STYLE}>
+                    Full residential street address <span style={{ color: 'var(--danger)' }}>*</span>
+                  </label>
+                  <textarea
+                    id="reg-address-input"
+                    value={form.address}
+                    onChange={(e) => {
+                      updateField('address', e.target.value);
+                      if (stepErrors.address) {
+                        setStepErrors((prev) => {
+                          const rest = { ...prev };
+                          delete rest.address;
+                          return rest;
+                        });
+                      }
+                    }}
+                    onBlur={commitField('address')}
+                    rows={2}
+                    placeholder="House / Flat No, Building / Colony, Street, Landmark"
+                    autoComplete="street-address"
+                    aria-invalid={Boolean(stepErrors.address)}
+                    className="reg-input"
+                    style={stepErrors.address ? { ...INPUT_ERROR_STYLE, resize: 'vertical' } : { ...INPUT_STYLE, resize: 'vertical' }}
+                  />
+                  <FieldError id="reg-address-error" message={stepErrors.address} />
+                </div>
+
+                {/* Optional location pin map */}
+                <LocationPicker
+                  latitude={pinLatitude}
+                  longitude={pinLongitude}
+                  onChange={(lat, lng) => {
+                    setPinLatitude(lat);
+                    setPinLongitude(lng);
+                    // Save to draft as record fields — 'latitude' and 'longitude' are on the
+                    // REGISTRATION_RECORD_FIELD_KEYS allow-list, so they flow through the
+                    // standard promotion pipeline and land on the assayer entity automatically.
+                    void saveDraft({
+                      record: {
+                        latitude: lat != null ? lat : '',
+                        longitude: lng != null ? lng : '',
+                      },
+                    });
+                  }}
                 />
-                <span>
-                  I declare that the information provided is true to the best of my knowledge, and I
-                  consent to Sumeru Global verifying my documents and details as part of this
-                  application.
-                </span>
-              </label>
-              {consentAccepted && (
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                  <ShieldCheck size={13} aria-hidden /> Recorded.
-                </div>
-              )}
-              {consentError && <AlertBanner type="error" message={consentError} onClose={() => setConsentError(null)} />}
-            </div>
 
-            {/* ── Submit ─────────────────────────────────────────────────── */}
-            <div style={SECTION_STYLE}>
-              <PrimaryButton onClick={() => void handleSubmit()} disabled={!canSubmit} busy={submitBusy}>
-                Submit application
-              </PrimaryButton>
-              {!canSubmit && (
-                <div style={SECTION_NOTE_STYLE}>
-                  {!otpVerified
-                    ? 'Confirm the code we emailed you before submitting. Everything you have typed is already saved.'
-                    : 'Needs your full name, an employment category and the declaration above before this can be submitted.'}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                  marginTop: '6px',
+                  paddingTop: '16px',
+                  borderTop: '1px solid var(--border-color)',
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => goToStep(1)}
+                    className="btn btn-secondary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
+                  >
+                    <ArrowLeft size={16} /> Back
+                  </button>
+                  <PrimaryButton onClick={() => attemptGoToStep(3)}>
+                    Continue to Statutory &amp; Bank &rarr;
+                  </PrimaryButton>
                 </div>
-              )}
-              {submitError && <AlertBanner type="error" message={submitError} onClose={() => setSubmitError(null)} />}
-            </div>
-        </>
+              </div>
+            )}
+
+            {/* ══════════════════════════════════════════════════════════════════════
+                STEP 3: Statutory & Bank Details
+               ══════════════════════════════════════════════════════════════════════ */}
+            {activeStep === 3 && (
+              <div className="pub-reg-card">
+                <div style={SECTION_TITLE_STYLE}>
+                  <CreditCard size={18} style={{ color: 'var(--accent)' }} />
+                  <span>Statutory compliance &amp; payout details</span>
+                </div>
+                <div style={SECTION_NOTE_STYLE}>
+                  Required for direct audit payouts and account verification. Please verify details carefully.
+                </div>
+
+                {/* Employment Category */}
+                <div id="reg-employmentCategory">
+                  <span id="reg-employmentCategory-label" style={LABEL_STYLE}>How do you practice as an appraiser? *</span>
+                  <div
+                    id="reg-employmentCategory-input"
+                    tabIndex={-1}
+                    role="group"
+                    aria-labelledby="reg-employmentCategory-label"
+                    aria-invalid={Boolean(stepErrors.employmentCategory)}
+                    style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', outline: 'none' }}
+                  >
+                    {CATEGORY_CARDS.map((c) => {
+                      const selected = form.employmentCategory === c.value;
+                      return (
+                        <button
+                          key={c.value}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => void handleEmploymentCategoryChange(c.value)}
+                          className={`reg-cat-card${selected ? ' reg-cat-selected' : ''}`}
+                          style={{
+                            border: selected ? '2px solid var(--accent)' : '1.5px solid var(--border-color)',
+                            borderRadius: '10px',
+                            background: selected ? 'rgba(245, 158, 11, 0.12)' : 'var(--bg-surface-2)',
+                            padding: '16px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '6px',
+                          }}
+                        >
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            <span style={{
+                              width: '18px',
+                              height: '18px',
+                              borderRadius: '50%',
+                              border: selected ? '2px solid var(--accent)' : '2px solid var(--text-secondary)',
+                              background: selected ? 'var(--accent)' : 'transparent',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0,
+                              boxSizing: 'border-box',
+                              transition: 'all 0.15s ease',
+                            }}>
+                              {selected && (
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#fff' }} />
+                              )}
+                            </span>
+                            {c.title}
+                          </span>
+                          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{c.desc}</span>
+                          <span style={{
+                            fontSize: 'var(--text-2xs)',
+                            color: '#f59e0b',
+                            fontWeight: 600,
+                            background: 'rgba(245, 158, 11, 0.12)',
+                            border: '1px solid rgba(245, 158, 11, 0.28)',
+                            borderRadius: '6px',
+                            padding: '3px 8px',
+                            marginTop: '2px',
+                            display: 'inline-block',
+                            alignSelf: 'flex-start',
+                          }}>
+                            {c.docs}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <FieldError id="reg-employmentCategory-error" message={stepErrors.employmentCategory} />
+                </div>
+
+                {/* Statutory ID Numbers */}
+                <div>
+                  <div style={{ ...SECTION_TITLE_STYLE, fontSize: 'var(--text-sm)' }}>
+                    <span>Statutory identity numbers</span>
+                  </div>
+                  <div style={FIELD_GRID_STYLE}>
+                    <div id="reg-panNumber">
+                      <label htmlFor="reg-panNumber-input" style={LABEL_STYLE}>PAN number</label>
+                      <input
+                        id="reg-panNumber-input"
+                        value={form.panNumber}
+                        placeholder="ABCDE1234F"
+                        onChange={(e) => updateField('panNumber', e.target.value.toUpperCase())}
+                        onBlur={commitField('panNumber')}
+                        autoCapitalize="characters"
+                        autoComplete="off"
+                        maxLength={10}
+                        aria-invalid={Boolean(stepErrors.panNumber)}
+                        className="reg-input"
+                        style={{ ...((stepErrors.panNumber) ? INPUT_ERROR_STYLE : INPUT_STYLE), textTransform: 'uppercase', fontFamily: 'monospace' }}
+                      />
+                      <FieldError message={stepErrors.panNumber} />
+                      {!stepErrors.panNumber && <FieldHint field="panNumber" value={form.panNumber} />}
+                    </div>
+                    <div id="reg-aadhaarNumber">
+                      <label htmlFor="reg-aadhaarNumber-input" style={LABEL_STYLE}>Aadhaar number</label>
+                      <input
+                        id="reg-aadhaarNumber-input"
+                        value={form.aadhaarNumber}
+                        inputMode="numeric"
+                        placeholder="12 digits"
+                        onChange={(e) => updateField('aadhaarNumber', e.target.value.replace(/\D/g, '').slice(0, 12))}
+                        onBlur={commitField('aadhaarNumber')}
+                        autoComplete="off"
+                        maxLength={12}
+                        aria-invalid={Boolean(stepErrors.aadhaarNumber)}
+                        className="reg-input"
+                        style={{ ...(stepErrors.aadhaarNumber ? INPUT_ERROR_STYLE : INPUT_STYLE), fontFamily: 'monospace' }}
+                      />
+                      <FieldError message={stepErrors.aadhaarNumber} />
+                      {!stepErrors.aadhaarNumber && <FieldHint field="aadhaarNumber" value={form.aadhaarNumber} />}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bank Details */}
+                <div>
+                  <div style={{ ...SECTION_TITLE_STYLE, fontSize: 'var(--text-sm)' }}>
+                    <Landmark size={16} style={{ color: 'var(--accent)' }} />
+                    <span>Bank account for payout settlements</span>
+                  </div>
+                  <div style={SECTION_NOTE_STYLE}>
+                    Enter your IFSC code first — our database will verify and auto-populate your bank name.
+                  </div>
+                  <div style={FIELD_GRID_STYLE}>
+                    <div id="reg-bankAccountNumber">
+                      <label htmlFor="reg-bankAccountNumber-input" style={LABEL_STYLE}>Bank account number</label>
+                      <input
+                        id="reg-bankAccountNumber-input"
+                        value={form.bankAccountNumber}
+                        inputMode="numeric"
+                        placeholder="9–18 digit account number"
+                        onChange={(e) => updateField('bankAccountNumber', e.target.value.replace(/\D/g, '').slice(0, 18))}
+                        onBlur={commitField('bankAccountNumber')}
+                        autoComplete="off"
+                        aria-invalid={Boolean(stepErrors.bankAccountNumber)}
+                        className="reg-input"
+                        style={{ ...(stepErrors.bankAccountNumber ? INPUT_ERROR_STYLE : INPUT_STYLE), fontFamily: 'monospace' }}
+                      />
+                      <FieldError message={stepErrors.bankAccountNumber} />
+                    </div>
+                    <div id="reg-ifscCode">
+                      <label htmlFor="reg-ifscCode-input" style={LABEL_STYLE}>Bank IFSC code</label>
+                      <input
+                        id="reg-ifscCode-input"
+                        value={form.ifscCode}
+                        placeholder="e.g. SBIN0001234"
+                        onChange={(e) => {
+                          updateField('ifscCode', e.target.value.toUpperCase());
+                          setBankLocked(false);
+                        }}
+                        onBlur={handleIfscBlur}
+                        autoCapitalize="characters"
+                        autoComplete="off"
+                        maxLength={11}
+                        aria-invalid={Boolean(stepErrors.ifscCode)}
+                        aria-describedby={stepErrors.ifscCode ? 'reg-ifscCode-error reg-ifscCode-status' : 'reg-ifscCode-status'}
+                        className="reg-input"
+                        style={{ ...(stepErrors.ifscCode ? INPUT_ERROR_STYLE : INPUT_STYLE), textTransform: 'uppercase', fontFamily: 'monospace' }}
+                      />
+                      <FieldError id="reg-ifscCode-error" message={stepErrors.ifscCode} />
+                      {!stepErrors.ifscCode && <FieldHint field="ifscCode" value={form.ifscCode} />}
+                      <div id="reg-ifscCode-status" aria-live="polite">
+                        {ifscState === 'looking' && (
+                          <div style={HINT_STYLE}><Loader2 size={11} className="spin" style={{ display: 'inline', verticalAlign: '-1px' }} /> Verifying IFSC with RBI directory…</div>
+                        )}
+                        {ifscState !== 'looking' && ifscNote && (
+                          <div style={ifscState === 'notfound' ? { ...HINT_STYLE, color: 'var(--warning)' } : AUTO_NOTE_STYLE}>
+                            <Info size={12} style={{ flexShrink: 0, marginTop: '1px' }} />
+                            <span>{ifscNote}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: '12px' }}>
+                    <label htmlFor="reg-bankName-input" style={LABEL_STYLE}>Bank name</label>
+                    {bankLocked && lastResolvedBank.current && form.bankName === lastResolvedBank.current ? (
+                      <>
+                        <input
+                          id="reg-bankName-input"
+                          value={form.bankName}
+                          readOnly
+                          aria-readonly="true"
+                          className="reg-input"
+                          style={{ ...INPUT_STYLE, background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontWeight: 600 }}
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                          <span>Verified from IFSC code.</span>
+                          <button
+                            type="button"
+                            onClick={() => setBankLocked(false)}
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontWeight: 600, fontSize: 'var(--text-xs)', textDecoration: 'underline' }}
+                          >
+                            Edit anyway
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <input
+                        id="reg-bankName-input"
+                        value={form.bankName}
+                        placeholder="Enter IFSC code above to auto-populate, or type manually"
+                        onChange={(e) => updateField('bankName', e.target.value)}
+                        onBlur={commitField('bankName')}
+                        autoComplete="off"
+                        maxLength={FIELD_LIMITS.bankName}
+                        className="reg-input"
+                        style={INPUT_STYLE}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* Qualification */}
+                <div>
+                  <div style={{ ...SECTION_TITLE_STYLE, fontSize: 'var(--text-sm)' }}>
+                    <GraduationCap size={16} style={{ color: 'var(--accent)' }} />
+                    <span>Educational qualification</span>
+                  </div>
+                  <div style={{ maxWidth: '400px' }}>
+                    <label htmlFor="reg-qualification-input" style={LABEL_STYLE}>Highest academic / professional qualification</label>
+                    <input
+                      id="reg-qualification-input"
+                      value={form.qualification}
+                      placeholder="e.g. B.Com, Graduate, Diploma in Gemology"
+                      onChange={(e) => updateField('qualification', e.target.value)}
+                      onBlur={commitField('qualification')}
+                      autoComplete="off"
+                      maxLength={FIELD_LIMITS.qualification}
+                      className="reg-input"
+                      style={INPUT_STYLE}
+                    />
+                    <div style={HINT_STYLE}>As stated on your graduation or diploma certificate.</div>
+                  </div>
+                </div>
+
+                <div style={{ borderTop: '1px solid var(--border-color)', margin: '6px 0' }} />
+
+                {/* Emergency Contact */}
+                <div>
+                  <div style={{ ...SECTION_TITLE_STYLE, fontSize: 'var(--text-sm)' }}>
+                    <Users size={16} style={{ color: 'var(--accent)' }} />
+                    <span>Emergency contact</span>
+                  </div>
+                  <div style={SECTION_NOTE_STYLE}>
+                    Required for field audit safety protocols. Please provide a family member or primary contact.
+                  </div>
+                </div>
+
+                <div style={FIELD_GRID_STYLE}>
+                  <div>
+                    <label htmlFor="reg-ec-name-input" style={LABEL_STYLE}>Contact person name</label>
+                    <input
+                      id="reg-ec-name-input"
+                      value={form.emergencyContactName}
+                      placeholder="e.g. Sunita Sharma"
+                      onChange={(e) => updateField('emergencyContactName', e.target.value)}
+                      onBlur={commitField('emergencyContactName')}
+                      autoComplete="off"
+                      maxLength={FIELD_LIMITS.emergencyContactName}
+                      className="reg-input"
+                      style={INPUT_STYLE}
+                    />
+                  </div>
+                  <div id="reg-emergencyContactPhone">
+                    <label htmlFor="reg-emergencyContactPhone-input" style={LABEL_STYLE}>Contact phone number</label>
+                    <PhoneInput
+                      id="reg-emergencyContactPhone-input"
+                      value={form.emergencyContactPhone}
+                      onChange={(v) => updateField('emergencyContactPhone', v)}
+                      onBlur={commitField('emergencyContactPhone')}
+                      invalid={Boolean(stepErrors.emergencyContactPhone)}
+                      describedBy={stepErrors.emergencyContactPhone ? 'reg-emergencyContactPhone-error' : undefined}
+                    />
+                    <FieldError id="reg-emergencyContactPhone-error" message={stepErrors.emergencyContactPhone} />
+                  </div>
+                  <div>
+                    <label htmlFor="reg-ec-relation" style={LABEL_STYLE}>Relationship</label>
+                    <Select
+                      value={relationSelectValue}
+                      onChange={handleRelationSelect}
+                      options={RELATION_OPTIONS}
+                      placeholder="Select relation…"
+                      aria-label="Relationship"
+                      id="reg-ec-relation"
+                      clearable
+                    />
+                    {showRelationOther && (
+                      <input
+                        value={relationSelectValue === OTHER_SENTINEL ? form.emergencyContactRelation : ''}
+                        onChange={(e) => updateField('emergencyContactRelation', e.target.value)}
+                        onBlur={commitField('emergencyContactRelation')}
+                        placeholder="e.g. Uncle, Neighbor"
+                        aria-label="Other relationship"
+                        maxLength={FIELD_LIMITS.emergencyContactRelation}
+                        className="reg-input"
+                        style={{ ...INPUT_STYLE, marginTop: '8px' }}
+                      />
+                    )}
+                  </div>
+                  <div id="reg-alternatePhone">
+                    <label htmlFor="reg-alternatePhone-input" style={LABEL_STYLE}>Your alternate number <span style={{ fontWeight: 400 }}>(optional)</span></label>
+                    <PhoneInput
+                      id="reg-alternatePhone-input"
+                      value={form.alternatePhone}
+                      onChange={(v) => updateField('alternatePhone', v)}
+                      onBlur={commitField('alternatePhone')}
+                      placeholder="Optional second number"
+                      invalid={Boolean(stepErrors.alternatePhone)}
+                      describedBy={stepErrors.alternatePhone ? 'reg-alternatePhone-error' : undefined}
+                    />
+                    <FieldError id="reg-alternatePhone-error" message={stepErrors.alternatePhone} />
+                  </div>
+                </div>
+
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                  marginTop: '6px',
+                  paddingTop: '16px',
+                  borderTop: '1px solid var(--border-color)',
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => goToStep(2)}
+                    className="btn btn-secondary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
+                  >
+                    <ArrowLeft size={16} /> Back
+                  </button>
+                  <PrimaryButton onClick={() => attemptGoToStep(4)}>
+                    Continue to Documents & Submit &rarr;
+                  </PrimaryButton>
+                </div>
+              </div>
+            )}
+
+            {/* ══════════════════════════════════════════════════════════════════════
+                STEP 4: Documents Upload & Final Submission
+               ══════════════════════════════════════════════════════════════════════ */}
+            {activeStep === 4 && (
+              <>
+                <div className="pub-reg-card">
+                  <div style={EYEBROW_STYLE}>
+                    {form.employmentCategory === EmploymentCategory.PROPRIETOR ? 'Proprietor documents' : form.employmentCategory === EmploymentCategory.FREELANCER ? 'Freelancer documents' : 'Documents'}
+                  </div>
+                  <div style={SECTION_TITLE_STYLE}>
+                    <FileCheck size={18} style={{ color: 'var(--accent)' }} />
+                    <span>Required document attachments</span>
+                  </div>
+                  <div style={SECTION_NOTE_STYLE}>
+                    Photograph documents flat in good lighting with all four corners visible. Accepted formats: JPG, PNG or PDF (up to 10MB per file).
+                    Click "Check scan" after attaching to verify clarity.
+                  </div>
+
+                  {/* VIP ID Photo Banner */}
+                  <div className="pub-reg-photo-banner" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    <div style={{
+                      width: '42px', height: '42px', borderRadius: '8px',
+                      background: 'linear-gradient(135deg, var(--accent) 0%, #d97706 100%)',
+                      color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <Camera size={22} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        Photograph for Appraiser ID Card
+                      </div>
+                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.4 }}>
+                        Your uploaded photograph will be printed on your official Appraiser ID Card upon onboarding approval. Please ensure a clear, front-facing passport-style photo.
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Document upload items list */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {documentsRequested.map((requirement) => {
+                      const doc = documents.find((d) => d.requirement === requirement);
+                      const uploaded = Boolean(doc && doc.filePaths.length > 0);
+                      const busy = Boolean(uploading[requirement]);
+                      const isInspecting = previewLoading === requirement;
+                      const label = ONBOARDING_DOCUMENT_LABELS[requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? requirement;
+                      const isPhoto = requirement === 'PHOTOGRAPH';
+                      const isConditional = CONDITIONAL_DOCS.has(requirement);
+
+                      return (
+                        <div
+                          key={requirement}
+                          id={`doc-req-${requirement}`}
+                          style={{
+                            border: uploaded
+                              ? '1px solid color-mix(in srgb, var(--success) 45%, var(--border-color))'
+                              : isPhoto ? '1px solid var(--accent)' : '1px dashed var(--border-color)',
+                            borderRadius: 'var(--radius-sm, 10px)',
+                            padding: '14px 16px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            flexWrap: 'wrap',
+                            background: uploaded ? 'color-mix(in srgb, var(--success) 5%, transparent)' : 'transparent',
+                          }}
+                        >
+                          <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                {label}
+                              </span>
+                              <span style={{
+                                fontSize: 'var(--text-3xs)',
+                                fontWeight: 700,
+                                padding: '2px 8px',
+                                borderRadius: '999px',
+                                background: isPhoto
+                                  ? 'var(--accent)'
+                                  : isConditional ? 'var(--bg-surface-2)' : 'color-mix(in srgb, var(--accent) 14%, transparent)',
+                                color: isPhoto ? '#fff' : isConditional ? 'var(--text-secondary)' : 'var(--accent)',
+                                border: isConditional ? '1px solid var(--border-color)' : 'none',
+                              }}>
+                                {isPhoto ? 'Mandatory for ID Card' : isConditional ? 'If applicable' : 'Required'}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 'var(--text-xs)', color: uploaded ? 'var(--success)' : 'var(--text-secondary)', marginTop: '4px' }}>
+                              {uploaded ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                  <Check size={12} strokeWidth={3} /> Uploaded &amp; attached ({doc!.filePaths.length} file{doc!.filePaths.length === 1 ? '' : 's'})
+                                </span>
+                              ) : isPhoto ? (
+                                'Required for your Appraiser ID Card — clear face portrait'
+                              ) : isConditional ? (
+                                requirement === 'RENT_AGREEMENT' ? 'Required only if residential address differs from Aadhaar' : 'Required if shop premises are rented'
+                              ) : (
+                                'Pending attachment'
+                              )}
+                            </div>
+                            {uploadErrors[requirement] && (
+                              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '4px' }}>
+                                {uploadErrors[requirement]}
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            {uploaded && (
+                              <button
+                                type="button"
+                                onClick={() => void openDocumentPreview(requirement, doc!.filePaths)}
+                                disabled={isInspecting}
+                                className="btn btn-secondary"
+                                style={{
+                                  fontSize: 'var(--text-xs)',
+                                  padding: '9px 12px',
+                                  minHeight: '42px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                }}
+                                title="Open scan to inspect visual clarity"
+                              >
+                                <Eye size={14} />
+                                {isInspecting ? 'Loading…' : 'Check scan'}
+                              </button>
+                            )}
+
+                            {/*
+                              The camera, not just a file picker. A candidate filling this in on a
+                              phone is holding the card; the scanner squares it up and cleans it so
+                              the desk can read the number off it, instead of receiving a four-
+                              megabyte photograph of a card lying on a table at an angle. Choosing
+                              a file is still right here beside it, for anybody on a laptop with a
+                              scan already saved.
+                            */}
+                            <ScanOrAttach
+                              documentLabel={label}
+                              requirement={requirement}
+                              disabled={busy}
+                              attachLabel={busy ? 'Uploading…' : uploaded ? 'Replace file' : 'Choose file'}
+                              onFiles={(files) => { if (files[0]) void handleUpload(requirement, files[0]); }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Consent & Declaration */}
+                <div className="pub-reg-card">
+                  <div style={SECTION_TITLE_STYLE}>
+                    <ShieldCheck size={18} style={{ color: 'var(--accent)' }} />
+                    <span>Candidate declaration &amp; consent</span>
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55, cursor: consentAccepted ? 'default' : 'pointer', padding: '14px', borderRadius: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)' }}>
+                    <input
+                      type="checkbox"
+                      checked={consentAccepted}
+                      disabled={consentAccepted || consentBusy}
+                      onChange={(e) => void handleConsentToggle(e.target.checked)}
+                      style={{ marginTop: '3px', flexShrink: 0, width: '18px', height: '18px', accentColor: 'var(--accent)' }}
+                    />
+                    <span>
+                      I solemnly declare that all personal and professional information provided in this registration form is accurate, complete, and true to the best of my knowledge. I hereby grant consent to Sumeru Global to verify my documents, professional credentials, and background records for the purpose of appraiser empanelment and onboarding.
+                    </span>
+                  </label>
+                  {consentAccepted && (
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <ShieldCheck size={15} /> Declaration and consent acknowledged.
+                    </div>
+                  )}
+                  {consentError && <AlertBanner type="error" message={consentError} onClose={() => setConsentError(null)} />}
+                </div>
+
+                {/* Submission Requirements Summary Checklist */}
+                <div className="pub-reg-card">
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    Final Submission Pre-Flight Checklist
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: 'var(--text-xs)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: otpVerified ? 'var(--success)' : 'var(--warning)' }}>
+                      {otpVerified ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
+                      <span>
+                        Mobile number verified (+91 {phone})
+                        {!otpVerified && (
+                          <button
+                            type="button"
+                            onClick={() => goToStep(1)}
+                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
+                          >
+                            Verify in Step 1 &rarr;
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: form.fullName.trim() ? 'var(--success)' : 'var(--warning)' }}>
+                      {form.fullName.trim() ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
+                      <span>
+                        Candidate legal name entered
+                        {!form.fullName.trim() && (
+                          <button
+                            type="button"
+                            onClick={() => goToStep(1)}
+                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
+                          >
+                            Enter in Step 1 &rarr;
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: form.employmentCategory ? 'var(--success)' : 'var(--warning)' }}>
+                      {form.employmentCategory ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
+                      <span>
+                        Practice category chosen ({form.employmentCategory || 'Freelancer / Proprietor'})
+                        {!form.employmentCategory && (
+                          <button
+                            type="button"
+                            onClick={() => goToStep(3)}
+                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
+                          >
+                            Select in Step 3 &rarr;
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: hasPhotograph ? 'var(--success)' : 'var(--warning)' }}>
+                      {hasPhotograph ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
+                      <span>
+                        ID Card photograph uploaded
+                        {!hasPhotograph && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById('doc-req-PHOTOGRAPH');
+                              if (el) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              } else {
+                                window.scrollTo({ top: 120, behavior: 'smooth' });
+                              }
+                            }}
+                            style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
+                          >
+                            Upload photo above &uarr;
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: consentAccepted ? 'var(--success)' : 'var(--warning)' }}>
+                      {consentAccepted ? <Check size={15} strokeWidth={3} /> : <AlertCircle size={15} />}
+                      <span>Declaration &amp; consent acknowledged</span>
+                    </div>
+                  </div>
+
+                  {!canSubmit && (
+                    <div style={{ marginTop: '12px', padding: '12px 14px', background: 'var(--bg-surface-2)', borderRadius: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5, border: '1px solid var(--border-hair)' }}>
+                      The Submit button will activate once all items above show a green checkmark. You can review and edit previous steps before submitting.
+                    </div>
+                  )}
+
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '10px',
+                    flexWrap: 'wrap',
+                    marginTop: '16px',
+                    paddingTop: '16px',
+                    borderTop: '1px solid var(--border-color)',
+                  }}>
+                    <button
+                      type="button"
+                      onClick={() => goToStep(3)}
+                      className="btn btn-secondary"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
+                    >
+                      <ArrowLeft size={16} /> Back
+                    </button>
+                    <PrimaryButton
+                      onClick={() => void handleSubmit()}
+                      disabled={!canSubmit}
+                      busy={submitBusy}
+                      style={{ minWidth: '220px', flex: '1 1 220px', maxWidth: '340px' }}
+                    >
+                      Submit application for HR review
+                    </PrimaryButton>
+                  </div>
+
+                  {submitError && <AlertBanner type="error" message={submitError} onClose={() => setSubmitError(null)} />}
+                </div>
+              </>
+            )}
+          </main>
+        </div>
       </div>
+
+      {/* Full scan preview modal */}
+      <DocumentPreviewModal
+        open={previewOpen}
+        onClose={handleClosePreview}
+        items={previewItems}
+        initialIndex={previewIndex}
+      />
     </div>
   );
 };

@@ -293,6 +293,78 @@ export const DOCUMENT_PRINTED_FIELDS: Partial<Record<OnboardingDocument, Printed
   [OnboardingDocument.ADDRESS_PROOF]: PRINTS({ name: true, address: true }),
 };
 
+/**
+ * WHAT EACH IDENTITY DOCUMENT ACTUALLY CARRIES.
+ *
+ * The record screen asked every one of these eight documents for a "document number" and an
+ * "Expires" date, because one form served all of them. Six of the eight do not expire — a PAN card,
+ * an Aadhaar and a Voter ID are issued once and never run out — and an address proof, which is
+ * usually an electricity bill, has no number anybody would call a document number.
+ *
+ * A form that asks for what is not on the paper teaches its user that the form is not to be taken
+ * seriously, and that is the expensive part: the same person then skips the box that DID matter.
+ * So each document says what it carries, and the form asks for exactly that.
+ *
+ * `numberLabel` is null for a document with no number to record. `expires` is true only where the
+ * document genuinely prints a valid-until date.
+ */
+export interface IdentityDocumentFacts {
+  /** What the number is CALLED on the document — "PAN", not "document number". Null if it has none. */
+  numberLabel: string | null;
+  /** Whether the document prints a date after which it is no longer valid. */
+  expires: boolean;
+  /** Said under the number box when the format is worth naming. */
+  numberHint?: string;
+}
+
+export const IDENTITY_DOCUMENT_FACTS: Record<string, IdentityDocumentFacts> = {
+  [OnboardingDocument.AADHAAR_FRONT]: {
+    numberLabel: 'Aadhaar number',
+    expires: false,
+    numberHint: 'The twelve digits printed under the photograph.',
+  },
+  // The back carries the same number as the front — one number on the person's record, two
+  // photographs of it — so it is recorded from whichever side the reviewer is holding.
+  [OnboardingDocument.AADHAAR_BACK]: {
+    numberLabel: 'Aadhaar number',
+    expires: false,
+    numberHint: 'The same twelve digits as the front.',
+  },
+  [OnboardingDocument.PAN_CARD]: {
+    numberLabel: 'PAN',
+    expires: false,
+    numberHint: 'Ten characters, like ABCDE1234F.',
+  },
+  [OnboardingDocument.PASSPORT]: {
+    numberLabel: 'Passport number',
+    expires: true,
+  },
+  [OnboardingDocument.DRIVING_LICENCE]: {
+    numberLabel: 'Licence number',
+    expires: true,
+  },
+  [OnboardingDocument.VOTER_ID]: {
+    numberLabel: 'EPIC number',
+    expires: false,
+    numberHint: 'The letters and digits printed on the front of the card.',
+  },
+  [OnboardingDocument.ID_PROOF]: {
+    numberLabel: 'Document number',
+    expires: false,
+  },
+  // An electricity bill or a rent agreement. There is no number on it worth recording, and it does
+  // not expire — what makes it good or bad is the address on it and how recent it is.
+  [OnboardingDocument.ADDRESS_PROOF]: {
+    numberLabel: null,
+    expires: false,
+  },
+};
+
+/** What this document carries, for any requirement — unknown ones ask for nothing they might not have. */
+export function identityDocumentFacts(requirement: string): IdentityDocumentFacts {
+  return IDENTITY_DOCUMENT_FACTS[requirement] ?? { numberLabel: 'Document number', expires: false };
+}
+
 /** Human names for the printed fields, used to say what is still missing. */
 export const PRINTED_FIELD_LABELS: Record<keyof PrintedIdentityFields, string> = {
   name: 'the name as printed',

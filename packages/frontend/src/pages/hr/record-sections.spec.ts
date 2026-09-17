@@ -30,8 +30,18 @@ describe('what ?section= on a record link may name', () => {
     }
   });
 
-  it('accepts the word on the screen where it differs from the key — the tab is labelled Pay & terms', () => {
+  it('accepts the word on the screen where it differs from the key', () => {
     expect(resolveRecordSection('pay')).toEqual({ tab: 'commercial' });
+    expect(resolveRecordSection('background')).toEqual({ tab: 'vetting' });
+    expect(resolveRecordSection('score')).toEqual({ tab: 'qualification' });
+    expect(resolveRecordSection('certificates')).toEqual({ tab: 'skills' });
+  });
+
+  it('opens the ID card window for every name a link to the card has used, including the retired tab key', () => {
+    for (const name of ['idcard', 'id-card', 'card', 'badge']) {
+      expect(resolveRecordSection(name)).toEqual({ tab: 'summary', idCard: true });
+    }
+    expect(RECORD_TAB_KEYS as readonly string[]).not.toContain('idcard');
   });
 
   it('shrugs off case and stray space, which hand-written links will have', () => {

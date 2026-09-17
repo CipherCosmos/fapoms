@@ -3,10 +3,10 @@ import {
 import { buildWorkbook } from '../reports/excel-export';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider'; import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
-  IDEMPOTENCY_ERROR_CODES,
+  IDEMPOTENCY_ERROR_CODES, payoutBlockingGaps,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -711,7 +711,8 @@ export class AssayerService implements OnModuleInit {
      * service positionally, and the gate must degrade to its default rather than throw when a
      * spec builds the service without one.
      */
-    @Optional() private readonly platformSettings?: PlatformSettingsService
+    @Optional() private readonly platformSettings?: PlatformSettingsService,
+    @Optional() private readonly templateRenderer?: EmailTemplateRenderer,
   ) {}
 
   onModuleInit() {
@@ -3250,9 +3251,34 @@ export class AssayerService implements OnModuleInit {
           ).catch(() => undefined);
         };
 
+        const runDocumentGate = async () => {
+          if (!this.rosterRecords) return;
+          const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
+          if (mode === 'off') return;
+          const standing = await this.rosterRecords.identityStanding(preRead.id);
+          if (standing.ok) return;
+          const outstanding = [...standing.missing, ...standing.rejected]
+            .map((d) => ONBOARDING_DOCUMENT_LABELS[d] ?? d).join(' and ');
+          const sentence = `${assayer.displayName} cannot pass document verification yet: ${outstanding} `
+            + (standing.rejected.length > 0
+              ? 'was sent back and has not been replaced with a verified scan.'
+              : 'has not been verified against original scans. Upload and verify all required identity documents before proceeding to background verification.');
+          if (mode === 'enforce') {
+            throw withCode(new BadRequestException(sentence), ASSAYER_ERROR_CODES.IDENTITY_NOT_VERIFIED);
+          }
+          this.logger.warn(`Document verification gate (warn only): ${sentence}`);
+          await this.recordActivity(
+            preRead.id, 'ASSAYER_UPDATED', null, null, userId,
+            `Moved out of document verification with unverified identity documents — ${outstanding} still unchecked. The identity `
+            + 'check is set to warn; switch it to Enforce in Settings once the queue is being worked.',
+            manager,
+          ).catch(() => undefined);
+        };
+
         if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
           event = AssayerStateMachine.verifyDocuments(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
+          await runDocumentGate();
           event = AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
           // The onboarding exit the owner's drawing gates: PASSED goes forward, FAILED does not.
@@ -3264,6 +3290,44 @@ export class AssayerService implements OnModuleInit {
           // as BGV_FAILED from re-entering the workforce until a newer check clears them.
           await runBackgroundGate('activate');
           await runIdentityGate();
+
+          // ── Payout-readiness gate ────────────────────────────────────────────
+          // An assayer without bank details, IFSC, or PAN cannot be paid. Activating
+          // them creates a person who earns money the system cannot deliver — and the
+          // recommendation engine will offer them for work immediately. This is not a
+          // warning: unlike the identity gate, where legacy records predating document
+          // uploads needed a grace period, a missing bank account has never been a
+          // temporary state the system could work around.
+          const payoutGaps = payoutBlockingGaps(assayer as unknown as Record<string, unknown>);
+          if (payoutGaps.length > 0) {
+            const labels = payoutGaps.map(g => g.label).join(' and ');
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} cannot be activated yet: ${labels} `
+                + `${payoutGaps.length === 1 ? 'is' : 'are'} missing. `
+                + 'Open their record and fill in the bank details before activating.',
+              ),
+              ASSAYER_ERROR_CODES.PAYOUT_NOT_ELIGIBLE,
+            );
+          }
+
+          // ── Location gate ────────────────────────────────────────────────────
+          // Without coordinates the recommendation engine cannot measure distance,
+          // travel costs cannot be computed, and the day planner has no position to
+          // route from. It silently passes everybody through its distance filter
+          // when coordinates are missing — the exact bypass this lifecycle exists
+          // to prevent.
+          if (assayer.latitude == null || assayer.longitude == null) {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} cannot be activated yet: no map coordinates on file. `
+                + 'Open their record, confirm their address, and place the pin — or wait for '
+                + 'the next geocoding run.',
+              ),
+              ASSAYER_ERROR_CODES.LOCATION_MISSING,
+            );
+          }
+
           event = AssayerStateMachine.activate(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.ON_LEAVE) {
           event = AssayerStateMachine.putOnLeave(assayer, userId);
@@ -5071,10 +5135,49 @@ export class AssayerService implements OnModuleInit {
           'your own password the first time you sign in.';
 
         if (assayer.email) {
+          let subject = 'Your FAPOMS app access';
+          let text = message;
+          let html = renderEmailHtml({
+            title: 'Your FAPOMS App Access Credentials',
+            bodyLines: [
+              `Hello ${assayer.displayName || 'Appraiser'},`,
+              'Your authorized account for the Sumeru Global Field Assayer & Portfolio Operations Management mobile application has been provisioned.',
+              'Use the temporary credentials below to sign in. You will be asked to set your own password upon first login.',
+            ],
+            kvTable: [
+              { label: 'Username / Appraiser ID', value: issued.username },
+              { label: 'Temporary Password', value: issued.temporaryPassword },
+              { label: 'Validity Period', value: '7 calendar days' },
+            ],
+            linkUrl: appPublicUrl(),
+            linkLabel: 'Access FAPOMS Portal',
+            securityNotice: 'Do not share your temporary credentials with anyone. Sumeru Global personnel will never ask for your password.',
+          });
+
+          if (this.templateRenderer) {
+            try {
+              const rendered = await this.templateRenderer.render('app-credentials', {
+                displayName: assayer.displayName || 'Appraiser',
+                username: issued.username,
+                temporaryPassword: issued.temporaryPassword,
+                validDays: '7',
+                loginUrl: appPublicUrl(),
+                logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+                companyName: 'Sumeru Global',
+              });
+              subject = rendered.subject;
+              text = rendered.text;
+              html = rendered.html;
+            } catch (err: any) {
+              this.logger.warn(`Template render failed for app-credentials: ${err.message}`);
+            }
+          }
+
           const emailResult = await this.emailProvider.send({
             to: assayer.email,
-            subject: 'Your FAPOMS app access',
-            text: message,
+            subject,
+            text,
+            html,
           });
           if (emailResult.success) channels.push('EMAIL');
         }
@@ -5166,6 +5269,12 @@ export class AssayerService implements OnModuleInit {
             to: assayer.email,
             subject: subject.trim(),
             text: body.trim(),
+            html: renderEmailHtml({
+              title: subject.trim(),
+              bodyLines: body.trim().split('\n').filter(Boolean),
+              linkUrl: appPublicUrl(),
+              linkLabel: 'Open FAPOMS Portal',
+            }),
           });
           if (emailResult.success) channels.push('EMAIL');
         } else if (sendEmail && !assayer.email) {

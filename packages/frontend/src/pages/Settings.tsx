@@ -195,7 +195,7 @@ export const Settings: React.FC = () => {
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <MonitorSmartphone size={16} />
-          <span>Sessions & Devices</span>
+          <span>Signed-in devices</span>
         </button>
         <button
           onClick={() => setActiveTab('APPEARANCE')}
@@ -517,7 +517,7 @@ export const Settings: React.FC = () => {
       {/* TAB 3: SESSIONS & DEVICES */}
       {activeTab === 'SESSIONS' && (
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Sessions & Devices</h3>
+          <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Signed-in devices</h3>
           <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: '24px' }}>
             Every device signed in to your account, with the address and when it was last active.
             If you don’t recognise one, sign it out — that device will be signed out and cannot refresh.

@@ -28,8 +28,8 @@ export const HrIssuesPage: React.FC = () => {
   return (
     <Page>
       <div>
-        <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: 0 }}>Review queue</h2>
-        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: '760px' }}>
+        {/* No heading here: the section header above already names this page. */}
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.55, maxWidth: '760px' }}>
           Everything the system found but would not decide for you: cells the roster import could
           not read, and failing checks on live records. Nothing was guessed and nothing was changed
           automatically — each one waits here until somebody decides what should happen to it.

@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, TextInput, TextStyle } from 'react-native';
 import { parseRupeeInput, formatRupees } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { MobileApiService } from '../services/api.service';
-import { AppText, Button, Card, Tappable } from './ui/primitives';
+import { AppText, Button, ChipSelector, ModalSheet } from './ui/primitives';
 import { useT, type TranslationKey } from '../i18n';
 
 export type ExpenseCategory = 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER';
@@ -172,89 +172,57 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
-        <View style={{
-          flex: 1,
-          backgroundColor: t.colors.scrim,
-          justifyContent: 'center',
-          padding: t.space.xl,
-        }}>
-        <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
-          <AppText variant="h2">{tr('expense.title')}</AppText>
+    <ModalSheet visible={visible} onClose={handleClose} title={tr('expense.title')} avoidKeyboard>
+      <View style={{ gap: t.space.xs }}>
+        <AppText variant="overline" tone="faint">{tr('expense.categoryLabel')}</AppText>
+        <ChipSelector
+          options={(['TRAVEL_KM', 'TOLL', 'FOOD', 'OTHER'] as const).map((c) => ({ key: c, label: tr(CAT_LABEL_KEYS[c]) }))}
+          value={cat}
+          onChange={(c) => handleCatSelect(c as ExpenseCategory)}
+        />
+      </View>
 
-          <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">{tr('expense.categoryLabel')}</AppText>
-            <View style={{ flexDirection: 'row', gap: t.space.xs, flexWrap: 'wrap' }}>
-              {(['TRAVEL_KM', 'TOLL', 'FOOD', 'OTHER'] as const).map((c) => {
-                const active = cat === c;
-                return (
-                  <Tappable key={c} onPress={() => handleCatSelect(c)} style={{ flex: 1, minWidth: 70 }}>
-                    <View style={{
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      paddingVertical: t.space.md,
-                      paddingHorizontal: t.space.sm,
-                      borderRadius: t.radius.md,
-                      backgroundColor: active ? t.colors.primarySoft : t.colors.bg,
-                      borderWidth: 1.5,
-                      borderColor: active ? t.colors.primary : t.colors.border,
-                    }}>
-                      <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{tr(CAT_LABEL_KEYS[c])}</AppText>
-                    </View>
-                  </Tappable>
-                );
-              })}
-            </View>
-          </View>
+      <View style={{ gap: t.space.xs, marginTop: t.space.lg }}>
+        <AppText variant="overline" tone="faint">{tr('expense.amountLabel')}</AppText>
+        <TextInput
+          style={inputStyle}
+          keyboardType="number-pad"
+          value={amt}
+          onChangeText={handleAmtChange}
+          placeholder={tr('expense.amountPlaceholder')}
+          placeholderTextColor={t.colors.textFaint}
+        />
+        {/*
+          Said before it is needed, and again when it is exceeded. A ceiling the assayer only
+          discovers by having a filled-in claim rejected is a ceiling they meet at the worst
+          possible moment.
+        */}
+        {overLimit ? (
+          <AppText variant="small" tone="danger">
+            {tr('expense.overLimit', { limit: formatRupees(Number(maxClaim)) })}
+          </AppText>
+        ) : maxClaim !== null ? (
+          <AppText variant="small" tone="faint">
+            {tr('expense.limitHint', { limit: formatRupees(Number(maxClaim)) })}
+          </AppText>
+        ) : null}
+      </View>
 
-          <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">{tr('expense.amountLabel')}</AppText>
-            <TextInput
-              style={inputStyle}
-              keyboardType="number-pad"
-              value={amt}
-              onChangeText={handleAmtChange}
-              placeholder={tr('expense.amountPlaceholder')}
-              placeholderTextColor={t.colors.textFaint}
-            />
-            {/*
-              Said before it is needed, and again when it is exceeded. A ceiling the assayer only
-              discovers by having a filled-in claim rejected is a ceiling they meet at the worst
-              possible moment.
-            */}
-            {overLimit ? (
-              <AppText variant="small" tone="danger">
-                {tr('expense.overLimit', { limit: formatRupees(Number(maxClaim)) })}
-              </AppText>
-            ) : maxClaim !== null ? (
-              <AppText variant="small" tone="faint">
-                {tr('expense.limitHint', { limit: formatRupees(Number(maxClaim)) })}
-              </AppText>
-            ) : null}
-          </View>
+      <View style={{ gap: t.space.xs, marginTop: t.space.lg }}>
+        <AppText variant="overline" tone="faint">{tr('expense.descriptionLabel')}</AppText>
+        <TextInput
+          style={inputStyle}
+          value={desc}
+          onChangeText={handleDescChange}
+          placeholder={tr('expense.descriptionPlaceholder')}
+          placeholderTextColor={t.colors.textFaint}
+        />
+      </View>
 
-          <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">{tr('expense.descriptionLabel')}</AppText>
-            <TextInput
-              style={inputStyle}
-              value={desc}
-              onChangeText={handleDescChange}
-              placeholder={tr('expense.descriptionPlaceholder')}
-              placeholderTextColor={t.colors.textFaint}
-            />
-          </View>
-
-          <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
-            <Button label={tr('expense.submit')} icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} style={{ flex: 1 }} />
-            <Button label={tr('common.cancel')} variant="neutral" onPress={handleClose} style={{ flex: 1 }} />
-          </View>
-        </Card>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.lg }}>
+        <Button label={tr('expense.submit')} icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} style={{ flex: 1 }} />
+        <Button label={tr('common.cancel')} variant="neutral" onPress={handleClose} style={{ flex: 1 }} />
+      </View>
+    </ModalSheet>
   );
 };

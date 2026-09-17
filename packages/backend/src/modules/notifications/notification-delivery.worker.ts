@@ -335,14 +335,41 @@ export class NotificationDeliveryWorker {
       return;
     }
 
+    let badgeText = 'FAPOMS NOTIFICATION';
+    let badgeTone: 'gold' | 'flame' | 'emerald' | 'crimson' | 'slate' = 'gold';
+    const notifType = (notification.type || '').toUpperCase();
+    const cat = String(def?.category || '').toUpperCase();
+
+    if (notifType === 'ACCOUNT_LOCKED' || cat.includes('SECURITY')) {
+      badgeText = 'SECURITY ALERT';
+      badgeTone = 'crimson';
+    } else if (notifType.includes('DESTRUCTIVE') || notifType.includes('APPROVAL') || notifType.includes('ACTION_REQUIRED')) {
+      badgeText = 'ACTION REQUIRED';
+      badgeTone = 'crimson';
+    } else if (notifType.includes('SLA') || notifType.includes('BREACH')) {
+      badgeText = 'SLA ESCALATION';
+      badgeTone = 'flame';
+    } else if (cat.includes('COMPLIANCE')) {
+      badgeText = 'COMPLIANCE NOTICE';
+      badgeTone = 'gold';
+    } else if (cat.includes('WORKFLOW')) {
+      badgeText = 'WORKFLOW UPDATE';
+      badgeTone = 'emerald';
+    } else if (cat.includes('BILLING') || cat.includes('FINANCE')) {
+      badgeText = 'FINANCE NOTICE';
+      badgeTone = 'gold';
+    }
+
     const result = await this.email.send({
       to: user.email,
       subject,
       text: `${bodyText}${linkUrl ? `\n\nOpen in FAPOMS: ${linkUrl}` : ''}`,
       html: renderEmailHtml({
         title: subject,
+        badge: { text: badgeText, tone: badgeTone },
         bodyLines: bodyText.split('\n').filter(Boolean),
         linkUrl,
+        linkLabel: 'Open in FAPOMS',
       }),
     });
 

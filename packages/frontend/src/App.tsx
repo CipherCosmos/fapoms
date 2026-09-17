@@ -66,6 +66,7 @@ const AssayerRecordPage = React.lazy(() => import('./pages/hr/AssayerRecordPage'
 const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
 const HrIssuesPage = React.lazy(() => import('./pages/hr/HrIssuesPage').then((m) => ({ default: m.HrIssuesPage })));
 const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
+const HrHiringPage = React.lazy(() => import('./pages/hr/hiring/HrHiringPage').then((m) => ({ default: m.HrHiringPage })));
 /**
  * Registering an assayer — its own page now, not a modal the roster launched. Outside the `/hr`
  * layout route deliberately: `HrLayout` draws its own PageHeader and the section's four-tab strip,
@@ -82,8 +83,7 @@ const RegistrationPage = React.lazy(() => import('./pages/hr/registration/Regist
  * section strip. See `assayer-interview.controller.ts` and `hr-applications.controller.ts` on
  * the backend.
  */
-const AssayerInterviewsPage = React.lazy(() => import('./pages/hr/interviews/AssayerInterviewsPage').then((m) => ({ default: m.AssayerInterviewsPage })));
-const HrApplicationsPage = React.lazy(() => import('./pages/hr/applications/HrApplicationsPage').then((m) => ({ default: m.HrApplicationsPage })));
+
 const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
 const PacketsQueue = React.lazy(() => import('./pages/dataentry/PacketsQueue'));
 const ReviewsQueue = React.lazy(() => import('./pages/dataentry/ReviewsQueue'));
@@ -493,7 +493,7 @@ export const App: React.FC = () => {
             review — and it was what the roster's "Add assayer" button opened. Adding somebody
             starts on the candidate screen; this path lands there rather than 404ing a bookmark.
           */}
-          <Route path="/hr/register" element={<Navigate to="/hr/interviews" replace />} />
+          <Route path="/hr/register" element={<Navigate to="/hr/hiring" replace />} />
           {/*
             Three segments, so React Router ranks this above the two-segment `:assayerId` below it.
             The desk filling in a candidate's own application — see `RegistrationPage`.
@@ -537,11 +537,19 @@ export const App: React.FC = () => {
               These were siblings of Workforce in the sidebar on the grounds that each is a focused
               single-task screen with its own header. The cost was three rows for one subject, two
               of them lighting up at once, and a breadcrumb that already called both of them
-              "Workforce" — the two chromes disagreed about where the user was. The URLs are
-              unchanged: a notification deep-links to `/hr/applications`.
+              "Workforce" — the two chromes disagreed about where the user was. Their old URLs
+              still resolve: the redirects below carry `/hr/applications` and its siblings onto the
+              one pipeline page.
             */}
-            <Route path="interviews" element={<AssayerInterviewsPage />} />
-            <Route path="applications" element={<HrApplicationsPage />} />
+            <Route path="hiring" element={<HrHiringPage />} />
+            {/*
+              Hiring was three tabs — Interviews, Applications, Onboarding — over one funnel. They
+              are one page now, and these keep every bookmark, notification payload and printed
+              link working rather than dropping people on the section's front page.
+            */}
+            <Route path="interviews" element={<Navigate to="/hr/hiring" replace />} />
+            <Route path="applications" element={<Navigate to="/hr/hiring" replace />} />
+            <Route path="onboarding" element={<Navigate to="/hr/hiring" replace />} />
 
             {/* Retired URLs, from one list — see hr-destinations.ts. This used to be a
                 hand-maintained copy with a comment asking the next person to keep the two in

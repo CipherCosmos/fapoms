@@ -38,6 +38,11 @@ describe('activation is gated on a verified identity', () => {
   ) => {
     const row = () => ({
       id: 'asr-1', displayName: 'Ramesh Kumar', lifecycleStatus: from, version: 3,
+      panNumber: 'ABCDE1234F',
+      bankAccountNumber: '123456789012',
+      ifscCode: 'HDFC0001234',
+      latitude: 19.076,
+      longitude: 72.877,
     });
     const svc: any = Object.create(AssayerService.prototype);
     svc.logger = { warn: jest.fn(), log: jest.fn() };

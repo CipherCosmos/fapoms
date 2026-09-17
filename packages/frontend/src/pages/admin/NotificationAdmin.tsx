@@ -227,9 +227,14 @@ export const NotificationAdmin: React.FC = () => {
                   ? <>Email is working — sending as <strong>{status.from}</strong>.</>
                   : <>Email is not configured, so nothing marked &ldquo;Email&rdquo; below is actually sent. Notifications still reach the bell.</>}
             </span>
-            <Link to="/admin/settings" style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginLeft: 'auto' }}>
-              {status?.enabled ? 'Email settings →' : 'Set it up →'}
-            </Link>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <Link to="/admin/settings?group=email_templates" style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--flame-500, #ED6714)', textDecoration: 'none' }}>
+                Email design templates →
+              </Link>
+              <Link to="/admin/settings" style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}>
+                {status?.enabled ? 'Email transport settings →' : 'Set it up →'}
+              </Link>
+            </div>
           </div>
 
           {/* ── Event catalog ───────────────────────────────────────────── */}

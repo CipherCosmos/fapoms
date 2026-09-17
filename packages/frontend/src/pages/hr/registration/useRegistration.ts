@@ -108,7 +108,23 @@ export function snapshotApplication(view: ApplicationView): Record<string, strin
       continue;
     }
     if (TEL_KEYS.includes(field.key)) {
-      const digits = String(raw ?? '').replace(/\D/g, '');
+      /*
+        THE NUMBER THEY WERE INVITED ON IS ALREADY A PHONE NUMBER FOR THEM.
+
+        `phone` is read from `extendedProfile.fields`, which nothing writes when an application is
+        opened — so the desk typed a mobile into "Add candidate", opened the form, and found the
+        phone box empty, asking for the number it had just given. The candidate's own form has
+        always shown `application.mobile` here.
+
+        Display only. This snapshot is what `adopt()` treats as SAVED as well as what is shown, so
+        an unedited box differs from nothing and is never sent — the deliberate split in
+        `persist.ts`, where `record.phone` must not overwrite the `mobile` column, is untouched.
+        And it is the number approval puts on the record anyway (`createDto.phone = mobile`).
+      */
+      const source = field.key === 'phone' && (raw === undefined || raw === null || raw === '')
+        ? application.mobile
+        : raw;
+      const digits = String(source ?? '').replace(/\D/g, '');
       form[field.key] = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
       continue;
     }

@@ -136,7 +136,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
     const ok = await confirm({
       title: 'Mark this invoice as sent?',
       message: <>Mark <strong>{invoice.invoiceNumber}</strong> as sent to the client{invoice.clientName ? <> ({invoice.clientName})</> : null}. It moves out of Draft and becomes payable, and payments can then be recorded against it.</>,
-      confirmLabel: 'Mark as sent',
+      confirmLabel: 'Sent to client',
       reversible: false,
     });
     if (!ok) return;
@@ -200,7 +200,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
             <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Ban size={14} /> Cancel invoice</button>
           )}
           {invoice.status === InvoiceStatus.DRAFT && (
-            <button onClick={doSend} disabled={send.isPending} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Mark as sent</button>
+            <button onClick={doSend} disabled={send.isPending} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
           )}
           {invoice.status === InvoiceStatus.ISSUED && (
             <button onClick={() => setPayOpen((o) => !o)} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Banknote size={14} /> Record payment</button>

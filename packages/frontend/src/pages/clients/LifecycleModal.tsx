@@ -71,16 +71,16 @@ export const LifecycleModal: React.FC<{
       setReason('');
       onClose();
     } catch (err: any) {
-      toast({ type: 'error', title: 'Transition failed', message: userMessage(err) });
+        toast({ type: 'error', title: 'Could not change status', message: userMessage(err) });
     }
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Transition Lifecycle Status" width="420px" asForm onSubmit={handleSubmit} footer={
+    <Modal open={open} onClose={onClose} title="Change client status" width="420px" asForm onSubmit={handleSubmit} footer={
       <>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
         <button type="submit" disabled={!targetLifecycle || transition.isPending} className="btn btn-primary">
-          {transition.isPending ? 'Updating...' : 'Confirm Transition'}
+          {transition.isPending ? 'Updating...' : 'Confirm change'}
         </button>
       </>
     }>

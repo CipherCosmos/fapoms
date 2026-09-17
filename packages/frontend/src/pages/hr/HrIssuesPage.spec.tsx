@@ -52,7 +52,9 @@ describe('HrIssuesPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Review queue')).toBeInTheDocument();
+    // The page is named by the section header above it (HrLayout titles itself from the open tab),
+    // so what this page must say for itself is what the queue IS.
+    expect(screen.getByText(/Everything the system found but would not decide for you/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/2 record problems to review/)).toBeInTheDocument());
     // Expanded: the grouped finding itself is on screen, not just the headline count.
     expect(screen.getByText(/has no date of birth on the record/)).toBeInTheDocument();

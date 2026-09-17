@@ -1,9 +1,14 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { createHash } from 'crypto';
+import {
+  BadRequestException, ConflictException, ForbiddenException, NotFoundException, ValidationPipe,
+} from '@nestjs/common';
 import {
   ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource, ASSAYER_ERROR_CODES,
 } from '@fapoms/shared';
 
 import { RegistrationApplicationService, documentsRequestedFor } from './registration-application.service';
+import { __resetPincodeCache } from '../geo/pincode-lookup.helper';
+import { OpenWithoutInterviewDto } from './hr-applications.controller';
 import { runWithRequestContext } from '../../core/context/request-context';
 
 /**
@@ -87,7 +92,7 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
   /** Read only so the reviewer sees the number HR typed beside the one the candidate confirmed. */
   const interviews = { findOne: jest.fn(async () => ({ mobile: '9822014455' })) };
   /** Written to only for the consent carry-over — see the service's own note on why. */
-  const assayers = { update: jest.fn(async () => ({ affected: 1 })) };
+  const assayers = { update: jest.fn(async () => ({ affected: 1 })), findOne: jest.fn(async () => null) };
 
   const service = new RegistrationApplicationService(
     applications as any, applicationDocuments as any, interviews as any, assayers as any,
@@ -106,15 +111,25 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
 const verified = () => ({ [`regotp:verified:${TOKEN_HASH}`]: { phone: '9822014455' } });
 
 describe('registration invite tokens', () => {
+  /**
+   * Rewritten 2026-09-16: this used to assert the row did not contain
+   * `tokenHash.slice(0, 8).toUpperCase()` — eight hex characters of the HASH, upper-cased. When
+   * those eight happened to be all digits (about one run in forty) upper-casing was a no-op, the
+   * row of course contained its own hash, and the suite went red for no reason. It also never
+   * tested the property it names: the thing that must not be in the row is the RAW token, which
+   * lives only in the emailed link.
+   */
   it('stores only the hash of a freshly minted token, never the token itself', async () => {
     const { service, applications } = makeService({ application: null });
-    await service.createInvite({ mobile: '9822014455', email: 'x@example.com', fullName: 'X' });
+    const { inviteLink } = await service.createInvite({ mobile: '9822014455', email: 'x@example.com', fullName: 'X' });
 
     const saved = applications.save.mock.calls[0][0];
-    expect(saved.tokenHash).toMatch(/^[0-9a-f]{64}$/);
-    // The raw token exists only in the emailed link. Nothing in the row may be usable as one.
-    const serialised = JSON.stringify(saved);
-    expect(serialised).not.toContain(saved.tokenHash.slice(0, 8).toUpperCase());
+    const rawToken = inviteLink.split('/').pop()!;
+    expect(rawToken).toMatch(/^[0-9a-f]{32,}$/);
+
+    // The row keeps the hash OF that token, and nothing anybody could present as the token.
+    expect(saved.tokenHash).toBe(createHash('sha256').update(rawToken).digest('hex'));
+    expect(JSON.stringify(saved)).not.toContain(rawToken);
     expect(saved).not.toHaveProperty('token');
   });
 
@@ -141,6 +156,60 @@ describe('registration invite tokens', () => {
     applications.save.mockClear();
     await service.hydrate(RAW_TOKEN);
     expect(applications.save).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A SUBMITTED APPLICATION'S LINK STOPS BEING A KEY TO THE CANDIDATE'S IDENTITY.
+ *
+ * The registration link is a bearer credential. It returned the whole application — PAN, Aadhaar,
+ * bank account — for as long as it lived, including after approval, and an audit of the running
+ * stack found hundreds of those links sitting in proxy logs. Once the application is out of the
+ * candidate's hands, the link shows where they stand and nothing they told us.
+ */
+describe('the registration link after the form is submitted', () => {
+  const withProfile = (status: ApplicationStatus) => ({
+    id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', fullName: 'Ramesh Kulkarni',
+    status, tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+    tokenConsumedAt: new Date(), employmentCategory: 'FREELANCER', organizationId: 'org-1',
+    dateOfBirth: '1986-04-12', address: '14 MG Road', pincode: '560001',
+    extendedProfile: { fields: { panNumber: 'ABCDE1234F', aadhaarNumber: '234567890124', bankAccountNumber: '50100123456789' } },
+  });
+
+  it.each([ApplicationStatus.PENDING_VALIDATION, ApplicationStatus.APPROVED, ApplicationStatus.REJECTED])(
+    'shows a %s application without anything the candidate told us',
+    async (status) => {
+      const { service, applicationDocuments } = makeService({ application: withProfile(status) }) as any;
+      applicationDocuments?.find?.mockResolvedValue?.([{ requirement: 'PAN_CARD', filePaths: ['uploads/1-pan.jpg'] }]);
+
+      const view = await service.hydrate(RAW_TOKEN);
+      const text = JSON.stringify(view);
+
+      for (const secret of ['ABCDE1234F', '234567890124', '50100123456789', '1986-04-12', '14 MG Road', 'uploads/1-pan.jpg', '9822014455']) {
+        expect(text).not.toContain(secret);
+      }
+      // …and still enough for the page to say where they stand.
+      expect(view.application).toMatchObject({ status, fullName: 'Ramesh Kulkarni', email: 'candidate@example.com' });
+    },
+  );
+
+  it('still gives the candidate their whole form while it is theirs to fill in', async () => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT) });
+    const view = await service.hydrate(RAW_TOKEN);
+    expect(JSON.stringify(view)).toContain('ABCDE1234F');
+  });
+
+  /** Sent back for more information, it is the candidate's form again. */
+  it('gives the form back when HR asks for more information', async () => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.AWAITING_INFO) });
+    const view = await service.hydrate(RAW_TOKEN);
+    expect(JSON.stringify(view)).toContain('ABCDE1234F');
+  });
+
+  it('refuses to open a scan through the link once the application is submitted', async () => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.APPROVED) });
+    await expect(service.documentFileKeyForToken(RAW_TOKEN, 'PAN_CARD' as never, 0))
+      .rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 
@@ -630,6 +699,78 @@ describe('the extended profile the wizard collects', () => {
       }),
     );
   });
+
+  /**
+   * ONE REFUSED VALUE USED TO EMPTY THE WHOLE RECORD.
+   *
+   * Every field went to one `update`. A PAN already on somebody else threw, and nothing landed —
+   * not the bank account, not the emergency contact, not the location. The person arrived on the
+   * roster with none of it, and onboarding asked the desk for everything the candidate had already
+   * typed in. Each group now fails alone.
+   */
+  describe('when one group of fields is refused', () => {
+    const fullProfile = () => ({
+      ...withProfile(),
+      extendedProfile: {
+        fields: {
+          panNumber: 'ABCDE1234K', aadhaarNumber: '234567890124',
+          bankAccountNumber: '123456789012', ifscCode: 'SBIN0001234', bankName: 'SBI',
+          emergencyContactName: 'Sita', emergencyContactPhone: '9876500000',
+          qualification: 'B.Sc', latitude: 19.07, longitude: 72.87, district: 'Mumbai',
+        },
+      },
+    });
+
+    /**
+     * The record as the roster would actually hold it: an `update` that throws writes nothing.
+     * Asserting on what was SENT is not enough — a single all-in-one call sends the bank account
+     * too, right before it throws and keeps none of it. What matters is what LANDED.
+     */
+    const refusingIdentity = (ctx: ReturnType<typeof makeService>) => {
+      const landed: Record<string, unknown> = {};
+      (ctx.assayerService as any).update = jest.fn(async (_id: string, dto: Record<string, unknown>) => {
+        if ('panNumber' in dto) throw new Error('That PAN is already on Ramesh Iyer (AS-77)');
+        Object.assign(landed, dto);
+        return {};
+      });
+      return { ctx, landed };
+    };
+
+    it('still carries the bank, contact, qualification and location onto the record', async () => {
+      const { ctx, landed } = refusingIdentity(arm(makeService({ application: fullProfile() })));
+
+      await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+      expect(landed).toMatchObject({
+        bankAccountNumber: '123456789012', ifscCode: 'SBIN0001234', bankName: 'SBI',
+        emergencyContactName: 'Sita', emergencyContactPhone: '9876500000',
+        qualification: 'B.Sc',
+        latitude: 19.07, longitude: 72.87, district: 'Mumbai',
+      });
+      // …and only the refused group is missing.
+      expect(landed).not.toHaveProperty('panNumber');
+    });
+
+    it('names exactly the group that was refused, and why', async () => {
+      const { ctx } = refusingIdentity(arm(makeService({ application: fullProfile() })));
+
+      const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+      expect(result.assayer.id).toBe('assayer-1');
+      expect(result.gaps).toEqual([expect.stringContaining('identity numbers (That PAN is already on Ramesh Iyer (AS-77))')]);
+    });
+
+    /** Coordinates are only taken when both arrive, and the district is checked against the pincode. */
+    it('sends latitude, longitude and district in one call', async () => {
+      const ctx = arm(makeService({ application: fullProfile() }));
+
+      await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+      const sent = (ctx.assayerService as any).update.mock.calls.map((c: unknown[]) => c[1]);
+      const location = sent.find((dto: Record<string, unknown>) => 'latitude' in dto);
+      expect(location).toEqual({ latitude: 19.07, longitude: 72.87, district: 'Mumbai' });
+    });
+  });
 });
 
 /**
@@ -762,6 +903,94 @@ describe('the candidate owns their own phone number', () => {
     const ctx = makeService();
     await ctx.service.updateDraft(RAW_TOKEN, { mobile: '9800000001' } as never);
     expect(ctx.applications.save.mock.calls.at(-1)![0].mobile).toBe('9800000001');
+  });
+
+  it('rejects requestOtp when mobile is already registered to an active assayer', async () => {
+    const ctx = makeService();
+    ctx.assayers.findOne.mockResolvedValueOnce({ assayerCode: 'AS001', displayName: 'Existing Assayer' } as never);
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(
+      /already in use by somebody on our roster/i,
+    );
+  });
+
+  it('rejects verifyOtp when mobile is already registered to an active assayer', async () => {
+    const ctx = makeService({ cache: withPending('9812345678', '123456') });
+    ctx.assayers.findOne.mockResolvedValueOnce({ assayerCode: 'AS001', displayName: 'Existing Assayer' } as never);
+    await expect(ctx.service.verifyOtp(RAW_TOKEN, '9812345678', '123456')).rejects.toThrow(
+      /already in use by somebody on our roster/i,
+    );
+  });
+
+  it('rejects updateDraft when mobile is changed to a conflicting number', async () => {
+    const ctx = makeService();
+    ctx.assayers.findOne.mockResolvedValueOnce({ assayerCode: 'AS002', displayName: 'Another Assayer' } as never);
+    await expect(ctx.service.updateDraft(RAW_TOKEN, { mobile: '9899999999' } as never)).rejects.toThrow(
+      /already in use by somebody on our roster/i,
+    );
+  });
+
+  /**
+   * THE CANDIDATE IS NOT SOMEBODY ELSE.
+   *
+   * Approving an application CREATES an assayer carrying the candidate's number, so from that
+   * moment the roster held a row matching their own application. With nothing excluding it, every
+   * OTP request, verification and submit came back "This mobile number is already registered with
+   * someone else" — about them, to them, on a form they could no longer get past. Observed live:
+   * both approved applications on the box matched the very record they had produced.
+   */
+  it('never reports a candidate as a conflict with the record their own approval created', async () => {
+    const ctx = makeService({
+      application: {
+        id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', status: ApplicationStatus.DRAFT,
+        promotedAssayerId: 'assayer-from-this-application',
+        tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+      },
+    });
+    ctx.assayers.findOne.mockResolvedValue({
+      id: 'assayer-from-this-application', assayerCode: 'AS0017', displayName: 'Priya Sharma',
+    } as never);
+
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).resolves.not.toThrow();
+  });
+
+  it('still refuses a number held by a DIFFERENT person on the roster, and names them for the desk', async () => {
+    const ctx = makeService({
+      application: {
+        id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', status: ApplicationStatus.DRAFT,
+        promotedAssayerId: 'assayer-from-this-application',
+        tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+      },
+    });
+    ctx.assayers.findOne.mockResolvedValue({
+      id: 'somebody-else', assayerCode: 'AS-01', displayName: 'Nilesh Rahane',
+    } as never);
+
+    // The candidate is told there is a clash, but never whose number it is.
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(
+      /already in use by somebody on our roster/i,
+    );
+    const conflict = await ctx.service.checkMobileConflict('9822014455', null, 'app-1', 'assayer-from-this-application');
+    expect(conflict!.message).not.toMatch(/Nilesh|AS-01/);
+    // The desk's copy names them, which is the only way a clerk can tell a duplicate from a typo.
+    expect(conflict!.detail).toMatch(/Nilesh Rahane \(AS-01\)/);
+  });
+
+  it('rejects submit when application mobile has a conflict', async () => {
+    const ctx = makeService({ cache: verified() });
+    ctx.assayers.findOne.mockResolvedValueOnce({ assayerCode: 'AS001', displayName: 'Existing Assayer' } as never);
+    await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(
+      /already in use by somebody on our roster/i,
+    );
+  });
+
+  it('allows HR to update application mobile with updateApplicationMobile', async () => {
+    const ctx = makeService();
+    ctx.applications.findOne = jest.fn(async () => ({ ...ctx.application, status: ApplicationStatus.PENDING_VALIDATION }));
+    const updated = await ctx.service.updateApplicationMobile('app-1', '9811223344', 'hr-user-1');
+    expect(updated.mobile).toBe('9811223344');
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'ASSAYER_APPLICATION_MOBILE_UPDATED',
+    }));
   });
 });
 
@@ -898,6 +1127,33 @@ describe('the desk completes the person as it approves', () => {
     ctx.interviews.findOne.mockResolvedValue({ mobile: '9822014455' } as never);
 
     expect((await ctx.service.getApplication('app-1')).invitedMobile).toBeNull();
+  });
+
+  /**
+   * The interviewer's notes were written down every time and shown on no screen. This method
+   * already loaded the interview row and read one field off it — the mobile — so the reviewer
+   * deciding the application could not see what the interviewer had written.
+   */
+  it('gives the reviewer what the interviewer wrote', async () => {
+    const ctx = makeService({ application: { ...ready(), interviewId: 'iv-1' } });
+    const when = new Date('2026-09-02T10:00:00.000Z');
+    ctx.interviews.findOne.mockResolvedValue({
+      mobile: '9822014455', outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
+      interviewedAt: when, interviewedByName: 'Meera Rao',
+    } as never);
+
+    const detail = await ctx.service.getApplication('app-1');
+
+    expect(detail.interview).toEqual({
+      outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
+      interviewedAt: when, interviewedByName: 'Meera Rao',
+    });
+  });
+
+  it('has no interview to show for somebody let in without one', async () => {
+    const ctx = makeService({ application: { ...ready(), interviewId: null } });
+
+    expect((await ctx.service.getApplication('app-1')).interview).toBeNull();
   });
 });
 
@@ -1222,5 +1478,411 @@ describe('the desk filling in an application', () => {
     const saved = await ctx.service.updateStaffDraft('app-1', smuggled, 'hr-maker');
     expect(saved.consentAcceptedAt).toBeFalsy();
     expect(saved.status).toBe(ApplicationStatus.DRAFT);
+  });
+});
+
+describe('candidate lookups (pincode → address, IFSC → bank)', () => {
+  // The directory answer is cached process-wide (it costs ~3.6s and pincodes do not move), so a
+  // suite that stubs `fetch` has to start from an empty one or it tests the previous test's answer.
+  beforeEach(() => __resetPincodeCache());
+
+  /**
+   * The directory is read through the invite token, not a session — so the token
+   * gate is tested first, and a bad token spends no network at all.
+   */
+  it('refuses lookups on an unknown token without touching the network', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    try {
+      const ctx = makeService({ application: null });
+      await expect(ctx.service.lookupPincode('bogus-token', '411001'))
+        .rejects.toBeInstanceOf(NotFoundException);
+      await expect(ctx.service.lookupIfsc('bogus-token', 'HDFC0001234'))
+        .rejects.toBeInstanceOf(NotFoundException);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('answers a malformed pincode or IFSC without a network call', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    try {
+      const ctx = makeService();
+      // Three digits is not a pincode anybody holds — that is the directory's answer, not an outage.
+      await expect(ctx.service.lookupPincode(RAW_TOKEN, '123')).resolves.toEqual({ status: 'not-found' });
+      await expect(ctx.service.lookupIfsc(RAW_TOKEN, 'NOTACODE')).resolves.toBeNull();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('returns the directory answer for a recognised pincode and IFSC', async () => {
+    const ctx = makeService();
+    const fetchSpy = jest.spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ([
+          { Status: 'Success', PostOffice: [{ State: 'Maharashtra', District: 'Pune', Block: 'Haveli' }] },
+        ]),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ BANK: 'HDFC Bank', BRANCH: 'MG Road', CITY: 'Pune', STATE: 'Maharashtra' }),
+      } as any);
+    try {
+      /*
+        The town is Pune, not the block's "Haveli" — Haveli is the taluka around Pune, and the
+        directory's block is only taken as a town when the district or the division corroborates
+        it. See `townFromDirectory`: an uncorroborated block is what filed Guwahati as "Gmc".
+      */
+      await expect(ctx.service.lookupPincode(RAW_TOKEN, '411001')).resolves.toEqual({
+        status: 'found', state: 'Maharashtra', district: 'Pune', city: 'Pune', source: 'directory',
+      });
+      await expect(ctx.service.lookupIfsc(RAW_TOKEN, 'HDFC0001234')).resolves.toMatchObject({
+        bankName: 'HDFC Bank',
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('says the lookup was unavailable when the directory is unreachable, rather than throwing', async () => {
+    const ctx = makeService();
+    const fetchSpy = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('directory down'));
+    try {
+      /*
+        The distinction the form depends on. An unreachable directory is NOT "no such pincode":
+        reporting it as one is what told every candidate to check digits that were correct, because
+        the deployed container cannot reach the postal API at all.
+      */
+      await expect(ctx.service.lookupPincode(RAW_TOKEN, '411001')).resolves.toEqual({ status: 'unavailable' });
+      await expect(ctx.service.lookupIfsc(RAW_TOKEN, 'HDFC0001234')).resolves.toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+/**
+ * The second door into the hiring pipeline, and the reason it is allowed to exist.
+ *
+ * A PASS used to be the only way in, so a walk-in or a referral could be hired only by recording
+ * an interview that never happened — which does not protect the gate, it only poisons the
+ * screening record of everybody who really was interviewed. The step is skippable now, and what
+ * makes that safe is that the skip is written down twice: stamped on the candidate's own
+ * application, and in the audit trail beside the name of whoever decided it.
+ */
+describe('a candidate admitted without an interview', () => {
+  const ACTOR = { id: 'hr-1', name: 'Priya Nair', organizationId: 'org-1' };
+  const INPUT = {
+    fullName: 'Ramesh Kulkarni',
+    mobile: '9822014455',
+    email: 'ramesh@example.com',
+    reason: 'Walk-in referred by the Pune branch manager; interviewed informally on the floor.',
+  };
+
+  /** No row anywhere: nobody on the roster, nothing open in the queue. */
+  const emptyQueue = () => makeService({ application: null });
+
+  it('opens an application and hands back a link the desk can read out', async () => {
+    const ctx = emptyQueue();
+    const result = await ctx.service.openWithoutInterview(INPUT, ACTOR);
+
+    expect(result.applicationId).toBe('app-new');
+    // Always returned, whatever the email did — a deployment with no mailbox still has to be able
+    // to get a candidate in. The raw token lives only here and in the email.
+    expect(result.inviteLink).toMatch(/\/register\/[0-9a-f]{64}$/);
+    expect(result.emailed).toBe(true);
+  });
+
+  it('stamps the reason and the person who decided it onto the application', async () => {
+    const ctx = emptyQueue();
+    await ctx.service.openWithoutInterview(INPUT, ACTOR);
+
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    expect(saved.extendedProfile.openedWithoutInterview).toMatchObject({
+      reason: INPUT.reason,
+      byId: 'hr-1',
+      byName: 'Priya Nair',
+    });
+    expect(Date.parse(saved.extendedProfile.openedWithoutInterview.at)).not.toBeNaN();
+  });
+
+  /**
+   * `HR_DESK` is not a label for "HR started this" — it means the desk typed the substance, and
+   * `approve()` bars every account it names from reviewing the result. Claiming it here would
+   * quietly lock whoever added the candidate out of their own queue.
+   */
+  it('leaves the candidate as the author of their own form, and the interview column empty', async () => {
+    const ctx = emptyQueue();
+    await ctx.service.openWithoutInterview(INPUT, ACTOR);
+
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    expect(saved.source).toBeUndefined();
+    expect(saved.interviewId).toBeNull();
+    expect(saved.status).toBe(ApplicationStatus.DRAFT);
+  });
+
+  it('writes the decision to the audit trail, carrying the reason and the actor', async () => {
+    const ctx = emptyQueue();
+    await ctx.service.openWithoutInterview(INPUT, ACTOR);
+
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'ASSAYER_APPLICATION_OPENED_WITHOUT_INTERVIEW',
+      entityType: 'ASSAYER_APPLICATION',
+      userId: 'hr-1',
+      remarks: expect.stringContaining(INPUT.reason),
+    }));
+  });
+
+  /**
+   * The order the rest of this service is built on: an email cannot be recalled, so it goes last.
+   * A stamp that failed to save after the send would leave a candidate holding a live link into a
+   * pipeline with no record of why they are in it — the exact state this endpoint exists to avoid.
+   */
+  it('saves the stamp before the invite is sent, not after', async () => {
+    const ctx = emptyQueue();
+    await ctx.service.openWithoutInterview(INPUT, ACTOR);
+
+    const lastSave = ctx.applications.save.mock.invocationCallOrder.at(-1)!;
+    expect(ctx.emailProvider.send.mock.invocationCallOrder[0]).toBeGreaterThan(lastSave);
+  });
+
+  it('still hands back the link when the email did not go, and says so', async () => {
+    const ctx = emptyQueue();
+    ctx.emailProvider.send.mockResolvedValueOnce({ success: false, error: 'transport off' });
+    const result = await ctx.service.openWithoutInterview(INPUT, ACTOR);
+
+    expect(result.emailed).toBe(false);
+    expect(result.inviteLink).toMatch(/\/register\/[0-9a-f]{64}$/);
+  });
+
+  it('refuses a number that already belongs to somebody on the roster', async () => {
+    const ctx = emptyQueue();
+    ctx.assayers.findOne.mockResolvedValueOnce({ assayerCode: 'AS0007', displayName: 'Ramesh K' } as never);
+
+    await expect(ctx.service.openWithoutInterview(INPUT, ACTOR))
+      .rejects.toBeInstanceOf(ConflictException);
+    // Nothing minted, nothing sent: the refusal is before the first write.
+    expect(ctx.applications.save).not.toHaveBeenCalled();
+    expect(ctx.emailProvider.send).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The failure the interview path already learned: two live links for one person, with no unique
+   * index to stop it, and whichever one the candidate happened to open becoming the real one.
+   */
+  it('refuses a person who already has an application open, naming them and it', async () => {
+    const ctx = makeService({
+      application: {
+        id: 'app-open', mobile: '9822014455', fullName: 'Ramesh Kulkarni',
+        status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+      },
+    });
+
+    const thrown = await ctx.service.openWithoutInterview(INPUT, ACTOR).catch((e) => e);
+    expect(thrown).toBeInstanceOf(ConflictException);
+    expect(thrown.message).toContain('Ramesh Kulkarni');
+    expect(thrown.message).toMatch(/already has an open application/i);
+    // The id travels in the body so the screen can offer "open it" rather than sending the desk
+    // back to the queue to search for a name it has just been told.
+    expect(thrown.getResponse()).toMatchObject({ applicationId: 'app-open' });
+    expect(ctx.applications.save).not.toHaveBeenCalled();
+    expect(ctx.emailProvider.send).not.toHaveBeenCalled();
+  });
+
+  it('treats a decided application as no obstacle — that is a new candidate', async () => {
+    const ctx = makeService({
+      application: {
+        id: 'app-old', mobile: '9822014455', fullName: 'Ramesh Kulkarni',
+        status: ApplicationStatus.REJECTED, organizationId: 'org-1',
+      },
+    });
+    await expect(ctx.service.openWithoutInterview(INPUT, ACTOR)).resolves.toMatchObject({
+      applicationId: expect.any(String),
+    });
+  });
+
+  it('refuses a reason too short to be one, before anything is written', async () => {
+    const ctx = emptyQueue();
+    await expect(ctx.service.openWithoutInterview({ ...INPUT, reason: 'walk in' }, ACTOR))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(ctx.service.openWithoutInterview({ ...INPUT, reason: '   ' }, ACTOR))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(ctx.applications.save).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The same floor at the edge, so a caller never reaches the service's copy of it. Run through a
+   * real `ValidationPipe` with main.ts's options rather than by reading the decorators, because
+   * what is being checked is that the request is refused — not that a decorator is present.
+   */
+  describe('what the endpoint will accept at all', () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const through = (body: Record<string, unknown>) =>
+      pipe.transform(body, { type: 'body', metatype: OpenWithoutInterviewDto } as never);
+
+    it('takes a full request', async () => {
+      await expect(through({ ...INPUT })).resolves.toMatchObject({ reason: INPUT.reason });
+    });
+
+    it('refuses a missing reason', async () => {
+      const { reason: _dropped, ...withoutReason } = INPUT;
+      await expect(through(withoutReason)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses a reason nobody could read later', async () => {
+      await expect(through({ ...INPUT, reason: 'ok' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses a nameless or numberless candidate', async () => {
+      await expect(through({ ...INPUT, fullName: 'R' })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(through({ ...INPUT, mobile: '123' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('accepts no email at all, and refuses one that is not an address', async () => {
+      const { email: _none, ...withoutEmail } = INPUT;
+      await expect(through(withoutEmail)).resolves.toMatchObject({ mobile: INPUT.mobile });
+      await expect(through({ ...INPUT, email: 'not-an-address' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+});
+
+/**
+ * `listApplications` returns entities, so the queue has always been able to see the stamp. The
+ * review drawer reads a projection, and saw only `interviewId: null` — a data gap, not a decision.
+ */
+describe('the review drawer can see why there was no interview', () => {
+  const stamped = {
+    id: 'app-1', mobile: '9822014455', fullName: 'Ramesh Kulkarni', organizationId: 'org-1',
+    status: ApplicationStatus.PENDING_VALIDATION, interviewId: null,
+    extendedProfile: {
+      openedWithoutInterview: {
+        reason: 'Walk-in referred by the Pune branch manager.',
+        byId: 'hr-1', byName: 'Priya Nair', at: '2026-09-16T09:00:00.000Z',
+      },
+    },
+  };
+
+  it('hands the stamp to the reviewer beside the application it excused', async () => {
+    const ctx = makeService({ application: stamped });
+    const view = await ctx.service.getApplication('app-1');
+    expect(view.openedWithoutInterview).toEqual({
+      reason: 'Walk-in referred by the Pune branch manager.',
+      byId: 'hr-1', byName: 'Priya Nair', at: '2026-09-16T09:00:00.000Z',
+    });
+  });
+
+  it('answers null for a candidate who came through an interview', async () => {
+    const ctx = makeService();
+    expect((await ctx.service.getApplication('app-1')).openedWithoutInterview).toBeNull();
+  });
+
+  /** Half a stamp renders as "Added without an interview — undefined", which is worse than none. */
+  it('answers null for a stamp with no reason in it', async () => {
+    const ctx = makeService({
+      application: { ...stamped, extendedProfile: { openedWithoutInterview: { byId: 'hr-1' } } },
+    });
+    expect((await ctx.service.getApplication('app-1')).openedWithoutInterview).toBeNull();
+  });
+});
+
+/**
+ * THE CHECKS THAT USED TO ARRIVE AS REVIEW-QUEUE FINDINGS.
+ *
+ * `data-integrity.service.ts` refuses an age outside 18–90 and flags a PAN, Aadhaar or email that
+ * already belongs to somebody — but it sweeps rows that exist, so the candidate had registered,
+ * been approved and reached the roster days before HR saw it. Submit asks the same questions at
+ * the one moment the answer can still change the outcome.
+ */
+describe('what submit refuses that the roster sweep used to catch later', () => {
+  /*
+    The identifier checks compare FINGERPRINTS, which need the PII key: without it
+    `fieldFingerprint` returns null and the duplicate check quietly does nothing. Production sets
+    the key; a bare test process does not, so set it here — and that silence is exactly why the
+    roster sweep stays as the backstop rather than being deleted.
+  */
+  const originalKey = process.env.PII_ENCRYPTION_KEY;
+  beforeAll(() => { process.env.PII_ENCRYPTION_KEY = 'a'.repeat(64); });
+  afterAll(() => {
+    if (originalKey === undefined) delete process.env.PII_ENCRYPTION_KEY;
+    else process.env.PII_ENCRYPTION_KEY = originalKey;
+  });
+
+  const ready = (over: Record<string, unknown> = {}) => ({
+    id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH,
+    tokenExpiresAt: new Date(Date.now() + 3_600_000), tokenConsumedAt: null,
+    employmentCategory: 'FREELANCER', consentAcceptedAt: new Date(), organizationId: 'org-1',
+    ...over,
+  });
+
+  const seventeenYearsAgo = () => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 17);
+    return d.toISOString().slice(0, 10);
+  };
+
+  it('refuses somebody under eighteen, and says so in their own words', async () => {
+    const ctx = makeService({ application: ready({ dateOfBirth: seventeenYearsAgo() }), cache: verified() });
+    await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/at least 18/);
+    expect(ctx.applications.save).not.toHaveBeenCalled();
+  });
+
+  it('reads the date of birth out of the form answers too, not only the column', async () => {
+    const ctx = makeService({
+      application: ready({ extendedProfile: { fields: { dateOfBirth: seventeenYearsAgo() } } }),
+      cache: verified(),
+    });
+    await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/at least 18/);
+  });
+
+  it('lets an ordinary working age through', async () => {
+    const ctx = makeService({ application: ready({ dateOfBirth: '1990-06-15' }), cache: verified() });
+    await expect(ctx.service.submit(RAW_TOKEN)).resolves.toMatchObject({
+      status: ApplicationStatus.PENDING_VALIDATION,
+    });
+  });
+
+  it('refuses a PAN that already belongs to somebody on the roster, naming nobody', async () => {
+    const ctx = makeService({
+      application: ready({ dateOfBirth: '1990-06-15', extendedProfile: { fields: { panNumber: 'ABCDE1234F' } } }),
+      cache: verified(),
+    });
+    // Only the PAN lookup finds anybody: a blanket match would trip the phone check first and
+    // prove nothing about which question was asked.
+    (ctx.assayers.findOne as jest.Mock).mockImplementation(async (q: any) => (
+      q?.where?.panFingerprint ? { id: 'someone-else', displayName: 'Nilesh Rahane' } : null
+    ));
+
+    await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/PAN is already registered to somebody/);
+    // Whose PAN it is belongs to them — the candidate is told there is a clash, not who.
+    await expect(ctx.service.submit(RAW_TOKEN)).rejects.not.toThrow(/Nilesh/);
+  });
+
+  it('does not count the record this very application created as somebody else', async () => {
+    const ctx = makeService({
+      application: ready({
+        dateOfBirth: '1990-06-15',
+        promotedAssayerId: 'assayer-from-this-application',
+        extendedProfile: { fields: { panNumber: 'ABCDE1234F' } },
+      }),
+      cache: verified(),
+    });
+    (ctx.assayers.findOne as jest.Mock).mockImplementation(async (q: any) => (
+      q?.where?.panFingerprint ? { id: 'assayer-from-this-application' } : null
+    ));
+
+    await expect(ctx.service.submit(RAW_TOKEN)).resolves.toBeTruthy();
+  });
+
+  it('refuses an email already on the roster', async () => {
+    const ctx = makeService({ application: ready({ dateOfBirth: '1990-06-15' }), cache: verified() });
+    (ctx.assayers.findOne as jest.Mock).mockImplementation(async (q: any) => (
+      q?.where?.email ? { id: 'someone-else' } : null
+    ));
+
+    await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/email address is already registered/);
   });
 });

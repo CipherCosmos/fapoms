@@ -7,7 +7,13 @@ export const DetailDrawer: React.FC<{
   title?: React.ReactNode;
   subtitle?: React.ReactNode;
   footer?: React.ReactNode;
-  width?: number;
+  /**
+   * A number is pixels; a string is any CSS length, so a content-heavy drawer can ask for
+   * `"min(920px, 94vw)"` and still fit a phone. Same contract `Modal` already has — the drawer was
+   * number-only, which is why the hiring drawers were stuck at fixed widths that a real document
+   * table does not fit in.
+   */
+  width?: number | string;
   children: React.ReactNode;
 }> = ({ open, onClose, title, subtitle, footer, width = 560, children }) => {
   const panelRef = React.useRef<HTMLDivElement>(null);
@@ -81,7 +87,7 @@ export const DetailDrawer: React.FC<{
           top: 0,
           right: 0,
           bottom: 0,
-          width: `min(${width}px, 100vw)`,
+          width: typeof width === 'number' ? `min(${width}px, 100vw)` : `min(${width}, 100vw)`,
           maxWidth: '100vw',
           background: 'var(--bg-secondary)',
           borderLeft: '1px solid var(--border-color)',
@@ -131,7 +137,18 @@ export const DetailDrawer: React.FC<{
           </button>
         </div>
       )}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/*
+        WHY THE WHOLE DRAWER USED TO SCROLL SIDEWAYS. This body set only `overflowY: 'auto'`, and CSS
+        computes the other axis to `auto` too whenever one is not `visible` — so any child wider than
+        the panel (a document table, a row of action links) gave the entire drawer a horizontal
+        scrollbar. `overflowX: hidden` + `minWidth: 0` is the `.page-scroll` pattern the pages
+        already use; a table that genuinely needs to scroll still does, inside its own
+        `.table-container`, instead of dragging the whole panel with it.
+      */}
+      <div
+        data-testid="detail-drawer-body"
+        style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', minWidth: 0, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 18 }}
+      >
         {children}
       </div>
       {footer && (

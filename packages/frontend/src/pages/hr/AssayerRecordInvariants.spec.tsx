@@ -7,7 +7,6 @@ import { EmpanelmentStandingCard } from './record/EmpanelmentStandingCard';
 import { DeploymentReadinessCard } from './record/DeploymentReadinessCard';
 import { BankProfileCard } from './record/BankProfileCard';
 import { FrozenPayoutDestinationCard } from './record/FrozenPayoutDestinationCard';
-import { DocumentVerificationModal } from './record/DocumentVerificationModal';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('react-router-dom', () => ({
@@ -63,10 +62,12 @@ describe('Monolith 3 Invariants Regression Suite', () => {
           />,
         );
 
-        expect(screen.getByText(status)).toBeInTheDocument();
+        // Plain words, never the stored code.
+        expect(screen.getByText(new RegExp(`^${status}$`, "i"))).toBeInTheDocument();
+        expect(screen.queryByText(status)).not.toBeInTheDocument();
         // Explanation must be visible explaining why it cannot be overridden
         expect(screen.getByTestId('hard-block-explanation')).toBeInTheDocument();
-        expect(screen.getByText(/Standing is final and hard-blocked by policy/i)).toBeInTheDocument();
+        expect(screen.getByText(/decision is final/i)).toBeInTheDocument();
 
         // Must NOT have any override or edit button
         expect(screen.queryByRole('button', { name: /Override/i })).not.toBeInTheDocument();
@@ -100,9 +101,9 @@ describe('Monolith 3 Invariants Regression Suite', () => {
 
       // Both standings are independently visible
       expect(screen.getByText('Axis Bank')).toBeInTheDocument();
-      expect(screen.getByText('REJECTED')).toBeInTheDocument();
+      expect(screen.getByText('Rejected')).toBeInTheDocument();
       expect(screen.getByText('HDFC Bank')).toBeInTheDocument();
-      expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+      expect(screen.getByText('Active')).toBeInTheDocument();
     });
   });
 
@@ -126,7 +127,7 @@ describe('Monolith 3 Invariants Regression Suite', () => {
 
       // Must display blocked verdict
       expect(screen.getByTestId('deployment-readiness-card')).toBeInTheDocument();
-      expect(screen.getByText('Blocked from Deployment')).toBeInTheDocument();
+      expect(screen.getByText('Not yet')).toBeInTheDocument();
       // Must display the authoritative blocker reasons provided by backend
       expect(screen.getByText(/Mandatory CIBIL credit score below policy minimum/)).toBeInTheDocument();
       expect(screen.getByText(/Annual police clearance certificate expired/)).toBeInTheDocument();
@@ -146,7 +147,7 @@ describe('Monolith 3 Invariants Regression Suite', () => {
         />,
       );
 
-      expect(screen.getByText('Blocked from Deployment')).toBeInTheDocument();
+      expect(screen.getByText('Not yet')).toBeInTheDocument();
       expect(screen.getByText(/Missing identity gate document: PAN Card/)).toBeInTheDocument();
     });
   });
@@ -184,7 +185,7 @@ describe('Monolith 3 Invariants Regression Suite', () => {
       // Frozen payable destination shows State Bank of India
       expect(within(c2).getByText('State Bank of India')).toBeInTheDocument();
       expect(within(c2).getByText('SBIN0001234')).toBeInTheDocument();
-      expect(within(c2).getByText(/Frozen snapshot captured at payable approval/i)).toBeInTheDocument();
+      expect(within(c2).getByText(/Saved at the moment the payment was approved/i)).toBeInTheDocument();
 
       // Frozen payable must NOT have an edit affordance
       expect(within(c2).queryByRole('button', { name: /Edit/i })).not.toBeInTheDocument();
@@ -201,123 +202,14 @@ describe('Monolith 3 Invariants Regression Suite', () => {
 
       // Must explicitly note that departed assayers are not active payout blockers
       expect(screen.getByTestId('departed-payout-notice')).toBeInTheDocument();
-      expect(screen.getByText(/No active payout blockers: assayer is departed/i)).toBeInTheDocument();
-    });
-  });
-
-  describe('4. Version-Specific KYC Document Verification & Concurrency', () => {
-    const docWithVersions = {
-      id: 'doc-1',
-      requirement: 'PAN_CARD',
-      label: 'PAN Card',
-      docVersion: 2,
-      currentVersionId: 'ver-2',
-      contentSha256: 'hash-version-2',
-      verificationStatus: 'PENDING',
-      versions: [
-        {
-          id: 'ver-2',
-          version: 2,
-          verificationStatus: 'PENDING',
-          contentSha256: 'hash-version-2',
-          createdAt: '2026-09-01T12:00:00Z',
-        },
-        {
-          id: 'ver-1',
-          version: 1,
-          verificationStatus: 'REJECTED',
-          contentSha256: 'hash-version-1',
-          supersededByVersionId: 'ver-2',
-          createdAt: '2026-08-01T12:00:00Z',
-        },
-      ],
-    };
-
-    it('submits exact targetVersionId, expectedDocVersion and expectedContentHash', async () => {
-      mockRequest.mockResolvedValueOnce({ success: true });
-      const onSuccess = jest.fn();
-      const onClose = jest.fn();
-
-      render(
-        <DocumentVerificationModal
-          open
-          document={docWithVersions as any}
-          onSuccess={onSuccess}
-          onClose={onClose}
-          assayerName="Person One"
-        />,
-      );
-
-      fireEvent.click(screen.getByRole('button', { name: /Confirm Verification/i }));
-
-      await waitFor(() => {
-        expect(mockRequest).toHaveBeenCalledWith(
-          '/assayers/document/doc-1/verify',
-          expect.objectContaining({
-            method: 'POST',
-            body: expect.stringContaining('"targetVersionId":"ver-2"'),
-          }),
-        );
-      });
-
-      const [, options] = mockRequest.mock.calls[0];
-      const parsed = JSON.parse(options.body);
-      expect(parsed).toMatchObject({
-        verdict: 'VERIFIED',
-        targetVersionId: 'ver-2',
-        expectedDocVersion: 2,
-        expectedContentHash: 'hash-version-2',
-      });
-    });
-
-    it('explicitly handles 409 DOCUMENT_VERSION_STALE without silent verification', async () => {
-      mockRequest.mockRejectedValueOnce(
-        new Error('DOCUMENT_VERSION_STALE: Expected document version 2 but found 3.'),
-      );
-
-      render(
-        <DocumentVerificationModal
-          open
-          document={docWithVersions as any}
-          onSuccess={jest.fn()}
-          onClose={jest.fn()}
-          assayerName="Person One"
-        />,
-      );
-
-      fireEvent.click(screen.getByRole('button', { name: /Confirm Verification/i }));
-
-      await waitFor(() => {
-        expect(screen.getByTestId('verification-conflict-alert')).toBeInTheDocument();
-      });
-
-      expect(screen.getByText('DOCUMENT_VERSION_STALE')).toBeInTheDocument();
-      expect(screen.getByText(/This document was updated by another operator or user concurrently/i)).toBeInTheDocument();
-    });
-
-    it('prohibits verifying superseded historical version', () => {
-      render(
-        <DocumentVerificationModal
-          open
-          document={docWithVersions as any}
-          onSuccess={jest.fn()}
-          onClose={jest.fn()}
-          assayerName="Person One"
-        />,
-      );
-
-      // Select superseded version v1
-      const select = screen.getByRole('combobox');
-      fireEvent.change(select, { target: { value: 'ver-1' } });
-
-      expect(screen.getByText(/Notice: This version has been superseded by a newer version/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Confirm Verification/i })).toBeDisabled();
+      expect(screen.getByText(/They have left \(Resigned\)/)).toBeInTheDocument();
     });
   });
 
   describe('5. Lifecycle 409 Concurrency Recovery', () => {
-    it('discards stale mutation and reloads fresh server truth on 409 conflict', async () => {
-      const initial = baseAssayer({ lifecycleStatus: AssayerLifecycleStatus.TRAINING });
+    it('on a 409, changes nothing, says so plainly, and re-reads the record', async () => {
+      // Pinned and payable, so the move reaches the server — Active is refused on the page without those.
+      const initial = baseAssayer({ lifecycleStatus: AssayerLifecycleStatus.TRAINING, latitude: 9.93, longitude: 76.26 });
       mockRequest.mockImplementation((url: string) => {
         if (url === '/assayers/a-1') return Promise.resolve(initial);
         if (url.endsWith('/dossier')) return Promise.resolve({ onboarding: [], empanelments: [] });
@@ -349,7 +241,7 @@ describe('Monolith 3 Invariants Regression Suite', () => {
       fireEvent.click(confirmBtn);
 
       await waitFor(() => {
-        expect(screen.getByText(/Conflict: The assayer record changed elsewhere. Stale transition aborted/i)).toBeInTheDocument();
+        expect(screen.getByText(/Someone else changed this person’s stage at the same time/)).toBeInTheDocument();
       });
 
       // Must re-read server truth

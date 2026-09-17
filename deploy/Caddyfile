@@ -106,8 +106,18 @@
 		reverse_proxy frontend:80
 	}
 
+	# A registration link (/register/<token>, /api/v1/public/registration/<token>/...) is a bearer
+	# credential to a candidate's PAN, Aadhaar, bank account and scans. Logged verbatim, an audit of
+	# the running stack found 398 lines each holding a working one. The token is replaced before the
+	# line is written, in the request path AND in the Referer the browser sends from the form page.
+	# The same rule lives in packages/backend/src/infrastructure/http/redact-url.ts for the API's logs.
 	log {
 		output stdout
-		format console
+		format filter {
+			request>uri regexp "(/public/registration/|/register/)[^/?#]+" "${1}[token]"
+			request>uri regexp "(?i)([?&](?:panNumber|aadhaarNumber|bankAccountNumber|token)=)[^&#]*" "${1}[redacted]"
+			request>headers>Referer regexp "(/public/registration/|/register/)[^/?#]+" "${1}[token]"
+			wrap console
+		}
 	}
 }

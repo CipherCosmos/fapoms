@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ApplicationStatus, EventCategory, InterviewOutcome } from '@fapoms/shared';
@@ -75,6 +75,15 @@ export class AssayerInterviewService {
 
     const mobile = dto.mobile.trim();
     const isPass = dto.outcome === InterviewOutcome.PASS;
+
+    if (isPass && typeof this.registrationApplications.checkMobileConflict === 'function') {
+      const conflict = await this.registrationApplications.checkMobileConflict(mobile, organizationId);
+      if (conflict && conflict.target === 'ASSAYER') {
+        // The interviewer is staff: name who holds the number, or they cannot tell a real
+        // duplicate from a mistyped digit.
+        throw new ConflictException(conflict.detail);
+      }
+    }
 
     /*
       Already partway in?

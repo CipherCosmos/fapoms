@@ -744,6 +744,10 @@ describe('AssayerRoster — bulk lifecycle moves need a real reason', () => {
     chooseFromSelect('Reason for the move', 'Not doing regular/any audit');
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
+    // The bulk guard names the count, the stage and the reason before anything moves.
+    expect(await screen.findByText(/2 selected people.*Suspended.*Not doing regular\/any audit/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Suspended' }));
+
     await waitFor(() => {
       const call = mockRequest.mock.calls.find(([url]) => url === '/assayers/bulk/lifecycle');
       expect(call).toBeDefined();
@@ -770,6 +774,10 @@ describe('AssayerRoster — bulk lifecycle moves need a real reason', () => {
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // One person, same guard.
+    expect(await screen.findByText(/1 selected person.*Suspended.*Family emergency/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Suspended' }));
 
     await waitFor(() => {
       const call = mockRequest.mock.calls.find(([url]) => url === '/assayers/bulk/lifecycle');
@@ -858,6 +866,7 @@ describe('AssayerRoster — single assayer lifecycle modal and consequence banne
     fireEvent.click(screen.getByRole('option', { name: 'Not doing regular/any audit' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move to Suspended' }));
 
     await waitFor(() => {
       expect(screen.getByText(/1 moved to Suspended, 1 skipped, 0 failed/)).toBeInTheDocument();

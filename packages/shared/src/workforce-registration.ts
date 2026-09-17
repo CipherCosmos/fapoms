@@ -1,5 +1,6 @@
 import { ASSAYER_RECORD_FIELDS, CRITICAL_ASSAYER_RECORD_FIELDS } from './assayer-record';
 import type { AssayerRecordField } from './assayer-record';
+import { maskTail } from './assayer-qualification';
 
 /**
  * One registration, whoever is typing.
@@ -52,6 +53,99 @@ export const REGISTRATION_RECORD_FIELD_KEYS = [
 ] as const;
 
 export type RegistrationRecordFieldKey = typeof REGISTRATION_RECORD_FIELD_KEYS[number];
+
+/**
+ * The three an application must never hold in the clear.
+ *
+ * The record encrypts these columns; the application — the same numbers, typed by the same person,
+ * minutes earlier — stored them as plain text in a jsonb column, kept them after approval, and
+ * returned them whole to every HR screen. They are the numbers that open a bank account, file a tax
+ * return and prove an identity, so they are encrypted in the application too, shown to staff as
+ * their last four, and cleared from the application once the record holds them.
+ *
+ * `ifscCode` and `bankName` are deliberately NOT here: a branch code identifies a bank, not a
+ * person, and masking it would only stop the desk seeing which bank it is.
+ */
+export const REGISTRATION_SECRET_FIELD_KEYS: readonly RegistrationRecordFieldKey[] = [
+  'panNumber', 'aadhaarNumber', 'bankAccountNumber',
+];
+
+export function isRegistrationSecretField(key: string): boolean {
+  return (REGISTRATION_SECRET_FIELD_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * The same fields with their secrets reduced to a last-four mask, for any response a staff screen
+ * receives. Values that are already masked, empty or not strings are left as they are.
+ */
+export function maskRegistrationFields(
+  fields: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(fields ?? {}) };
+  for (const key of REGISTRATION_SECRET_FIELD_KEYS) {
+    const value = out[key];
+    if (typeof value === 'string' && value.trim() !== '') out[key] = maskTail(value);
+  }
+  return out;
+}
+
+/**
+ * HOW THOSE FIELDS REACH THE RECORD: IN GROUPS THAT FAIL ALONE.
+ *
+ * Approving an application used to hand every one of the fields above to a single
+ * `AssayerService.update`. That call validates as it goes — a PAN already on somebody else, an
+ * IFSC that does not exist, a district that contradicts the pincode — and one refusal threw away
+ * the entire payload. The approval still completed, the person appeared on the roster, and the
+ * onboarding drawer then asked the desk for the PAN, the Aadhaar, the bank account, the emergency
+ * contact and the qualification all over again, from an empty record, for data the candidate had
+ * already typed in. That is the "we are asking for things we already have" report.
+ *
+ * So each group is applied on its own, and a refusal costs that group and nothing else. The
+ * boundaries are not arbitrary — each is a set the update genuinely validates TOGETHER:
+ *
+ *  - `location` must travel as one: coordinates are taken only when latitude AND longitude arrive
+ *    together, and a district is checked against the stored pincode.
+ *  - `bank` is the three things a payout needs; half of them is no more payable than none.
+ *  - `identity` is what the duplicate check looks at, so its refusal is the likeliest one.
+ *
+ * `registration-field-groups.spec.ts` fails if a key on the allow-list is in no group, or in two.
+ */
+export const REGISTRATION_FIELD_GROUPS: ReadonlyArray<{
+  name: 'identity' | 'bank' | 'contact' | 'competence' | 'location';
+  label: string;
+  keys: readonly RegistrationRecordFieldKey[];
+}> = [
+  { name: 'identity', label: 'identity numbers', keys: ['panNumber', 'aadhaarNumber', 'legalName'] },
+  { name: 'bank', label: 'bank details', keys: ['bankAccountNumber', 'ifscCode', 'bankName'] },
+  {
+    name: 'contact',
+    label: 'contact details',
+    keys: ['phone', 'alternatePhone', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation'],
+  },
+  { name: 'competence', label: 'qualification and experience', keys: ['qualification', 'experienceYears'] },
+  { name: 'location', label: 'location', keys: ['latitude', 'longitude', 'district'] },
+];
+
+/**
+ * An application's fields split into the groups above, dropping empty groups.
+ *
+ * Keys not on the allow-list are left out entirely — the allow-list is the rule for what an
+ * application may set, and grouping must never become a way around it.
+ */
+export function groupRegistrationRecordFields(
+  fields: Record<string, unknown>,
+): Array<{ name: string; label: string; values: Record<string, unknown> }> {
+  const out: Array<{ name: string; label: string; values: Record<string, unknown> }> = [];
+  for (const group of REGISTRATION_FIELD_GROUPS) {
+    const values: Record<string, unknown> = {};
+    for (const key of group.keys) {
+      if (Object.prototype.hasOwnProperty.call(fields, key)) values[key] = fields[key];
+    }
+    if (Object.keys(values).length > 0) out.push({ name: group.name, label: group.label, values });
+  }
+  return out;
+}
+
 
 /** Is this key one an application is allowed to carry into the record? */
 export function isRegistrationRecordField(key: string): key is RegistrationRecordFieldKey {

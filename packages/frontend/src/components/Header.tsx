@@ -22,7 +22,7 @@ interface HeaderProps {
 
 const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/dashboard', category: 'Overview', label: 'Dashboard' },
-  { prefix: '/executive-map', category: 'Overview', label: 'Live Map' },
+  { prefix: '/executive-map', category: 'Overview', label: 'Coverage map' },
   { prefix: '/feedback', category: 'Overview', label: 'Support' },
   { prefix: '/projects', category: 'Operations', label: 'Projects' },
   /**
@@ -43,7 +43,7 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/billing', category: 'Business Records', label: 'Billing' },
   { prefix: '/branches', category: 'Business Records', label: 'Branches' },
   { prefix: '/hr', category: 'Business Records', label: 'Workforce' },
-  { prefix: '/documents', category: 'Business Records', label: 'Branch Paperwork' },
+  { prefix: '/documents', category: 'Business Records', label: 'Documents' },
   { prefix: '/data-entry', category: 'Business Records', label: 'Audit Data Entry' },
   { prefix: '/holidays', category: 'Operational Setup', label: 'Holiday Calendar' },
   { prefix: '/rules', category: 'Operational Setup', label: 'Business Rules' },
@@ -66,13 +66,13 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
    * taken from the sidebar rows that lead here (Sidebar.tsx), so the header and the navigation
    * call each page the same thing rather than two things.
    */
-  { prefix: '/falling-behind', category: 'Operations', label: 'Falling Behind' },
+  { prefix: '/falling-behind', category: 'Operations', label: 'Overdue' },
   { prefix: '/admin/approvals', category: 'Administration', label: 'Approvals' },
   { prefix: '/admin/compliance', category: 'Administration', label: 'Security & Compliance' },
   { prefix: '/admin/settings', category: 'Administration', label: 'Platform Settings' },
   { prefix: '/admin/logs', category: 'Administration', label: 'Service Logs' },
   { prefix: '/admin/notifications', category: 'Administration', label: 'Notification Rules' },
-  { prefix: '/admin/rule-bypass', category: 'Administration', label: 'Rule Bypass' },
+  { prefix: '/admin/rule-bypass', category: 'Administration', label: 'Paused rules' },
   { prefix: '/transport-costs', category: 'Operational Setup', label: 'Transport Costs' },
   { prefix: '/zones', category: 'Operational Setup', label: 'Service Areas' },
   { prefix: '/notifications', category: 'My Account', label: 'Notifications' },

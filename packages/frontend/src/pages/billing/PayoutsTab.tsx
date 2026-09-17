@@ -28,7 +28,7 @@ import { TdsReportModal } from './TdsReportModal';
  * a payment; there is no status dropdown. Reimbursements of expense claims appear in the same
  * table as their own rows, because an expense payout is the same act as a fee payout.
  *
- * This tab is also where the assayer-invoicing round STARTS: "Invite all to invoice" (the
+ * This tab is also where the assayer-invoicing round STARTS: "Ask assayers to invoice" (the
  * periodic bulk gesture) and the per-assayer invite put unbilled payouts in front of the
  * assayer — their first sight of money — for confirmation; the invoices themselves are
  * reviewed and approved on the Assayer Invoices tab. A payout riding an active invoice wears
@@ -287,7 +287,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
             title={invoicingDark
               ? 'Assayer invoicing is not enabled on this deployment yet'
               : 'One invoice invitation per assayer with unbilled work — the periodic (~15-day/monthly) billing round'}>
-            <Send size={13} /> {inviteAll.isPending ? 'Inviting…' : 'Invite all to invoice'}
+            <Send size={13} /> {inviteAll.isPending ? 'Inviting…' : 'Ask assayers to invoice'}
           </button>
         )}
         <button onClick={() => setTdsOpen(true)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}

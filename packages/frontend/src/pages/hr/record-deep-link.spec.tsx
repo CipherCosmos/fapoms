@@ -51,8 +51,8 @@ const record = {
   state: 'Kerala',
   lifecycleStatus: 'ACTIVE',
   panNumber: 'ABCDE1234F',
-  // No bank details on purpose: the Pay & terms tab's banner and HR Pay's link are both
-  // about exactly this gap.
+  // No bank details on purpose: the Pay tab's bank card and HR Pay's link are both about exactly
+  // this gap.
   bankAccountNumber: null,
   ifscCode: null,
   managerId: null,
@@ -130,12 +130,28 @@ describe('arriving on the record with ?section=', () => {
     await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
   });
 
-  it('a tab name opens that tab — commercial lands on Pay & terms', async () => {
+  it('a tab name opens that tab — commercial lands on Pay', async () => {
     serveRecord();
     renderRecordAt('/hr/roster/a-1?section=commercial');
 
-    // The banner at the top of the Pay & terms tab, for a record with no bank details.
-    await waitFor(() => expect(screen.getByText('No bank details — cannot be paid')).toBeInTheDocument());
+    // The bank account card at the top of the Pay tab, for a record with no bank details.
+    await waitFor(() => expect(screen.getByText('Cannot be paid yet — missing:')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
+  });
+
+  it('a link to the retired ID card tab opens the ID card window instead of a blank pane', async () => {
+    serveRecord();
+    const base = mockRequest.getMockImplementation()!;
+    mockRequest.mockImplementation((url: string) => (url.endsWith('/id-card/preview')
+      ? Promise.resolve({
+        canDownload: true, blockedBecause: [], gaps: [], issuedOn: '2026-09-16T00:00:00.000Z', validTill: '2026-12-31T00:00:00.000Z',
+        jobTitle: 'Gold Appraiser', fullName: 'Person One', assayerCode: 'AS0001', department: null, location: 'Kochi, Kerala',
+        signatoryName: null, signatoryTitle: null, helplinePhone: null, officeAddress: null,
+      })
+      : base(url)));
+    renderRecordAt('/hr/roster/a-1?section=idcard');
+
+    await waitFor(() => expect(screen.getByTestId('appraiser-id-card')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
   });
 

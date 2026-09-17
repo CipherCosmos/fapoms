@@ -269,7 +269,7 @@ export const BranchDocumentPanel: React.FC<{
                             )}
                             {canSendToOcr && (
                               <button onClick={() => withActing(d.id, () => onSendToOcr(d.id))} disabled={rowBusy} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
-                                <ArrowRightCircle size={11} /> {rowBusy ? '…' : 'Send to OCR'}
+                                <ArrowRightCircle size={11} /> {rowBusy ? '…' : 'Send for scanning'}
                               </button>
                             )}
                             {canUploadExcel && d.assessmentId && (

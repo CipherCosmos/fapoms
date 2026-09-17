@@ -206,6 +206,10 @@ export const queryKeys = {
     applications: (status: string) => ['hr', 'applications', status] as const,
     /** One application's full detail (fields + documents), for the review drawer. */
     applicationDetail: (id: string) => ['hr', 'applications', 'detail', id] as const,
+    /** Assayer record by id. */
+    assayerRecord: (id: string) => ['hr', 'assayer', id] as const,
+    /** Assayer dossier by id (KYC and onboarding documents). */
+    assayerDossier: (id: string) => ['hr', 'assayer', id, 'dossier'] as const,
   },
   documents: {
     all: ['documents'] as const,

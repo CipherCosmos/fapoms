@@ -362,6 +362,16 @@ services:
       # is never mounted into this container.
       DOCKER_API_URL: http://dockerproxy:2375
       PROCESS_ROLE: api
+      # NO ADMIN CREDENTIALS IN THE API. `.env.docker` is loaded whole by `env_file`, so without
+      # these the internet-facing process received the database admin URL (a superuser, which can
+      # switch off the audit tables' append-only triggers), the migration password, and the object
+      # store's ROOT credential. `db-migrate` and `minio` still get them through interpolation;
+      # nothing in the API reads them (see provision.ts, and assertProductionSafeConfig, which
+      # now checks the credential the API signs with rather than demanding root be present).
+      DB_ADMIN_URL: ""
+      FAPOMS_MIGRATION_PASSWORD: ""
+      MINIO_ROOT_USER: ""
+      MINIO_ROOT_PASSWORD: ""
       # Postgres default max_connections is 100. Reserved ~10 for psql/migrations/superuser,
       # leaving 90 to split between this replica and backend-worker below: 20 here (HTTP
       # concurrency; unchanged from the pre-split default) + 40 on the worker (comfortably above
@@ -429,6 +439,16 @@ services:
     env_file: [../.env.docker]
     environment:
       PROCESS_ROLE: worker
+      # NO ADMIN CREDENTIALS IN THE API. `.env.docker` is loaded whole by `env_file`, so without
+      # these the internet-facing process received the database admin URL (a superuser, which can
+      # switch off the audit tables' append-only triggers), the migration password, and the object
+      # store's ROOT credential. `db-migrate` and `minio` still get them through interpolation;
+      # nothing in the API reads them (see provision.ts, and assertProductionSafeConfig, which
+      # now checks the credential the API signs with rather than demanding root be present).
+      DB_ADMIN_URL: ""
+      FAPOMS_MIGRATION_PASSWORD: ""
+      MINIO_ROOT_USER: ""
+      MINIO_ROOT_PASSWORD: ""
       # The SAME runtime identity as the API, and for the same reason. The worker runs every Bull
       # processor and every scheduled cron — retention, the outbox relay, the audit sealer — so a
       # worker still connecting as the old owning role would leave the audit triggers removable by

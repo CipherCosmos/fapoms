@@ -1,4 +1,5 @@
 import { canonicalStateName } from './regions';
+import { stateNameKey } from './utils';
 
 /**
  * Reading a pincode out of an address, and refusing to guess.
@@ -45,14 +46,12 @@ const POSTAL_CIRCLES: Record<string, string[]> = {
 };
 
 /**
- * One comparable form for a state name, whatever spelling it arrived in.
- *
  * `&` and "and" are the same word, and punctuation is noise: this table wrote
  * "Jammu and Kashmir" while `canonicalStateName` answers "Jammu & Kashmir", so every J&K record
- * was reported as a state/pincode conflict when the two agreed perfectly.
+ * was reported as a state/pincode conflict when the two agreed perfectly. The comparison lives in
+ * `utils.ts` because the directory lookups need the same one.
  */
-const stateKey = (value: string): string =>
-  value.toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '');
+const stateKey = stateNameKey;
 
 /**
  * Every form of a state name worth comparing.

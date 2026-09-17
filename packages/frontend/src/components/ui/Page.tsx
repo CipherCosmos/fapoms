@@ -56,6 +56,7 @@ export const Page: React.FC<PageProps> = ({
       // A capped page centres inside the shell's container rather than hugging the sidebar.
       marginInline: width === 'full' ? undefined : 'auto',
       width: '100%',
+      minWidth: 0,
       // `min-height: 0` releases the flex default that refuses to shrink below content, which is
       // what lets an inner pane scroll instead of pushing the page taller.
       ...(fills ? { height: '100%', minHeight: 0 } : null),

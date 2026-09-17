@@ -7,7 +7,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService, RouteSource } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssignmentStatus, AssayerStatus, EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -274,7 +274,9 @@ export class DeployabilityFilter implements CandidateFilter {
   constructor(private readonly ruleBypass: RuleBypassService) {}
 
   async evaluate(assayer: AssayerEntity): Promise<boolean> {
-    if (assayer.isActive && assayer.status === AssayerStatus.ACTIVE) return true;
+    if (assayer.isActive
+        && assayer.status === AssayerStatus.ACTIVE
+        && assayer.lifecycleStatus === AssayerLifecycleStatus.ACTIVE) return true;
     /**
      * A deleted profile is never selectable, bypass or not. Suspending onboarding is a
      * statement about vetting being incomplete; it is not a statement that a record somebody
@@ -574,7 +576,7 @@ const STANDING_EXCLUSION_DETAIL: Record<string, (client: string) => string> = {
   [EmpanelmentStatus.TERMINATED]: (c) => `empanelment TERMINATED by ${c}`,
   [EmpanelmentStatus.NOT_RECOMMENDED]: (c) => `standing NOT_RECOMMENDED for ${c}`,
   [EmpanelmentStatus.RESIGNED]: (c) => `RESIGNED from ${c}`,
-  [EmpanelmentStatus.INACTIVE]: (c) => `empanelment with ${c} is INACTIVE (dormant) — reactivate it on the vetting screen to plan them`,
+  [EmpanelmentStatus.INACTIVE]: (c) => `empanelment with ${c} is INACTIVE (dormant) — reactivate it on their record's Background tab to plan them`,
   [EmpanelmentStatus.DOCUMENTS_PENDING]: (c) => `${c}'s document requirements are still outstanding (DOCUMENTS_PENDING)`,
 };
 
@@ -651,7 +653,7 @@ export class ClientEligibilityFilter implements CandidateFilter {
       context.branchFacts?.noEmpanelmentRowPolicy ??
       (await this.platformSettings.get<string>(NO_EMPANELMENT_ROW_SETTING));
     if (policy === 'ALLOW') return null;
-    return `no empanelment record with ${clientName} — record an Active or Recommended standing on the vetting screen to make them plannable`;
+    return `no empanelment record with ${clientName} — record an Active or Recommended standing on their record's Background tab to make them plannable`;
   }
 }
 

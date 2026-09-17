@@ -154,7 +154,7 @@ export const ExecutiveMap: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 14 }}>
         <div>
           <h2 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, fontFamily: 'var(--font-display)', display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
-            <ShieldAlert size={22} style={{ color: 'var(--accent-primary)' }} /> Executive Command Center
+            <ShieldAlert size={22} style={{ color: 'var(--accent-primary)' }} /> Coverage map
           </h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', margin: '4px 0 0' }}>
             Where the work is, where the people are, and where those two don’t line up.

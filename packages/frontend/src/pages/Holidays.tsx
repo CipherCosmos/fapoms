@@ -244,7 +244,7 @@ export const Holidays: React.FC = () => {
               {/* Most of a year's calendar is last year's calendar with new dates. Retyping
                   forty holidays each January is where the typos and the omissions came from. */}
               <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
-                <CopyPlus size={14} /> Copy from {yearFilter - 1}
+                <CopyPlus size={14} /> Copy {yearFilter - 1}’s holidays
               </button>
               <button onClick={() => handleOpenCreate()} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
                 <Plus size={14} /> Add Holiday

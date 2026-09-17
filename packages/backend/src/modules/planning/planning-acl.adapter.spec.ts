@@ -6,6 +6,7 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AssayerService } from '../assayer/assayer.service';
+import { AssayerLifecycleStatus, AssayerStatus } from '@fapoms/shared';
 
 describe('PlanningAntiCorruptionLayer', () => {
   let acl: PlanningAntiCorruptionLayer;
@@ -119,6 +120,20 @@ describe('PlanningAntiCorruptionLayer', () => {
 
       const call = mockAssayerRepo.find.mock.calls[0][0];
       expect(call.where.region).toBeUndefined();
+    });
+
+    it('excludes assayers not at ACTIVE lifecycle status from the planning pool', async () => {
+      mockAssayerRepo.find.mockClear();
+      await acl.getAvailableAssayers(new Date());
+      expect(mockAssayerRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+            status: AssayerStatus.ACTIVE,
+            isActive: true,
+          }),
+        }),
+      );
     });
   });
 

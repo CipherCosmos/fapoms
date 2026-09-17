@@ -28,7 +28,9 @@ jest.mock('react-router-dom', () => ({
 }));
 jest.mock('./AssayerVettingTab', () => ({
   AssayerVettingTab: () => null,
-  STANDING_LABELS: {},
+  // Real, because the Summary's bank-standing card reads both to word a standing and to lock it.
+  STANDING_LABELS: jest.requireActual('./AssayerVettingTab').STANDING_LABELS,
+  HARD_BLOCKED_STANDINGS: jest.requireActual('./AssayerVettingTab').HARD_BLOCKED_STANDINGS,
   // The real rule, not a stub of it: `standingStance` is what decides whether a standing chip on
   // the record reads as refused, not-ready or fine, and it now answers that from the same
   // `standingAllowsPlanning` the planner's gate uses. A stub that always says "fine" would let
@@ -152,8 +154,8 @@ const serveWithDossier = (row: ReturnType<typeof record>, dossier: Record<string
   });
 };
 
-/** The dossier strip ("Banks & standing") only appears once `dossierGlance` has actually loaded — waiting for it is how a test avoids clicking a move button before the substance it should show is in. */
-const waitForDossier = () => waitFor(() => expect(screen.getByText(/Banks & standing/)).toBeInTheDocument());
+/** The ID documents card only draws once the dossier has actually loaded — waiting for it is how a test avoids clicking a move button before the substance it should show is in. */
+const waitForDossier = () => waitFor(() => expect(screen.getByTestId('kyc-readiness-card')).toBeInTheDocument());
 
 const renderRecord = () => render(
   <AssayerRecord assayerId="a-1" canManage onClose={jest.fn()} onChanged={jest.fn()} />,
@@ -269,13 +271,11 @@ describe('AssayerRecord — the lifecycle as next steps', () => {
     serve(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }));
     renderRecord();
 
-    // Twice on purpose: once in the header (every tab, every viewer — see the "Next:" line) and
-    // once leading the Summary tab's "What happens next" section (canManage only, above the
-    // buttons). Both have to say the planner's exact words, so both are asserted rather than
-    // picking one and leaving the other undefended.
+    // Once, leading "What happens next". The header used to repeat it and the joining-steps bar
+    // says the step too — three statements of one fact on one screen was the clutter.
     await waitFor(() => expect(
       screen.getAllByText(/in training — mark training complete on the HR roster to activate/),
-    ).toHaveLength(2));
+    ).toHaveLength(1));
   });
 
   it('moves exactly one stage per press, and no further', async () => {
@@ -415,11 +415,12 @@ describe('AssayerRecord — plain words', () => {
 
     renderRecord();
 
-    // "VSTS: none" and "Credit: GOOD (742)" named nothing a reader could look up. VSTS appeared
-    // twice — the banks strip and the "Who they are" caption — and both were the abbreviation.
-    await waitFor(() => expect(screen.getAllByText(/Vault system code/)).toHaveLength(2));
-    expect(screen.getByText(/CIBIL credit score/)).toBeInTheDocument();
+    // "VSTS: none" named nothing a reader could look up. It is spelled out, and said once — the
+    // banks strip that repeated it (and the credit score, which lives with the background check)
+    // is gone from the Summary.
+    await waitFor(() => expect(screen.getAllByText(/Vault system code/)).toHaveLength(1));
     expect(screen.queryByText(/VSTS/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Banks & standing/)).not.toBeInTheDocument();
   });
 });
 
@@ -731,7 +732,7 @@ describe('AssayerRecord — rehire', () => {
  * and none of the three refuses the move; proceeding is always still one more click away.
  */
 describe('AssayerRecord — substance before a forward onboarding move', () => {
-  it('warns when not one document has been checked, before moving to background verification', async () => {
+  it('blocks moving to background verification when required documents have not been verified', async () => {
     serveWithDossier(
       record({ lifecycleStatus: AssayerLifecycleStatus.DOCUMENT_VERIFICATION }),
       { onboarding: Array.from({ length: 21 }, (_, i) => doc({ requirement: `REQ_${i}`, label: `Document ${i}` })) },
@@ -742,24 +743,42 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move to Background Verification' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(
-      'No documents have been checked yet — 0 of 21 on their dossier are verified. Move them on anyway?',
-    )).toBeInTheDocument();
+    expect(within(dialog).getByText(/Cannot advance to Background Verification/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Required identity documents/i)).toBeInTheDocument();
 
-    // Proceeding is still allowed — this is an informed confirm, not a gate.
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Background Verification' }));
-    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
-    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
-    expect(JSON.parse(options.body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION });
+    // Move is strictly blocked — clicking Understood dismisses without making the API call
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Understood' }));
+    expect(mockRequest).not.toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything());
   });
 
-  it('does not interrupt the move once at least one document has actually been checked', async () => {
+  it('blocks moving to background verification if PAN is unverified even if Aadhaar is verified', async () => {
     serveWithDossier(
       record({ lifecycleStatus: AssayerLifecycleStatus.DOCUMENT_VERIFICATION }),
       {
         onboarding: [
           doc({ requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true, verificationStatus: 'VERIFIED' }),
           doc({ requirement: 'PAN_CARD', label: 'PAN card', identity: true }),
+        ],
+      },
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Background Verification' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Cannot advance to Background Verification/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/PAN card/i)).toBeInTheDocument();
+    expect(mockRequest).not.toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything());
+  });
+
+  it('does not interrupt the move once all required identity documents are actually verified', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.DOCUMENT_VERIFICATION }),
+      {
+        onboarding: [
+          doc({ requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true, verificationStatus: 'VERIFIED' }),
+          doc({ requirement: 'PAN_CARD', label: 'PAN card', identity: true, verificationStatus: 'VERIFIED' }),
         ],
       },
     );
@@ -815,7 +834,7 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('lists the record\'s remaining critical gaps before activating, with the identity-gate note', async () => {
+  it('says plainly that Active is refused without PAN and bank details, instead of promising it will proceed', async () => {
     serveWithDossier(
       record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING, panNumber: null, bankAccountNumber: null }),
       {},
@@ -826,10 +845,26 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move to Active' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(
-      'Still missing: PAN, Bank account. The identity gate is set to warn, so activation will '
-      + 'proceed — these gaps stay on their record.',
-    )).toBeInTheDocument();
+    expect(within(dialog).getByText('Person One cannot be made Active yet')).toBeInTheDocument();
+    expect(within(dialog).getByText('Still missing: PAN, Bank account. Fill these in on their details first.')).toBeInTheDocument();
+
+    // The way forward is the fix, not the move: it opens their details for editing and sends nothing.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fill them in' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save changes/ })).toBeInTheDocument());
+    expect(mockRequest).not.toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything());
+  });
+
+  it('refuses Active without a map location too, the other thing the server will not activate without', async () => {
+    serveWithDossier(record({ lifecycleStatus: AssayerLifecycleStatus.ON_LEAVE, latitude: null, longitude: null }), {});
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Active' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Still missing: Map location. Fill these in on their details first.')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fill them in' }));
+    expect(mockRequest).not.toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything());
   });
 
   it('folds in an unverified identity document even when the record\'s own fields are all filled in', async () => {
@@ -849,9 +884,9 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(
-      'Still missing: Aadhaar — front. The identity gate is set to warn, so activation will '
-      + 'proceed — these gaps stay on their record.',
+      'Not done yet: Aadhaar — front. These stay listed on their record until they are done.',
     )).toBeInTheDocument();
+    expect(dialog.textContent).not.toMatch(/identity gate/i);
   });
 
   it('says everything needed is on file when nothing — record or identity — is missing', async () => {
@@ -892,31 +927,93 @@ describe('AssayerRecord — substance before a forward onboarding move', () => {
 });
 
 /**
- * THE ONBOARDING NEXT STEP, ON EVERY TAB.
+ * THE JOINING STEP, ON EVERY TAB.
  *
- * `ONBOARDING_NEXT_STEP` (@fapoms/shared) is the same sentence the planner prints when it refuses
- * an unfinished joiner work. The Summary tab's own "What happens next" section already led with
- * it, but only while that tab was open and only for `canManage` — so a record reached on Vetting
- * or Documents, or by a viewer who cannot manage it, showed nothing. The header renders for every
- * tab and does not check `canManage`, because reading the next step is not the same act as taking
- * it.
+ * The bar under the header renders on every tab and for every viewer, because reading which step
+ * someone is on is not the same act as moving them. Each step names the tab where its work is
+ * done; it replaced a header "Next:" line that repeated the Summary's own sentence.
  */
-describe('AssayerRecord — onboarding guidance in the header', () => {
-  it('names the next step in the header for someone mid-onboarding', async () => {
+describe('AssayerRecord — the joining steps bar', () => {
+  it('names the step someone is on, in the words of the tab where it is done', async () => {
     serve(record({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }));
     renderRecord();
 
-    await waitFor(() => expect(
-      screen.getByText(/Next: they are in background verification — complete it on the HR roster/),
-    ).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Step 3 of 5: Background check')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Go to Background/ })).toBeInTheDocument();
+    expect(screen.queryByText(/BGV|Pipeline|Doc Check/)).not.toBeInTheDocument();
   });
 
-  it('says nothing extra once somebody is past onboarding', async () => {
+  it('never sends a trainee to the score tab — training has no tab, its next action is on the Summary', async () => {
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }));
+    renderRecord();
+
+    await waitFor(() => expect(screen.getByText('Step 4 of 5: Training')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /Go to/ })).not.toBeInTheDocument();
+  });
+
+  it('is gone once somebody is Active — there is nothing left to join', async () => {
     serve(record({ lifecycleStatus: AssayerLifecycleStatus.ACTIVE }));
     renderRecord();
 
     await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
-    expect(screen.queryByText(/^Next:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Joining steps')).not.toBeInTheDocument();
+  });
+});
+
+describe('AssayerRecord — the ID card', () => {
+  const terms = {
+    canDownload: false,
+    blockedBecause: ['they are not Active yet'],
+    gaps: [],
+    issuedOn: '2026-09-16T00:00:00.000Z',
+    validTill: '2026-12-31T00:00:00.000Z',
+    jobTitle: 'Gold Appraiser',
+    fullName: 'Person One',
+    assayerCode: 'AS0001',
+    department: null,
+    location: 'Kochi, Kerala',
+    signatoryName: null,
+    signatoryTitle: null,
+    helplinePhone: null,
+    officeAddress: null,
+  };
+
+  it('opens one window from the header, drawn from what the server says the card prints, and says why it cannot be issued', async () => {
+    mockRequest.mockImplementation((url: string) => {
+      if (url === '/assayers/a-1') return Promise.resolve(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }));
+      if (url === '/assayers/a-1/id-card/preview') return Promise.resolve(terms);
+      return Promise.reject(new Error('not served in this test'));
+    });
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    // Not on the Summary itself any more — only in the window.
+    expect(screen.queryByTestId('appraiser-id-card')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'ID card' }));
+
+    await waitFor(() => expect(screen.getByTestId('appraiser-id-card')).toBeInTheDocument());
+    expect(screen.getByTestId('id-card-blocked')).toHaveTextContent('they are not Active yet');
+    expect(screen.queryByRole('button', { name: /Download PDF/ })).not.toBeInTheDocument();
+    // Nothing the card cannot back up.
+    expect(screen.queryByText(/Verified|Scan ID|Narayanan|Bullion|Authenticated/)).not.toBeInTheDocument();
+    expect(screen.getByText(/No signatory name is set/)).toBeInTheDocument();
+  });
+
+  it('offers the download only when the server says the card can be issued', async () => {
+    mockRequest.mockImplementation((url: string) => {
+      if (url === '/assayers/a-1') return Promise.resolve(record());
+      if (url === '/assayers/a-1/id-card/preview') {
+        return Promise.resolve({ ...terms, canDownload: true, blockedBecause: [], signatoryName: 'A. Signer' });
+      }
+      return Promise.reject(new Error('not served in this test'));
+    });
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'ID card' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Download PDF/ })).toBeInTheDocument());
+    expect(screen.getByText('A. Signer')).toBeInTheDocument();
+    expect(screen.queryByTestId('id-card-blocked')).not.toBeInTheDocument();
   });
 });
 
@@ -987,16 +1084,16 @@ describe('AssayerRecord — deployment readiness is the server\'s verdict', () =
     renderRecord();
     await waitForDossier();
 
-    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Blocked from Deployment');
+    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Not yet');
 
     const list = screen.getByTestId('deployment-blockers-list');
     for (const blocker of SERVER_BLOCKERS) {
       expect(within(list).getByText(blocker)).toBeInTheDocument();
     }
 
-    // Nothing that stops work is filed as an "attention", and nothing on the card says they are fine.
+    // Nothing that stops work is filed as merely "worth knowing", and nothing on the card says they are fine.
     expect(screen.queryByTestId('deployment-warnings-list')).not.toBeInTheDocument();
-    expect(screen.queryByText(/meets all baseline operational and compliance gates/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nothing is stopping them/)).not.toBeInTheDocument();
   });
 
   /**
@@ -1013,8 +1110,8 @@ describe('AssayerRecord — deployment readiness is the server\'s verdict', () =
     await waitForDossier();
 
     const badge = screen.getByTestId('readiness-verdict-badge');
-    expect(badge).toHaveTextContent('Readiness Unavailable');
-    expect(badge).not.toHaveTextContent('Deployable');
+    expect(badge).toHaveTextContent('Not known');
+    expect(badge).not.toHaveTextContent('Yes');
   });
 
   /**
@@ -1027,7 +1124,7 @@ describe('AssayerRecord — deployment readiness is the server\'s verdict', () =
     renderRecord();
     await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
 
-    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Readiness Unavailable');
+    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Not known');
     expect(screen.getByTestId('readiness-unavailable-note')).toBeInTheDocument();
   });
 
@@ -1053,12 +1150,12 @@ describe('AssayerRecord — deployment readiness is the server\'s verdict', () =
   });
 
   /** And the green badge, only when the server actually said yes. */
-  it('draws Deployable only on the server\'s own yes', async () => {
+  it('says yes only on the server\'s own yes', async () => {
     serveWithDossier(record(), { deployable: true, deploymentBlockers: [] });
     renderRecord();
     await waitForDossier();
 
-    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Deployable');
+    expect(screen.getByTestId('readiness-verdict-badge')).toHaveTextContent('Yes');
     expect(screen.queryByTestId('deployment-blockers-list')).not.toBeInTheDocument();
   });
 });

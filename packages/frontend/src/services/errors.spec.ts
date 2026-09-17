@@ -235,3 +235,34 @@ describe('the field keys a validation failure names', () => {
     expect(userMessage(validation([human]))).toBe(human);
   });
 });
+
+/**
+ * THE GENERIC SENTENCE THAT REPLACED A SPECIFIC ONE.
+ *
+ * Activation refused with "Sunita Rao cannot be activated yet: PAN card has not been checked against
+ * the original. Open their Documents tab…". The translation table caught the code and put
+ * "Mandatory KYC identity documents (PAN / Aadhaar) must be verified…" on screen instead — which
+ * neither says which of the two documents, nor where to go to fix it.
+ */
+describe('a gate that already names the person and the gap', () => {
+  const serverSentence = 'Sunita Rao cannot be activated yet: PAN card has not been checked against the original. '
+    + 'Open their Documents tab, check the scan against what is recorded, and mark it verified.';
+
+  it('keeps the server’s own sentence', () => {
+    const err = fromResponse(400, { message: serverSentence, code: 'IDENTITY_NOT_VERIFIED' });
+    expect(userMessage(err)).toContain('PAN card has not been checked');
+    expect(userMessage(err)).toContain('Documents tab');
+    expect(userMessage(err)).not.toMatch(/Mandatory KYC/);
+  });
+
+  it('still falls back to the table when the server sent nothing a person can read', () => {
+    const err = fromResponse(400, { code: 'IDENTITY_NOT_VERIFIED' });
+    expect(userMessage(err)).toMatch(/Mandatory KYC identity documents/);
+  });
+
+  /** The preference is per code: a code without it keeps the table's wording, as before. */
+  it('leaves every other code translated exactly as it was', () => {
+    const err = fromResponse(403, { message: 'Account suspended for review.', code: 'ACCOUNT_ON_HOLD' });
+    expect(userMessage(err)).toMatch(/placed on hold or suspended/);
+  });
+});

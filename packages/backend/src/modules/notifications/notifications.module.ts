@@ -24,6 +24,9 @@ import { NotificationSettingsService } from './notification-settings.service';
 import { NotificationAdminController } from './notification-admin.controller';
 import { NotificationTenancyService } from './notification-tenancy';
 
+import { EmailTemplateLoader } from '../../infrastructure/notifications/email-template-loader';
+import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -41,11 +44,15 @@ import { NotificationTenancyService } from './notification-tenancy';
   providers: [
     NotificationService, PushNotificationService, NotificationDispatchService,
     NotificationDeliveryWorker, NotificationSweeper, FcmProvider, EmailProvider, SmsProvider, NotificationSettingsService,
+    EmailTemplateLoader, EmailTemplateRenderer,
     // Deliberately a plain singleton, not request-scoped: dispatch is reached from Bull workers
     // and cron scans where there is no request to be scoped to. See its own comment.
     NotificationTenancyService,
   ],
-  exports: [NotificationService, PushNotificationService, NotificationDispatchService, EmailProvider, SmsProvider, NotificationSettingsService],
+  exports: [
+    NotificationService, PushNotificationService, NotificationDispatchService, EmailProvider, SmsProvider, NotificationSettingsService,
+    EmailTemplateLoader, EmailTemplateRenderer,
+  ],
 })
 export class NotificationsModule implements OnModuleInit {
   private readonly logger = new Logger(NotificationsModule.name);

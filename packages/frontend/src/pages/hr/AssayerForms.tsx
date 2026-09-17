@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import {
   INDIAN_STATES, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason,
-  isValidIfsc, CRITICAL_ASSAYER_RECORD_FIELDS,
+  isValidIfsc, CRITICAL_ASSAYER_RECORD_FIELDS, matchIndianState, stateNameKey, pincodeFromAddress,
   todayDateKey, EMERGENCY_CONTACT_RELATIONS as EMERGENCY_RELATION_NAMES,
 } from '@fapoms/shared';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
@@ -284,7 +284,27 @@ export const resolvePincode = async (pincode: string): Promise<{ state: string; 
     const data = await res.json();
     const ok = data?.[0];
     const po = ok && ok.Status === 'Success' ? ok.PostOffice?.[0] : null;
-    return po ? { state: String(po.State || ''), district: String(po.District || '') } : null;
+    if (!po) return null;
+
+    /*
+      THE ANSWER IS ONLY USABLE IF THE FORM CAN HOLD IT.
+
+      India Post writes "Jammu & Kashmir"; the state `<select>` on every one of these forms is
+      built from `INDIAN_STATES`, which offers "Jammu and Kashmir". Filling the first into a
+      select that has only the second left the box blank while the operator watched it fill, and
+      `addressConflict` then read the two spellings as two different states and blocked the save.
+      `matchIndianState` maps a directory answer onto the option that exists, or onto nothing —
+      and nothing means the operator types the address, which is the right way to fail.
+
+      The circle check is the second guard: the first digit of a pincode fixes its postal circle,
+      so an answer from outside that circle contradicts the number it was looked up by. Neither
+      half of such a pair is safe to fill in.
+    */
+    const state = matchIndianState(String(po.State || ''));
+    const district = String(po.District || '');
+    if (!state || !district) return null;
+    if (pincodeFromAddress(pincode, state).reason) return null;
+    return { state, district };
   } catch { return null; /* can't verify client-side; backend enforces */ }
 };
 
@@ -336,7 +356,11 @@ export const addressConflict = (
   state: string,
   district: string,
 ): { message: string; blocking: boolean } | null => {
-  if (state && po.state && state.trim().toLowerCase() !== po.state.trim().toLowerCase()) {
+  // Compared as states, not as strings: "Jammu and Kashmir" and "Jammu & Kashmir" are one place,
+  // and reading them as two blocked the save on a record whose state was perfectly right.
+  const typed = stateNameKey(state.trim());
+  const official = stateNameKey(po.state.trim());
+  if (typed && official && typed !== official) {
     return {
       message: `Pincode ${pincode} is in ${po.state}, but the state is set to ${state}. Change one of the two before saving.`,
       blocking: true,

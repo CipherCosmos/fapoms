@@ -1552,7 +1552,7 @@ export class RosterImportService {
       issues.push({
         sourceSheet: sheet, sourceRow, sourceColumn: 'CIBIL  date', rawValue: String(sheetCheckedOn),
         reason: `A background check dated ${new Date(existing.checkedOn).toISOString().slice(0, 10)} is already on file — `
-          + 'this older row from the sheet was not applied. Record a new check in the vetting screen instead.',
+          + 'this older row from the sheet was not applied. Record a new check on the Background tab of their record instead.',
       });
       return 0;
     }

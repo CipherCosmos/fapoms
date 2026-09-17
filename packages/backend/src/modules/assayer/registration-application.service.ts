@@ -1,4 +1,6 @@
-import { Injectable, Inject, Logger, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable, Inject, Logger, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
@@ -12,12 +14,19 @@ import {
   ApplicationSource,
   ASSAYER_ERROR_CODES,
   pickRegistrationRecordFields,
+  groupRegistrationRecordFields,
+  REGISTRATION_SECRET_FIELD_KEYS,
+  maskRegistrationFields,
+  looksMasked,
   pickEmploymentTermFields,
   mergedRegistrationView,
   missingRegistrationFields,
   isValidPan,
   isValidIfsc,
   isValidAadhaar,
+  normalisePhone,
+  dateOfBirthProblem,
+  maskTail,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AssayerApplicationEntity } from './assayer-application.entity';
@@ -29,10 +38,14 @@ import { RosterRecordsService } from './roster-records.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
+import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { hashCode, numericCode, hashesEqual } from '../auth/otp-codes';
+import { fieldFingerprint, encryptField, decryptField, isEncrypted } from '../../infrastructure/security/field-encryption';
 import { assertUploadAllowed, SCAN_UPLOAD_TYPES } from '../document/upload-validation';
+import { lookupIfsc } from '../geo/ifsc-lookup.helper';
+import { lookupPincodeDetailed } from '../geo/pincode-lookup.helper';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
 import type { Readable } from 'stream';
@@ -42,6 +55,53 @@ const OTP_TTL_SECONDS = 300;
 const OTP_VERIFIED_TTL_SECONDS = 24 * 60 * 60;
 const OTP_SEND_WINDOW_SECONDS = 60 * 60;
 const OTP_SEND_MAX_PER_WINDOW = 5;
+
+/**
+ * The floor on the reason for admitting a candidate no interview ever saw.
+ *
+ * Matched by `OpenWithoutInterviewDto`'s `@MinLength(10)` so a caller that skips the controller
+ * meets the same bar. Ten characters is not a judgement of quality — nothing can be — it is the
+ * length at which "ok", "walk in" and a stray keypress stop qualifying as a recorded decision.
+ */
+const MIN_NO_INTERVIEW_REASON_LENGTH = 10;
+
+/**
+ * Why a candidate is in the pipeline with no interview behind them.
+ *
+ * Stored in `extendedProfile.openedWithoutInterview` rather than in a column of its own: the
+ * absence of an interview is already visible as a null `interviewId`, and what was missing was
+ * the reason for it. `getApplication` hands this to the review drawer so the reviewer reads the
+ * decision — and who made it — beside the application it excused.
+ */
+export interface OpenedWithoutInterviewStamp {
+  reason: string;
+  byId: string;
+  byName: string | null;
+  /** ISO-8601, because this rides in jsonb where a `Date` would come back as a string anyway. */
+  at: string;
+}
+
+/**
+ * The stamp, read back out of untyped jsonb.
+ *
+ * Shape-checked rather than cast: `extendedProfile` is a column anything can have been written
+ * into, including by an older build, and a half-written stamp rendered as "Added without an
+ * interview — undefined" would be a worse answer than no banner at all.
+ */
+function readOpenedWithoutInterview(
+  application: Pick<AssayerApplicationEntity, 'extendedProfile'>,
+): OpenedWithoutInterviewStamp | null {
+  const raw = (application.extendedProfile as Record<string, unknown> | null)?.openedWithoutInterview;
+  if (!raw || typeof raw !== 'object') return null;
+  const stamp = raw as Partial<OpenedWithoutInterviewStamp>;
+  if (typeof stamp.reason !== 'string' || !stamp.reason) return null;
+  return {
+    reason: stamp.reason,
+    byId: typeof stamp.byId === 'string' ? stamp.byId : '',
+    byName: typeof stamp.byName === 'string' ? stamp.byName : null,
+    at: typeof stamp.at === 'string' ? stamp.at : '',
+  };
+}
 
 /**
  * The documents the Appraiser Recruitment spec asks for beyond the common set, split by
@@ -116,6 +176,61 @@ function filterExtendedProfile(
   return Object.keys(fields).length > 0 ? { ...rest, fields } : { ...rest };
 }
 
+
+/**
+ * THE APPLICATION HOLDS THE SAME THREE NUMBERS THE RECORD ENCRYPTS.
+ *
+ * `assayers` has encrypted `pan_number`, `aadhaar_number` and `bank_account_number` since the
+ * column encryption landed. The application — the same numbers, typed by the same person, minutes
+ * earlier — kept them as plain text in a jsonb column, went on holding them after approval, and
+ * returned them whole to every HR list and detail response. An audit found them sitting in the live
+ * database in the clear.
+ *
+ * So they are sealed on the one write path (`mergeRecordFields`), opened again only where the
+ * plaintext is genuinely needed — the duplicate check, promotion, and the candidate's own form —
+ * and masked everywhere a staff screen can see them.
+ */
+function sealSecretFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...fields };
+  for (const key of REGISTRATION_SECRET_FIELD_KEYS) {
+    const value = out[key];
+    if (typeof value !== 'string' || value.trim() === '' || isEncrypted(value)) continue;
+    out[key] = encryptField(value.trim());
+  }
+  return out;
+}
+
+function openSecretFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...fields };
+  for (const key of REGISTRATION_SECRET_FIELD_KEYS) {
+    const value = out[key];
+    if (typeof value === 'string' && isEncrypted(value)) out[key] = decryptField(value);
+  }
+  return out;
+}
+
+/** The stored answers with their secrets readable — for promotion, duplicate checks and the candidate. */
+function openProfile(profile: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  if (!profile) return null;
+  const fields = (profile as { fields?: Record<string, unknown> }).fields;
+  if (!fields) return { ...profile };
+  return { ...profile, fields: openSecretFields(fields) };
+}
+
+/** The stored answers as a staff screen may see them: last four digits, never the number. */
+function maskProfile(profile: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  if (!profile) return null;
+  const fields = (profile as { fields?: Record<string, unknown> }).fields;
+  if (!fields) return { ...profile };
+  return { ...profile, fields: maskRegistrationFields(openSecretFields(fields)) };
+}
+
+/** An application with its stored answers masked, for any response staff receive. */
+function maskApplication<T extends { extendedProfile?: unknown }>(application: T): T {
+  if (!application?.extendedProfile) return application;
+  return { ...application, extendedProfile: maskProfile(application.extendedProfile as Record<string, unknown>) } as T;
+}
+
 /**
  * What a reviewer may add when they approve — see `approve()` for why the three groups are kept
  * apart rather than merged into one bag of fields.
@@ -129,6 +244,8 @@ export interface ApproveApplicationInput {
   commercial?: Record<string, unknown>;
   /** First client standings. Without at least one, nobody can be given work for anybody. */
   empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+  allowSharedContact?: boolean;
+  sharedContactReason?: string;
 }
 
 export interface UpdateApplicationDraftDto {
@@ -194,6 +311,26 @@ export interface StaffApplicationPatch extends UpdateApplicationDraftDto {
  *    where an incomplete file gets caught, matching how the ungated HR-desk wizard next to this
  *    also never gates Finish on documents.
  */
+/**
+ * What a submitted application's registration link may still show: enough to tell the candidate
+ * where they stand, and none of what they told us. See `hydrate`.
+ */
+function submittedApplicationView(application: AssayerApplicationEntity): AssayerApplicationEntity {
+  return {
+    id: application.id,
+    status: application.status,
+    fullName: application.fullName,
+    email: application.email,
+    // The page may say which number HR will call; the last four identify it well enough.
+    mobile: application.mobile ? maskTail(application.mobile) : application.mobile,
+    employmentCategory: application.employmentCategory,
+    consentAcceptedAt: application.consentAcceptedAt,
+    createdAt: application.createdAt,
+    updatedAt: application.updatedAt,
+    extendedProfile: null,
+  } as unknown as AssayerApplicationEntity;
+}
+
 @Injectable()
 export class RegistrationApplicationService {
   private readonly logger = new Logger(RegistrationApplicationService.name);
@@ -221,6 +358,7 @@ export class RegistrationApplicationService {
     private readonly cache: CacheService,
     private readonly settings: PlatformSettingsService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
+    @Optional() private readonly templateRenderer?: EmailTemplateRenderer,
   ) {}
 
   // ── Invite creation ──────────────────────────────────────────────────────
@@ -265,16 +403,41 @@ export class RegistrationApplicationService {
     if (!application.email) return false;
     const link = this.inviteLink(rawToken);
     const greeting = application.fullName ? `Hello ${application.fullName},` : 'Hello,';
+    let subject = 'Your Appraiser registration link';
+    let text = `${greeting}\n\n${intro}\n\n${link}`;
+    let html = renderEmailHtml({
+      title: 'Complete Your Registration',
+      bodyLines: [
+        greeting,
+        intro,
+        'Click the button below to complete your profile and upload verification documents from your phone or computer.',
+      ],
+      linkUrl: link,
+      linkLabel: 'Complete Registration',
+      securityNotice: 'This registration link is personalized for you. Do not forward or share it.',
+    });
+
+    if (this.templateRenderer) {
+      try {
+        const rendered = await this.templateRenderer.render('registration-invite', {
+          fullName: application.fullName || 'Candidate',
+          inviteUrl: link,
+          logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+          companyName: 'Sumeru Global',
+        });
+        subject = rendered.subject;
+        text = rendered.text;
+        html = rendered.html;
+      } catch (err: any) {
+        this.logger.warn(`Template render failed for registration-invite: ${err.message}`);
+      }
+    }
+
     const result = await this.emailProvider.send({
       to: application.email,
-      subject: 'Your Appraiser registration link',
-      text: `${greeting}\n\n${intro}\n\n${link}`,
-      html: renderEmailHtml({
-        title: 'Complete your registration',
-        bodyLines: [greeting, intro],
-        linkUrl: link,
-        linkLabel: 'Continue registration',
-      }),
+      subject,
+      text,
+      html,
     });
     if (!result?.success) {
       this.logger.warn(
@@ -323,6 +486,116 @@ export class RegistrationApplicationService {
       order: { createdAt: 'DESC' },
     });
     return found.find((a) => !APPLICATION_TERMINAL_STATUSES.includes(a.status)) ?? null;
+  }
+
+  /**
+   * Is this number already somebody else's — on the roster, or on another live application?
+   *
+   * TWO EXCLUSIONS, AND BOTH ARE THE DIFFERENCE BETWEEN A CHECK AND A WALL.
+   *
+   * `excludeApplicationId` keeps an application from colliding with itself. `excludeAssayerId` is
+   * the one that was missing, and it made the candidate-facing page unusable: approving somebody
+   * CREATES an assayer carrying their number, so from that moment their own application matched
+   * the roster row it had just produced, and every OTP request, verification and submit answered
+   * "This mobile number is already registered with someone else" — about them, to them. Callers
+   * pass `application.promotedAssayerId`.
+   *
+   * `isActive` matters for the same reason it does on the identifier check: a soft-deleted ghost
+   * must not veto a live registration.
+   *
+   * Two sentences come back, because there are two audiences. `message` is candidate-safe and
+   * names nobody — whose number it is is somebody else's identity, and the public form is not
+   * entitled to it. `detail` names the person and their code for the desk, which is the only way
+   * a clerk can tell a real duplicate from a seeded row or a number typed into two records.
+   */
+  async checkMobileConflict(
+    phone: string,
+    organizationId?: string | null,
+    excludeApplicationId?: string,
+    excludeAssayerId?: string | null,
+  ): Promise<{
+    conflict: boolean; target: 'ASSAYER' | 'APPLICATION'; message: string; detail: string;
+    assayerCode?: string; displayName?: string;
+  } | null> {
+    const raw = (phone ?? '').trim();
+    if (!raw) return null;
+    const normalized = normalisePhone(raw) ?? raw.replace(/\D/g, '').slice(-10);
+    if (!normalized || normalized.length < 6) return null;
+
+    const variants = Array.from(new Set([
+      normalized,
+      `+91${normalized}`,
+      `91${normalized}`,
+      `0${normalized}`,
+      raw,
+    ])).filter(Boolean);
+
+    // 1. Already on the roster — but not counting this application's own promoted record, and not
+    //    counting anybody soft-deleted off the roster.
+    if (this.assayers && typeof this.assayers.findOne === 'function') {
+      for (const v of variants) {
+        const match = await this.assayers.findOne({
+          where: {
+            phone: v,
+            isActive: true,
+            ...(organizationId ? { organizationId } : {}),
+          } as any,
+        });
+        // `excludeAssayerId` only excuses a match when it is actually set: comparing two
+        // undefineds would read every conflict as "that is just them" and wave it through.
+        if (match && (!excludeAssayerId || match.id !== excludeAssayerId)) {
+          const who = [match.displayName, match.assayerCode ? `(${match.assayerCode})` : null]
+            .filter(Boolean).join(' ');
+          return {
+            conflict: true,
+            target: 'ASSAYER',
+            assayerCode: match.assayerCode ?? undefined,
+            displayName: match.displayName ?? undefined,
+            message: 'This mobile number is already in use by somebody on our roster. If it is '
+              + 'your own number, contact the office — they can sort it out.',
+            detail: who
+              ? `${raw} is already on the roster as ${who}.`
+              : `${raw} is already on the roster.`,
+          };
+        }
+      }
+    }
+
+    // 2. Check if already claimed by another active registration application
+    if (this.applications && typeof this.applications.findOne === 'function') {
+      for (const v of variants) {
+        const match = await this.applications.findOne({
+          where: {
+            mobile: v,
+            ...(organizationId ? { organizationId } : {}),
+          } as any,
+        });
+        if (match && (!excludeApplicationId || match.id !== excludeApplicationId)
+          && match.status !== ApplicationStatus.REJECTED) {
+          return {
+            conflict: true,
+            target: 'APPLICATION',
+            displayName: match.fullName ?? undefined,
+            message: 'This mobile number is already being used by another application. If it is '
+              + 'your own number, contact the office — they can sort it out.',
+            detail: match.fullName
+              ? `${raw} is already on an open application for ${match.fullName}.`
+              : `${raw} is already on another open application.`,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async checkPhoneForToken(rawToken: string, phone: string) {
+    const application = await this.findByRawToken(rawToken);
+    const conflict = await this.checkMobileConflict(phone, application.organizationId, application.id, application.promotedAssayerId);
+    if (!conflict) return { conflict: false as const };
+    // The rulebook's own candidate-safe sentence, not a fourth copy of it: this screen is the
+    // candidate's, so it says there is a clash and never whose number it is.
+    return { conflict: true as const, message: conflict.message };
   }
 
   /**
@@ -396,6 +669,113 @@ export class RegistrationApplicationService {
   }
 
   /**
+   * A candidate the interview gate never saw — admitted on a reason, not on a shrug.
+   *
+   * Until now a PASS was the only door into the pipeline, so a walk-in or a referral could be
+   * hired only by recording an interview that never happened. A mandatory step that blocks real
+   * work does not survive contact with the desk; it survives as a fiction, and the fiction is
+   * worse than the gap because it also destroys the screening record for everybody who WAS
+   * interviewed. So the step is skippable and the skip is the thing that gets written down.
+   *
+   * What separates this from the interview path is only the absence of an interview:
+   * `interviewId` stays null, the row, the token and the email are the same ones
+   * `createInviteRecord`/`deliverInvite` mint for a PASS, and `source` stays SELF_SERVICE because
+   * the candidate is still the one who fills the form in. (`HR_DESK` means the desk typed the
+   * substance, and it is what maker–checker keys on at `approve()` — claiming it here would
+   * quietly bar whoever added the candidate from ever reviewing them.)
+   *
+   * The two calls are used rather than `createInvite` for the reason `createInviteRecord`'s own
+   * docblock gives: the stamp is saved before anything is sent, because an email cannot be
+   * recalled and a stamp that failed to save would leave a candidate holding a live link into a
+   * pipeline with no record of why they are in it.
+   */
+  async openWithoutInterview(
+    input: { fullName: string; mobile: string; email?: string | null; reason: string },
+    actor: { id: string; name?: string | null; organizationId?: string | null },
+  ): Promise<{ applicationId: string; emailed: boolean; inviteLink: string }> {
+    const fullName = (input.fullName ?? '').trim();
+    const mobile = (input.mobile ?? '').trim();
+    const reason = (input.reason ?? '').trim();
+    if (!fullName) throw new BadRequestException('Candidate name is required.');
+    if (!mobile) throw new BadRequestException('Mobile number is required.');
+    if (reason.length < MIN_NO_INTERVIEW_REASON_LENGTH) {
+      throw new BadRequestException(
+        'Say why this candidate is being added without an interview. The reason is stamped on '
+        + 'their application and written to the audit trail, so it has to be a sentence somebody '
+        + 'can read later.',
+      );
+    }
+
+    // The same refusal a PASS gets: somebody already on the roster is not a candidate, and a
+    // second application would race the first for the same person.
+    const conflict = await this.checkMobileConflict(mobile, actor.organizationId);
+    if (conflict && conflict.target === 'ASSAYER') {
+      throw new ConflictException(conflict.detail);
+    }
+
+    /*
+      Already in the queue?
+
+      `openApplicationForMobile` is the same look `AssayerInterviewService.record` takes before a
+      PASS mints anything, and it ignores decided applications on purpose — somebody rejected a
+      year ago is a new candidate. The id travels in the body so the screen can offer to open the
+      application they already have rather than leaving the desk to search for it.
+    */
+    const open = await this.openApplicationForMobile(mobile, actor.organizationId);
+    if (open) {
+      const who = open.fullName?.trim() || fullName;
+      const refusal = new ConflictException(
+        `${who} already has an open application on ${mobile}. Open that one rather than starting a second.`,
+      );
+      const body = refusal.getResponse();
+      if (typeof body === 'object' && body !== null) Object.assign(body, { applicationId: open.id });
+      throw refusal;
+    }
+
+    const { application, rawToken } = await this.createInviteRecord({
+      fullName,
+      mobile,
+      email: input.email?.trim() || null,
+      organizationId: actor.organizationId ?? null,
+    });
+
+    /*
+      The decision, stamped where the screen can read it.
+
+      `extendedProfile` is the jsonb `deskEditors` already rides in, and `applyExtendedProfile`
+      reads that column by named group — so a key it does not know is carried to approval and
+      ignored there, exactly as `deskEditors` is. No column, no migration: `interviewId` stays
+      null, and this stamp is the answer to "why is there no interview behind this person?".
+    */
+    const stamp: OpenedWithoutInterviewStamp = {
+      reason,
+      byId: actor.id,
+      byName: actor.name?.trim() || null,
+      at: new Date().toISOString(),
+    };
+    const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
+    application.extendedProfile = { ...profile, openedWithoutInterview: stamp } as never;
+    const saved = await this.applications.save(application);
+
+    const { emailed, inviteLink } = await this.deliverInvite(saved, rawToken);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_APPLICATION_OPENED_WITHOUT_INTERVIEW',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: saved.id,
+      userId: actor.id,
+      remarks: `${fullName} was added to the hiring pipeline with no interview on record, by `
+        + `${stamp.byName ?? actor.id}. Reason: ${reason} — the invite was `
+        + `${emailed ? 'emailed' : 'minted and handed to the desk'}.`,
+    });
+
+    // `emailed` is reported rather than assumed, and the link comes back either way, so the desk
+    // can read it out when the send did not happen — the same contract the interview path has.
+    return { applicationId: saved.id, emailed, inviteLink };
+  }
+
+  /**
    * Send the candidate a fresh link.
    *
    * Two places already told people this existed — the candidate's own "This registration link is
@@ -457,6 +837,7 @@ export class RegistrationApplicationService {
     application: AssayerApplicationEntity;
     documents: AssayerApplicationDocumentEntity[];
     documentsRequested: readonly OnboardingDocument[];
+    otpVerified: boolean;
   }> {
     const application = await this.findByRawToken(rawToken);
     if (!application.tokenConsumedAt) {
@@ -464,7 +845,43 @@ export class RegistrationApplicationService {
       await this.applications.save(application);
     }
     const documents = await this.applicationDocuments.find({ where: { applicationId: application.id } });
-    return { application, documents, documentsRequested: documentsRequestedFor(application.employmentCategory) };
+    const verified = await this.cache.getJson<{ phone: string }>(`regotp:verified:${hashCode(rawToken)}`);
+
+    /*
+      A SUBMITTED APPLICATION'S LINK STOPS BEING A KEY TO THE CANDIDATE'S IDENTITY.
+
+      The link is a bearer credential: whoever holds it is treated as the candidate. That is
+      necessary while they are filling the form in, and for nothing afterwards — yet this returned
+      the whole application, PAN, Aadhaar, bank account and all, for as long as the link lived,
+      including after HR had approved it. The link ends up in browser history, forwarded messages
+      and, as an audit of the running stack found, in hundreds of proxy log lines.
+
+      Once the application is out of the candidate's hands, the page needs only enough to say
+      "submitted, under review": who, which status, where we will write to them. Every stored answer
+      and every scan stays behind the desk's own authenticated routes. If HR sends it back for more
+      information it is editable again, and the full form returns with it.
+    */
+    if (!applicationIsEditableByCandidate(application.status)) {
+      return {
+        application: submittedApplicationView(application),
+        documents: documents.map((d) => ({
+          ...d,
+          // Same count, so the page can still say how many were received; no storage keys.
+          filePaths: (d.filePaths ?? []).map(() => '[submitted]'),
+        })) as AssayerApplicationDocumentEntity[],
+        documentsRequested: documentsRequestedFor(application.employmentCategory),
+        otpVerified: Boolean(verified),
+      };
+    }
+
+    return {
+      // The candidate's own answers, readable, so a resumed form shows what they typed. Theirs to
+      // see; the link is locked down the moment they submit (above).
+      application: { ...application, extendedProfile: openProfile(application.extendedProfile as Record<string, unknown> | null) } as AssayerApplicationEntity,
+      documents,
+      documentsRequested: documentsRequestedFor(application.employmentCategory),
+      otpVerified: Boolean(verified),
+    };
   }
 
   // ── OTP ──────────────────────────────────────────────────────────────────
@@ -494,6 +911,10 @@ export class RegistrationApplicationService {
         'There is no email address on this application to send a code to. Ask HR to add one and resend your link.',
       );
     }
+    const conflict = await this.checkMobileConflict(phone, application.organizationId, application.id, application.promotedAssayerId);
+    if (conflict) {
+      throw new ConflictException(conflict.message);
+    }
     const tokenHash = hashCode(rawToken);
 
     const sendCounterKey = `regotp:sent:${tokenHash}`;
@@ -516,17 +937,39 @@ export class RegistrationApplicationService {
     await this.cache.setJson(sendCounterKey, { count: sent + 1 }, OTP_SEND_WINDOW_SECONDS);
     await this.cache.setJson(lastSentKey, Date.now(), OTP_SEND_WINDOW_SECONDS);
 
+    let subject = 'Your Appraiser registration code';
+    let text = `Your Appraiser registration verification code is ${code}. It expires in 5 minutes.`;
+    let html = renderEmailHtml({
+      title: 'Verification Code',
+      bodyLines: [
+        'Please enter the 6-digit code below to verify your email address and continue your Sumeru Global appraiser registration.',
+      ],
+      otpCode: code,
+      securityNotice: 'This code expires in 5 minutes. If you did not request this, you can safely ignore this email.',
+    });
+
+    if (this.templateRenderer) {
+      try {
+        const rendered = await this.templateRenderer.render('otp-verification', {
+          otpCode: code,
+          validMinutes: '5',
+          logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+          supportEmail: 'recruitment@sumeruglobal.com',
+          companyName: 'Sumeru Global',
+        });
+        subject = rendered.subject;
+        text = rendered.text;
+        html = rendered.html;
+      } catch (err: any) {
+        this.logger.warn(`Template render failed for otp-verification: ${err.message}`);
+      }
+    }
+
     const result = await this.emailProvider.send({
       to: application.email,
-      subject: 'Your Appraiser registration code',
-      text: `Your Appraiser registration verification code is ${code}. It expires in 5 minutes.`,
-      html: renderEmailHtml({
-        title: 'Your registration code',
-        bodyLines: [
-          `Your verification code is ${code}.`,
-          'It expires in 5 minutes. If you did not ask for it, you can ignore this message.',
-        ],
-      }),
+      subject,
+      text,
+      html,
     });
     /**
      * A code that was never sent is a dead end, so say so instead of answering "sent".
@@ -568,6 +1011,10 @@ export class RegistrationApplicationService {
      * mismatch is somebody's decision rather than a silent overwrite.
      */
     const application = await this.findByRawToken(rawToken);
+    const conflict = await this.checkMobileConflict(phone, application.organizationId, application.id, application.promotedAssayerId);
+    if (conflict) {
+      throw new ConflictException(conflict.message);
+    }
     if (applicationIsEditableByCandidate(application.status) && application.mobile !== phone) {
       application.mobile = phone;
       await this.applications.save(application);
@@ -581,12 +1028,48 @@ export class RegistrationApplicationService {
     }
   }
 
+  // ── Lookups (pincode → address, IFSC → bank) ─────────────────────────────
+
+  /**
+   * What a pincode actually is, for the candidate's own address form.
+   *
+   * The desk wizard reads this same directory from its own browser
+   * (`resolvePincode` in `AssayerForms.tsx`); this page carries no session, so
+   * it reads it through the invite token instead — one directory, two doors.
+   * The token is validated (expiry enforced) because it is the only auth this
+   * controller has; a miss is `null`, never an error, so the form degrades to
+   * hand-typing rather than blocking.
+   */
+  async lookupPincode(rawToken: string, pin: string) {
+    await this.findByRawToken(rawToken);
+    const answer = await lookupPincodeDetailed(pin);
+    // `{status}` always, and the place only when there is one: a null told the form nothing about
+    // WHY, so it said "check the digits" whether the directory had answered no or nobody had
+    // managed to ask.
+    return answer.status === 'found' ? { status: answer.status, ...answer.place } : { status: answer.status };
+  }
+
+  /**
+   * Which bank an IFSC code belongs to — the same `lookupIfsc` the
+   * authenticated `GET /geo/ifsc/:code` route answers, minus the session.
+   */
+  async lookupIfsc(rawToken: string, code: string) {
+    await this.findByRawToken(rawToken);
+    return lookupIfsc(code);
+  }
+
   // ── Draft ────────────────────────────────────────────────────────────────
 
   async updateDraft(rawToken: string, patch: UpdateApplicationDraftDto): Promise<AssayerApplicationEntity> {
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
+    }
+    if (patch.mobile && normalisePhone(patch.mobile) !== normalisePhone(application.mobile)) {
+      const conflict = await this.checkMobileConflict(patch.mobile, application.organizationId, application.id, application.promotedAssayerId);
+      if (conflict) {
+        throw new ConflictException(conflict.message);
+      }
     }
     this.applyDraftPatch(application, patch);
     return this.applications.save(application);
@@ -603,8 +1086,18 @@ export class RegistrationApplicationService {
     for (const key of EDITABLE_DRAFT_FIELDS) {
       const incoming = (patch as Record<string, unknown>)[key];
       if (incoming === undefined) continue;
-      (application as unknown as Record<string, unknown>)[key] =
-        key === 'dateOfBirth' && typeof incoming === 'string' ? new Date(incoming) : incoming;
+      if (key === 'dateOfBirth') {
+        if (typeof incoming === 'string' && incoming.trim() !== '') {
+          const d = new Date(incoming);
+          (application as unknown as Record<string, unknown>)[key] = Number.isNaN(d.getTime()) ? null : d;
+        } else if (incoming instanceof Date) {
+          (application as unknown as Record<string, unknown>)[key] = Number.isNaN(incoming.getTime()) ? null : incoming;
+        } else {
+          (application as unknown as Record<string, unknown>)[key] = null;
+        }
+      } else {
+        (application as unknown as Record<string, unknown>)[key] = incoming;
+      }
     }
     this.mergeRecordFields(application, patch.record);
   }
@@ -668,6 +1161,41 @@ export class RegistrationApplicationService {
   }
 
   /**
+   * Correct an application's registered mobile number from the HR desk.
+   * Validates that the new number does not conflict with an active Assayer or active application.
+   */
+  async updateApplicationMobile(id: string, newMobile: string, actorUserId: string): Promise<AssayerApplicationEntity> {
+    const application = await this.applications.findOne({ where: tenantWhere<AssayerApplicationEntity>({ id }) });
+    if (!application) throw new NotFoundException('Application not found.');
+    if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
+      throw new BadRequestException('This application has already been decided.');
+    }
+    const trimmed = (newMobile ?? '').trim();
+    if (!trimmed) throw new BadRequestException('Mobile number is required.');
+
+    const conflict = await this.checkMobileConflict(trimmed, application.organizationId, application.id, application.promotedAssayerId);
+    if (conflict) {
+      throw new ConflictException(conflict.detail);
+    }
+
+    const oldMobile = application.mobile;
+    application.mobile = trimmed;
+    application.updatedBy = actorUserId;
+    const saved = await this.applications.save(application);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_APPLICATION_MOBILE_UPDATED',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: saved.id,
+      userId: actorUserId,
+      remarks: `Mobile number updated from ${oldMobile} to ${trimmed} by HR.`,
+    });
+
+    return saved;
+  }
+
+  /**
    * Who typed the substance, recorded so approval can refuse them.
    *
    * `createInvite` leaves `createdBy` null — the interview creates the row, nobody has typed
@@ -722,9 +1250,25 @@ export class RegistrationApplicationService {
         `Check the ${invalid.join(' and ')} — ${invalid.length > 1 ? 'those do' : 'that does'} not look right.`,
       );
     }
+    /*
+      A masked value must never be stored. Staff screens now receive the last four digits, so a form
+      that sent back what it was shown would replace a real PAN with "••••234F" — and the number
+      would be gone. The screens are built not to, and this is the guarantee that does not depend
+      on them.
+    */
+    const masked = REGISTRATION_SECRET_FIELD_KEYS.filter(
+      (key) => typeof accepted[key] === 'string' && looksMasked(accepted[key] as string),
+    );
+    if (masked.length > 0) {
+      throw new BadRequestException(
+        'That looks like the masked copy shown on screen rather than the number itself. Type the '
+        + 'number in full, or leave the box alone to keep what is on file.',
+      );
+    }
+
     const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
     const fields = (profile.fields ?? {}) as Record<string, unknown>;
-    application.extendedProfile = { ...profile, fields: { ...fields, ...accepted } } as never;
+    application.extendedProfile = { ...profile, fields: sealSecretFields({ ...fields, ...accepted }) } as never;
   }
 
   /**
@@ -787,11 +1331,8 @@ export class RegistrationApplicationService {
   ): Promise<AssayerApplicationDocumentEntity> {
     const application = await this.applications.findOne({ where: tenantWhere<AssayerApplicationEntity>({ id }) });
     if (!application) throw new NotFoundException('Application not found.');
-    if (!applicationIsEditableByCandidate(application.status)) {
-      throw new BadRequestException(
-        'This application has already been submitted. Use Request more information to ask for a '
-        + 'different document.',
-      );
+    if (application.status === ApplicationStatus.APPROVED || application.status === ApplicationStatus.REJECTED) {
+      throw new BadRequestException('This application has already been decided.');
     }
     if (!Object.values(OnboardingDocument).includes(requirement)) {
       throw new BadRequestException('That is not a recognised document type.');
@@ -841,6 +1382,32 @@ export class RegistrationApplicationService {
     return { key, fileName: key.split('/').pop() ?? `${requirement}-${index}` };
   }
 
+  /**
+   * The candidate reading a scan attached to their own application.
+   *
+   * Token-authorised, so unscoped by tenant: the token proves ownership of the application,
+   * matching `uploadDocument` and `findByRawToken`.
+   */
+  async documentFileKeyForToken(
+    rawToken: string,
+    requirement: OnboardingDocument,
+    index: number,
+  ): Promise<{ key: string; fileName: string }> {
+    const application = await this.findByRawToken(rawToken);
+    // The scans behind a submitted application are the desk's to open, through its own logged-in
+    // routes — not anybody's who still holds the link. See `hydrate`.
+    if (!applicationIsEditableByCandidate(application.status)) {
+      throw new ForbiddenException(
+        'This application has been submitted, so its documents can no longer be opened from the '
+        + 'registration link. Contact HR if something needs changing.',
+      );
+    }
+    const row = await this.applicationDocuments.findOne({ where: { applicationId: application.id, requirement } });
+    const key = row?.filePaths?.[index];
+    if (!key) throw new NotFoundException('That document has not been attached.');
+    return { key, fileName: key.split('/').pop() ?? `${requirement}-${index}` };
+  }
+
   /** The bytes behind a key from `documentFileKey`. Separated so the controller streams, not this. */
   async openDocumentStream(key: string): Promise<Readable> {
     return this.storage.getFileStream(key);
@@ -880,11 +1447,71 @@ export class RegistrationApplicationService {
    * The link is still the authorisation for everything before this. Nothing is filed, reviewed or
    * promoted until the code confirms the person at the other end.
    */
+
+  /**
+   * WHAT THE ROSTER SWEEP WOULD HAVE SAID, SAID NOW.
+   *
+   * `data-integrity.service.ts` files findings for an impossible age and for a PAN, Aadhaar, bank
+   * account or email that already belongs to somebody — but it runs over rows that exist, so the
+   * candidate had already registered, been approved and joined the roster before anybody saw it.
+   * The same questions are cheap to ask here, at the one moment the answer can still change what
+   * happens: the identifiers are fingerprinted columns, and the age is arithmetic.
+   *
+   * Candidate-safe wording throughout: a clash names no one — whose PAN it is belongs to them.
+   */
+  private async assertRegistrationIsAcceptable(application: AssayerApplicationEntity): Promise<void> {
+    // Opened: the duplicate check fingerprints the NUMBER, so it needs the number.
+    const fields = openSecretFields(((application.extendedProfile ?? {}) as Record<string, any>).fields ?? {});
+
+    const dobProblem = dateOfBirthProblem((application.dateOfBirth ?? fields.dateOfBirth) as string | null);
+    if (dobProblem) throw new BadRequestException(dobProblem);
+
+    if (!this.assayers || typeof this.assayers.findOne !== 'function') return;
+    const where = (extra: Record<string, unknown>) => ({
+      isActive: true,
+      ...(application.organizationId ? { organizationId: application.organizationId } : {}),
+      ...extra,
+    }) as never;
+
+    /** Already held by somebody on the roster — except by the record this application itself made. */
+    const heldBySomebodyElse = async (clause: Record<string, unknown>): Promise<boolean> => {
+      const match = await this.assayers.findOne({ where: where(clause) });
+      return !!match && match.id !== application.promotedAssayerId;
+    };
+
+    const checks: Array<{ value: unknown; clause: (fp: string) => Record<string, unknown>; label: string }> = [
+      { value: fields.panNumber, clause: (fp) => ({ panFingerprint: fp }), label: 'PAN' },
+      { value: fields.aadhaarNumber, clause: (fp) => ({ aadhaarFingerprint: fp }), label: 'Aadhaar number' },
+    ];
+    for (const check of checks) {
+      const fingerprint = fieldFingerprint(typeof check.value === 'string' ? check.value : null);
+      if (!fingerprint) continue;
+      if (await heldBySomebodyElse(check.clause(fingerprint))) {
+        throw new ConflictException(
+          `That ${check.label} is already registered to somebody on our roster. If it is yours, `
+          + 'contact the office — they can sort it out.',
+        );
+      }
+    }
+
+    const email = (application.email ?? '').trim().toLowerCase();
+    if (email && await heldBySomebodyElse({ email })) {
+      throw new ConflictException(
+        'That email address is already registered to somebody on our roster. If it is yours, '
+        + 'contact the office — they can sort it out.',
+      );
+    }
+  }
+
   async submit(rawToken: string): Promise<AssayerApplicationEntity> {
     await this.assertOtpVerified(rawToken);
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application has already been submitted.');
+    }
+    const conflict = await this.checkMobileConflict(application.mobile, application.organizationId, application.id, application.promotedAssayerId);
+    if (conflict) {
+      throw new ConflictException(conflict.message);
     }
     if (!application.fullName?.trim()) {
       throw new BadRequestException('Your full name is required before submitting.');
@@ -895,6 +1522,8 @@ export class RegistrationApplicationService {
     if (!application.consentAcceptedAt) {
       throw new BadRequestException('You must accept the declaration and consent before submitting.');
     }
+    // The checks that used to arrive as review-queue findings days later.
+    await this.assertRegistrationIsAcceptable(application);
 
     const wasAwaitingInfo = application.status === ApplicationStatus.AWAITING_INFO;
     application.status = ApplicationStatus.PENDING_VALIDATION;
@@ -926,10 +1555,12 @@ export class RegistrationApplicationService {
    * what `tenantWhere` returning the clause unchanged means for them.
    */
   async listApplications(status?: ApplicationStatus): Promise<AssayerApplicationEntity[]> {
-    return this.applications.find({
+    const rows = await this.applications.find({
       where: tenantWhere<AssayerApplicationEntity>(status ? { status } : {}),
       order: { createdAt: 'DESC' },
     });
+    // Masked: a queue of candidates is not a reason to hand out everybody's PAN and bank account.
+    return rows.map((row) => maskApplication(row));
   }
 
   /**
@@ -955,23 +1586,67 @@ export class RegistrationApplicationService {
      * to fill the form in for them, and the reviewer needs it to see what is still outstanding.
      */
     documentsRequested: OnboardingDocument[];
+    phoneConflict: { message: string; assayerCode?: string; displayName?: string } | null;
+    /**
+     * Lifted out of `extendedProfile` because this return is a projection, not the row.
+     *
+     * `listApplications` returns entities, so the queue already sees the stamp; a reviewer opening
+     * one saw only `interviewId: null`, which reads as a data gap rather than as a decision
+     * somebody made and signed. Null for every candidate who came through an interview.
+     */
+    openedWithoutInterview: OpenedWithoutInterviewStamp | null;
+    /**
+     * What happened at the interview, for the person deciding the application.
+     *
+     * The interviewer's notes were written down every time and shown on no screen: this method
+     * already loaded the interview row, and read one field off it — the mobile. A reviewer
+     * approving somebody could not see that the interviewer had written "could not tell 22K from
+     * 18K on the touchstone", and had to go and ask. Null when nobody interviewed them.
+     */
+    interview: {
+      outcome: string;
+      notes: string | null;
+      interviewedAt: Date;
+      interviewedByName: string | null;
+    } | null;
   }> {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found.');
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
 
     let invitedMobile: string | null = null;
+    let interviewSummary: {
+      outcome: string; notes: string | null; interviewedAt: Date; interviewedByName: string | null;
+    } | null = null;
     if (application.interviewId) {
       const interview = await this.interviews.findOne({ where: { id: application.interviewId } });
       invitedMobile = interview?.mobile ?? null;
+      if (interview) {
+        interviewSummary = {
+          outcome: interview.outcome,
+          notes: interview.notes ?? null,
+          interviewedAt: interview.interviewedAt,
+          interviewedByName: interview.interviewedByName ?? null,
+        };
+      }
     }
 
+    const conflict = await this.checkMobileConflict(application.mobile, application.organizationId, application.id, application.promotedAssayerId);
+
     return {
-      application,
+      // Masked: the reviewer needs to see WHICH numbers are on file and that they are well-formed,
+      // not the numbers themselves. The record's own audited reveal exists for the rare case.
+      application: maskApplication(application),
       documents,
       gaps: this.registrationGaps(application),
       invitedMobile: invitedMobile === application.mobile ? null : invitedMobile,
+      interview: interviewSummary,
       documentsRequested: [...documentsRequestedFor(application.employmentCategory)],
+      phoneConflict: conflict
+        // The desk's copy names the person: a clerk cannot act on "somebody else".
+        ? { message: conflict.detail, assayerCode: conflict.assayerCode, displayName: conflict.displayName }
+        : null,
+      openedWithoutInterview: readOpenedWithoutInterview(application),
     };
   }
 
@@ -997,18 +1672,44 @@ export class RegistrationApplicationService {
 
     if (saved.email) {
       const greeting = saved.fullName ? `Hello ${saved.fullName},` : 'Hello,';
+      let subject = 'Your Appraiser application';
+      let text = `${greeting}\n\nAfter review, we are unable to proceed with your application at this time.\n\nReason: ${saved.reviewNotes}`;
+      let html = renderEmailHtml({
+        title: 'Application Status Update',
+        bodyLines: [
+          greeting,
+          'Thank you for your interest in joining Sumeru Global. After reviewing your application dossier and submitted credentials, our verification committee is unable to proceed with your onboarding at this time.',
+        ],
+        callout: {
+          title: 'Review Remarks',
+          text: saved.reviewNotes || 'Does not meet minimum criteria at this time.',
+          tone: 'crimson',
+        },
+        footer: 'Questions regarding this decision may be directed to recruitment@sumeruglobal.com.',
+      });
+
+      if (this.templateRenderer) {
+        try {
+          const rendered = await this.templateRenderer.render('application-rejected', {
+            fullName: saved.fullName || 'Candidate',
+            reviewNotes: saved.reviewNotes || 'Does not meet minimum criteria at this time.',
+            supportEmail: 'recruitment@sumeruglobal.com',
+            logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+            companyName: 'Sumeru Global',
+          });
+          subject = rendered.subject;
+          text = rendered.text;
+          html = rendered.html;
+        } catch (err: any) {
+          this.logger.warn(`Template render failed for application-rejected: ${err.message}`);
+        }
+      }
+
       await this.emailProvider.send({
         to: saved.email,
-        subject: 'Your Appraiser application',
-        text: `${greeting}\n\nAfter review, we are unable to proceed with your application at this time.\n\nReason: ${saved.reviewNotes}`,
-        html: renderEmailHtml({
-          title: 'Your application decision',
-          bodyLines: [
-            greeting,
-            'After review, we are unable to proceed with your application at this time.',
-            `Reason: ${saved.reviewNotes}`,
-          ],
-        }),
+        subject,
+        text,
+        html,
       });
     }
     await this.auditService.recordEventSafe({
@@ -1066,7 +1767,9 @@ export class RegistrationApplicationService {
     application: AssayerApplicationEntity,
     actorUserId: string,
   ): Promise<string[]> {
-    const profile = (application.extendedProfile ?? null) as {
+    // Opened: the record's own columns encrypt these again on the way in. Promotion is one of the
+    // three places the plaintext is genuinely needed — see `sealSecretFields`.
+    const profile = openProfile(application.extendedProfile as Record<string, unknown> | null) as {
       fields?: Record<string, unknown>;
       commercial?: Record<string, unknown>;
       references?: Array<Record<string, unknown>>;
@@ -1077,10 +1780,30 @@ export class RegistrationApplicationService {
     const gaps: string[] = [];
 
     if (profile.fields && Object.keys(profile.fields).length > 0) {
-      try {
-        await this.assayerService.update(assayerId, profile.fields as never, actorUserId);
-      } catch (err: any) {
-        gaps.push(`profile fields (${err?.message ?? 'refused'})`);
+      const fields = { ...profile.fields };
+      if (fields.latitude === '' || fields.latitude === null) delete fields.latitude;
+      if (fields.longitude === '' || fields.longitude === null) delete fields.longitude;
+
+      /*
+        ONE REFUSAL USED TO EMPTY THE WHOLE RECORD.
+
+        Every field went to a single `update`, which validates as it goes. A PAN already on
+        somebody else, an IFSC that does not exist, a district that contradicts the pincode — any
+        one of them threw, the catch below swallowed it into one line, and NOTHING landed: not the
+        Aadhaar, not the bank account, not the emergency contact, not the qualification. Approval
+        still completed, so the person arrived on the roster empty, and the onboarding drawer
+        asked the desk for all of it again — data the candidate had already typed in.
+
+        Applied a group at a time (`REGISTRATION_FIELD_GROUPS`, whose boundaries are the sets the
+        update genuinely validates together), a refusal costs its own group and names it, and the
+        rest of what they told us arrives.
+      */
+      for (const group of groupRegistrationRecordFields(fields)) {
+        try {
+          await this.assayerService.update(assayerId, group.values as never, actorUserId);
+        } catch (err: any) {
+          gaps.push(`${group.label} (${err?.message ?? 'refused'})`);
+        }
       }
     }
 
@@ -1216,6 +1939,12 @@ export class RegistrationApplicationService {
     // Folded into the application BEFORE promotion so the existing applier handles them, rather
     // than a second write path that would have to be kept in step with the first.
     this.mergeRecordFields(application, input?.corrections);
+    if (input?.corrections) {
+      const correctedMobile = (input.corrections.mobile || input.corrections.phone) as string | undefined;
+      if (typeof correctedMobile === 'string' && correctedMobile.trim()) {
+        application.mobile = correctedMobile.trim();
+      }
+    }
     if (input?.commercial || input?.empanelments) {
       const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
       if (input.commercial) profile.commercial = input.commercial;
@@ -1249,6 +1978,19 @@ export class RegistrationApplicationService {
       application.availability ? `Availability: ${application.availability}.` : null,
     ].filter((v): v is string => Boolean(v));
 
+    const profile = (application.extendedProfile ?? null) as {
+      fields?: Record<string, unknown>;
+      commercial?: Record<string, unknown>;
+      references?: Array<Record<string, unknown>>;
+      empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+    } | null;
+
+    const latRaw = profile?.fields?.latitude;
+    const lngRaw = profile?.fields?.longitude;
+    const suppliedLat = latRaw != null && latRaw !== '' ? Number(latRaw) : undefined;
+    const suppliedLng = lngRaw != null && lngRaw !== '' ? Number(lngRaw) : undefined;
+    const district = (profile?.fields?.district as string | undefined) ?? undefined;
+
     const createDto: CreateAssayerDto = {
       /**
        * The application id IS the idempotency key.
@@ -1269,8 +2011,11 @@ export class RegistrationApplicationService {
       // mandatory before submit for exactly this reason, but a defensive fallback here means an
       // application that somehow lacks it does not crash the promotion.
       state: application.state || 'Unknown',
+      district,
       city: application.city ?? undefined,
       pincode: application.pincode ?? undefined,
+      latitude: Number.isFinite(suppliedLat) ? suppliedLat : undefined,
+      longitude: Number.isFinite(suppliedLng) ? suppliedLng : undefined,
       // `dateOfBirth` on a `type: 'date'` column round-trips as a plain 'YYYY-MM-DD' string from
       // the driver, not a `Date` — same duality `AssayerEntity.dateOfBirth` has. Handle both
       // rather than assume one, since `CreateAssayerDto.dateOfBirth` wants the ISO string form.
@@ -1284,6 +2029,8 @@ export class RegistrationApplicationService {
       employmentCategory: application.employmentCategory ?? undefined,
       experienceYears: application.experienceYears ?? undefined,
       notes: notesParts.length ? notesParts.join(' ') : undefined,
+      allowSharedContact: input?.allowSharedContact,
+      sharedContactReason: input?.sharedContactReason,
     };
 
     // The same, ungated `create()` the HR-desk wizard uses — allocates the assayer code, runs the
@@ -1358,19 +2105,48 @@ export class RegistrationApplicationService {
 
     if (application.email) {
       const greeting = application.fullName ? `Hello ${application.fullName},` : 'Hello,';
+      let subject = 'Your Appraiser application has been approved';
+      let text = `${greeting}\n\nYour application has been approved. Your Appraiser code is ${assayer.assayerCode}. HR will be in touch about next steps.`;
+      let html = renderEmailHtml({
+        title: 'Application Approved — Welcome to Sumeru Global',
+        bodyLines: [
+          greeting,
+          'Congratulations! Your application has been approved. You have been officially registered as an authorized Appraiser in our network.',
+          'Our operations team will be in touch shortly regarding branch roster assignments and field audit schedules.',
+        ],
+        kvTable: [
+          { label: 'Official Appraiser Code', value: assayer.assayerCode },
+          { label: 'Registered Name', value: assayer.displayName || application.fullName || '—' },
+          { label: 'Status', value: 'Active Roster Ready' },
+        ],
+        linkUrl: appPublicUrl(),
+        linkLabel: 'Sign in to FAPOMS',
+        securityNotice: `Keep your Appraiser code (${assayer.assayerCode}) confidential. It is required during bank branch audit verification.`,
+      });
+
+      if (this.templateRenderer) {
+        try {
+          const rendered = await this.templateRenderer.render('application-approved', {
+            assayerCode: assayer.assayerCode,
+            loginUrl: appPublicUrl(),
+            logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+            candidateName: application.fullName || assayer.displayName || 'Appraiser',
+            remarks: profileGaps.length ? `Note: ${profileGaps.join('; ')}` : '',
+            companyName: 'Sumeru Global',
+          });
+          subject = rendered.subject;
+          text = rendered.text;
+          html = rendered.html;
+        } catch (err: any) {
+          this.logger.warn(`Template render failed for application-approved: ${err.message}`);
+        }
+      }
+
       await this.emailProvider.send({
         to: application.email,
-        subject: 'Your Appraiser application has been approved',
-        text: `${greeting}\n\nYour application has been approved. Your Appraiser code is ${assayer.assayerCode}. HR will be in touch about next steps.`,
-        html: renderEmailHtml({
-          title: 'Application approved',
-          bodyLines: [
-            greeting,
-            'Your application has been approved.',
-            `Your Appraiser code is ${assayer.assayerCode}.`,
-            'HR will be in touch about next steps.',
-          ],
-        }),
+        subject,
+        text,
+        html,
       });
     }
 

@@ -1,6 +1,10 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
-import { useManagerOptions, useHrOwnerOptions, applyPlace, resolveIfsc, EDIT_FIELDS } from './AssayerForms';
+import { INDIAN_STATES } from '@fapoms/shared';
+import {
+  useManagerOptions, useHrOwnerOptions, applyPlace, resolveIfsc, EDIT_FIELDS,
+  resolvePincode, addressConflict,
+} from './AssayerForms';
 import { api } from '../../services/api';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
@@ -239,5 +243,73 @@ describe('resolveIfsc', () => {
   it('resolves to null when the backend genuinely has no match — a 200 with null data', async () => {
     mockRequest.mockResolvedValueOnce(null);
     await expect(resolveIfsc('HDFC0001234')).resolves.toBeNull();
+  });
+});
+
+/**
+ * THE DESK FILLS ADDRESSES IN TOO, AND WAS FILLING THEM WRONG.
+ *
+ * `resolvePincode` reads India Post — the register that defines what a pincode is — and hands the
+ * answer to the branch form and the registration wizard, which write it straight into the state
+ * `<select>`. Two things went wrong there and both produced a record with a wrong or missing
+ * state while the operator watched the field appear to fill:
+ *
+ * - The directory writes "Jammu & Kashmir"; the select is built from `INDIAN_STATES`, which
+ *   offers "Jammu and Kashmir". The option did not exist, so the box stayed empty.
+ * - `addressConflict` then compared those same two spellings as plain strings, called them two
+ *   different states, and blocked the save on an address that was entirely correct.
+ */
+describe('filling an address in from the postal directory', () => {
+  const realFetch = global.fetch;
+  const directorySays = (postOffice: Record<string, string>) => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ([{ Status: 'Success', PostOffice: [postOffice] }]),
+    }) as never;
+  };
+  afterEach(() => { global.fetch = realFetch; jest.restoreAllMocks(); });
+
+  it('returns the state in the spelling the dropdown offers', async () => {
+    directorySays({ State: 'Jammu & Kashmir', District: 'Srinagar' });
+    const answer = await resolvePincode('190001');
+
+    expect(answer).toEqual({ state: 'Jammu and Kashmir', district: 'Srinagar' });
+    expect(INDIAN_STATES.some((s) => s.value === answer?.state)).toBe(true);
+  });
+
+  it('refuses a state outside the pincode\'s own postal circle', async () => {
+    // 110001 is circle 1 (Delhi, Haryana, Punjab…); Kerala is circle 6, so the pair contradicts
+    // itself and neither half is safe to fill in.
+    directorySays({ State: 'Kerala', District: 'Ernakulam' });
+    await expect(resolvePincode('110001')).resolves.toBeNull();
+  });
+
+  it('refuses an answer it cannot match to a real state', async () => {
+    directorySays({ State: 'Wakanda', District: 'Birnin Zana' });
+    await expect(resolvePincode('682001')).resolves.toBeNull();
+  });
+
+  it('says nothing when the directory cannot be reached — the backend still enforces', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as never;
+    await expect(resolvePincode('682001')).resolves.toBeNull();
+  });
+
+  it('does not call one state two states because of an ampersand', () => {
+    expect(addressConflict(
+      { state: 'Jammu & Kashmir', district: 'Srinagar' }, '190001', 'Jammu and Kashmir', 'Srinagar',
+    )).toBeNull();
+  });
+
+  it('still blocks a save where the state genuinely disagrees', () => {
+    expect(addressConflict(
+      { state: 'Kerala', district: 'Ernakulam' }, '682001', 'Delhi', 'Ernakulam',
+    )).toMatchObject({ blocking: true });
+  });
+
+  /** A differently-named district is normal across most of India, and is said out loud, not blocked. */
+  it('warns without blocking when only the district is named differently', () => {
+    expect(addressConflict(
+      { state: 'Karnataka', district: 'Bangalore' }, '560066', 'Karnataka', 'Bengaluru Urban',
+    )).toMatchObject({ blocking: false });
   });
 });

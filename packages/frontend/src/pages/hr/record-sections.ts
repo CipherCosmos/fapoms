@@ -32,9 +32,12 @@
  */
 export const RECORD_LINK_PARAMS = ['section', 'edit'] as const;
 
-/** The record's tabs, by the keys AssayerRecord's TABS list uses. */
+/**
+ * The record's tabs, by the keys AssayerRecord's TABS list uses. Keys are link vocabulary, not
+ * labels: `vetting` is labelled "Background", `qualification` "Profile score", `commercial` "Pay".
+ */
 export const RECORD_TAB_KEYS = [
-  'summary', 'commercial', 'skills', 'vetting', 'documents', 'qualification', 'remarks', 'history',
+  'summary', 'documents', 'vetting', 'commercial', 'skills', 'qualification', 'remarks', 'history',
 ] as const;
 export type RecordTabKey = (typeof RECORD_TAB_KEYS)[number];
 
@@ -52,14 +55,24 @@ export interface RecordSectionTarget {
   tab: RecordTabKey;
   /** Set when the section is one of the Summary's groups — scroll there and ring it. */
   group?: SummaryGroupKey;
+  /** The ID card is a window opened from the header, not a tab — links to it open that window. */
+  idCard?: true;
 }
 
 /**
  * Names that are neither a tab key nor a group key but that somebody writing a link would
- * plausibly use — the words on the screen. The commercial tab is labelled "Pay & terms".
+ * plausibly use — the words on the screen, and `idcard`, which was a tab key until the card
+ * moved into its own window and must keep working in links already sent.
  */
 const ALIASES: Record<string, RecordSectionTarget> = {
   pay: { tab: 'commercial' },
+  background: { tab: 'vetting' },
+  score: { tab: 'qualification' },
+  certificates: { tab: 'skills' },
+  idcard: { tab: 'summary', idCard: true },
+  'id-card': { tab: 'summary', idCard: true },
+  card: { tab: 'summary', idCard: true },
+  badge: { tab: 'summary', idCard: true },
 };
 
 /**

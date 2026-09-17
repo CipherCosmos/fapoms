@@ -9,6 +9,8 @@ import {
 import type { Request, Response } from 'express';
 import { QueryFailedError } from 'typeorm';
 import { CORRELATION_ID_HEADER } from './correlation-id.middleware';
+// Registration tokens and identity numbers ride in URLs; see redact-url.ts for why they never reach a log.
+import { redactUrl } from './redact-url';
 import { errorAlerter, ErrorAlerter } from '../observability/error-alerter';
 import { GENERAL_ERROR_CODES } from '@fapoms/shared';
 import { codeForResponse } from './api-error';
@@ -80,11 +82,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       // 4xx are ordinary client errors and would only be noise; 5xx HttpExceptions are worth a line.
       if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
         this.logger.error(
-          `[${correlationId}] ${req.method} ${req.originalUrl} -> ${status}: ${JSON.stringify(body)}`,
+          `[${correlationId}] ${req.method} ${redactUrl(req.originalUrl)} -> ${status}: ${JSON.stringify(body)}`,
         );
         this.alerter.report({
           method: req.method,
-          route: req.originalUrl,
+          route: redactUrl(req.originalUrl),
           errorName: exception.constructor?.name ?? 'HttpException',
           correlationId: correlationId as string | undefined,
         });
@@ -106,7 +108,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
      */
     if (isClientDisconnect(exception, res)) {
       this.logger.warn(
-        `[${correlationId}] ${req.method} ${req.originalUrl} — client disconnected before the request completed`,
+        `[${correlationId}] ${req.method} ${redactUrl(req.originalUrl)} — client disconnected before the request completed`,
       );
       return;
     }
@@ -119,7 +121,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           ? `${exception.name}: ${exception.message}`
           : String(exception);
     this.logger.error(
-      `[${correlationId}] ${req.method} ${req.originalUrl} -> 500: ${detail}`,
+      `[${correlationId}] ${req.method} ${redactUrl(req.originalUrl)} -> 500: ${detail}`,
       exception instanceof Error ? exception.stack : undefined,
     );
 
@@ -128,7 +130,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     // and those values are customer records. That stays in the log on the host.
     this.alerter.report({
       method: req.method,
-      route: req.originalUrl,
+      route: redactUrl(req.originalUrl),
       errorName: exception instanceof Error ? exception.name : 'UnknownError',
       correlationId: correlationId as string | undefined,
     });

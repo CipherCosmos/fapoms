@@ -38,6 +38,13 @@ export interface StorageEngine {
   getSignedUrl?(key: string, expiresIn?: number): Promise<string>;
 
   /**
+   * Encrypt an object that reached the store without passing through `saveFile` — a direct
+   * presigned upload, or an assembled multipart upload — in place. Returns true when it did, false
+   * when the object was already encrypted or no key is configured. See `document-cipher.ts`.
+   */
+  sealObject?(key: string): Promise<boolean>;
+
+  /**
    * Generate a short-lived pre-signed PUT URL so mobile/web clients can stream
    * files DIRECTLY to MinIO / S3 without proxying through the NestJS backend API.
    * Crucial for high throughput and zero server bottleneck on low 2G/3G networks.

@@ -184,7 +184,7 @@ export const Notifications: React.FC = () => {
         <div style={{ display: 'flex', gap: '8px' }}>
           {tab === 'inbox' && unreadCount > 0 && (
             <button onClick={handleMarkAllRead} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)' }}>
-              <CheckCheck size={14} /> Mark all read
+              <CheckCheck size={14} /> Mark all as read
             </button>
           )}
           {/* Refreshes whichever tab is showing. It used to call `load(0)` unconditionally, which

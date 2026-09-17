@@ -59,7 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       category: 'Overview',
       items: [
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-        { name: 'Live Map', path: '/executive-map', icon: Map },
+        { name: 'Coverage map', path: '/executive-map', icon: Map },
         { name: 'Support', path: '/feedback', icon: MessageSquare },
       ],
     },
@@ -74,7 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
               activePaths: WORK_TABS.map((tab) => tab.path),
             }]
           : []),
-        { name: 'Falling Behind', path: '/falling-behind', icon: AlertTriangle },
+        { name: 'Overdue', path: '/falling-behind', icon: AlertTriangle },
         { name: 'Projects', path: '/projects', icon: FolderKanban },
       ],
     },
@@ -100,9 +100,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
           name: 'Workforce',
           path: '/hr',
           icon: UserCog,
-          activePaths: ['/hr', '/hr/roster', '/hr/pay', '/hr/where', '/hr/issues', '/hr/interviews', '/hr/applications'],
+          activePaths: ['/hr', '/hr/roster', '/hr/pay', '/hr/where', '/hr/issues', '/hr/interviews', '/hr/applications', '/hr/onboarding'],
         },
-        { name: 'Branch Paperwork', path: '/documents', icon: Files },
+        { name: 'Documents', path: '/documents', icon: Files },
         { name: 'Audit Data Entry', path: '/data-entry', icon: Inbox },
       ],
     },
@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Security & Compliance', path: '/admin/compliance', icon: ShieldAlert },
         // Administrators only — filtered by canAccessRoute against route-permissions, same as
         // every other item here.
-        { name: 'Rule Bypass', path: '/admin/rule-bypass', icon: ShieldOff },
+        { name: 'Paused rules', path: '/admin/rule-bypass', icon: ShieldOff },
       ],
     },
   ];

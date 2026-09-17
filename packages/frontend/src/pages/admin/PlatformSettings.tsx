@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SlidersHorizontal, Mail, Clock, Wallet, Receipt, Database, Send, Sliders,
-  RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle,
+  RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle, LayoutTemplate,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { isValidPan } from '@fapoms/shared';
@@ -18,6 +18,7 @@ import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset,
 import { DangerZoneSection } from './DangerZone/DangerZoneSection';
 import { RulesSection } from '../Rules';
 import { TransportCostsSection } from '../TransportCosts';
+import { EmailTemplatesSection } from './EmailTemplatesSection';
 import { Page } from '../../components/ui/Page';
 import { SkeletonList } from '../../components/ui/Loading';
 
@@ -40,6 +41,12 @@ const RULES_GROUP = {
   key: 'rules',
   label: 'Who can be assigned',
   description: 'Skills, certificates, territories and assignment limits that decide which assayers a job may be offered to.',
+};
+
+const EMAIL_TEMPLATES_GROUP = {
+  key: 'email_templates',
+  label: 'Email Templates',
+  description: 'Visual designs, live preview, and dynamic tokens for transactional emails.',
 };
 
 /**
@@ -78,6 +85,7 @@ interface Group { key: string; label: string; description: string }
 
 const GROUP_ICON: Record<string, React.ElementType> = {
   email: Mail,
+  email_templates: LayoutTemplate,
   schedule: Clock,
   fees: Wallet,
   billing: Receipt,
@@ -225,13 +233,28 @@ export const PlatformSettings: React.FC = () => {
         ...(canSeeTravel ? travel : []),
       ];
     }
+    const hasTemplates = fromServer.some((g) => g.key === 'email_templates');
+    const withTemplates = hasTemplates
+      ? fromServer
+      : (() => {
+          const emailIdx = fromServer.findIndex((g) => g.key === 'email');
+          if (emailIdx !== -1) {
+            return [
+              ...fromServer.slice(0, emailIdx + 1),
+              EMAIL_TEMPLATES_GROUP,
+              ...fromServer.slice(emailIdx + 1),
+            ];
+          }
+          return [...fromServer, EMAIL_TEMPLATES_GROUP];
+        })();
+
     /**
      * Planning has no nav entry of its own: its one setting — how many offers before someone
      * counts as well used — is a scoring rule, and it sat on a separate heading from the rules
      * deciding who is eligible to be scored at all. It renders inside that section instead.
      */
-    const planningAt = fromServer.findIndex((g) => g.key === 'planning');
-    const withoutPlanning = fromServer.filter((g) => g.key !== 'planning');
+    const planningAt = withTemplates.findIndex((g) => g.key === 'planning');
+    const withoutPlanning = withTemplates.filter((g) => g.key !== 'planning');
     const at = planningAt === -1 ? withoutPlanning.length : planningAt;
     const withRules = [...withoutPlanning.slice(0, at), RULES_GROUP, ...withoutPlanning.slice(at)];
     return [...withRules, ...(canWipeData ? [DANGER_ZONE_GROUP] : [])];
@@ -604,6 +627,8 @@ export const PlatformSettings: React.FC = () => {
             </>
           ) : activeGroup === 'dangerZone' ? (
             <DangerZoneSection />
+          ) : activeGroup === 'email_templates' ? (
+            <EmailTemplatesSection canEdit={canEdit} />
           ) : (
           <SectionCard
             title={groups.find((g) => g.key === activeGroup)?.label ?? 'Settings'}

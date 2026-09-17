@@ -74,7 +74,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
    */
   const remainingCapacity = planningSnapshot?.workload?.remaining ?? null;
   if (remainingCapacity !== null && remainingCapacity <= 0) {
-    warnings.push('Weekly workload capacity is full (0 slots remaining)');
+    warnings.push('Their week is full — no more jobs can be added this week.');
   }
 
   // A count for the readout beside the verdict, through the planner's own predicate rather than a
@@ -105,7 +105,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-            Deployment Readiness
+            Can they be given work?
           </span>
           {/*
             "(Backend-Authoritative)" is a sentence about our architecture, printed on a screen a
@@ -114,7 +114,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
             that this is the same verdict dispatch will apply — so say that.
           */}
           <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
-            the same check dispatch makes
+            the same check used when assigning work
           </span>
         </div>
         <div
@@ -134,15 +134,15 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
         >
           {!answered ? (
             <>
-              <HelpCircle size={13} /> Readiness Unavailable
+              <HelpCircle size={13} /> Not known
             </>
           ) : isDeployable ? (
             <>
-              <CheckCircle2 size={13} /> Deployable
+              <CheckCircle2 size={13} /> Yes
             </>
           ) : (
             <>
-              <XCircle size={13} /> Blocked from Deployment
+              <XCircle size={13} /> Not yet
             </>
           )}
         </div>
@@ -161,21 +161,21 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
         }}
       >
         <div>
-          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Lifecycle Stage</span>
+          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Stage</span>
           <strong style={{ color: 'var(--text-primary)' }}>{assayerLifecycleLabel(assayer.lifecycleStatus)}</strong>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Active Banks</span>
+          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Banks they can work for</span>
           <strong style={{ color: 'var(--text-primary)' }}>
-            {plannableEmpanelmentCount} plannable
+            {plannableEmpanelmentCount}
           </strong>
         </div>
-        <div>
-          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Spare Workload</span>
-          <strong style={{ color: 'var(--text-primary)' }}>
-            {remainingCapacity !== null ? `${remainingCapacity} slots` : '—'}
-          </strong>
-        </div>
+        {remainingCapacity !== null && (
+          <div>
+            <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 'var(--text-2xs)' }}>Jobs left this week</span>
+            <strong style={{ color: 'var(--text-primary)' }}>{remainingCapacity}</strong>
+          </div>
+        )}
       </div>
 
       {/* Blockers Section — the server's list, verbatim and in its order. */}
@@ -191,7 +191,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--danger)' }}>
             <ShieldAlert size={14} />
-            Blocking Reasons:
+            Why not:
           </div>
           <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 'var(--text-xs)', color: 'var(--text-primary)' }}>
             {blockers.map((b, idx) => (
@@ -214,7 +214,7 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)' }}>
             <AlertTriangle size={14} />
-            Compliance Attention:
+            Worth knowing:
           </div>
           <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 'var(--text-xs)', color: 'var(--text-primary)' }}>
             {warnings.map((w, idx) => (
@@ -226,15 +226,14 @@ export const DeploymentReadinessCard: React.FC<DeploymentReadinessCardProps> = (
 
       {!answered && (
         <div data-testid="readiness-unavailable-note" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          The readiness check has not answered for this record — the dossier is still loading, or
-          this account is not entitled to read it. Nothing here is a statement that they are clear
-          to deploy.
+          This check has not loaded — it may still be on its way, or your account may not be allowed
+          to see it. Do not read this as a yes.
         </div>
       )}
 
       {isDeployable && warnings.length === 0 && (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>
-          Profile meets all baseline operational and compliance gates for assignment dispatch.
+          Nothing is stopping them from being given work.
         </div>
       )}
     </div>

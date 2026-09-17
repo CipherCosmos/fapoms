@@ -211,6 +211,12 @@ describe('page one', () => {
    * tried to move past the page with it still blank.
    */
   it('keeps the Phone gap notice muted until the clerk has touched it or tried to move on', async () => {
+    // With no number at all. The phone box now opens holding the mobile the candidate was invited
+    // on, so an ordinary application has no phone gap to warn about — this rule is for the one that
+    // genuinely does.
+    wireApi({
+      [`GET /hr/applications/${APP_ID}`]: { ...VIEW, application: { ...APPLICATION, mobile: '' } },
+    });
     await mount();
     const phoneInput = screen.getByLabelText(/^Phone/);
     const phoneLabel = document.querySelector(`label[for="${phoneInput.id}"]`) as HTMLElement;
@@ -602,10 +608,41 @@ describe('the papers step', () => {
       });
     });
 
-    it('offers the camera as well as the gallery on a phone (capture="environment")', async () => {
+    /**
+     * This used to assert `capture="environment"` on the picker — the phone's own camera app,
+     * which hands back a photograph of a card lying on a desk: skewed, with the desk in it, at
+     * whatever exposure the room had. The camera is now a real scanner (`ScanOrAttach` →
+     * `DocumentScanner`), which finds the document in the frame, squares it up and cleans it, so
+     * the hint is gone and a button stands in its place. The picker itself is untouched and still
+     * takes a flatbed PDF or a photo already on the device.
+     *
+     * The camera has to be stubbed for it to appear, and the exact name matters: the first version
+     * of this test asked for any button matching /scan/i and passed against the step tab "4. Papers
+     * and scans" while no scan button existed at all.
+     */
+    const withCamera = (present: boolean) => {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        value: present ? { getUserMedia: jest.fn() } : undefined,
+        configurable: true,
+      });
+    };
+
+    it('offers a scanner beside the file picker where a camera exists', async () => {
+      withCamera(true);
       await openDocuments();
-      const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
-      expect(picker.getAttribute('capture')).toBe('environment');
+
+      expect(screen.getAllByRole('button', { name: 'Scan' }).length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Choose file').length).toBeGreaterThan(0);
+      expect(document.querySelector('input[type="file"]')).toBeTruthy();
+    });
+
+    /** A button that explains it cannot work only after being pressed is worse than no button. */
+    it('offers only the file picker on a machine with no camera', async () => {
+      withCamera(false);
+      await openDocuments();
+
+      expect(screen.queryByRole('button', { name: 'Scan' })).not.toBeInTheDocument();
+      expect(document.querySelector('input[type="file"]')).toBeTruthy();
     });
   });
 });
@@ -1011,5 +1048,56 @@ describe('bankName locks once the IFSC code resolves it', () => {
     expect(bankNameBox).not.toHaveAttribute('readonly');
     fireEvent.change(bankNameBox, { target: { value: 'HDFC Bank — Fort Kochi branch' } });
     expect(screen.getByDisplayValue('HDFC Bank — Fort Kochi branch')).toBeInTheDocument();
+  });
+});
+
+/**
+ * A STEP DECLARES WHAT IT COLLECTS; THE SCREEN HAS TO ACTUALLY ASK FOR IT.
+ *
+ * `STEP_FIELDS.person` said the first step collects gender and "Freelancer or proprietor". The
+ * screen asked for neither — its Blocks listed four other keys that were not in the field map, and
+ * `Block` drops an unknown key without a word. So the desk could never set whether somebody is a
+ * freelancer or a proprietor, which decides the documents they are asked for and which the
+ * application refuses to submit without.
+ *
+ * This checks every declared key on every step that has boxes, by the label the person would read.
+ * It kills the class, not the instance: the next key somebody declares and forgets to draw fails
+ * here too.
+ */
+describe('every box a step declares is on the screen', () => {
+  const { STEP_FIELDS, REGISTRATION_FIELDS } = jest.requireActual('./steps');
+  const labelOf = (key: string): string =>
+    (REGISTRATION_FIELDS as Array<{ key: string; label: string }>).find((f) => f.key === key)?.label ?? key;
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const expectDrawn = (step: string) => {
+    for (const key of STEP_FIELDS[step] as string[]) {
+      const found = screen.queryAllByLabelText(new RegExp(`^${escape(labelOf(key))}`));
+      expect({ step, key, drawn: found.length > 0 }).toEqual({ step, key, drawn: true });
+    }
+  };
+
+  beforeEach(() => wireApi());
+
+  it('draws the whole of the first step, including freelancer or proprietor', async () => {
+    await mount();
+    expectDrawn('person');
+  });
+
+  it('draws the address, identity and people steps in full', async () => {
+    await mount();
+    type(/^Full name/, 'Ramesh Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await choose(/^Freelancer or proprietor/, 'Freelancer');
+
+    await click(/Continue/);
+    expectDrawn('address');
+
+    await click(/^Continue/);
+    expectDrawn('identity');
+
+    await click(/^Continue/);            // documents — no boxes of its own
+    await click(/^Continue/);
+    expectDrawn('people');
   });
 });

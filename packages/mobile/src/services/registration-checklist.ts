@@ -1,3 +1,4 @@
+import { DOCUMENT_SCAN_PROFILES, type OnboardingDocument } from '@fapoms/shared';
 import type { RegistrationChecklistItem } from './api.service';
 import type { OutboxUpload } from './upload-outbox';
 // Type-only, and therefore erased at compile time: this module must stay loadable in the
@@ -54,14 +55,11 @@ export interface ChecklistRow extends RegistrationChecklistItem {
 }
 
 /**
- * Which requirements have a "what to photograph" instruction written for them.
+ * Which requirements have a hand-written "what to photograph" instruction.
  *
- * The sentences themselves live in the translation catalogue under `registration.hints.*`, one
- * key per entry below. This list exists so that a requirement with no instruction — a new
- * document type the server starts asking for before anybody has written copy for it — produces
- * *nothing* rather than a key that the humanising fallback would turn into "Governance audit".
- * Silence is the intended behaviour there: the document's own name is already on the row, and a
- * padded sentence would add nothing but noise for the reader.
+ * The sentences live in the translation catalogue under `registration.hints.*`, one key per entry
+ * below, and they are written for the reader this app actually has: short, second person, no
+ * vocabulary anybody has to decode — "The side with your photo on it."
  *
  * The document's *name* is deliberately not translated anywhere: it arrives from the server and
  * the person is holding a physical paper they have to match it against. Renaming an NDA on
@@ -79,11 +77,25 @@ type DocumentedRequirement = (typeof DOCUMENTED_REQUIREMENTS)[number];
 
 const HINTED = new Set<string>(DOCUMENTED_REQUIREMENTS);
 
-/** The catalogue key for a requirement's photography instruction, or null if none is written. */
+/**
+ * The catalogue key for a requirement's photography instruction.
+ *
+ * TWO SOURCES, ONE ANSWER, IN THAT ORDER. A hand-written sentence above wins, because those were
+ * written for this app's reader and no general rule beats somebody having thought about the actual
+ * document. Where none exists — fifteen of the twenty-eight requirements, including every one of
+ * the proprietor's papers — the shared scanning profile supplies the sentence for that *kind* of
+ * document (`@fapoms/shared`, the same table the browser scanner reads), so a rent agreement gets
+ * "flatten the page, add each further page after this one" instead of the silence it used to get.
+ *
+ * Null survives for a requirement that is not a document at all, which is the only case where
+ * saying nothing was ever the right answer rather than a gap in the copy.
+ */
 export function hintKeyFor(requirement: string): TranslationKey | null {
-  return HINTED.has(requirement)
-    ? (`registration.hints.${requirement as DocumentedRequirement}` as TranslationKey)
-    : null;
+  if (HINTED.has(requirement)) {
+    return `registration.hints.${requirement as DocumentedRequirement}` as TranslationKey;
+  }
+  const profile = DOCUMENT_SCAN_PROFILES[requirement as OnboardingDocument];
+  return profile ? (`scanner.hint.${profile.hintKey}` as TranslationKey) : null;
 }
 
 /** Outbox entries for registration documents, keyed by requirement, newest attempt winning. */

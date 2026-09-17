@@ -1,5 +1,6 @@
 import {
   Body, Controller, Get, Param, Patch, Post, UploadedFile, UseInterceptors, BadRequestException,
+  Res, ParseIntPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -141,6 +142,36 @@ export class PublicRegistrationController {
     return await this.registrationApplications.updateDraft(token, dto);
   }
 
+  @Get(':token/lookup/ifsc/:code')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'IFSC → bank lookup for the candidate bank form (invite-token gated)' })
+  async lookupIfsc(@Param('token') token: string, @Param('code') code: string) {
+    return await this.registrationApplications.lookupIfsc(token, code);
+  }
+
+  @Get(':token/lookup/pincode/:pin')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Pincode → district/city/state lookup for the candidate address form (invite-token gated)' })
+  async lookupPincode(@Param('token') token: string, @Param('pin') pin: string) {
+    return await this.registrationApplications.lookupPincode(token, pin);
+  }
+
+  @Get(':token/check-phone/:phone')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Check if a mobile phone number already conflicts with an active appraiser or application' })
+  async checkPhone(@Param('token') token: string, @Param('phone') phone: string) {
+    /*
+      Returned as it comes back, because the service already answers in this shape.
+
+      This used to be `conflict ? {conflict: true, …} : {conflict: false}` — and the service's
+      "no, that number is free" answer is an OBJECT, `{conflict: false}`, which is truthy. So the
+      ternary took the conflict branch for EVERY number, with `conflict.message` undefined, and
+      the candidate's form fell back to its own sentence: "This mobile number is already
+      registered with someone else." Nobody could get past step one with any number at all.
+    */
+    return await this.registrationApplications.checkPhoneForToken(token, phone);
+  }
+
   @Post(':token/consent')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiOperation({ summary: 'Record the declaration & consent acknowledgement' })
@@ -175,5 +206,22 @@ export class PublicRegistrationController {
   @ApiOperation({ summary: 'Submit the application for HR review' })
   async submit(@Param('token') token: string) {
     return await this.registrationApplications.submit(token);
+  }
+
+  @Get(':token/documents/:requirement/file/:index')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Stream one attached scan for candidate preview' })
+  async readDocument(
+    @Param('token') token: string,
+    @Param('requirement') requirement: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Res() res: any,
+  ): Promise<void> {
+    const { key, fileName } = await this.registrationApplications.documentFileKeyForToken(
+      token, requirement as OnboardingDocument, index,
+    );
+    const stream = await this.registrationApplications.openDocumentStream(key);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
+    stream.pipe(res);
   }
 }

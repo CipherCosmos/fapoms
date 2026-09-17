@@ -10,7 +10,7 @@ import { CAT_LABEL_KEYS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
 import { useT, t as translate, type TranslationKey } from '../i18n';
 import {
-  AppText, Badge, Button, Card, CollapsibleSection, Divider, EmptyState, FadeIn, GlowBlob, Icon, StatStrip, StatTile,
+  AppText, Badge, Button, Card, CollapsibleSection, Divider, EmptyState, FadeIn, GlowBlob, Icon, MetaChip, StatStrip, StatTile,
 } from '../components/ui/primitives';
 
 interface EarningsScreenProps {
@@ -102,26 +102,6 @@ function pastDay(iso: string | null | undefined): string {
   return formatDateOnly(iso, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-/** The chip pattern used across the app: soft pill, 13px accent-toned icon, caption text. */
-const MoneyChip: React.FC<{ icon: string; label: string; value: string; iconColor?: string }> = ({
-  icon, label, value, iconColor,
-}) => {
-  const t = useTheme();
-  return (
-    <View
-      style={{
-        flexDirection: 'row', alignItems: 'center', gap: 6,
-        backgroundColor: t.colors.surfaceAlt, borderWidth: 1, borderColor: t.colors.border,
-        paddingHorizontal: 10, paddingVertical: 6, borderRadius: t.radius.pill,
-      }}
-    >
-      <Icon name={icon} size={13} color={iconColor ?? t.colors.accent} />
-      <AppText variant="caption" tone="muted">{label} </AppText>
-      <AppText variant="caption">{value}</AppText>
-    </View>
-  );
-};
-
 /**
  * Money: what has been paid, what is still owed, and what each audit earned.
  *
@@ -210,16 +190,16 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
 
             {/* Paid vs pending at a glance, in the app's chip pattern. */}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-              <MoneyChip icon="trending-up" label={tr('earnings.chipEarned')} value={money(lifetime)} />
-              <MoneyChip icon="checkmark-circle-outline" label={tr('earnings.chipPaid')} value={money(paid)} iconColor={t.colors.success} />
-              <MoneyChip icon="hourglass-outline" label={tr('earnings.chipPending')} value={money(awaiting)} iconColor={t.colors.warning} />
+              <MetaChip icon="trending-up" label={tr('earnings.chipEarned')} value={money(lifetime)} />
+              <MetaChip icon="checkmark-circle-outline" label={tr('earnings.chipPaid')} value={money(paid)} iconColor={t.colors.success} />
+              <MetaChip icon="hourglass-outline" label={tr('earnings.chipPending')} value={money(awaiting)} iconColor={t.colors.warning} />
               {onHold > 0 && (
-                <MoneyChip icon="pause-circle-outline" label={tr('earnings.payableStatus.onHold')} value={money(onHold)} iconColor={t.colors.danger} />
+                <MetaChip icon="pause-circle-outline" label={tr('earnings.payableStatus.onHold')} value={money(onHold)} iconColor={t.colors.danger} />
               )}
               {/* Was computed by the backend and shown on the desk's own view of this same
                   statement, but silently dropped by this screen's mapping until now. */}
               {tdsWithheld > 0 && statement?.tdsSection && (
-                <MoneyChip
+                <MetaChip
                   icon="receipt-outline"
                   label={tr('earnings.chipTdsWithheld', { section: statement.tdsSection })}
                   value={money(tdsWithheld)}

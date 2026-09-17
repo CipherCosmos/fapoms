@@ -61,6 +61,7 @@ export interface RegistrationHydrateResult {
   application: RegistrationApplication;
   documents: RegistrationApplicationDocument[];
   documentsRequested: OnboardingDocument[];
+  otpVerified?: boolean;
 }
 
 export interface UpdateRegistrationDraftInput {
@@ -74,7 +75,12 @@ export interface UpdateRegistrationDraftInput {
   state?: string;
   city?: string;
   pincode?: string;
-  experienceYears?: number;
+  /**
+   * `null` clears a previously saved value. The backend's `@IsOptional()`
+   * skips null, and the draft loop stores it — so clearing a box and leaving
+   * it is a real clear, not a value that resurrects on reload.
+   */
+  experienceYears?: number | null;
   currentEmployer?: string;
   expertise?: string;
   availability?: string;
@@ -140,6 +146,20 @@ export function verifyRegistrationOtp(token: string, phone: string, code: string
   });
 }
 
+export interface CheckPhoneConflictResult {
+  conflict: boolean;
+  message?: string;
+}
+
+export function checkRegistrationPhoneConflict(
+  token: string,
+  phone: string,
+): Promise<CheckPhoneConflictResult> {
+  return call<CheckPhoneConflictResult>(
+    `${basePath(token)}/check-phone/${encodeURIComponent(phone.trim())}`,
+  );
+}
+
 export function updateRegistrationDraft(
   token: string,
   patch: UpdateRegistrationDraftInput,
@@ -172,6 +192,65 @@ export function uploadRegistrationDocument(
 
 export function submitRegistration(token: string): Promise<RegistrationApplication> {
   return call<RegistrationApplication>(`${basePath(token)}/submit`, { method: 'POST' });
+}
+
+/**
+ * Three answers, not two: the directory saying "no such pincode" and nobody being able to ask are
+ * different facts, and only the first one means the candidate should check their digits.
+ */
+export interface RegistrationPincodeLookup {
+  status: 'found' | 'not-found' | 'unavailable';
+  state?: string;
+  district?: string;
+  city?: string | null;
+  /** `directory` = India Post, which defines the pincode. `map` = OpenStreetMap, worth confirming. */
+  source?: 'directory' | 'map';
+}
+
+export interface RegistrationIfscLookup {
+  bankName: string;
+  branchName: string;
+  city: string | null;
+  state: string | null;
+  address: string | null;
+}
+
+/**
+ * Pincode → district/city/state, read through the invite token rather than a
+ * session. Answers `null` when the directory has nothing for the pincode —
+ * the caller degrades to hand-typing, never to a block.
+ */
+export function lookupRegistrationPincode(
+  token: string,
+  pin: string,
+): Promise<RegistrationPincodeLookup | null> {
+  return call<RegistrationPincodeLookup | null>(
+    `${basePath(token)}/lookup/pincode/${encodeURIComponent(pin.trim())}`,
+  );
+}
+
+/** IFSC → bank/branch, same terms as the pincode lookup above. */
+export function lookupRegistrationIfsc(
+  token: string,
+  code: string,
+): Promise<RegistrationIfscLookup | null> {
+  return call<RegistrationIfscLookup | null>(
+    `${basePath(token)}/lookup/ifsc/${encodeURIComponent(code.trim().toUpperCase())}`,
+  );
+}
+
+export async function getRegistrationDocumentFileBlob(
+  token: string,
+  requirement: string,
+  index = 0,
+): Promise<Blob> {
+  const path = `${basePath(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`;
+  const response = await fetchWithTimeout(path, { timeoutMs: LONG_TIMEOUT_MS });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw fromResponse(response.status, body);
+  }
+  return response.blob();
 }
 
 /** Was this failure the server saying "verify your mobile number before continuing"? */

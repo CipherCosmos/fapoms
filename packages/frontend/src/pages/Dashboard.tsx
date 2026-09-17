@@ -234,8 +234,8 @@ export const Dashboard: React.FC = () => {
   const documentBars: HBarDatum[] = data?.documents ? [
     { key: 'unsent', label: 'Packets unsent', value: data.documents.packetsUnsent, color: 'var(--warning)' },
     { key: 'withAssayers', label: 'With assayers', value: data.documents.awaitingReturn, color: 'var(--accent-primary)' },
-    { key: 'awaitingOcr', label: 'Awaiting OCR', value: data.documents.awaitingOcr, color: 'var(--accent-secondary)' },
-    { key: 'inOcr', label: 'In OCR', value: data.documents.inOcr, color: 'var(--success)' },
+    { key: 'awaitingOcr', label: 'Waiting for scan', value: data.documents.awaitingOcr, color: 'var(--accent-secondary)' },
+    { key: 'inOcr', label: 'Being scanned', value: data.documents.inOcr, color: 'var(--success)' },
   ] : [];
 
   const moneyBars: HBarDatum[] = data?.money ? [
@@ -300,7 +300,7 @@ export const Dashboard: React.FC = () => {
           {canSeeCommandCenter && (
             <button onClick={() => navigate('/executive-map')} className="btn btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
-              <Map size={14} /> Command Center <ArrowRight size={13} />
+              <Map size={14} /> Coverage map <ArrowRight size={13} />
             </button>
           )}
         </div>

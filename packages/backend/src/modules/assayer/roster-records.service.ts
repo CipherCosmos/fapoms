@@ -19,13 +19,14 @@ import {
   missingAssayerRecordFields, isPlaceholderPin, standingAllowsPlanning,
 } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
+import { DataIntegrityService } from './data-integrity.service';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
-import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, EventCategory } from '@fapoms/shared';
+import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, IDEMPOTENCY_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
@@ -36,6 +37,7 @@ import {
   assessIdentityArtifact,
   idCardValidTill,
 } from './identity-artifacts';
+import { cardLine, type IdCardPrintedText, type IdCardTerms } from './id-card';
 import {
   assertEmpanelmentVersion, lockEmpanelmentRow, translateConcurrentEmpanelmentCreate,
 } from './empanelment-version';
@@ -132,6 +134,12 @@ export class RosterRecordsService {
     // TypeScript — `@Optional()` is what stops Nest throwing when no provider is registered.
     // Every call site guards with `?.`.
     @Optional() private readonly auditService?: AuditService,
+    /**
+     * For one question, asked before a PAN or an Aadhaar is written onto a person from the
+     * paperwork screen: does this number already belong to somebody else? Optional in the same way
+     * and for the same reason as the audit collaborator above — hand-built specs still resolve.
+     */
+    @Optional() private readonly dataIntegrity?: DataIntegrityService,
     /**
      * Optional for the same reason the audit collaborator is: specs build this service directly,
      * and a document that cannot be announced must still be able to be rejected.
@@ -326,11 +334,12 @@ export class RosterRecordsService {
      */
     const lifecycle = assayer.lifecycleStatus;
 
+    // These sentences are shown word for word to HR clerks on the record's "Can they be given
+    // work?" card, so they say what is wrong and where to fix it — in their words, not ours.
+    const words = (code: unknown) => String(code ?? '').toLowerCase().replace(/_/g, ' ');
+
     if (assayer.isActive === false) {
-      blockers.push(
-        'profile has been deleted from the workforce — restore it on the HR roster before anything '
-        + 'can be planned for them',
-      );
+      blockers.push('their record has been deleted — restore it on the HR roster before they can be given work');
     }
 
     if (operationalStatusFor(lifecycle) !== 'ACTIVE') {
@@ -338,30 +347,20 @@ export class RosterRecordsService {
       if (step) {
         // The planner's exact wording, through the shared map, so the coordinator it sends to
         // this screen finds the identical instruction waiting rather than a paraphrase.
-        blockers.push(`onboarding not finished: ${step}`);
+        blockers.push(`still joining: ${step}`);
       } else if (hasLeftWorkforce(assayer)) {
         blockers.push(
           String(assayer.unavailableReason ?? '').toUpperCase() === 'DECEASED'
-            ? 'recorded as deceased — the record is kept for audit history and nothing is ever '
-              + 'dispatched or paid against it again'
-            : `off the workforce (${assayerLifecycleLabel(lifecycle)}) — a rehire restarts onboarding `
-              + 'from Invited on the HR roster; there is no path straight back to Active',
+            ? 'recorded as deceased — the record is kept for history only'
+            : `they have left (${assayerLifecycleLabel(lifecycle)}) — to bring them back, rehire them; `
+              + 'they start joining again from Invited',
         );
       } else if (lifecycle === AssayerLifecycleStatus.SUSPENDED) {
-        blockers.push(
-          'suspended — no assignment is offered, accepted or checked in while the suspension '
-          + 'stands; lift it on the HR roster',
-        );
+        blockers.push('suspended — they cannot be offered or do any work until the suspension is lifted');
       } else if (lifecycle === AssayerLifecycleStatus.ON_LEAVE) {
-        blockers.push(
-          'on leave — leave is not a per-date fact here, it takes them out of the candidate pool '
-          + 'entirely; move them back to Active on the HR roster when they return',
-        );
+        blockers.push('on leave — they are not offered any work until they are moved back to Active');
       } else if (lifecycle === AssayerLifecycleStatus.INACTIVE) {
-        blockers.push(
-          'parked as inactive — move them back to Active on the HR roster to return them to the '
-          + 'planning pool',
-        );
+        blockers.push('inactive — move them back to Active to offer them work again');
       } else {
         // Unreachable while ONBOARDING_STAGES and the lifecycle enum agree, and kept anyway: a new
         // lifecycle value added without a sentence here must show up as an honest refusal naming
@@ -381,9 +380,9 @@ export class RosterRecordsService {
        */
       const left = assayer.exitDate ?? assayer.terminationDate;
       blockers.push(
-        `recorded as having left on ${new Date(left as Date).toISOString().slice(0, 10)} while the `
-        + `lifecycle still reads ${assayerLifecycleLabel(lifecycle)} — close the record on the HR `
-        + 'roster, or clear the leaving date if they never went',
+        `a leaving date (${new Date(left as Date).toISOString().slice(0, 10)}) is recorded but their `
+        + `stage still says ${assayerLifecycleLabel(lifecycle)} — close their record, or clear the `
+        + 'leaving date if they never left',
       );
     }
 
@@ -391,8 +390,8 @@ export class RosterRecordsService {
     // unavailability, and naming it twice reads as two separate problems.
     if (assayer.unavailableReason && !hasLeftWorkforce(assayer)) {
       blockers.push(
-        `marked unavailable (${assayer.unavailableReason}) — clear the unavailability on the HR `
-        + 'roster if they are working again',
+        `marked unavailable (${words(assayer.unavailableReason)}) — clear it on their details if `
+        + 'they are working again',
       );
     }
 
@@ -408,17 +407,17 @@ export class RosterRecordsService {
     if (plannable.length === 0) {
       if (empanelments.length === 0) {
         blockers.push(
-          'no client empanelment on file — record an Active or Recommended standing on the vetting '
-          + 'screen; with no standing anywhere the planner has no client it may offer them to',
+          'not approved by any bank yet — record a bank approval (Active or Recommended) on their '
+          + 'Background tab',
         );
       } else {
         const held = empanelments
           .slice(0, 3)
-          .map((e) => `${e.status} with ${e.client?.clientCode ?? e.client?.name ?? 'a client'}`)
+          .map((e) => `${words(e.status)} with ${e.client?.clientCode ?? e.client?.name ?? 'a client'}`)
           .join(', ');
         blockers.push(
-          `no client empanelment in a plannable standing — ${held} on file, and only Active or `
-          + 'Recommended lets the planner offer work; fix it on the vetting screen',
+          `no bank approval that allows work (${held}) — only Active or Recommended lets them be `
+          + 'offered work; change it on their Background tab',
         );
       }
     }
@@ -454,28 +453,26 @@ export class RosterRecordsService {
         parts.push(`${say(identity.rejected)} ${identity.rejected.length > 1 ? 'were' : 'was'} sent back and ${identity.rejected.length > 1 ? 'have' : 'has'} not been replaced`);
       }
       blockers.push(
-        `identity not established — ${parts.join(', and ')}; open their Documents tab, check the `
-        + 'scan against what is recorded and mark it verified',
+        `identity not confirmed — ${parts.join(', and ')}; check the scans on their Documents tab `
+        + 'and mark them verified',
       );
     }
 
     if (missingAssayerRecordFields(assayer as unknown as Record<string, unknown>).some((f) => f.key === 'latitude')) {
       blockers.push(
         isPlaceholderPin(assayer as unknown as Record<string, unknown>)
-          ? 'home pin is a placeholder, not a home — it is a district or state centroid, so every '
-            + 'distance the planner measures for them is measured from the wrong place; pin their '
-            + 'home on the HR record'
-          : 'no home location recorded — the planner\'s distance pre-filter drops anyone it cannot '
-            + 'place, silently and with no exclusion reason, so they are never even considered; '
-            + 'pin their home on the HR record',
+          ? 'home pin is only approximate (the middle of their district or state), so distances and '
+            + 'travel costs for them are wrong — pin their home on their details'
+          : 'no home location recorded — without it they are left out of every search for nearby '
+            + 'people; pin their home on their details',
       );
     }
 
     if (cannotBePaid(assayer as unknown as Record<string, unknown> & AssayerEntity)) {
       const gaps = payoutBlockingGaps(assayer as unknown as Record<string, unknown>).map((f) => f.label);
       blockers.push(
-        `payout details incomplete (${gaps.join(', ')}) — the audit can be dispatched, but every `
-        + 'payable it earns is held until HR records them on the record',
+        `bank details incomplete (${gaps.join(', ')}) — they can be sent to work, but their pay is `
+        + 'held until these are filled in',
       );
     }
 
@@ -947,6 +944,37 @@ export class RosterRecordsService {
           }
         }
         if (column) {
+          /*
+            THE SAME NUMBER ON TWO PEOPLE.
+
+            A PAN or an Aadhaar identifies exactly one human being, and this route writes it
+            straight onto `assayers.pan_number` / `aadhaar_number` — so until now the paperwork
+            screen would happily record one person's Aadhaar against a second roster record. The
+            duplicate check already existed and was wired only to an advisory lookup the
+            registration wizard calls; the path that actually writes the column never asked it.
+
+            A duplicate here is refused rather than warned about: two records sharing an Aadhaar
+            means payments, assignments and a client's KYC file are attached to the wrong person,
+            and the fix afterwards is a merge nobody wants to do. `excludeId` keeps a person's own
+            number from being read as a clash with themselves.
+          */
+          if (shaped && this.dataIntegrity) {
+            const clashes = await this.dataIntegrity.findIdentifierMatches({
+              [column === 'panNumber' ? 'panNumber' : 'aadhaarNumber']: shaped,
+              excludeId: assayerId,
+            });
+            const clash = clashes.find((m) => m.matchedOn === column);
+            if (clash) {
+              throw withCode(
+                new ConflictException(
+                  `That ${column === 'panNumber' ? 'PAN' : 'Aadhaar number'} is already on `
+                  + `${clash.displayName} (${clash.assayerCode}). One number belongs to one person — `
+                  + 'check the document, or merge the two records if they are the same person.',
+                ),
+                IDEMPOTENCY_ERROR_CODES.DEFINITE_DUPLICATE,
+              );
+            }
+          }
           const person = await this.assayers.findOne({ where: { id: assayerId } });
           if (person) {
             person[column] = dto.documentNumber || null;
@@ -1508,14 +1536,37 @@ export class RosterRecordsService {
    * calendar-year with a grace window: issued within `graceDays` of December 31st, the card
    * carries to the end of the NEXT year — otherwise a December 31st joiner's card would expire
    * the day it was printed, which is the owner's own objection recorded verbatim.
+   *
+   * This is the DOWNLOAD's entry point: the judgement is `idCardTerms`, and the audit row below is
+   * the one thing added on top. A preview must call `idCardTerms` instead — looking at a card is
+   * not issuing one, and must not leave an "issued with gaps" row behind.
    */
-  async idCardIssuance(assayerId: string, actorId: string): Promise<{
-    refusals: string[];
-    gated: string[];
-    gateMode: string;
-    issuedOn: Date;
-    validTill: Date;
-  }> {
+  async idCardIssuance(assayerId: string, actorId: string): Promise<IdCardTerms> {
+    const terms = await this.idCardTerms(assayerId);
+    const { refusals, gated, gateMode } = terms;
+
+    if (refusals.length === 0 && gated.length > 0 && gateMode !== 'enforce') {
+      // Issued anyway — but never silently. This row is how "who holds a card we could not have
+      // defended issuing" stays answerable after the gate is eventually switched to enforce.
+      await this.auditService?.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ASSAYER_ID_CARD_ISSUED_WITH_GAPS',
+        entityType: 'ASSAYER',
+        entityId: assayerId,
+        userId: actorId,
+        remarks: `ID card issued while the identity gate is '${gateMode}': ${gated.join('; ')}`,
+      });
+    }
+
+    return terms;
+  }
+
+  /**
+   * The ID-card judgement with no side effects — refusals, gated items, gate mode and the dates the
+   * card would carry if it were printed now. Shared by the download (through `idCardIssuance`) and
+   * the preview route, so the two cannot reach different verdicts.
+   */
+  async idCardTerms(assayerId: string): Promise<IdCardTerms> {
     const assayer = await this.assayers.findOne({ where: { id: assayerId } });
     if (!assayer) return { refusals: ['no such record'], gated: [], gateMode: 'warn', issuedOn: new Date(), validTill: new Date() };
 
@@ -1542,20 +1593,32 @@ export class RosterRecordsService {
       ID_CARD_VALIDITY_DEFAULTS.graceDays);
     const validTill = idCardValidTill(issuedOn, { mode, rollingMonths, graceDays });
 
-    if (refusals.length === 0 && gated.length > 0 && gateMode !== 'enforce') {
-      // Issued anyway — but never silently. This row is how "who holds a card we could not have
-      // defended issuing" stays answerable after the gate is eventually switched to enforce.
-      await this.auditService?.recordEventSafe({
-        category: EventCategory.OPERATIONAL,
-        eventType: 'ASSAYER_ID_CARD_ISSUED_WITH_GAPS',
-        entityType: 'ASSAYER',
-        entityId: assayerId,
-        userId: actorId,
-        remarks: `ID card issued while the identity gate is '${gateMode}': ${gated.join('; ')}`,
-      });
-    }
-
     return { refusals, gated, gateMode, issuedOn, validTill };
+  }
+
+  /**
+   * The card text an administrator sets under Admin → Settings: who signs it, the "if found" phone
+   * number, and the office address (`company.address`, the same one the invoices print).
+   *
+   * Each value is one printable line or null, and null leaves that line off the card. A settings
+   * read that fails degrades to null rather than refusing the card — a missing signatory line is a
+   * cosmetic gap; a card that cannot be printed at all is not.
+   */
+  async idCardPrintedText(): Promise<IdCardPrintedText> {
+    const read = async (key: string): Promise<string | null> => {
+      try {
+        return cardLine(await this.platformSettings?.get<string>(key));
+      } catch {
+        return null;
+      }
+    };
+    const [signatoryName, signatoryTitle, helplinePhone, officeAddress] = await Promise.all([
+      read('idCard.signatoryName'),
+      read('idCard.signatoryTitle'),
+      read('idCard.helplinePhone'),
+      read('company.address'),
+    ]);
+    return { signatoryName, signatoryTitle, helplinePhone, officeAddress };
   }
 
   /**

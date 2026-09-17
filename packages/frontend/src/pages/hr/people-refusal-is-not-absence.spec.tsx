@@ -115,9 +115,9 @@ describe('Qualification tab — a refused score is not a missing one', () => {
     draw(<AssayerQualificationTab assayerId="as-1" canManage />);
 
     await waitFor(() =>
-      expect(screen.getByText(/Could not load this assayer's qualification scores/)).toBeInTheDocument());
+      expect(screen.getByText(/Could not load their profile score/)).toBeInTheDocument());
     expect(screen.getByText(/do not have permission/)).toBeInTheDocument();
-    // "Not yet assessable" is the tab's own way of saying a person has nothing scoreable on file.
-    expect(screen.queryByText(/Not yet assessable/)).not.toBeInTheDocument();
+    // "No profile score yet" is the tab's own way of saying a person has nothing scoreable on file.
+    expect(screen.queryByText(/No profile score yet/)).not.toBeInTheDocument();
   });
 });

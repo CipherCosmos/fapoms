@@ -21,6 +21,9 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { StorageEngine } from './storage-engine.interface';
+import {
+  documentKey, newSeal, isSealed, ivOf, encryptBuffer, encryptingStream, decryptingStream, alignedRange,
+} from './document-cipher';
 
 /**
  * S3-compatible object storage backend.
@@ -238,14 +241,25 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
     const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const key = `uploads/${Date.now()}-${safeFileName}`;
 
+    /*
+      Encrypted before it leaves this process — see document-cipher.ts for why the app does this
+      rather than trusting the store. Without a root key (development only; production refuses to
+      boot without one) the file is stored as it came, exactly as before.
+    */
+    const cipherKey = documentKey();
+    const seal = cipherKey ? newSeal() : null;
+    const metadata = seal ? { Metadata: seal.metadata } : {};
+
     if (Buffer.isBuffer(content)) {
+      const body = cipherKey && seal ? encryptBuffer(content, cipherKey, seal.iv) : content;
       await this.client.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: key,
-          Body: content,
-          ContentLength: content.length,
+          Body: body,
+          ContentLength: body.length,
           ...(mimeType ? { ContentType: mimeType } : {}),
+          ...metadata,
           ...this.sseParams(),
         }),
       );
@@ -255,8 +269,9 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
         params: {
           Bucket: this.bucket,
           Key: key,
-          Body: content,
+          Body: cipherKey && seal ? content.pipe(encryptingStream(cipherKey, seal.iv)) : content,
           ...(mimeType ? { ContentType: mimeType } : {}),
+          ...metadata,
           ...this.sseParams(),
         },
         queueSize: 4,
@@ -279,14 +294,34 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
    * field downloads.
    */
   async getFileStream(key: string, start?: number, end?: number): Promise<Readable> {
-    const rangeHeader =
-      start !== undefined && end !== undefined ? `bytes=${start}-${end}` : undefined;
+    const ranged = start !== undefined && end !== undefined;
+
+    /*
+      A ranged read of an encrypted object has to know it is encrypted BEFORE asking for bytes:
+      counter mode decrypts from a block boundary, so the request starts at the block containing
+      `start` and the first few plaintext bytes are discarded. Byte offsets are otherwise identical
+      — the cipher is length-preserving — so `statFile`, Content-Length and 206 responses are right.
+    */
+    if (ranged) {
+      const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      if (isSealed(head.Metadata)) {
+        const cipherKey = this.requireDocumentKey(key);
+        const { alignedStart, skip } = alignedRange(start!);
+        const response = await this.client.send(
+          new GetObjectCommand({ Bucket: this.bucket, Key: key, Range: `bytes=${alignedStart}-${end}` }),
+        );
+        if (!response.Body) {
+          throw new InternalServerErrorException(`Object "${key}" returned an empty body from storage.`);
+        }
+        return (response.Body as Readable).pipe(decryptingStream(cipherKey, ivOf(head.Metadata!), alignedStart, skip));
+      }
+    }
 
     const response = await this.client.send(
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: key,
-        ...(rangeHeader ? { Range: rangeHeader } : {}),
+        ...(ranged ? { Range: `bytes=${start}-${end}` } : {}),
       }),
     );
 
@@ -294,7 +329,60 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
       throw new InternalServerErrorException(`Object "${key}" returned an empty body from storage.`);
     }
 
+    // Objects stored before encryption existed carry no seal and are returned as they are; the
+    // one-off `seal-existing-objects` run encrypts them.
+    if (!ranged && isSealed(response.Metadata)) {
+      return (response.Body as Readable).pipe(decryptingStream(this.requireDocumentKey(key), ivOf(response.Metadata!)));
+    }
     return response.Body as Readable;
+  }
+
+  /**
+   * Encrypt, in place, an object that reached the store without passing through `saveFile`.
+   *
+   * Direct presigned uploads and assembled multipart uploads are written by the client straight
+   * into the bucket, so the app never holds their bytes on the way in. They are sealed when they
+   * are finalized. Read fully into memory first rather than streamed onto the same key, because
+   * overwriting an object while a read of it is still open is not something to rely on — and
+   * upload limits cap these files well within memory.
+   */
+  async sealObject(key: string): Promise<boolean> {
+    const cipherKey = documentKey();
+    if (!cipherKey) return false;
+    const head = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (isSealed(head.Metadata)) return false;
+
+    const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (!response.Body) throw new InternalServerErrorException(`Object "${key}" returned an empty body from storage.`);
+    const parts: Buffer[] = [];
+    for await (const chunk of response.Body as AsyncIterable<Buffer>) parts.push(Buffer.from(chunk));
+    const plain = Buffer.concat(parts);
+
+    const seal = newSeal();
+    const body = encryptBuffer(plain, cipherKey, seal.iv);
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentLength: body.length,
+        ...(head.ContentType ? { ContentType: head.ContentType } : {}),
+        // Keep whatever metadata the object already carried; add the seal.
+        Metadata: { ...(head.Metadata ?? {}), ...seal.metadata },
+        ...this.sseParams(),
+      }),
+    );
+    return true;
+  }
+
+  private requireDocumentKey(key: string): Buffer {
+    const cipherKey = documentKey();
+    if (!cipherKey) {
+      throw new InternalServerErrorException(
+        `Stored document "${key}" is encrypted, but no PII_ENCRYPTION_KEY is configured to read it.`,
+      );
+    }
+    return cipherKey;
   }
 
   /**
@@ -329,6 +417,13 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
    * encoded into the URL itself and validated by the object store.
    */
   async getSignedUrl(key: string, expiresIn = 3600): Promise<string> {
+    // A presigned GET goes straight to the store and would hand the caller ciphertext. Nothing
+    // calls this today; the refusal keeps it that way rather than failing quietly later.
+    if (documentKey()) {
+      throw new InternalServerErrorException(
+        'Stored documents are encrypted; serve them through the API rather than a presigned URL.',
+      );
+    }
     const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
     return getSignedUrl(this.client, command, { expiresIn });
   }

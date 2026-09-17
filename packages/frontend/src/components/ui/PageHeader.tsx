@@ -28,6 +28,15 @@ export interface PageHeaderProps {
   metadata?: React.ReactNode;
   /** Optional filter or search row rendered directly within the header block. */
   filters?: React.ReactNode;
+  /**
+   * Tighter heading for a screen that already sits under a section's own tab strip.
+   *
+   * The full-size header — a 38px icon tile, a 20px title and a subtitle — is right for a
+   * destination you arrive at. It is wrong repeated above every tab of one section: the shell's
+   * breadcrumb already names the section, so the tile and the section name were a third and
+   * fourth statement of where you are, costing ~90px before any content on every page.
+   */
+  compact?: boolean;
   className?: string;
   style?: React.CSSProperties;
   children?: React.ReactNode;
@@ -50,6 +59,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   actions,
   metadata,
   filters,
+  compact = false,
   className,
   style,
   children,
@@ -62,8 +72,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 'var(--space-3, 12px)',
-        marginBottom: 'var(--space-4, 16px)',
+        gap: compact ? 'var(--space-2, 8px)' : 'var(--space-3, 12px)',
+        marginBottom: compact ? 'var(--space-2, 8px)' : 'var(--space-4, 16px)',
         ...style,
       }}
     >
@@ -125,8 +135,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: '38px',
-                height: '38px',
+                width: compact ? '30px' : '38px',
+                height: compact ? '30px' : '38px',
                 borderRadius: 'var(--radius-md, 10px)',
                 color: 'var(--accent-primary)',
                 background: 'color-mix(in srgb, var(--accent-primary) 12%, transparent)',
@@ -140,7 +150,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <h1
                 style={{
-                  fontSize: 'var(--text-xl, 20px)',
+                  fontSize: compact ? 'var(--text-lg, 18px)' : 'var(--text-xl, 20px)',
                   fontWeight: 700,
                   margin: 0,
                   fontFamily: 'var(--font-sans)',
@@ -158,8 +168,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
               <p
                 style={{
                   color: 'var(--text-secondary)',
-                  fontSize: 'var(--text-sm, 13px)',
-                  margin: '4px 0 0',
+                  fontSize: compact ? 'var(--text-xs, 12px)' : 'var(--text-sm, 13px)',
+                  margin: compact ? '2px 0 0' : '4px 0 0',
                   lineHeight: 1.45,
                 }}
               >

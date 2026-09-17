@@ -354,7 +354,7 @@ const Clients: React.FC = () => {
                 value={bulkTarget}
                 onChange={setBulkTarget}
                 options={bulkTargets.map((t) => ({ value: t, label: clientLifecycleLabel(t) }))}
-                placeholder="Move all to…"
+                placeholder="Change all to…"
                 compact
               />
               <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
@@ -515,7 +515,7 @@ const Clients: React.FC = () => {
                       <Pencil size={14} /> Edit
                     </button>
                     <button onClick={() => setShowLifecycle(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <ArrowLeftRight size={14} /> Transition
+                      <ArrowLeftRight size={14} /> Change status
                     </button>
                   </>
                 )}
@@ -635,7 +635,7 @@ const TabGroup: React.FC<{ active: string; onChange: (t: 'contacts' | 'contracts
     { key: 'contacts' as const, label: 'Contacts' },
     { key: 'contracts' as const, label: 'Contracts' },
     { key: 'billing' as const, label: 'Billing' },
-    { key: 'config' as const, label: 'Config & Planning' },
+    { key: 'config' as const, label: 'Settings' },
   ];
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)' }}>

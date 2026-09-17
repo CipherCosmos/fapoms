@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { AssignmentStatus, BypassableRule } from '@fapoms/shared';
+import { AssignmentStatus, BypassableRule, AssayerLifecycleStatus } from '@fapoms/shared';
 import {
   RecommendationEngine,
   DeployabilityFilter,
@@ -341,6 +341,7 @@ describe('RecommendationEngine', () => {
       {
         id: 'a-1',
         status: 'ACTIVE',
+        lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
         isActive: true,
         latitude: 19.0,
         longitude: 72.8,
@@ -544,7 +545,7 @@ describe('RecommendationEngine', () => {
         .mockResolvedValueOnce([{ id: 'a-near' }])
         .mockResolvedValueOnce([{ id: 'a-far', displayName: 'Distant Deepa', distanceKm: '412.7' }]);
       mockAssayerRepo.find.mockResolvedValue([
-        { id: 'a-near', displayName: 'Nearby Nilesh', status: 'ACTIVE', isActive: true, latitude: 18.5, longitude: 73.8 },
+        { id: 'a-near', displayName: 'Nearby Nilesh', status: 'ACTIVE', lifecycleStatus: AssayerLifecycleStatus.ACTIVE, isActive: true, latitude: 18.5, longitude: 73.8 },
       ]);
 
       const results = await engine.recommend(branch, new Date());
@@ -622,7 +623,7 @@ describe('RecommendationEngine', () => {
         .mockResolvedValueOnce([{ id: 'a-near' }])
         .mockResolvedValueOnce([]);
       mockAssayerRepo.find.mockResolvedValue([
-        { id: 'a-near', displayName: 'Nearby Nilesh', status: 'ACTIVE', isActive: true, latitude: 18.5, longitude: 73.8 },
+        { id: 'a-near', displayName: 'Nearby Nilesh', status: 'ACTIVE', lifecycleStatus: AssayerLifecycleStatus.ACTIVE, isActive: true, latitude: 18.5, longitude: 73.8 },
       ]);
 
       const excluded = (await engine.recommend(branch, new Date()) as any).excluded;
@@ -640,6 +641,7 @@ describe('RecommendationEngine', () => {
       id: 'a-1',
       displayName: 'Booked Bina',
       status: 'ACTIVE',
+      lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
       isActive: true,
       latitude: 19.0,
       longitude: 72.8,
@@ -720,6 +722,7 @@ describe('RecommendationEngine', () => {
     const assayerClose = {
       id: 'a-close',
       status: 'ACTIVE',
+      lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
       isActive: true,
       latitude: 19.08,
       longitude: 72.88,
@@ -730,6 +733,7 @@ describe('RecommendationEngine', () => {
     const assayerFar = {
       id: 'a-far',
       status: 'ACTIVE',
+      lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
       isActive: true,
       latitude: 20.5,
       longitude: 73.5,
@@ -779,10 +783,10 @@ describe('RecommendationEngine', () => {
 
   it('should flag (not exclude) the assayer holding an unconfirmed pending offer on this branch', async () => {
     const assayerPending = {
-      id: 'a-pending', status: 'ACTIVE', isActive: true, latitude: 19.08, longitude: 72.88,
+      id: 'a-pending', status: 'ACTIVE', lifecycleStatus: AssayerLifecycleStatus.ACTIVE, isActive: true, latitude: 19.08, longitude: 72.88,
     };
     const assayerFresh = {
-      id: 'a-fresh', status: 'ACTIVE', isActive: true, latitude: 19.09, longitude: 72.89,
+      id: 'a-fresh', status: 'ACTIVE', lifecycleStatus: AssayerLifecycleStatus.ACTIVE, isActive: true, latitude: 19.09, longitude: 72.89,
     };
 
     mockAssayerRepo.find.mockResolvedValue([assayerPending, assayerFresh]);
@@ -817,6 +821,7 @@ describe('RecommendationEngine', () => {
     const assayerNoCoords = {
       id: 'a-no-coords',
       status: 'ACTIVE',
+      lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
       isActive: true,
       latitude: null,
       longitude: null,
@@ -850,7 +855,7 @@ describe('RecommendationEngine', () => {
    */
   describe('staff remarks and rotation fairness', () => {
     const twin = (id: string) => ({
-      id, status: 'ACTIVE', isActive: true, latitude: 19.08, longitude: 72.88,
+      id, status: 'ACTIVE', lifecycleStatus: AssayerLifecycleStatus.ACTIVE, isActive: true, latitude: 19.08, longitude: 72.88,
       performanceRating: 5.0, experienceYears: 5,
     });
     const branch = { id: 'b-1', latitude: 19.076, longitude: 72.877 } as any;

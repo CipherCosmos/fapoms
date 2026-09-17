@@ -428,7 +428,7 @@ export const Documents: React.FC = () => {
       {confirmDialog}
       <PageHeader
         icon={<FileText size={20} />}
-        title="Branch Paperwork"
+        title="Documents"
         subtitle="Every branch's files in one place — upload, dispatch, receive and process without switching screens."
         actions={
           <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

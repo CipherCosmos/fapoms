@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { View, TextInput, ScrollView, KeyboardAvoidingView, Platform, TextStyle } from 'react-native';
+import { View, TextInput, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
+import { AmbientGlow, AppText, Button, Card, Icon, Input, Tappable } from '../components/ui/primitives';
 import { MobileApiService } from '../services/api.service';
 import * as haptics from '../lib/haptics';
 import { useT, serverErrorText } from '../i18n';
@@ -55,7 +55,6 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
   const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [focused, setFocused] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   /** So "Next" on the keyboard hands focus along the form instead of just showing a key nobody wired. */
@@ -65,29 +64,6 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
   const lengthOk = newPassword.length >= MIN_LENGTH;
   const differsFromCurrent = newPassword.length > 0 && newPassword !== currentPassword;
   const matches = confirmPassword.length > 0 && newPassword === confirmPassword;
-
-  // Radius matches LoginScreen's field treatment (radius.lg) rather than the tighter radius.md
-  // used for the dense profile-editor inputs — this screen is a one-task auth form, not a list
-  // of settings fields, so it gets the more spacious, "premium" rounding of the sign-in screen.
-  const inputWrap = (isFocused: boolean) => ({
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: t.space.md,
-    backgroundColor: t.colors.bg,
-    borderRadius: t.radius.lg,
-    borderWidth: 1.5,
-    borderColor: isFocused ? t.colors.primary : t.colors.border,
-    paddingHorizontal: t.space.lg,
-    height: 54,
-  });
-
-  const inputStyle: TextStyle = {
-    flex: 1,
-    color: t.colors.text,
-    fontSize: 15,
-    fontWeight: '600',
-    paddingVertical: 0,
-  };
 
   const submit = async () => {
     setError(null);
@@ -147,6 +123,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
       style={{ flex: 1, backgroundColor: t.colors.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <AmbientGlow />
       <ScrollView
         contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: t.space.xl, gap: t.space['2xl'] }}
         keyboardShouldPersistTaps="handled"
@@ -172,58 +149,50 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
         </View>
 
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl, borderRadius: t.radius['2xl'] }}>
-          <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">{tr('password.currentLabel')}</AppText>
-            <View style={inputWrap(focused === 'cur')}>
-              <Icon name="key-outline" size={18} color={focused === 'cur' ? t.colors.primary : t.colors.textFaint} />
-              <TextInput
-                value={currentPassword}
-                onChangeText={setCurrentPassword}
-                onFocus={() => setFocused('cur')}
-                onBlur={() => setFocused(null)}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                style={inputStyle}
-                accessibilityLabel={tr('password.currentAccessibility')}
-                returnKeyType="next"
-                blurOnSubmit={false}
-                onSubmitEditing={() => newRef.current?.focus()}
-              />
-            </View>
-          </View>
+          <Input
+            label={tr('password.currentLabel')}
+            icon="key-outline"
+            value={currentPassword}
+            onChangeText={setCurrentPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            accessibilityLabel={tr('password.currentAccessibility')}
+            returnKeyType="next"
+            blurOnSubmit={false}
+            onSubmitEditing={() => newRef.current?.focus()}
+            size="lg"
+          />
 
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">{tr('password.newLabel')}</AppText>
-            <View style={inputWrap(focused === 'new')}>
-              <Icon name="lock-closed-outline" size={18} color={focused === 'new' ? t.colors.primary : t.colors.textFaint} />
-              <TextInput
-                ref={newRef}
-                value={newPassword}
-                onChangeText={setNewPassword}
-                onFocus={() => setFocused('new')}
-                onBlur={() => setFocused(null)}
-                secureTextEntry={!showNew}
-                autoCapitalize="none"
-                autoCorrect={false}
-                style={inputStyle}
-                accessibilityLabel={tr('password.newAccessibility')}
-                returnKeyType="next"
-                blurOnSubmit={false}
-                onSubmitEditing={() => confirmRef.current?.focus()}
-              />
-              {/* Tappable, not a bare Pressable — this row's show/hide toggle previously gave no
-                  press feedback at all, the one control on the screen that felt unresponsive next
-                  to every button and switch elsewhere in the app using the same scale-down cue. */}
-              <Tappable
-                onPress={() => setShowNew((v) => !v)}
-                hitSlop={14}
-                accessibilityRole="button"
-                accessibilityLabel={showNew ? tr('password.hideNew') : tr('password.showNew')}
-              >
-                <Icon name={showNew ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
-              </Tappable>
-            </View>
+            <Input
+              label={tr('password.newLabel')}
+              icon="lock-closed-outline"
+              value={newPassword}
+              onChangeText={setNewPassword}
+              secureTextEntry={!showNew}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel={tr('password.newAccessibility')}
+              returnKeyType="next"
+              blurOnSubmit={false}
+              onSubmitEditing={() => confirmRef.current?.focus()}
+              size="lg"
+              inputRef={newRef}
+              rightAccessory={
+                // Tappable, not a bare Pressable — this row's show/hide toggle previously gave no
+                // press feedback at all, the one control on the screen that felt unresponsive next
+                // to every button and switch elsewhere in the app using the same scale-down cue.
+                <Tappable
+                  onPress={() => setShowNew((v) => !v)}
+                  hitSlop={14}
+                  accessibilityRole="button"
+                  accessibilityLabel={showNew ? tr('password.hideNew') : tr('password.showNew')}
+                >
+                  <Icon name={showNew ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
+                </Tappable>
+              }
+            />
             {/* Rules update live rather than only surfacing on a rejected submit — on a field
                 connection every round trip costs time, so a typo is worth catching before "Set
                 password" is even tapped. */}
@@ -234,32 +203,30 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
           </View>
 
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">{tr('password.confirmLabel')}</AppText>
-            <View style={inputWrap(focused === 'conf')}>
-              <Icon name="checkmark-circle-outline" size={18} color={focused === 'conf' ? t.colors.primary : t.colors.textFaint} />
-              <TextInput
-                ref={confirmRef}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                onFocus={() => setFocused('conf')}
-                onBlur={() => setFocused(null)}
-                secureTextEntry={!showConfirm}
-                autoCapitalize="none"
-                autoCorrect={false}
-                style={inputStyle}
-                accessibilityLabel={tr('password.confirmAccessibility')}
-                returnKeyType="go"
-                onSubmitEditing={submit}
-              />
-              <Tappable
-                onPress={() => setShowConfirm((v) => !v)}
-                hitSlop={14}
-                accessibilityRole="button"
-                accessibilityLabel={showConfirm ? tr('password.hideConfirm') : tr('password.showConfirm')}
-              >
-                <Icon name={showConfirm ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
-              </Tappable>
-            </View>
+            <Input
+              label={tr('password.confirmLabel')}
+              icon="checkmark-circle-outline"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry={!showConfirm}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel={tr('password.confirmAccessibility')}
+              returnKeyType="go"
+              onSubmitEditing={submit}
+              size="lg"
+              inputRef={confirmRef}
+              rightAccessory={
+                <Tappable
+                  onPress={() => setShowConfirm((v) => !v)}
+                  hitSlop={14}
+                  accessibilityRole="button"
+                  accessibilityLabel={showConfirm ? tr('password.hideConfirm') : tr('password.showConfirm')}
+                >
+                  <Icon name={showConfirm ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
+                </Tappable>
+              }
+            />
             <RuleRow ok={matches} label={tr('password.ruleMatches')} />
           </View>
 
@@ -277,7 +244,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
             </View>
           ) : null}
 
-          <Button label={busy ? tr('common.saving') : tr('password.submit')} onPress={submit} loading={busy} size="lg" full />
+          <Button label={busy ? tr('common.saving') : tr('password.submit')} onPress={submit} loading={busy} size="lg" glow full />
         </Card>
 
         {/* The secondary exit stays a plain ghost button — quiet relative to the primary

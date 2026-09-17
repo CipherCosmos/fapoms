@@ -232,6 +232,7 @@ export function operationalStatusFor(lifecycle: string | null | undefined): 'ACT
 // cannot-be-paid-parity.spec.ts pins the two to the same answers on shared fixtures.
 
 import { hasLeftWorkforce } from './assayer-lifecycle';
+import { parseCalendarDate } from './labels';
 
 /**
  * The gaps that stop money, as opposed to leaving the record untidy. A subset of the critical
@@ -279,4 +280,59 @@ export function cannotBePaid(
 ): boolean {
   if (!record) return false;
   return stillWorkable(record) && payoutBlockingGaps(record).length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// How old a working appraiser can be (2026-09-16)
+// ---------------------------------------------------------------------------
+/**
+ * THE RULE THAT USED TO ARRIVE A WEEK LATE.
+ *
+ * `data-integrity.service.ts` has always refused an age outside 18–90 — but only as a SWEEP over
+ * rows that already exist, which files a finding in HR's review queue days after the person
+ * registered, was approved and was put on the roster. The candidate was never told, the desk found
+ * out afterwards, and somebody then had to unpick a record that should never have been accepted.
+ *
+ * So the same numbers live here, where the form and the submit can both reach them. One sentence
+ * too: a rule the screen and the server word differently is a rule the candidate meets twice.
+ */
+export const APPRAISER_MIN_AGE = 18;
+export const APPRAISER_MAX_AGE = 90;
+/** Nobody working today was born before this; a year earlier is a typo, not a birthday. */
+export const EARLIEST_BIRTH_YEAR = 1930;
+
+/** Whole years between a date of birth and a given day — birthday not yet reached counts as last year. */
+export function ageInYears(dateOfBirth: string | Date, on: Date = new Date()): number | null {
+  const dob = parseCalendarDate(dateOfBirth);
+  if (!dob) return null;
+  let age = on.getFullYear() - dob.getFullYear();
+  const beforeBirthday = on.getMonth() < dob.getMonth()
+    || (on.getMonth() === dob.getMonth() && on.getDate() < dob.getDate());
+  if (beforeBirthday) age -= 1;
+  return age;
+}
+
+/**
+ * What is wrong with this date of birth, in the words the candidate reads — or null if nothing is.
+ *
+ * Deliberately one function for all four failures (unreadable, future, implausible year, age out
+ * of range) so the form, the submit and the roster cannot disagree about which dates are allowed.
+ */
+export function dateOfBirthProblem(value: string | Date | null | undefined, on: Date = new Date()): string | null {
+  if (value == null || value === '') return null;
+  const dob = parseCalendarDate(value as string);
+  if (!dob) return 'That is not a date we can read — pick it from the calendar.';
+  if (dob.getTime() > on.getTime()) return 'A date of birth cannot be in the future — check the year.';
+  if (dob.getFullYear() < EARLIEST_BIRTH_YEAR) {
+    return `That year is before ${EARLIEST_BIRTH_YEAR} — check it against the date on your ID.`;
+  }
+  const age = ageInYears(dob, on);
+  if (age == null) return null;
+  if (age < APPRAISER_MIN_AGE) {
+    return `You must be at least ${APPRAISER_MIN_AGE} to register as an appraiser — that date makes you ${age}.`;
+  }
+  if (age > APPRAISER_MAX_AGE) {
+    return `That date makes you ${age}, which is past the age we can register — check the year against your ID.`;
+  }
+  return null;
 }

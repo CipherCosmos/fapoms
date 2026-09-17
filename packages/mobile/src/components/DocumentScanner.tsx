@@ -7,6 +7,9 @@ import {
   isDocumentScannerAvailable,
   type ScannedPage,
 } from '../../modules/document-scanner';
+import { SCAN_UPLOAD_MIME_TYPES, uploadSizeProblem } from '@fapoms/shared';
+import { scanPlanFor, scanFileName } from './document-scan-options';
+import { hintKeyFor } from '../services/registration-checklist';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Badge } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
@@ -30,17 +33,21 @@ export interface DocumentScannerProps {
   onSaved: (doc: ScannedDocument) => void;
   /** Shown on the save screen so the assayer knows what they are filing. */
   purpose?: string;
+  /**
+   * WHICH document this is (`OnboardingDocument`), so the phone scans it the way the browser does:
+   * a card is capped at its one side, a form is left open-ended, and the sentence telling somebody
+   * what to do with the paper is this document's own. One table behind both — `scanProfileFor` in
+   * `@fapoms/shared`. Absent for scans that answer to no requirement, such as an audit packet.
+   */
+  requirement?: string | null;
 }
 
 /**
  * Drive names scans by capture time rather than making the user invent one, which matters
  * when an assayer files several packets at one branch and needs them to sort predictably.
  */
-const defaultName = (): string => {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `Scan_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
-};
+const baseName = (purpose?: string | null): string =>
+  scanFileName(purpose, 'x', new Date()).replace(/\.x$/, '');
 
 /** Reads a scanned artifact off disk. Only used by callers that genuinely need the bytes. */
 export async function readAsBase64(uri: string): Promise<string> {
@@ -52,13 +59,23 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   onClose,
   onSaved,
   purpose,
+  requirement,
 }) => {
   const t = useTheme();
   const tr = useT();
   const feedback = useFeedback();
+  const plan = scanPlanFor(requirement);
+  // One place decides what to say about a document — the hand-written sentence where somebody has
+  // written one, the shape's own otherwise. See `hintKeyFor`.
+  const hint = requirement ? hintKeyFor(requirement) : null;
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [pdfUri, setPdfUri] = useState<string | null>(null);
-  const [fileName, setFileName] = useState(defaultName);
+  /*
+    Named after the document where there is one. A record used to collect eight files all called
+    `Scan_2026-09-16_…`; `scanFileName` keeps that timestamp only for scans nothing can name —
+    an audit packet, a photo on a query — and is shared with the browser's naming.
+  */
+  const [fileName, setFileName] = useState(() => baseName(purpose));
   const [scanning, setScanning] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -73,11 +90,11 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   const reset = useCallback(() => {
     setPages([]);
     setPdfUri(null);
-    setFileName(defaultName());
+    setFileName(baseName(purpose));
     setScanning(false);
     setSaving(false);
     launchedRef.current = false;
-  }, []);
+  }, [purpose]);
 
   const dismiss = useCallback(() => {
     reset();
@@ -94,7 +111,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   const launchScanner = useCallback(async () => {
     setScanning(true);
     try {
-      const result = await scanDocument({ resultFormat: 'both', galleryImportAllowed: true });
+      const result = await scanDocument(plan.options);
       if (result.status !== 'success' || result.pages.length === 0) {
         // Backing out of the scanner without capturing closes the whole flow, as it does in
         // Drive — landing the user on an empty review screen would be a dead end.
@@ -115,7 +132,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
     } finally {
       setScanning(false);
     }
-  }, [dismiss, feedback, pages.length, tr]);
+  }, [dismiss, feedback, pages.length, plan.options, tr]);
 
   useEffect(() => {
     if (!visible || launchedRef.current) return;
@@ -130,11 +147,28 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   const pickFile = useCallback(async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['image/*', 'application/pdf'],
+        // The server's own accept-list rather than `image/*`, which is both wider (SVG) and
+        // narrower (no HEIC by name, no TIFF or BMP — what a branch flatbed writes) than what an
+        // upload is actually allowed to be. Same list the browser's picker offers.
+        type: SCAN_UPLOAD_MIME_TYPES,
         copyToCacheDirectory: true,
         multiple: true,
       });
       if (result.canceled || !result.assets?.length) return;
+
+      /*
+        Refused here rather than after the upload. The browser has told people a file is too big
+        before sending it since the size rule was written; the phone sent it anyway and let the
+        server answer, which on a field worker's connection means watching a progress bar for a
+        minute to be told no. Same rule, same sentence, from `uploadSizeProblem`.
+      */
+      const tooBig = result.assets
+        .map((a) => (a.size ? uploadSizeProblem({ name: a.name ?? 'file', size: a.size }) : null))
+        .find((problem): problem is string => !!problem);
+      if (tooBig) {
+        feedback.warning(tr('scanner.tooBigTitle'), tooBig);
+        return;
+      }
 
       const picked = result.assets.map((a, i) => ({ uri: a.uri, pageNumber: pages.length + i + 1 }));
       const pdf = result.assets.find((a) => a.mimeType === 'application/pdf');
@@ -200,6 +234,17 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
             {purpose ? (
               <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
                 {purpose}
+              </AppText>
+            ) : null}
+            {/*
+              What to do with this particular paper, in the reader's own language: the same
+              sentence the browser prints under its viewfinder, looked up by the profile's
+              `hintKey` because this app is English and Hindi and a translator cannot be handed an
+              English string as a key. Shown before the first capture, which is when it helps.
+            */}
+            {!hasScan && hint ? (
+              <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
+                {tr(hint)}
               </AppText>
             ) : null}
           </View>

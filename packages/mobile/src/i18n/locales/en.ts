@@ -1350,10 +1350,26 @@ export const en = {
   scanner: {
     unavailableTitle: 'Scanner unavailable',
     unavailableBody: 'The document scanner could not be opened.',
+    tooBigTitle: 'File is too large',
     pickFailedTitle: 'Could not open files',
     pickFailedBody: 'File selection failed.',
     nameRequiredTitle: 'Name required',
     nameRequiredBody: 'Give the document a name before saving.',
+    /*
+      What to do with the paper in front of you, one sentence per kind of document. Keyed by
+      `DocumentScanProfile.hintKey` in `@fapoms/shared`, which is the same row the browser scanner
+      reads its own wording from — so a document's guidance changes in one place for both apps.
+    */
+    hint: {
+      card: 'Lay the card flat — all four corners in view.',
+      aadhaarFront: 'The side with the photograph. The back goes on its own row.',
+      aadhaarBack: 'The side with the address on it.',
+      passport: 'The page with the photograph, held open and flat. Add the address page after it.',
+      page: 'Flatten the page. Add each further page after this one.',
+      portrait: 'Head and shoulders, facing the camera, plain background.',
+      passbook: 'The page with the account number and the name on it.',
+      free: 'Fill the frame with the document and hold steady.',
+    },
     close: 'Close scanner',
     saveTitle: 'Save document',
     scanTitle: 'Scan document',

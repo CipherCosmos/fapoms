@@ -263,7 +263,12 @@ export const LinkButton: React.FC<{
 
 /** The trailing action cell of a table row, spaced the same on every table in the section. */
 export const RowActions: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>{children}</div>
+  // Wraps rather than widening the row. "Add number · Verify · Send back · Scan · Choose file" in
+  // one unbreakable line was what pushed the identity table past the drawer's edge; on a narrow
+  // cell the links now stack, which reads fine and never scrolls.
+  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 12px', alignItems: 'center', justifyContent: 'flex-end' }}>
+    {children}
+  </div>
 );
 
 /**
@@ -321,8 +326,17 @@ export const Editor: React.FC<{
   busy?: boolean;
   saveDisabled?: boolean;
   width?: number;
+  /**
+   * Why the last attempt to save failed, shown INSIDE the dialog.
+   *
+   * Every editor on these screens reported a failed save into a page-level banner — which sits
+   * behind the dialog the person is looking at. The server's message was good ("the check digit did
+   * not match, please re-read it from the document") and nobody ever saw it: the dialog simply sat
+   * there, and the only way to find out what had happened was the browser's network tab.
+   */
+  error?: string | null;
   children: React.ReactNode;
-}> = ({ title, intro, note, onCancel, onSave, saveLabel, busy, saveDisabled, width = 480, children }) => (
+}> = ({ title, intro, note, onCancel, onSave, saveLabel, busy, saveDisabled, width = 480, error, children }) => (
   <Modal
     open
     onClose={onCancel}
@@ -347,6 +361,18 @@ export const Editor: React.FC<{
     )}
   >
     {intro && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.55 }}>{intro}</div>}
+    {error && (
+      <div
+        role="alert"
+        style={{
+          width: '100%', padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+          background: 'var(--danger-bg, #FEF2F2)', border: '1px solid var(--danger)',
+          color: 'var(--danger)', fontSize: 'var(--text-xs)', lineHeight: 1.5,
+        }}
+      >
+        {error}
+      </div>
+    )}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>{children}</div>
   </Modal>
 );
@@ -397,9 +423,29 @@ export const attritionExplainer = (a: HrWorkforceOverview['attrition']): {
  */
 export const InviteLinkBox: React.FC<{ link: string; note?: string }> = ({ link, note }) => {
   const [copied, setCopied] = React.useState(false);
+
+  // Normalize link for local development / testing:
+  // If the link uses a localhost origin whose port does not match the active web app origin,
+  // rewrite origin to window.location.origin so the link opens directly in the current browser.
+  const effectiveLink = React.useMemo(() => {
+    try {
+      const parsed = new URL(link, window.location.origin);
+      if (
+        (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') &&
+        parsed.port !== window.location.port
+      ) {
+        return `${window.location.origin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      }
+      return link;
+    } catch {
+      return link;
+    }
+  }, [link]);
+
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(effectiveLink);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -420,10 +466,19 @@ export const InviteLinkBox: React.FC<{ link: string; note?: string }> = ({ link,
           flex: 1, minWidth: 240, fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-xs)',
           background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
           borderRadius: 6, padding: '8px 10px', color: 'var(--text-primary)', wordBreak: 'break-all',
-        }}>{link}</code>
+        }}>{effectiveLink}</code>
         <button type="button" onClick={copy} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
           {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy link'}
         </button>
+        <a
+          href={effectiveLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-ghost"
+          style={{ gap: 6, fontSize: 'var(--text-xs)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
+        >
+          <ExternalLink size={14} /> Open link
+        </a>
       </div>
       <p style={{ margin: '8px 0 0', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
         Anyone holding this link can complete the application, so send it to the candidate only.
@@ -467,14 +522,20 @@ export const OpenLink: React.FC<{ onClick: () => void; label?: string }> = ({ on
  * loud; the keys are never shown.
  */
 export const ViewChips = <K extends string>({ options, value, onChange }: {
-  options: ReadonlyArray<{ key: K; label: string; hint?: string; count?: number | null }>;
+  /**
+   * `tone` follows the section's badge rule: red says "there is something here for you to do",
+   * never "this number is large". Every count used to go red the moment it passed zero, so a
+   * chip counting approved applications or people in training — neither of which is a task —
+   * looked exactly like a queue nobody had worked.
+   */
+  options: ReadonlyArray<{ key: K; label: string; hint?: string; count?: number | null; tone?: 'neutral' | 'alert' }>;
   value: K;
   onChange: (key: K) => void;
 }) => (
   // Secondary to the shell's own tab strip above: smaller, square-edged, no tablist chrome.
   // These switch a view inside one destination; dressing them as a second row of tabs made the
   // page read as tabs-inside-tabs.
-  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
+  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
     {options.map((o) => {
       const active = o.key === value;
       return (
@@ -497,13 +558,16 @@ export const ViewChips = <K extends string>({ options, value, onChange }: {
           }}
         >
           {o.label}
-          {o.count !== null && o.count !== undefined && (
-            <span style={{
-              fontSize: 'var(--text-xs)', fontWeight: 700, padding: '1px 7px', borderRadius: '9px',
-              background: o.count > 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
-              color: o.count > 0 ? 'var(--danger)' : 'var(--text-muted)',
-            }}>{o.count}</span>
-          )}
+          {o.count !== null && o.count !== undefined && (() => {
+            const alarming = o.tone === 'alert' && o.count > 0;
+            return (
+              <span style={{
+                fontSize: 'var(--text-xs)', fontWeight: 700, padding: '1px 7px', borderRadius: '9px',
+                background: alarming ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
+                color: alarming ? 'var(--danger)' : 'var(--text-muted)',
+              }}>{o.count}</span>
+            );
+          })()}
         </button>
       );
     })}

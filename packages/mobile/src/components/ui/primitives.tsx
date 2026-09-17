@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import {
   View, Text, Pressable, Animated, StyleProp, ViewStyle, TextStyle,
-  ActivityIndicator, Platform, ScrollView,
+  ActivityIndicator, Platform, ScrollView, TextInput, Modal, KeyboardAvoidingView,
 } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
 import * as Font from 'expo-font';
@@ -215,11 +215,17 @@ export const AmbientGlow: React.FC = () => {
   const t = useTheme();
   return (
     <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
-      <View style={{ position: 'absolute', top: -110, left: -90 }}>
-        <GlowBlob color={t.colors.primary} size={360} opacity={t.mode === 'dark' ? 0.05 : 0.045} />
+      {/*
+        A visible aurora wash, not a whisper. The original 0.04-0.05 opacity was so faint it
+        barely survived a screenshot — flat and closer to plain dark-grey than to the neon
+        identity the rest of the kit commits to. This is the single biggest lever for reading as
+        a premium 2020s app instead of a bordered-forms one, so it's turned up meaningfully.
+      */}
+      <View style={{ position: 'absolute', top: -140, left: -120 }}>
+        <GlowBlob color={t.colors.primary} size={460} opacity={t.mode === 'dark' ? 0.16 : 0.10} />
       </View>
-      <View style={{ position: 'absolute', bottom: -120, right: -100 }}>
-        <GlowBlob color={t.colors.accent} size={320} opacity={t.mode === 'dark' ? 0.045 : 0.04} />
+      <View style={{ position: 'absolute', bottom: -160, right: -130 }}>
+        <GlowBlob color={t.colors.accent} size={420} opacity={t.mode === 'dark' ? 0.13 : 0.09} />
       </View>
     </View>
   );
@@ -235,6 +241,15 @@ export const Card: React.FC<{
   children: React.ReactNode;
 }> = ({ level = 1, padded = true, onPress, style, children }) => {
   const t = useTheme();
+  /*
+   * A floating panel reads as lifted through shadow and a tone step off the page — not through
+   * a solid outline. The full-strength `border` token (visible ~8-10% white/ink) drawn around
+   * every single card, nested inside screens that are themselves bordered boxes of bordered
+   * boxes, is what actually reads as "old forms UI." A hairline is kept — a card with literally
+   * no edge can look undefined on the near-black palette — but at a fraction of the contrast, so
+   * it reads as a glass edge rather than a rectangle someone drew.
+   */
+  const hairline = level === 0 ? t.colors.border : (t.mode === 'dark' ? 'rgba(255,255,255,0.045)' : 'rgba(20,18,40,0.06)');
   const body = (
     <View
       style={[
@@ -242,7 +257,7 @@ export const Card: React.FC<{
           backgroundColor: t.colors.surface,
           borderRadius: t.radius.xl,
           borderWidth: 1,
-          borderColor: t.colors.border,
+          borderColor: hairline,
           padding: padded ? t.space.lg : 0,
           overflow: 'hidden',
         },
@@ -447,6 +462,147 @@ export const IconButton: React.FC<{
   );
 };
 
+// ─────────────────────────────────────────────────────────── Text input
+
+/**
+ * The themed text field ten different screens and modals used to hand-roll on their own —
+ * `LoginScreen`, `ChangePasswordScreen`, `SelfRegistrationScreen`'s `LabeledInput`,
+ * `ProfileScreen`'s `FieldInput`, and half a dozen modal forms each kept an independent copy of
+ * the same field, including independently rediscovering the same Android focus bug below.
+ *
+ * Focus is signalled by border colour ONLY — never by adding shadow/elevation. Toggling
+ * elevation/shadow on an input's wrapper the instant it gains focus recreates the native view
+ * under Fabric (always on in Expo Go), which drops the just-granted IME focus — verified on the
+ * emulator, `dumpsys input_method` showed `mServedView=null` after every tap while a focus glow
+ * was present. A plain border-colour prop update on the same view does not have this problem.
+ */
+export const Input: React.FC<{
+  /** Rendered upper-cased, same as `GroupedSection`'s title — pass it in whatever case reads
+   *  best in translation files (most are stored pre-capitalised; this makes the ones that aren't,
+   *  like ProfileScreen's field labels, match without every call site remembering to transform). */
+  label?: string;
+  value: string;
+  onChangeText?: (v: string) => void;
+  onBlur?: () => void;
+  onFocus?: () => void;
+  placeholder?: string;
+  icon?: IconName;
+  /** e.g. a show/hide-password toggle, rendered after the field. */
+  rightAccessory?: React.ReactNode;
+  hint?: string;
+  error?: string;
+  secureTextEntry?: boolean;
+  keyboardType?: 'default' | 'numeric' | 'number-pad' | 'phone-pad' | 'email-address' | 'url';
+  autoCapitalize?: 'none' | 'characters' | 'words' | 'sentences';
+  autoCorrect?: boolean;
+  multiline?: boolean;
+  maxLength?: number;
+  returnKeyType?: 'done' | 'go' | 'next' | 'search' | 'send';
+  blurOnSubmit?: boolean;
+  onSubmitEditing?: () => void;
+  /** 'lg' matches LoginScreen's 56pt fields; 'md' (default) matches every other form in the app. */
+  size?: 'md' | 'lg';
+  /** A flat, non-editable display in place of the field — the value is HR-maintained. */
+  readOnly?: boolean;
+  /** Same flat display as `readOnly`, plus a lock icon and the (already-translated) reason. */
+  lockedReason?: string;
+  accessibilityLabel?: string;
+  style?: StyleProp<ViewStyle>;
+  inputRef?: React.RefObject<TextInput>;
+}> = ({
+  label, value, onChangeText, onBlur, onFocus, placeholder, icon, rightAccessory, hint, error,
+  secureTextEntry, keyboardType = 'default', autoCapitalize = 'sentences', autoCorrect = true,
+  multiline, maxLength, returnKeyType, blurOnSubmit, onSubmitEditing, size = 'md',
+  readOnly, lockedReason, accessibilityLabel, style, inputRef,
+}) => {
+  const t = useTheme();
+  const [focused, setFocused] = React.useState(false);
+  const height = size === 'lg' ? 56 : 50;
+
+  if (readOnly || lockedReason) {
+    return (
+      <View style={[{ gap: t.space.sm }, style]}>
+        {label ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+            <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
+            {lockedReason && <Icon name="lock-closed" size={11} color={t.colors.textFaint} />}
+          </View>
+        ) : null}
+        <View style={{
+          backgroundColor: t.colors.surfaceAlt, borderRadius: t.radius.md,
+          paddingHorizontal: t.space.lg, paddingVertical: t.space.md,
+        }}>
+          <AppText variant="small" tone={value ? 'default' : 'faint'}>{value || placeholder || '—'}</AppText>
+        </View>
+        {lockedReason ? <AppText variant="caption" tone="faint">{lockedReason}</AppText> : null}
+      </View>
+    );
+  }
+
+  return (
+    <View style={[{ gap: t.space.sm }, style]}>
+      {label ? <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText> : null}
+      <View
+        style={{
+          flexDirection: 'row', alignItems: multiline ? 'flex-start' : 'center', gap: t.space.md,
+          backgroundColor: t.colors.surfaceAlt, borderRadius: t.radius.lg,
+          /*
+           * Resting state is a flat filled pill — no border at all. A field permanently
+           * outlined in a visible stroke, sitting inside a card that's ALSO outlined, is the
+           * single most "HTML form circa 2012" cue in the old version of this component. The
+           * border now exists only to answer a question ("is this focused / did this fail") —
+           * transparent otherwise, so it costs nothing when there's nothing to say.
+           */
+          borderWidth: 1.5,
+          borderColor: error ? t.colors.danger : focused ? t.colors.primary : 'transparent',
+          paddingHorizontal: t.space.lg,
+          paddingVertical: multiline ? t.space.md : 0,
+          minHeight: multiline ? 90 : height,
+        }}
+      >
+        {icon && (
+          <Icon
+            name={icon}
+            size={18}
+            color={focused ? t.colors.primary : t.colors.textFaint}
+            style={multiline ? { marginTop: 2 } : undefined}
+          />
+        )}
+        <TextInput
+          ref={inputRef}
+          value={value}
+          onChangeText={onChangeText}
+          onFocus={() => { setFocused(true); onFocus?.(); }}
+          onBlur={() => { setFocused(false); onBlur?.(); }}
+          placeholder={placeholder}
+          placeholderTextColor={t.colors.textFaint}
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize}
+          autoCorrect={autoCorrect}
+          multiline={multiline}
+          maxLength={maxLength}
+          returnKeyType={returnKeyType}
+          blurOnSubmit={blurOnSubmit}
+          onSubmitEditing={onSubmitEditing}
+          accessibilityLabel={accessibilityLabel ?? label}
+          textAlignVertical={multiline ? 'top' : 'center'}
+          style={{
+            flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600',
+            paddingVertical: multiline ? 10 : 0,
+          }}
+        />
+        {rightAccessory}
+      </View>
+      {error ? (
+        <AppText variant="caption" tone="danger">{error}</AppText>
+      ) : hint ? (
+        <AppText variant="caption" tone="faint">{hint}</AppText>
+      ) : null}
+    </View>
+  );
+};
+
 // ─────────────────────────────────────────────────────────── Badges & chips
 
 type BadgeTone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
@@ -532,6 +688,134 @@ export const Segmented: React.FC<{
           </Pressable>
         );
       })}
+    </View>
+  );
+};
+
+/**
+ * A small fact as a neon-tinted pill — time, distance, customer count, a running total.
+ *
+ * Promoted from three near-identical local copies (HomeScreen's `Meta`, EarningsScreen's
+ * `MoneyChip`, ScheduleScreen's `Fact`) into one component, so the same fact reads the same way
+ * everywhere it appears instead of three screens each keeping eleven lines of styling in sync
+ * by hand. EarningsScreen's own comment on `MoneyChip` said as much: "the chip pattern used
+ * across the app."
+ */
+export const MetaChip: React.FC<{
+  icon: IconName;
+  label: string;
+  /** A second value rendered after the label in the same pill (EarningsScreen's `MoneyChip`). */
+  value?: string;
+  iconColor?: string;
+  /** 'pill' (default): tinted rounded chip. 'stacked': bare label-over-value with no fill or
+   *  border — ScheduleScreen's `Fact`, used where several facts already sit inside a bordered row. */
+  layout?: 'pill' | 'stacked';
+  style?: StyleProp<ViewStyle>;
+}> = ({ icon, label, value, iconColor, layout = 'pill', style }) => {
+  const t = useTheme();
+
+  if (layout === 'stacked') {
+    return (
+      <View style={[{ flex: 1, gap: 4 }, style]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <Icon name={icon} size={12} color={t.colors.textFaint} />
+          <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
+        </View>
+        <AppText variant="bodyStrong" numberOfLines={1}>{value}</AppText>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[{
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      backgroundColor: t.colors.surfaceAlt, borderWidth: 1, borderColor: t.colors.border,
+      paddingHorizontal: 10, paddingVertical: 6, borderRadius: t.radius.pill,
+    }, style]}>
+      <Icon name={icon} size={13} color={iconColor ?? t.colors.accent} />
+      <AppText variant="caption" tone="muted">{label}{value != null ? ' ' : ''}</AppText>
+      {value != null && <AppText variant="caption">{value}</AppText>}
+    </View>
+  );
+};
+
+export interface ChipOption { key: string; label: string; icon?: IconName }
+
+/**
+ * A row of chips toggled on/off — distinct from `Segmented`, which always shows SOME option as
+ * chosen (it clamps a missing value to index 0). Several forms need the opposite: a category that
+ * is genuinely unset until the person picks one (self-registration's employment category, a
+ * decline/report reason), which is why chip-selection kept getting reinvented locally — in
+ * `SelfRegistrationScreen`, `RejectionModal`, `ReportIssueModal`, `FeedbackModal`, `ExpenseModal` —
+ * instead of reusing `Segmented`. Pass an array to `value` for multi-select; nothing here forces
+ * single-select on its own.
+ */
+export const ChipSelector: React.FC<{
+  options: ChipOption[];
+  /** A single selected key (or null/undefined for none), or an array for multi-select. */
+  value: string | string[] | null | undefined;
+  onChange: (key: string) => void;
+  /** Square corners instead of pill — `ExpenseModal`'s category picker was the one outlier using
+   *  this; default is pill to match every other chip in the app. */
+  shape?: 'pill' | 'square';
+  style?: StyleProp<ViewStyle>;
+}> = ({ options, value, onChange, shape = 'pill', style }) => {
+  const t = useTheme();
+  const selected = Array.isArray(value) ? value : value != null ? [value] : [];
+
+  return (
+    <View style={[{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }, style]}>
+      {options.map((o) => {
+        const active = selected.includes(o.key);
+        return (
+          <Tappable
+            key={o.key || 'EMPTY'}
+            onPress={() => { haptics.select(); onChange(o.key); }}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={o.label}
+          >
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 6,
+              paddingVertical: t.space.sm, paddingHorizontal: t.space.md,
+              borderRadius: shape === 'pill' ? t.radius.pill : t.radius.md,
+              backgroundColor: active ? t.colors.primarySoft : t.colors.surfaceAlt,
+              borderWidth: 1.5, borderColor: active ? t.colors.primary : t.colors.border,
+            }}>
+              {o.icon && <Icon name={o.icon} size={14} color={active ? t.colors.primary : t.colors.textFaint} />}
+              <AppText variant="small" tone={active ? 'primary' : 'muted'}>{o.label}</AppText>
+            </View>
+          </Tappable>
+        );
+      })}
+    </View>
+  );
+};
+
+/** A removable pill — a picked tag, or a legacy value kept around for compatibility. Used inside
+ *  `ProfileScreen`'s attribute/region pickers, where the same "chip with an ✕" was drawn twice. */
+export const Tag: React.FC<{
+  label: string;
+  tone?: 'neutral' | 'primary';
+  onRemove?: () => void;
+  removeAccessibilityLabel?: string;
+}> = ({ label, tone = 'neutral', onRemove, removeAccessibilityLabel }) => {
+  const t = useTheme();
+  const c = tone === 'primary'
+    ? { bg: t.colors.primarySoft, border: t.colors.primary, fg: 'primary' as const }
+    : { bg: t.colors.surface, border: t.colors.border, fg: 'muted' as const };
+  return (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
+      backgroundColor: c.bg, borderWidth: 1, borderColor: c.border,
+    }}>
+      <AppText variant="caption" tone={c.fg}>{label}</AppText>
+      {onRemove && (
+        <Tappable onPress={onRemove} accessibilityRole="button" accessibilityLabel={removeAccessibilityLabel}>
+          <Icon name="close-circle" size={14} color={tone === 'primary' ? t.colors.primary : t.colors.textFaint} />
+        </Tappable>
+      )}
     </View>
   );
 };
@@ -893,7 +1177,9 @@ export const GroupedSection: React.FC<{
         backgroundColor: t.colors.surface,
         borderRadius: t.radius.groupedInset,
         borderWidth: 1,
-        borderColor: t.colors.border,
+        // A hairline, not the full-strength `border` token — real Settings.app separates a
+        // grouped section from the page behind it with a tone step, not a drawn outline.
+        borderColor: t.mode === 'dark' ? 'rgba(255,255,255,0.045)' : 'rgba(20,18,40,0.06)',
         overflow: 'hidden',
       }}>
         {rows.map((child, i) => {
@@ -910,5 +1196,93 @@ export const GroupedSection: React.FC<{
         </AppText>
       ) : null}
     </View>
+  );
+};
+
+// ─────────────────────────────────────────────────────────── Modal shell
+//
+// The scrim + container + header structure nine-odd modals rebuilt by hand — each with tiny
+// drift (some at `space.xl` padding, some at `md`; a close IconButton here, a plain Tappable
+// "Done" there). This owns only the shell; every modal keeps its own body and footer content.
+
+/**
+ * `visible`/`onClose`/`title` plus a shell shape:
+ * - 'dialog' (default): a centred `Card`, for a short focused form — Expense, Rejection,
+ *   Invoice review. Matches what those three already built by hand: scrim, centered, padded.
+ * - 'sheet': a full-height panel sliding up from the bottom, for a longer or multi-view flow —
+ *   Feedback, Notifications, Report Issue. Matches FeedbackModal's own shell exactly.
+ */
+export const ModalSheet: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  title?: string;
+  variant?: 'dialog' | 'sheet';
+  /** Replaces the header's default empty leading slot — e.g. a back button mid-flow, or a
+   *  decorative icon when there's nothing to go back to (see FeedbackModal's list/compose/thread). */
+  leading?: React.ReactNode;
+  /** Shows the trailing close button. Defaults to `true` for 'sheet' (every sheet in the app has
+   *  one) and `false` for 'dialog' (Expense/Rejection rely on their own Cancel button instead, so
+   *  a default close X would be a new control appearing where there wasn't one). */
+  showClose?: boolean;
+  /** Pre-translated accessibility label for the close button. */
+  closeLabel?: string;
+  avoidKeyboard?: boolean;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+}> = ({
+  visible, onClose, title, variant = 'dialog', leading, showClose, closeLabel = 'Close', avoidKeyboard, footer, children,
+}) => {
+  const t = useTheme();
+  const close = showClose ?? variant === 'sheet';
+
+  if (!visible) return null;
+
+  const header = (title || leading || close) ? (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+      paddingHorizontal: variant === 'sheet' ? t.space.xl : 0,
+      paddingBottom: variant === 'sheet' ? t.space.md : t.space.sm,
+    }}>
+      {leading}
+      {title ? <AppText variant="h2" style={{ flex: 1 }}>{title}</AppText> : <View style={{ flex: 1 }} />}
+      {close && (
+        <IconButton icon="close" onPress={onClose} accessibilityLabel={closeLabel} size={variant === 'sheet' ? 36 : 34} />
+      )}
+    </View>
+  ) : null;
+
+  const content = variant === 'sheet' ? (
+    <View style={{
+      backgroundColor: t.colors.bg,
+      borderTopLeftRadius: t.radius.xl, borderTopRightRadius: t.radius.xl,
+      height: '88%', paddingTop: t.space.md,
+    }}>
+      <View style={{ alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: t.colors.border, marginBottom: t.space.sm }} />
+      {header}
+      <View style={{ flex: 1 }}>{children}</View>
+      {footer}
+    </View>
+  ) : (
+    <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
+      {header}
+      {children}
+      {footer}
+    </Card>
+  );
+
+  const scrimStyle: StyleProp<ViewStyle> = variant === 'sheet'
+    ? { flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }
+    : { flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'center', padding: t.space.xl };
+
+  const body = <View style={scrimStyle}>{content}</View>;
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      {avoidKeyboard ? (
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+          {body}
+        </KeyboardAvoidingView>
+      ) : body}
+    </Modal>
   );
 };

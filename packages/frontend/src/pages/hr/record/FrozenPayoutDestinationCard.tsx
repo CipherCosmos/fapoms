@@ -36,10 +36,10 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
           <Lock size={16} style={{ color: 'var(--text-secondary)' }} />
           <div>
             <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-              FROZEN DISBURSEMENT DESTINATION
+              Account for approved payments
             </span>
             <span style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
-              Frozen snapshot captured at payable approval
+              Saved at the moment the payment was approved
             </span>
           </div>
         </div>
@@ -54,7 +54,7 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
             border: '1px solid var(--border-color)',
           }}
         >
-          IMMUTABLE
+          Locked
         </span>
       </div>
 
@@ -89,13 +89,13 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
             }}
           >
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Destination Bank</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Bank</span>
               <strong style={{ color: 'var(--text-primary)' }}>
                 {activePayable.destinationBankName || '—'}
               </strong>
             </div>
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Account Number</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Account number</span>
               <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
                 {activePayable.destinationBankAccountNumber
                   ? `••••${activePayable.destinationBankAccountNumber.slice(-4)}`
@@ -103,13 +103,13 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
               </strong>
             </div>
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Destination IFSC</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>IFSC</span>
               <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
                 {activePayable.destinationIfsc || '—'}
               </strong>
             </div>
             <div>
-              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Beneficiary</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Account holder</span>
               <strong style={{ color: 'var(--text-primary)' }}>
                 {activePayable.destinationAccountHolderName || '—'}
               </strong>
@@ -118,14 +118,14 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
 
           {activePayable.approvedAt && (
             <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', borderTop: '1px dashed var(--border-hair)', paddingTop: '6px' }}>
-              Frozen upon approval on {fmtDate(activePayable.approvedAt)}
-              {activePayable.payoutEvidenceVersionId && ' (bound to verified KYC passbook)'}
+              Locked when approved on {fmtDate(activePayable.approvedAt)}
+              {activePayable.payoutEvidenceVersionId && ', from the checked copy of their passbook'}
             </div>
           )}
         </div>
       ) : (
         <div style={{ padding: '14px', background: 'var(--bg-surface-2)', borderRadius: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-          No approved payables currently on file. When an assayer payable is approved for disbursement, its destination bank account will be frozen here and become immutable.
+          No approved payments yet. When a payment is approved, the bank account it will be paid into is saved here and locked.
         </div>
       )}
 
@@ -142,7 +142,7 @@ export const FrozenPayoutDestinationCard: React.FC<FrozenPayoutDestinationCardPr
       >
         <Info size={14} style={{ flexShrink: 0, marginTop: '2px', color: 'var(--text-secondary)' }} />
         <span>
-          <strong>Operational boundary:</strong> Modifying the Current Bank Profile above will <em>never</em> redirect or mutate an already-approved payable destination snapshot.
+          If they change their bank details later, payments that are already approved still go to the account shown here.
         </span>
       </div>
     </div>

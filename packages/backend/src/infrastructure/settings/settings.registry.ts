@@ -20,7 +20,7 @@
 
 import { CANONICAL_STATE_NAMES } from '@fapoms/shared';
 
-export type SettingType = 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron';
+export type SettingType = 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron' | 'json';
 
 /**
  * Who a setting belongs to, since the DEVELOPER/ADMIN split (2026-09-05).
@@ -94,6 +94,7 @@ export const SETTINGS_GROUPS = [
   { key: 'security', label: 'Access boundaries', audience: 'technical', description: 'Rollout controls for access checks being tightened — a value here is a staged switch, never a permanent policy.' },
   { key: 'qualification', label: 'Assayer qualification', audience: 'business', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
   { key: 'registration', label: 'Self-registration', audience: 'technical', description: 'How the candidate-facing registration link and OTP verification behave — the entry point alongside the HR desk, not a replacement for it.' },
+  { key: 'email_templates', label: 'Email Templates', audience: 'business', description: 'Versioned overrides and custom layouts for platform notification emails.' },
 ] as const;
 
 /**
@@ -125,7 +126,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
   {
     key: 'company.address',
     label: 'Company address',
-    description: 'The registered address printed under the seller name. Commas become line breaks on the invoice.',
+    description: 'The registered address printed under the seller name on invoices (commas become line breaks there), and at the bottom of every appraiser ID card.',
     group: 'company',
     type: 'string',
     default: null,
@@ -169,6 +170,37 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     group: 'company',
     type: 'string',
     default: '998222',
+    applies: 'immediately',
+  },
+  // The appraiser ID card's printed text. Read by RosterRecordsService.idCardPrintedText for BOTH
+  // the downloaded PDF and the on-screen preview, so the two cannot disagree. Nothing here has a
+  // made-up fallback: an unset key leaves its line off the card rather than printing somebody who
+  // does not exist. The office address on the card is `company.address` above — one address.
+  {
+    key: 'idCard.signatoryName',
+    label: 'ID card: signed by (name)',
+    description: 'The name printed under the signature line on every appraiser ID card, for example the person who authorises the cards. Leave it empty and no name is printed under the line.',
+    group: 'company',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'idCard.signatoryTitle',
+    label: 'ID card: signed by (job title)',
+    description: 'The job title printed under the signatory\'s name on every appraiser ID card, for example "Director - Operations". Leave it empty and no title is printed.',
+    group: 'company',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'idCard.helplinePhone',
+    label: 'ID card: phone number to call if the card is found',
+    description: 'Printed at the bottom of every appraiser ID card as "If found, please call …", next to the Company address set above. Leave it empty and the line is left off the card.',
+    group: 'company',
+    type: 'string',
+    default: null,
     applies: 'immediately',
   },
 
@@ -689,7 +721,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     description: 'Turns on the invoicing round: the desk invites assayers to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and earnings appear only after the desk approves the submitted invoice. Leave off until the updated mobile app is distributed.',
     group: 'billing',
     type: 'boolean',
-    default: false,
+    default: true,
     // A rollout flag wearing a business group's clothes — flip it only in step with the mobile
     // release, so it is the Developer's; remove the override when the rollout completes.
     audience: 'technical',
@@ -1190,6 +1222,49 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     label: 'OTP resend cooldown',
     description: 'How long a candidate must wait before requesting another mobile verification code on the same registration link.',
     group: 'registration', type: 'number', default: 60, min: 15, max: 600, unit: 'seconds', applies: 'immediately',
+  },
+  // ── Email Templates ───────────────────────────────────────────────────────
+  {
+    key: 'email.template.otp-verification',
+    label: 'Template: OTP Verification',
+    description: 'Versioned configuration and overrides for registration OTP email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.registration-invite',
+    label: 'Template: Registration Invitation',
+    description: 'Versioned configuration and overrides for appraiser registration invite email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.app-credentials',
+    label: 'Template: App Access Credentials',
+    description: 'Versioned configuration and overrides for app access credentials delivery email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.application-approved',
+    label: 'Template: Application Approved',
+    description: 'Versioned configuration and overrides for application approval and assayer code email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.application-rejected',
+    label: 'Template: Application Rejected',
+    description: 'Versioned configuration and overrides for application rejection email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.branch-audit-paperwork',
+    label: 'Template: Branch Audit Documentation',
+    description: 'Versioned configuration and overrides for branch audit paperwork email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.morning-digest',
+    label: 'Template: Operations Morning Brief',
+    description: 'Versioned configuration and overrides for daily morning operations brief email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
   },
 ];
 

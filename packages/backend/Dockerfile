@@ -41,6 +41,7 @@ RUN npm ci --only=production --legacy-peer-deps
 
 COPY --from=builder /app/packages/shared/dist packages/shared/dist
 COPY --from=builder /app/packages/backend/dist packages/backend/dist
+COPY --from=builder /app/packages/backend/templates packages/backend/templates
 
 EXPOSE 3000
 

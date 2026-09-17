@@ -167,14 +167,14 @@ const ResolveForm: React.FC<{
 }> = ({ closeLabel, busy, onClose }) => {
   const [text, setText] = useState('');
   return (
-    <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap', width: '100%', maxWidth: '100%' }}>
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') onClose(text); }}
         placeholder="What was decided? e.g. “Availability note in the wrong column — ignore.”"
         aria-label="What was decided"
-        style={{ ...fieldInput, flex: 1, minWidth: '220px', width: 'auto' }}
+        style={{ ...fieldInput, flex: '1 1 220px', minWidth: 0, width: 'auto', maxWidth: '100%' }}
       />
       <button
         onClick={() => onClose(text)}
@@ -216,7 +216,7 @@ const PartialOutcome: React.FC<{
 
 /** Every person behind one problem, each a link to their record. */
 const PersonPills: React.FC<{ issues: Issue[]; onOpen: (i: Issue) => void }> = ({ issues, onOpen }) => (
-  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', maxHeight: '148px', overflowY: 'auto' }}>
+  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', maxHeight: '148px', overflowY: 'auto', minWidth: 0, maxWidth: '100%' }}>
     {issues.map((i) => {
       const who = whoOf(i);
       return i.assayer?.id ? (
@@ -229,12 +229,14 @@ const PersonPills: React.FC<{ issues: Issue[]; onOpen: (i: Issue) => void }> = (
             padding: '5px 10px', fontSize: 'var(--text-xs)', fontWeight: 600,
             background: 'var(--bg-surface)', color: 'var(--primary)',
             border: '1px solid var(--border-color)', borderRadius: '999px', cursor: 'pointer',
+            maxWidth: '100%',
           }}
         >
-          {who} <ExternalLink size={11} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{who}</span>
+          <ExternalLink size={11} style={{ flexShrink: 0 }} />
         </button>
       ) : (
-        <span key={i.id} style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{who}</span>
+        <span key={i.id} style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{who}</span>
       );
     })}
   </div>
@@ -284,7 +286,7 @@ const ProblemDetail: React.FC<{
         <WriterTag fromScan={group.fromScan} />
         <CountBadge>{counted(group.issues.length, 'person', 'people')}</CountBadge>
       </div>
-      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
         {/*
           A scan finding says something different about each person it names — one has no date
           of birth, another has one that makes them nine years old — so the first row's
@@ -727,8 +729,8 @@ export const ImportIssuesPanel: React.FC<{
             visibleGroups.length === 0 && !q ? (
               <Empty>Nothing outstanding.</Empty>
             ) : (
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <div data-testid="queue-group-list" style={{ flex: '1 1 260px', minWidth: '220px', display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '380px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start', width: '100%', maxWidth: '100%' }}>
+                <div data-testid="queue-group-list" style={{ flex: '1 1 260px', minWidth: '220px', maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '380px', overflowY: 'auto' }}>
                   {visibleGroups.map((g) => {
                     const on = activeGroup?.key === g.key;
                     return (
@@ -755,7 +757,7 @@ export const ImportIssuesPanel: React.FC<{
                     );
                   })}
                 </div>
-                <div data-testid="queue-group-detail" style={{ flex: '2 1 340px', minWidth: '260px', borderLeft: '1px solid var(--border-hair)', paddingLeft: '12px' }}>
+                <div data-testid="queue-group-detail" style={{ flex: '2 1 340px', minWidth: '260px', maxWidth: '100%', borderLeft: '1px solid var(--border-hair)', paddingLeft: '12px' }}>
                   {activeGroup ? (
                     <ProblemDetail
                       key={activeGroup.key}
@@ -774,8 +776,8 @@ export const ImportIssuesPanel: React.FC<{
             visiblePeople.length === 0 && !q ? (
               <Empty>Nothing outstanding.</Empty>
             ) : (
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <div data-testid="queue-person-list" style={{ flex: '1 1 260px', minWidth: '220px', display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '380px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start', width: '100%', maxWidth: '100%' }}>
+                <div data-testid="queue-person-list" style={{ flex: '1 1 260px', minWidth: '220px', maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '380px', overflowY: 'auto' }}>
                   {visiblePeople.map((p) => {
                     const on = activePerson?.key === p.key;
                     return (
@@ -800,7 +802,7 @@ export const ImportIssuesPanel: React.FC<{
                     );
                   })}
                 </div>
-                <div data-testid="queue-person-detail" style={{ flex: '2 1 340px', minWidth: '260px', borderLeft: '1px solid var(--border-hair)', paddingLeft: '12px' }}>
+                <div data-testid="queue-person-detail" style={{ flex: '2 1 340px', minWidth: '260px', maxWidth: '100%', borderLeft: '1px solid var(--border-hair)', paddingLeft: '12px' }}>
                   {activePerson ? (
                     <PersonDetail
                       key={activePerson.key}

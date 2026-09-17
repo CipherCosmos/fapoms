@@ -169,6 +169,7 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
           loading={uploadingPdf}
           disabled={!hasFile || uploadingPdf}
           size="lg"
+          glow
           full
         />
         {!hasFile && (

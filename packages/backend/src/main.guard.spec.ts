@@ -33,6 +33,7 @@ describe('assertProductionSafeConfig', () => {
     const env = { ...original };
     delete env.S3_ENDPOINT;
     delete env.MINIO_ROOT_PASSWORD;
+    delete env.AWS_SECRET_ACCESS_KEY;
     process.env = env;
   });
 
@@ -124,30 +125,45 @@ describe('assertProductionSafeConfig', () => {
     expect(() => assertProductionSafeConfig()).not.toThrow();
   });
 
-  it('refuses a self-hosted MinIO deployment with no root password set', () => {
-    const env: any = { ...process.env, ...safeProduction, S3_ENDPOINT: 'http://minio:9000' };
-    delete env.MINIO_ROOT_PASSWORD;
-    process.env = env;
-    expect(() => assertProductionSafeConfig()).toThrow(/MINIO_ROOT_PASSWORD/);
+  /**
+   * SELF-HOSTED MINIO. The API needs a credential limited to the documents bucket, not the store's
+   * root. These pin that: root is no longer required in the API's environment, and the API signing
+   * with root — or with the burned literal committed to this public repository's history — is
+   * refused.
+   */
+  const minio = { S3_ENDPOINT: 'http://minio:9000' };
+  const appCredential = 'a-genuinely-random-app-user-secret';
+
+  it('refuses a self-hosted MinIO deployment with no storage credential', () => {
+    process.env = { ...process.env, ...safeProduction, ...minio };
+    expect(() => assertProductionSafeConfig()).toThrow(/AWS_SECRET_ACCESS_KEY/);
   });
 
-  it('refuses the burned MinIO dev default even when a value is present', () => {
-    process.env = {
-      ...process.env,
-      ...safeProduction,
-      S3_ENDPOINT: 'http://minio:9000',
-      MINIO_ROOT_PASSWORD: 'fapoms_minio_secret',
-    };
-    expect(() => assertProductionSafeConfig()).toThrow(/MINIO_ROOT_PASSWORD/);
+  it('refuses the burned dev default as the credential the API signs with', () => {
+    process.env = { ...process.env, ...safeProduction, ...minio, AWS_SECRET_ACCESS_KEY: 'fapoms_minio_secret' };
+    expect(() => assertProductionSafeConfig()).toThrow(/burned dev default/);
   });
 
-  it('accepts a self-hosted MinIO deployment with a real root password', () => {
+  it('refuses the burned dev default as the root password, if root is present at all', () => {
     process.env = {
-      ...process.env,
-      ...safeProduction,
-      S3_ENDPOINT: 'http://minio:9000',
-      MINIO_ROOT_PASSWORD: 'a-genuinely-random-minio-password',
+      ...process.env, ...safeProduction, ...minio,
+      AWS_SECRET_ACCESS_KEY: appCredential, MINIO_ROOT_PASSWORD: 'fapoms_minio_secret',
     };
+    expect(() => assertProductionSafeConfig()).toThrow(/MINIO_ROOT_PASSWORD is the burned dev default/);
+  });
+
+  it('refuses an API that signs its storage requests with the root credential', () => {
+    const root = 'a-genuinely-random-minio-root-password';
+    process.env = {
+      ...process.env, ...safeProduction, ...minio,
+      AWS_SECRET_ACCESS_KEY: root, MINIO_ROOT_PASSWORD: root,
+    };
+    expect(() => assertProductionSafeConfig()).toThrow(/signs storage requests with the MinIO ROOT credential/);
+  });
+
+  /** The intended state: a bucket-limited user, and no root credential in the API at all. */
+  it('accepts a bucket-limited credential with root absent from the API', () => {
+    process.env = { ...process.env, ...safeProduction, ...minio, AWS_SECRET_ACCESS_KEY: appCredential };
     expect(() => assertProductionSafeConfig()).not.toThrow();
   });
 

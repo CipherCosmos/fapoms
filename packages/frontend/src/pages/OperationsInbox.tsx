@@ -498,7 +498,7 @@ export const OperationsInbox: React.FC = () => {
                   item={item}
                   chip={
                     <span style={{ marginLeft: 8, fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: item.channel === 'PHONE' ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)', color: item.channel === 'PHONE' ? 'var(--warning)' : 'var(--text-muted)' }}>
-                      {item.channel === 'PHONE' ? 'PHONE-ONLY' : 'APP · GONE QUIET'}
+                      {item.channel === 'PHONE' ? 'Call needed' : 'Waiting in app'}
                     </span>
                   }
                 >
@@ -560,7 +560,7 @@ export const OperationsInbox: React.FC = () => {
             data0.replacements.map((item) => (
               <CardShell key={item.id} item={item}
                 chip={<span style={{ marginLeft: 8, fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
-                  {item.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' ? 'OFFER EXPIRED' : 'DECLINED'}
+                  {item.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' ? 'Expired' : 'Declined'}
                 </span>}>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button onClick={() => setReassignFor(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>

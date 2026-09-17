@@ -114,7 +114,7 @@ describe('Phase 4: Cross-Screen Product Hardening Specification', () => {
       );
 
       // Verify header link to all assignments for this assayer
-      const viewAllLink = screen.getByRole('link', { name: /view in assignment queue/i });
+      const viewAllLink = screen.getByRole('link', { name: /see all their work/i });
       expect(viewAllLink).toHaveAttribute('href', '/assignments?assayerId=a-1');
 
       // Verify assignment number link to specific assignment

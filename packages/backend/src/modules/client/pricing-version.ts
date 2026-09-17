@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { CONCURRENCY_ERROR_CODES, type ApiErrorCode } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';

@@ -135,10 +135,30 @@ describe('the instructions on screen', () => {
     expect(t(rows[0].hintKey!)).not.toMatch(/AADHAAR_BACK/);
   });
 
-  it('says nothing rather than padding when there is no useful instruction', () => {
-    // Null, not a key: a requirement nobody has written copy for renders no hint line at all,
-    // rather than a humanised guess at what its name might mean.
-    expect(buildChecklistRows([item({ requirement: 'GOVERNANCE_AUDIT' })], [])[0].hintKey).toBeNull();
+  /**
+   * A document nobody wrote a sentence for used to render no instruction at all — fifteen of the
+   * twenty-eight, including every paper a proprietor is asked for. It now falls back to the shared
+   * scanning profile's sentence for that KIND of document, which is the same table the browser
+   * scanner reads, so the two apps cannot drift into telling people different things.
+   */
+  it('falls back to the sentence for that kind of document, rather than saying nothing', () => {
+    const row = buildChecklistRows([item({ requirement: 'RENT_AGREEMENT' })], [])[0];
+
+    expect(row.hintKey).toBe('scanner.hint.page');
+    expect(t(row.hintKey!)).toMatch(/Flatten the page/i);
+    expect(t(row.hintKey!)).not.toMatch(/RENT_AGREEMENT/);
+  });
+
+  /** The hand-written sentence wins where there is one: it was written for this app's reader. */
+  it('prefers the hand-written instruction over the general one', () => {
+    const row = buildChecklistRows([item({ requirement: 'PAN_CARD' })], [])[0];
+
+    expect(row.hintKey).toBe('registration.hints.PAN_CARD');
+    expect(t(row.hintKey!)).toMatch(/all four corners/i);
+  });
+
+  it('still says nothing for a requirement that is not a document at all', () => {
+    expect(buildChecklistRows([item({ requirement: 'NOT_A_DOCUMENT' })], [])[0].hintKey).toBeNull();
   });
 });
 

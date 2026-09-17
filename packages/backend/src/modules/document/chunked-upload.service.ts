@@ -329,6 +329,9 @@ export class ChunkedUploadService {
     // needs — one extra cheap List call, in exchange for the caller never having to know an ETag
     // exists at all.
     await storage.completeMultipartUpload(session.s3Key, session.s3UploadId);
+    // The parts were written by the client straight into the store; encrypt the assembled object
+    // before anything registers it. See document-cipher.ts.
+    await this.storage.sealObject?.(session.s3Key);
 
     this.logger.log(
       `Upload session ${uploadId} completed → object key: ${session.s3Key}`,

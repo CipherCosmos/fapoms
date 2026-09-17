@@ -200,8 +200,8 @@ export const AssayerSkillsPanel: React.FC<{
       )}
 
       <Lede>
-        What {who} can be matched on when work is planned. A branch that requires a certificate is
-        never offered to somebody whose copy of it has lapsed.
+        The skills, languages and certificates {who} can be matched on when work is planned. A branch
+        that needs a certificate is never offered to someone whose certificate has expired.
       </Lede>
 
       {/*

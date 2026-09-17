@@ -47,7 +47,18 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
 import { RosterRecordsService } from './roster-records.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
-type Row = { id: string; lifecycleStatus: string; version: number; isActive: boolean; displayName: string };
+type Row = {
+  id: string;
+  lifecycleStatus: string;
+  version: number;
+  isActive: boolean;
+  displayName: string;
+  panNumber?: string;
+  bankAccountNumber?: string;
+  ifscCode?: string;
+  latitude?: number;
+  longitude?: number;
+};
 
 describe('bulk lifecycle — the contract between the response and the database', () => {
   let service: AssayerService;
@@ -65,7 +76,18 @@ describe('bulk lifecycle — the contract between the response and the database'
   let identityGateMode: string;
 
   const seed = (id: string, lifecycleStatus: AssayerLifecycleStatus): string => {
-    rows.set(id, { id, lifecycleStatus, version: 1, isActive: lifecycleStatus !== AssayerLifecycleStatus.ARCHIVED, displayName: `Person ${id}` });
+    rows.set(id, {
+      id,
+      lifecycleStatus,
+      version: 1,
+      isActive: lifecycleStatus !== AssayerLifecycleStatus.ARCHIVED,
+      displayName: `Person ${id}`,
+      panNumber: 'ABCDE1234F',
+      bankAccountNumber: '123456789012',
+      ifscCode: 'HDFC0001234',
+      latitude: 19.076,
+      longitude: 72.877,
+    });
     return id;
   };
   const stateOf = (id: string) => rows.get(id)?.lifecycleStatus;

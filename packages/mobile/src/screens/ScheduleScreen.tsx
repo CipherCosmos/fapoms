@@ -3,7 +3,7 @@ import { View, Linking } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
+import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, MetaChip, Segmented } from '../components/ui/primitives';
 import { assignmentStatusLabel, isAssignmentTerminal, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { dayGroupHeader, dayKey, relativeDay } from '../utils/dates';
@@ -245,8 +245,8 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 <Divider spacing={2} />
 
                 <View style={{ flexDirection: 'row', gap: t.space.lg }}>
-                  <Fact icon="calendar-outline" label={tr('schedule.factDate')} value={fmtDate(a.scheduledDate)} />
-                  <Fact icon="cube-outline" label={tr('schedule.factPackets')} value={a.estimatedCustomerCount > 0 ? String(a.estimatedCustomerCount) : '—'} />
+                  <MetaChip layout="stacked" icon="calendar-outline" label={tr('schedule.factDate')} value={fmtDate(a.scheduledDate)} />
+                  <MetaChip layout="stacked" icon="cube-outline" label={tr('schedule.factPackets')} value={a.estimatedCustomerCount > 0 ? String(a.estimatedCustomerCount) : '—'} />
                 </View>
 
                 {/* Accept or decline, on the work alone — no fee is shown and no counter-offer
@@ -408,23 +408,6 @@ const DayHeader: React.FC<{ header: string; tone: Tone; count: number }> = ({
       <AppText variant="caption" tone="faint">
         {count === 1 ? tr('schedule.oneStop') : tr('schedule.manyStops', { count })}
       </AppText>
-    </View>
-  );
-};
-
-const Fact: React.FC<{
-  icon: string;
-  label: string;
-  value: string;
-}> = ({ icon, label, value }) => {
-  const t = useTheme();
-  return (
-    <View style={{ flex: 1, gap: 4 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-        <Icon name={icon} size={12} color={t.colors.textFaint} />
-        <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
-      </View>
-      <AppText variant="bodyStrong" numberOfLines={1}>{value}</AppText>
     </View>
   );
 };

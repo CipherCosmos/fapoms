@@ -5,13 +5,14 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
-import { IsArray, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { SystemRole, ApplicationStatus, OnboardingDocument } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
 import { UpdateDraftRequestDto } from './public-registration.controller';
 import { RegistrationApplicationService } from './registration-application.service';
+import { AuditRead } from '../../core/audit/audit-read.decorator';
 
 const staffUploadMulterOptions = {
   storage: memoryStorage(),
@@ -23,15 +24,18 @@ const staffUploadMulterOptions = {
  *
  * Every box the candidate has, plus the three groups only a desk decides. Those three are left
  * loose for the reason `ApproveApplicationDto` below states: each is filtered server-side against
- * one shared list, and repeating the list as decorators here is how a form and its server drift.
+ * an allow-list, so re-declaring them as twenty decorators here is how the controller drifted from
+ * the service in the first place.
  */
-class StaffDraftRequestDto extends UpdateDraftRequestDto {
+export class StaffDraftRequestDto extends UpdateDraftRequestDto {
+  /** The rate card, filed in the same draft. */
   @IsOptional() @IsObject()
   commercial?: Record<string, unknown>;
 
   @IsOptional() @IsArray()
   references?: Array<Record<string, unknown>>;
 
+  /** Client standing, filed in the same draft. */
   @IsOptional() @IsArray()
   empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
 }
@@ -42,11 +46,10 @@ class RejectApplicationDto {
 }
 
 /**
- * What the reviewer fills in as they approve.
+ * What a reviewer may add when they approve.
  *
- * Deliberately loose as a shape: each group is filtered server-side against one shared list
- * (`pickRegistrationRecordFields`, `pickEmploymentTermFields`), and thirty decorators repeating
- * those lists here is exactly how a form and its server drift apart.
+ * Left loose for the same reason `StaffDraftRequestDto` is: each group is filtered server-side
+ * against an allow-list, so sixty decorators here would be a second place to maintain the schema.
  */
 class ApproveApplicationDto {
   /** Record fields the candidate got wrong. */
@@ -64,11 +67,45 @@ class ApproveApplicationDto {
   /** First client standings. Without one, nobody can be given work for anybody. */
   @IsOptional() @IsArray()
   empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+
+  @IsOptional() @IsBoolean()
+  allowSharedContact?: boolean;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  sharedContactReason?: string;
+}
+
+class UpdateMobileDto {
+  @IsString() @MinLength(6) @MaxLength(20)
+  mobile: string;
 }
 
 class RequestMoreInfoDto {
   @IsString() @MinLength(1) @MaxLength(2000)
   notes: string;
+}
+
+/**
+ * Adding a candidate no interview ever saw.
+ *
+ * `reason` carries a floor rather than merely `@IsNotEmpty()`, and it is the whole point of the
+ * endpoint: a step that blocks real work and can be skipped with an empty box is a step that gets
+ * skipped with an empty box. Ten characters is what stops "ok" from counting as a decision.
+ * (`TrimStringsPipe` runs before validation, so a field of spaces is already `''` here.)
+ */
+export class OpenWithoutInterviewDto {
+  @IsString() @MinLength(2) @MaxLength(200)
+  fullName: string;
+
+  /** The same shape `UpdateMobileDto` uses — one number, checked against the roster by the service. */
+  @IsString() @MinLength(6) @MaxLength(20)
+  mobile: string;
+
+  @IsOptional() @IsEmail() @MaxLength(255)
+  email?: string;
+
+  @IsString() @MinLength(10) @MaxLength(500)
+  reason: string;
 }
 
 /**
@@ -110,6 +147,27 @@ export class HrApplicationsController {
   }
 
   /**
+   * The second door into the pipeline: a candidate with no interview behind them.
+   *
+   * Declared ahead of every other `@Post` here, so a literal segment is matched before any
+   * pattern that could swallow it. Thin on purpose: every rule — the roster check, the
+   * already-open check, the stamp, the audit row — lives in the service, beside the interview
+   * path that has to agree with it.
+   */
+  @Post('invite')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Add a candidate to the hiring pipeline without an interview, on a recorded reason' })
+  async openWithoutInterview(@Body() dto: OpenWithoutInterviewDto, @Req() req: any) {
+    return await this.registrationApplications.openWithoutInterview(dto, {
+      id: req.user.id,
+      // The same three-deep fallback the interview screen uses for the interviewer's name.
+      name: req.user.displayName ?? req.user.username ?? req.user.email ?? null,
+      organizationId: req.user.organizationId,
+    });
+  }
+
+  /**
    * The desk saving a step of the form on the candidate's behalf.
    *
    * A diff, not the whole form: the wizard sends only what moved, which is what keeps a desk save
@@ -125,6 +183,18 @@ export class HrApplicationsController {
     @Req() req: any,
   ) {
     return await this.registrationApplications.updateStaffDraft(id, dto, req.user.id);
+  }
+
+  @Patch(':id/mobile')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: "Correct a candidate's registered mobile number" })
+  async updateMobile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateMobileDto,
+    @Req() req: any,
+  ) {
+    return await this.registrationApplications.updateApplicationMobile(id, dto.mobile, req.user.id);
   }
 
   @Post(':id/documents/:requirement')
@@ -163,6 +233,8 @@ export class HrApplicationsController {
    * an application without one and could only ever check that a file existed.
    */
   @Get(':id/documents/:requirement/file/:index')
+  // Opening an identity scan is recorded: "who looked at whose Aadhaar card" had no answer at all.
+  @AuditRead({ resource: 'ASSAYER_APPLICATION', idParam: 'id', eventType: 'APPLICATION_DOCUMENT_SCAN_VIEWED' })
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Stream one attached scan' })
@@ -178,6 +250,8 @@ export class HrApplicationsController {
     const stream = await this.registrationApplications.openDocumentStream(key);
     // `inline` so a reviewer sees the scan rather than downloading it to look at it.
     res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
+    // Never cached: an identity scan must not survive in a shared machine's browser cache.
+    res.setHeader('Cache-Control', 'private, no-store');
     stream.pipe(res);
   }
 

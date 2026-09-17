@@ -1,7 +1,7 @@
 import React from 'react';
-import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams, Link } from 'react-router-dom';
+import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams, Link, useLocation } from 'react-router-dom';
 import {
-  Users, MapPin, ClipboardList, Wallet, AlertTriangle, UserCheck, FileCheck2,
+  Users, MapPin, ClipboardList, Wallet, AlertTriangle, Plus, UserPlus,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
@@ -60,12 +60,15 @@ export function useHr(): HrContext {
  * What is left is the shape of the work rather than the shape of the data:
  *
  *   Overview        what needs doing today, ranked
+ *   Interviews      intake gate — candidate screening and interview pass/fail
+ *   Applications    review queue — applicant documents, identity verification and promotion
  *   People          the roster; a chip for every "who needs X", and the whole record on opening
  *                   somebody — including everything the retired pages could edit
  *   Pay & terms     the one screen that is genuinely a comparison: rate cards side by side, which
  *                   is a question about the roster and not about a person
  *   Where people are  utilisation, coverage and recent changes — the only concern here that is
  *                   not a per-person fact at all
+ *   Review queue    cells the import could not read and data checks failing on live records
  *
  * ONBOARDING, PAPERWORK and SKILLS are gone as destinations. Each was a list of people needing
  * something, which is what the roster's chips are, plus an editor for one person, which is what
@@ -90,48 +93,32 @@ const PAGES: readonly {
 }[] = [
   { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count', hint: () => 'Everything that needs attention today, in one list' },
   {
-    to: '/hr/roster', label: 'People', icon: Users, tone: 'count',
+    /*
+      ONE TAB FOR ONE FUNNEL.
+
+      Interviews, Applications and Onboarding were three destinations over a single pipeline: a
+      pass opened an application, an approval created the assayer record, and joining carried them
+      to Active. Three queues, three chip vocabularies and three drawers for the same people — and
+      they disagreed, "Invited" naming an unsubmitted application on one tab and an approved
+      assayer on another. The badge is the one number that is a task: forms waiting to be reviewed.
+    */
+    to: '/hr/hiring', label: 'Hiring', icon: UserPlus, tone: 'alert',
+    badge: (_d, _i, pending) => pending,
+    hint: (_d: HrWorkforceOverview, _i: number | null, pending: number | null) => (
+      pending === null
+        ? 'Everyone being hired, from interview to their first day'
+        : pending === 0
+          ? 'Everyone being hired — no form is waiting on a decision'
+          : `${pending} ${pending === 1 ? 'form is' : 'forms are'} waiting on a decision`
+    ),
+  },
+  {
+    to: '/hr/roster', label: 'People', icon: Users, tone: 'count' as const,
     badge: (d: HrWorkforceOverview) => d.headcount.total,
     hint: (d: HrWorkforceOverview) => `${d.headcount.total} people on the books — open anyone to see and edit their whole record`,
   },
   { to: '/hr/pay', label: 'Pay & terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms, side by side' },
   { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count', hint: () => 'Who is busy, which states are covered, and what changed recently' },
-  /*
-    A FIFTH TAB, AND IT EARNS ITS BADGE.
-
-    The badge rule above says a number appears on exactly one tab — the one that can resolve it —
-    and `alert` means "there is work here", not "this number is large". This is the first
-    destination in the section that qualifies: 431 record problems are open right now, every one
-    of them is cleared from this screen, and until this tab existed the only way to find out was
-    to scroll to the bottom of the roster and hope the collapsed panel was not returning null.
-
-    The badge is null, not 0, while the count is unknown — loading, or refused to a role that
-    cannot read the queue — so a tab never shows "0" for a question it has not asked.
-  */
-  /*
-    RECRUITMENT, INSIDE THE SECTION IT BELONGS TO.
-
-    These two were rows in the sidebar beside Workforce, on the grounds that each is a focused
-    single-task screen with a header of its own. The cost was three sidebar rows for one subject,
-    two of them highlighting at once, and a breadcrumb that already called both of them
-    "Workforce" — so the two chromes disagreed about where the user was standing.
-
-    Applications earns an alert badge by the same rule the review queue does: the number is work
-    that is cleared from this screen and nowhere else. Interviews does not — recording one is
-    something HR initiates, not a queue that fills up on its own.
-  */
-  { to: '/hr/interviews', label: 'Interviews', icon: UserCheck, badge: () => null, tone: 'count', hint: () => 'The gate before a candidate can register — a pass sends them their link' },
-  {
-    to: '/hr/applications', label: 'Applications', icon: FileCheck2, tone: 'alert',
-    badge: (_d, _i, pending) => pending,
-    hint: (_d, _i, pending) => (
-      pending === null
-        ? 'Candidates who have filled in their own registration and are waiting on a decision'
-        : pending === 0
-          ? 'Nobody is waiting — every application has been decided'
-          : `${pending} ${pending === 1 ? 'candidate is' : 'candidates are'} waiting on a decision`
-    ),
-  },
   {
     to: '/hr/issues', label: 'Review queue', icon: AlertTriangle, tone: 'alert',
     badge: (_d: HrWorkforceOverview, openIssues: number | null) => openIssues,
@@ -158,8 +145,18 @@ export const HrLayout: React.FC = () => {
   const workforce = useHrWorkforce();
   const { data, isLoading } = workforce;
   const [params] = useSearchParams();
+  const location = useLocation();
+  const navRef = React.useRef<HTMLElement>(null);
   const roles = useCurrentRoles();
   const canManage = canManageAssayers(roles);
+
+  React.useEffect(() => {
+    if (!navRef.current) return;
+    const active = navRef.current.querySelector<HTMLElement>('a.active, a[aria-current="page"]');
+    if (active && typeof active.scrollIntoView === 'function') {
+      active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [location.pathname]);
   /*
     Read here so the badge is present on every screen in the section, not only on the queue's own
     page. One query key, so the panel below shares this response rather than fetching it again —
@@ -183,8 +180,8 @@ export const HrLayout: React.FC = () => {
   if (isLoading) {
     return (
       <Page>
-        <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>Workforce</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+        <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, margin: 0 }}>Workforce</h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', margin: '4px 0 0' }}>
           Getting the latest figures for everyone on the roster…
         </p>
       </Page>
@@ -214,50 +211,84 @@ export const HrLayout: React.FC = () => {
   }
 
   const d = data as HrWorkforceOverview;
+  // Longest matching prefix, so `/hr/roster/:id` still reads as People and `/hr` only matches the
+  // Overview exactly.
+  const currentPage = [...PAGES]
+    .sort((a, b) => b.to.length - a.to.length)
+    .find((p) => (p.end ? location.pathname === p.to : location.pathname.startsWith(p.to)));
 
   return (
-    <Page>
+    <Page style={{ gap: 'var(--space-3)' }}>
       <PageHeader
-        icon={<Users size={20} />}
-        title="Workforce"
+        style={{ marginBottom: 0 }}
+        /*
+          Compact, and titled by the TAB rather than the section.
+ 
+          The shell's breadcrumb already says "Workforce", so a 38px tile plus a 20px "Workforce"
+          plus the tab strip said where you were three times and pushed the actual work below the
+          fold — about 90px of every screen in the section, before a single row of content. The
+          heading now names the page you are on, which is the one thing none of the rest said.
+        */
+        compact
+        title={currentPage?.label ?? 'Workforce'}
         /*
           "Updated 11:02 am" reads as a promise that the figures are live, which they are not: this
           is `hr_workforce.service.ts`'s own aggregate, computed once and cached — the words a
           reader needs are "this is when the number was true", not "this is current". The same
           mis-reading is what made a stale HR page indistinguishable from a working one before the
           section had live updates at all.
+ 
+          The region scope rides on the same line: it was a right-aligned row of its own, which
+          cost a whole band of the page to say one short thing.
         */
-        subtitle={`${d.headcount.active} active · ${d.headcount.onboarding} onboarding · ${d.headcount.exited} exited · figures as of ${fmtWhen(d.generatedAt)}`}
-        actions={
-          <Link to="/hr/roster" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}>
-            <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}
-          </Link>
-        }
+        subtitle={(
+          <>
+            {`${d.headcount.active} active · ${d.headcount.onboarding} joining · ${d.headcount.exited} left · figures as of ${fmtWhen(d.generatedAt)}`}
+            {!!d.scope?.regions?.length && (
+              <span
+                title="Your account is confined to these regions on every operations desk, and this workforce view is scoped the same way — the figures here describe only these regions, not the whole roster."
+                style={{
+                  marginLeft: '8px', display: 'inline-flex', alignItems: 'center',
+                  fontSize: 'var(--text-2xs)', fontWeight: 600, padding: '1px 8px', borderRadius: '999px',
+                  background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Your regions: {d.scope.regions.join(', ')}
+              </span>
+            )}
+          </>
+        )}
+        actions={(() => {
+          /*
+            The two cross-links that used to live here — "View applications" on Interviews and
+            "Record interview" on Applications — were the seams of a funnel split across tabs.
+            The funnel is one page now, and adding somebody is a button on it, so the only
+            contextual action left is the one that crosses between destinations.
+          */
+          if (location.pathname.startsWith('/hr/roster')) {
+            return canManage ? (
+              <Link
+                to="/hr/hiring"
+                className="btn btn-primary"
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}
+              >
+                <Plus size={14} /> Add assayer
+              </Link>
+            ) : null;
+          }
+          if (location.pathname.startsWith('/hr/hiring')) return null;
+          return (
+            <Link
+              to="/hr/roster"
+              className="btn btn-secondary"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}
+            >
+              <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}
+            </Link>
+          );
+        })()}
       />
-
-      {/*
-        A regionally-scoped account sees a smaller workforce than the "whole roster" figure they
-        may remember from a national screen or a colleague's, with nothing here saying why —
-        the same shape of unexplained gap `RosterExportDialog` already has to head off for a
-        server-filtered roster. Shown only for a scoped caller; `d.scope` is undefined for both an
-        unscoped (national) one and a server that has not shipped this field yet, so the chip
-        disappears cleanly rather than rendering "Your regions: " with nothing after the colon.
-      */}
-      {!!d.scope?.regions?.length && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
-          <span
-            title="Your account is confined to these regions on every operations desk, and this workforce view is scoped the same way — the figures above describe only these regions, not the whole roster."
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: '5px',
-              fontSize: 'var(--text-xs)', fontWeight: 600, padding: '4px 10px', borderRadius: '999px',
-              background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            Your regions: {d.scope.regions.join(', ')}
-          </span>
-        </div>
-      )}
 
       {/*
         * ONE SCROLLING STRIP, NEVER A WRAPPED STACK.
@@ -273,9 +304,10 @@ export const HrLayout: React.FC = () => {
         * detail drawer's own tab row already uses.
         */}
       <nav
+        ref={navRef}
         className="hr-tab-strip"
         style={{
-          display: 'flex', gap: '4px', margin: '18px 0',
+          display: 'flex', gap: '4px', margin: 0,
           flexWrap: 'nowrap', overflowX: 'auto', overflowY: 'hidden',
           borderBottom: '1px solid var(--border-color)',
           scrollbarWidth: 'none',

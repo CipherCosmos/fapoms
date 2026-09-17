@@ -86,18 +86,13 @@ export const RosterSegmentTabs: React.FC<RosterSegmentTabsProps> = ({
         })}
       </div>
 
+      {/*
+        One muted line, not a bordered panel. The hint is guidance for the chip you just picked;
+        boxing it in its own tinted, left-accented card gave a sentence the visual weight of a
+        warning and cost ~40px above the table on every visit.
+      */}
       {activeSegment.hint && (
-        <div
-          style={{
-            fontSize: 'var(--text-xs)',
-            color: 'var(--text-secondary)',
-            lineHeight: 1.5,
-            padding: '8px 12px',
-            borderRadius: '6px',
-            background: 'var(--bg-muted, rgba(128,128,128,0.06))',
-            borderLeft: '3px solid var(--accent)',
-          }}
-        >
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
           {activeSegment.hint}
         </div>
       )}

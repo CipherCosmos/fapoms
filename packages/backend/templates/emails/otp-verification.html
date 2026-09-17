@@ -1,0 +1,83 @@
+<!--
+EMAIL_TEMPLATE: otp-verification
+NAME: Registration OTP Verification
+REQUIRED_TOKENS:
+  - otpCode
+  - validMinutes
+  - logoUrl
+  - supportEmail
+OPTIONAL_TOKENS:
+  - greeting
+  - companyName
+RAW_TOKENS:
+  - none
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verification Code</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F8F9FA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#F8F9FA;padding:32px 12px;">
+    <tr>
+      <td align="center">
+        <!--[if (gte mso 9)|(IE)]>
+        <table role="presentation" width="560" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>
+        <![endif]-->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;background-color:#FFFFFF;border-radius:10px;overflow:hidden;border:1px solid #E5E7EB;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+          <!-- Header with Authentic Logo -->
+          <tr>
+            <td align="center" style="padding:28px 32px 20px 32px;border-bottom:1px solid #F3F4F6;">
+              <img src="{{logoUrl}}" alt="Sumeru Global" width="65" height="50" style="display:block;margin:0 auto;border:0;outline:none;" />
+            </td>
+          </tr>
+          <!-- Content Body -->
+          <tr>
+            <td style="padding:28px 32px 24px 32px;background-color:#FFFFFF;">
+              <h1 style="margin:0 0 14px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;font-weight:700;color:#111827;line-height:1.35;letter-spacing:-0.2px;">
+                Verification Code
+              </h1>
+              <p style="margin:0 0 12px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;line-height:1.65;color:#374151;">
+                Please enter the 6-digit code below to verify your email address and continue your Sumeru Global appraiser registration.
+              </p>
+              
+              <!-- Clean OTP Code Box -->
+              <div style="margin:20px 0 22px 0;padding:20px 16px;background-color:#FFF7ED;border:1px solid #FED7AA;border-radius:8px;text-align:center;">
+                <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;color:#C2410C;text-transform:uppercase;margin-bottom:6px;">
+                  One-Time Verification Code
+                </div>
+                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono',monospace;font-size:34px;font-weight:700;letter-spacing:8px;color:#9A3412;padding:2px 0;">
+                  {{otpCode}}
+                </div>
+                <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;color:#9A3412;opacity:0.85;margin-top:6px;">
+                  Valid for {{validMinutes}} minutes &bull; Strictly confidential
+                </div>
+              </div>
+
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;color:#6B7280;line-height:1.45;">
+                <strong style="color:#374151;">Note:</strong> This code expires in {{validMinutes}} minutes. If you did not request this, you can safely ignore this email. For support, contact {{supportEmail}}.
+              </div>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding:20px 32px;background-color:#F9FAFB;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+              <div style="font-size:12px;font-weight:600;color:#4B5563;">
+                Sumeru Global &bull; Field Audit Operations Management
+              </div>
+              <div style="font-size:11.5px;color:#9CA3AF;margin-top:4px;line-height:1.5;">
+                You are receiving this communication regarding your role in FAPOMS. Update preferences under Notifications &rarr; Preferences.
+              </div>
+            </td>
+          </tr>
+        </table>
+        <!--[if (gte mso 9)|(IE)]>
+        </td></tr></table>
+        <![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -200,10 +200,31 @@ export function assertProductionSafeConfig(): void {
    * (FILE_SCAN_REQUIRED IS now checked above, because the ClamAV sidecar it needs now ships in the
    * prod compose, so it is a one-line config the operator can satisfy.)
    */
-  const minioPassword = process.env.MINIO_ROOT_PASSWORD;
+  /*
+    SELF-HOSTED MINIO: CHECK THE CREDENTIAL THE API ACTUALLY SIGNS WITH.
+
+    This used to demand that MINIO_ROOT_PASSWORD be present in the API's environment and not the
+    burned default — which made holding the storage ROOT credential a precondition for booting. The
+    API does not need root: it needs a user that can read and write one bucket. And an API holding
+    root is the thing to prevent, because anybody who compromises the API then owns the store, its
+    users, its policies and every KYC scan in it.
+
+    So what is refused now is: no signing credential at all, the burned literal (it is committed to
+    this public repository's history) as either credential, and the API signing its requests WITH
+    the root credential. Root may be absent from the API entirely, which is the intended state.
+  */
+  const burnedMinioSecret = 'fapoms_minio_secret';
   if (process.env.STORAGE_DRIVER === 's3' && process.env.S3_ENDPOINT && !/amazonaws\.com/.test(process.env.S3_ENDPOINT)) {
-    if (!minioPassword || minioPassword === 'fapoms_minio_secret') {
-      fatal.push('MINIO_ROOT_PASSWORD is unset or the burned dev default. This is the actual root credential on the bucket holding every audit document and KYC scan.');
+    const signingSecret = process.env.AWS_SECRET_ACCESS_KEY;
+    const rootPassword = process.env.MINIO_ROOT_PASSWORD;
+    if (!signingSecret || signingSecret === burnedMinioSecret) {
+      fatal.push('The storage credential (AWS_SECRET_ACCESS_KEY) is unset or the burned dev default. It is what reads and writes every audit document and KYC scan.');
+    }
+    if (rootPassword && rootPassword === burnedMinioSecret) {
+      fatal.push('MINIO_ROOT_PASSWORD is the burned dev default, which is committed to git history. It is the root credential on the bucket holding every audit document and KYC scan.');
+    }
+    if (rootPassword && signingSecret && rootPassword === signingSecret) {
+      fatal.push('The API signs storage requests with the MinIO ROOT credential. Give it a user limited to the documents bucket, and keep root out of the API environment.');
     }
   }
 

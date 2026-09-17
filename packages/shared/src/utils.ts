@@ -20,7 +20,52 @@ export const INDIAN_STATES: { value: string; label: string }[] = [
   { value: 'Chandigarh', label: 'Chandigarh' }, { value: 'Delhi', label: 'Delhi' },
   { value: 'Jammu and Kashmir', label: 'Jammu and Kashmir' }, { value: 'Ladakh', label: 'Ladakh' },
   { value: 'Lakshadweep', label: 'Lakshadweep' }, { value: 'Puducherry', label: 'Puducherry' },
+  // 35 entries offered 28 states and 7 of the 8 union territories: Dadra & Nagar Haveli and
+  // Daman & Diu was missing, so nobody in Silvassa or Daman could pick where they live, and the
+  // postal directory's answer for a 396-series pincode matched no option on the form.
+  {
+    value: 'Dadra and Nagar Haveli and Daman and Diu',
+    label: 'Dadra and Nagar Haveli and Daman and Diu',
+  },
 ];
+
+/**
+ * One comparable form for a state name, whatever spelling it arrived in.
+ *
+ * `&` and "and" are the same word and punctuation is noise, so "Jammu & Kashmir",
+ * "Jammu and Kashmir" and "JAMMU-AND-KASHMIR" all reduce to the same key. `pincode.ts` compares
+ * postal-circle names with this; `matchIndianState` compares directory answers with it.
+ */
+export const stateNameKey = (value: string): string =>
+  value.toLowerCase().replace(/&/g, 'and').replace(/[^a-z]/g, '');
+
+/**
+ * The spelling of a state that this app's own dropdowns offer, or null for a name that is not
+ * one of them.
+ *
+ * WHY THIS EXISTS. An address filled in from a directory is only correct if the form can hold
+ * it. India Post answers "Jammu & Kashmir" and OpenStreetMap answers "Jammu and Kashmir", while
+ * `INDIAN_STATES` — the list every state `<select>` is built from — offers exactly one of those.
+ * Writing the other into the field leaves the select showing nothing at all, so a candidate who
+ * watched their state appear submits a record with no state in it: a silently wrong address,
+ * which is the worst kind. `canonicalStateName` is not enough on its own here, because it
+ * canonicalises to "&" forms this list does not use; it is used first for its recovery of
+ * abbreviations and misspellings, then the result is matched against the list.
+ */
+export function matchIndianState(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const keys = new Set(
+    [value, canonicalStateName(value)]
+      .filter((v): v is string => !!v && v !== 'UNKNOWN')
+      .map(stateNameKey)
+      .filter((k) => k.length > 0),
+  );
+  if (!keys.size) return null;
+  const hit = INDIAN_STATES.find(
+    (s) => keys.has(stateNameKey(s.value)) || keys.has(stateNameKey(s.label)),
+  );
+  return hit ? hit.value : null;
+}
 
 /**
  * Calculates the great-circle distance between two points on the Earth's surface

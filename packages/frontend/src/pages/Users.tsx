@@ -16,7 +16,7 @@ import { Page } from '../components/ui/Page';
  */
 
 const TABS = [
-  { key: 'directory', label: 'Directory', icon: UsersRound },
+  { key: 'directory', label: 'Staff list', icon: UsersRound },
   { key: 'roles', label: 'Roles & Permissions', icon: ShieldCheck },
   { key: 'activity', label: 'Activity', icon: ActivityIcon },
 ] as const;

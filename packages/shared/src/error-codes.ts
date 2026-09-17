@@ -169,6 +169,25 @@ export const ASSAYER_ERROR_CODES = {
   INVALID_COORDINATES: 'INVALID_COORDINATES',
   /** Registration cannot be submitted yet — something on the checklist is still missing. */
   REGISTRATION_INCOMPLETE: 'REGISTRATION_INCOMPLETE',
+  /**
+   * Activation refused because one or more payout-blocking fields are missing.
+   *
+   * An assayer without bank account, IFSC, or PAN cannot be paid. Activating them creates a
+   * person who earns money the system cannot deliver — and the recommendation engine will offer
+   * them for work immediately. Unlike the identity gate, which has a warn mode for legacy
+   * estates, this is unconditional: money cannot be sent to a missing bank account regardless
+   * of operational pressure.
+   */
+  PAYOUT_NOT_ELIGIBLE: 'PAYOUT_NOT_ELIGIBLE',
+  /**
+   * Activation refused because the record has no map coordinates.
+   *
+   * Without coordinates the recommendation engine cannot measure distance, travel costs cannot
+   * be computed, and the day planner has no position to route from. The distance filter silently
+   * passes everybody through when coordinates are missing — the exact bypass this lifecycle
+   * gate exists to prevent.
+   */
+  LOCATION_MISSING: 'LOCATION_MISSING',
 } as const;
 
 // ---------------------------------------------------------------------------

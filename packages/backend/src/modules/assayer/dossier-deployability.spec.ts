@@ -193,61 +193,61 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'INVITED',
       gate: 'DeployabilityFilter.explain — the planner\'s own next-step sentence',
       person: { lifecycleStatus: AssayerLifecycleStatus.INVITED },
-      expect: /onboarding not finished: invited — start document verification on the HR roster/,
+      expect: /still joining: invited — start document verification on the HR roster/,
     },
     {
       name: 'DOCUMENT_VERIFICATION',
       gate: 'DeployabilityFilter.explain',
       person: { lifecycleStatus: AssayerLifecycleStatus.DOCUMENT_VERIFICATION },
-      expect: /onboarding not finished: in document verification — complete it on the HR roster/,
+      expect: /still joining: in document verification — complete it on the HR roster/,
     },
     {
       name: 'BACKGROUND_VERIFICATION',
       gate: 'DeployabilityFilter.explain',
       person: { lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION },
-      expect: /onboarding not finished: in background verification/,
+      expect: /still joining: in background verification/,
     },
     {
       name: 'TRAINING',
       gate: 'DeployabilityFilter.explain',
       person: { lifecycleStatus: AssayerLifecycleStatus.TRAINING },
-      expect: /onboarding not finished: in training — mark training complete on the HR roster to activate/,
+      expect: /still joining: in training — mark training complete on the HR roster to activate/,
     },
     {
       name: 'ON_LEAVE',
       gate: 'operationalStatusFor maps ON_LEAVE to INACTIVE deliberately',
       person: { lifecycleStatus: AssayerLifecycleStatus.ON_LEAVE },
-      expect: /on leave — .*candidate pool/,
+      expect: /on leave — they are not offered any work until they are moved back to Active/,
     },
     {
       name: 'SUSPENDED',
       gate: 'the accept guard and the check-in guard, both status !== ACTIVE',
       person: { lifecycleStatus: AssayerLifecycleStatus.SUSPENDED },
-      expect: /suspended — no assignment is offered, accepted or checked in/,
+      expect: /suspended — they cannot be offered or do any work until the suspension is lifted/,
     },
     {
       name: 'INACTIVE',
       gate: 'operationalStatusFor',
       person: { lifecycleStatus: AssayerLifecycleStatus.INACTIVE },
-      expect: /parked as inactive — move them back to Active on the HR roster/,
+      expect: /inactive — move them back to Active to offer them work again/,
     },
     {
       name: 'RESIGNED',
       gate: 'hasLeftWorkforce + the rehire edge, which restarts at Invited',
       person: { lifecycleStatus: AssayerLifecycleStatus.RESIGNED },
-      expect: /off the workforce \(Resigned\) — a rehire restarts onboarding from Invited/,
+      expect: /they have left \(Resigned\) — to bring them back, rehire them; they start joining again from Invited/,
     },
     {
       name: 'TERMINATED',
       gate: 'hasLeftWorkforce',
       person: { lifecycleStatus: AssayerLifecycleStatus.TERMINATED },
-      expect: /off the workforce \(Terminated\)/,
+      expect: /they have left \(Terminated\)/,
     },
     {
       name: 'ARCHIVED',
       gate: 'hasLeftWorkforce; ARCHIVED is terminal',
       person: { lifecycleStatus: AssayerLifecycleStatus.ARCHIVED },
-      expect: /off the workforce \(Archived\)/,
+      expect: /they have left \(Archived\)/,
     },
     {
       // A death is not a lifecycle value — it is INACTIVE carrying `unavailableReason = DECEASED`,
@@ -259,7 +259,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
         lifecycleStatus: AssayerLifecycleStatus.INACTIVE,
         unavailableReason: AssayerUnavailableReason.DECEASED,
       },
-      expect: /recorded as deceased — the record is kept for audit history/,
+      expect: /recorded as deceased — the record is kept for history only/,
     },
 
     // ── Soft delete: DeployabilityFilter refuses `!isActive` before it will even look at the
@@ -268,7 +268,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'deleted profile',
       gate: 'DeployabilityFilter — never selectable, bypass or not',
       person: { isActive: false },
-      expect: /profile has been deleted from the workforce — restore it on the HR roster/,
+      expect: /their record has been deleted — restore it on the HR roster/,
     },
 
     // ── An explicit unavailability on somebody the lifecycle still calls ACTIVE.
@@ -276,7 +276,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'ACTIVE + unavailableReason',
       gate: 'the roster\'s own availability column',
       person: { unavailableReason: AssayerUnavailableReason.NO_WORK_IN_AREA },
-      expect: /marked unavailable \(NO_WORK_IN_AREA\) — clear the unavailability on the HR roster/,
+      expect: /marked unavailable \(no work in area\) — clear it on their details/,
     },
 
     // ── stillWorkable, which is stricter than every dispatch gate: an exit date filed while
@@ -286,7 +286,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'ACTIVE + an exit date nobody acted on',
       gate: 'stillWorkable — the mirror-image record',
       person: { exitDate: new Date('2026-03-31T00:00:00Z') },
-      expect: /recorded as having left on 2026-03-31 while the lifecycle still reads Active/,
+      expect: /a leaving date \(2026-03-31\) is recorded but their stage still says Active/,
     },
 
     // ── The per-client empanelment gate, asked of every client at once.
@@ -294,7 +294,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'ACTIVE + zero empanelments',
       gate: 'ClientEligibilityFilter under noEmpanelmentRow=BLOCK',
       empanelments: [],
-      expect: /no client empanelment on file — record an Active or Recommended standing on the vetting screen/,
+      expect: /not approved by any bank yet — record a bank approval \(Active or Recommended\) on their Background tab/,
     },
     {
       // DOCUMENTS_PENDING is not a refusal, and it still does not qualify. This is exactly the
@@ -302,19 +302,19 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'ACTIVE + only DOCUMENTS_PENDING',
       gate: 'standingAllowsPlanning is narrower than the enum looks',
       empanelments: [standing(EmpanelmentStatus.DOCUMENTS_PENDING, 'AXIS')],
-      expect: /no client empanelment in a plannable standing — DOCUMENTS_PENDING with AXIS on file/,
+      expect: /no bank approval that allows work \(documents pending with AXIS\)/,
     },
     {
       name: 'ACTIVE + only INACTIVE (dormant) standings',
       gate: 'standingAllowsPlanning',
       empanelments: [standing(EmpanelmentStatus.INACTIVE, 'SBI')],
-      expect: /only Active or Recommended lets the planner offer work/,
+      expect: /only Active or Recommended lets them be offered work/,
     },
     {
       name: 'ACTIVE + only REJECTED standings',
       gate: 'the strictly-non-overridable arm of the assignment gate',
       empanelments: [standing(EmpanelmentStatus.REJECTED, 'ICICI')],
-      expect: /REJECTED with ICICI on file/,
+      expect: /rejected with ICICI/,
     },
 
     // ── The identity gate: the same documents and the same words the activation gate uses.
@@ -322,7 +322,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'ACTIVE + no identity documents at all',
       gate: 'identityStanding / IDENTITY_GATE_DOCUMENTS',
       documents: [],
-      expect: /identity not established — Aadhaar — front and PAN card have not been checked against the original/,
+      expect: /identity not confirmed — Aadhaar — front and PAN card have not been checked against the original/,
     },
     {
       // A row asserting the document arrived, with no file behind it. 11,160 such rows were
@@ -333,7 +333,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
         { ...verifiedDoc(OnboardingDocument.AADHAAR_FRONT), filePaths: [] },
         verifiedDoc(OnboardingDocument.PAN_CARD),
       ],
-      expect: /identity not established — Aadhaar — front has not been checked against the original/,
+      expect: /identity not confirmed — Aadhaar — front has not been checked against the original/,
     },
     {
       name: 'ACTIVE + a document that was sent back',
@@ -350,13 +350,13 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'ACTIVE + no coordinate',
       gate: 'the candidate distance pre-filter, which drops the unplaceable with no reason',
       person: { latitude: null, longitude: null, geoAccuracyMeters: null },
-      expect: /no home location recorded — .*drops anyone it cannot place, silently/,
+      expect: /no home location recorded — without it they are left out of every search for nearby people/,
     },
     {
       name: 'ACTIVE + a state-centroid pin',
       gate: 'isPlaceholderPin / PLACEHOLDER_PIN_METRES',
       person: { geoAccuracyMeters: PLACEHOLDER_PIN_METRES },
-      expect: /home pin is a placeholder, not a home/,
+      expect: /home pin is only approximate/,
     },
 
     // ── Payability. This one does not stop a dispatch, and the sentence says so.
@@ -364,13 +364,13 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       name: 'ACTIVE + missing payout details',
       gate: 'cannotBePaid / payoutBlockingGaps',
       person: { bankAccountNumber: null, ifscCode: null, panNumber: null },
-      expect: /payout details incomplete \(PAN, Bank account, IFSC\) — the audit can be dispatched, but every payable it earns is held/,
+      expect: /bank details incomplete \(PAN, Bank account, IFSC\) — they can be sent to work, but their pay is held/,
     },
     {
       name: 'ACTIVE + only the bank account missing',
       gate: 'payoutBlockingGaps names the gap, not "payment details"',
       person: { bankAccountNumber: null },
-      expect: /payout details incomplete \(Bank account\)/,
+      expect: /bank details incomplete \(Bank account\)/,
     },
   ];
 
@@ -428,13 +428,13 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
     expect(dossier.deployable).toBe(false);
     expect(dossier.deploymentBlockers).toHaveLength(3);
     expect(dossier.deploymentBlockers).toEqual(expect.arrayContaining([
-      expect.stringMatching(/no client empanelment on file/),
-      expect.stringMatching(/identity not established/),
-      expect.stringMatching(/payout details incomplete \(Bank account\)/),
+      expect.stringMatching(/not approved by any bank yet/),
+      expect.stringMatching(/identity not confirmed/),
+      expect.stringMatching(/bank details incomplete \(Bank account\)/),
     ]));
     // And not one of them is about the lifecycle: this person really is ACTIVE, which is the
     // whole reason the card believed them fine.
-    expect(dossier.deploymentBlockers.join(' ')).not.toMatch(/onboarding not finished|suspended|on leave/);
+    expect(dossier.deploymentBlockers.join(' ')).not.toMatch(/still joining|suspended|on leave/);
   });
 
   /**
@@ -455,7 +455,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
 
     expect(gate.ok).toBe(false);
     expect(gate.rejected).toEqual([OnboardingDocument.PAN_CARD]);
-    expect(dossier.deploymentBlockers.some((b: string) => /identity not established/.test(b))).toBe(true);
+    expect(dossier.deploymentBlockers.some((b: string) => /identity not confirmed/.test(b))).toBe(true);
   });
 
   /**
@@ -499,7 +499,7 @@ describe('RosterRecordsService.dossier — deployability is the server\'s answer
       identityGateMode = 'enforce';
       unverified();
       const d: any = await service.dossier('asr-1');
-      expect(d.deploymentBlockers).toContainEqual(expect.stringMatching(/identity not established/));
+      expect(d.deploymentBlockers).toContainEqual(expect.stringMatching(/identity not confirmed/));
       expect(d.deployable).toBe(false);
     });
 

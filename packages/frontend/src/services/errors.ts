@@ -109,6 +109,16 @@ interface DomainErrorEntry {
    * conflates with `requiresRefresh` unless a code says otherwise here.
    */
   retryable?: boolean;
+  /**
+   * The server's own sentence wins over `message` when it sent one a person can read.
+   *
+   * For most codes the table's wording is the better one. For a gate that names the person and
+   * the exact thing missing, it is strictly worse: activation said "Sunita Rao cannot be activated
+   * yet: PAN card has not been checked against the original. Open their Documents tab…", and this
+   * table replaced that with "Mandatory KYC identity documents (PAN / Aadhaar) must be verified" —
+   * which neither says which of the two, nor where to go. `message` stays as the fallback.
+   */
+  preferServerMessage?: boolean;
 }
 
 /**
@@ -127,6 +137,7 @@ interface DomainErrorEntry {
  */
 const DOMAIN_ERROR_TRANSLATIONS: Partial<Record<ApiErrorCode, DomainErrorEntry>> = {
   IDENTITY_NOT_VERIFIED: {
+    preferServerMessage: true,
     message: 'Mandatory KYC identity documents (PAN / Aadhaar) must be verified before this assayer can be activated.',
     category: 'user-correction-required',
     translationCategory: 'business_rule',
@@ -649,7 +660,9 @@ export function fromResponse(status: number, body: any): AppError {
   // A domain code is more specific than the status, so it still wins both fields.
   const domainDef = domainTranslation(domainCode);
   if (domainDef) {
-    friendly = domainDef.message;
+    friendly = domainDef.preferServerMessage && isHumanReadable(serverText)
+      ? sentence(serverText)
+      : domainDef.message;
     category = domainDef.category;
   } else if (isHumanReadable(serverText)) {
     friendly = sentence(serverText);
@@ -699,7 +712,8 @@ export function translateError(err: unknown): ErrorTranslation {
       return {
         category: domainDef.translationCategory,
         title: domainDef.title,
-        message: domainDef.message,
+        // `fromResponse` already chose between the server's sentence and the table's for these.
+        message: domainDef.preferServerMessage ? err.userMessage : domainDef.message,
         action: domainDef.action,
         retryable: domainDef.retryable ?? (domainDef.translationCategory === 'rate_limit'),
         requiresRefresh: domainDef.requiresRefresh ?? (domainDef.translationCategory === 'conflict'),

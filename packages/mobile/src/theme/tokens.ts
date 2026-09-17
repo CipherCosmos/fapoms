@@ -8,17 +8,23 @@ import { Platform } from 'react-native';
  * Every screen reads from here, so the look is changed in one place, not screen
  * by screen.
  *
- * ## Identity — "Midnight Neon"
+ * ## Identity — "Orbit Navy"
  *
- * Dark-first and premium. The ground is a near-black with a faint blue-violet
- * undertone, layered into three surface tiers so depth comes from the tier gap
- * rather than heavy shadow. The primary is an electric violet (#8B7CFF) and the
- * accent an electric cyan (#22D3EE) — the two neon signals that carry the brand.
- * Status hues (success/warning/danger/info) are held clearly apart from the
- * violet so a warning never reads as just another button.
+ * Dark-first, but deliberately closer to a trusted ops/audit tool than to a
+ * consumer neon app: the ground is a deep navy-charcoal rather than a
+ * blue-violet near-black, and the brand signal is an electric blue rather than
+ * violet — a field assayer's employer, not a game. The accent is an electric
+ * teal, one clear step off the primary so a balance figure and a primary
+ * button never compete. Status hues (success/warning/danger/info) are held
+ * clearly apart from both so a warning never reads as just another button.
  *
- * The light palette is a clean companion, not an afterthought: the same violet
- * and cyan carried further down the ramp so they stay legible on white.
+ * Replaces the original "Midnight Neon" (violet/cyan) identity — same
+ * structure (three surface tiers, dual palette, WCAG-checked text tones; see
+ * `contrast.spec.ts`), different hue family, chosen for a more professional,
+ * less gaming/crypto-app read.
+ *
+ * The light palette is a clean companion, not an afterthought: the same blue
+ * and teal carried further down the ramp so they stay legible on white.
  */
 
 export type Mode = 'light' | 'dark';
@@ -65,114 +71,114 @@ export interface Palette {
 }
 
 const dark: Palette = {
-  /* Near-black with a faint blue-violet undertone, and three clearly separated
-     surface tiers above it so the neon violet reads as part of the family rather
-     than an accent bolted onto a cold ground. Depth comes from the tier gap
-     between bg/surface/surfaceAlt plus elevation, so borders stay a hairline seam
-     rather than an outline around every box. */
-  bg: '#0E1016',
-  surface: '#191C24',
-  surfaceAlt: '#232733',
+  /* Deep navy-charcoal — cooler and darker than the old violet-tinted near-black, read as an
+     ops/audit tool rather than a game. Three clearly separated surface tiers above it so depth
+     comes from the tier gap plus elevation, not from an outline around every box (see `Card`,
+     `GroupedSection` in primitives.tsx — both moved from a full-strength border to a hairline
+     for the same reason: a box drawn in a visible outline, nested inside more outlined boxes, is
+     what reads as dated forms UI, not the tone of the box itself). */
+  bg: '#0A101C',
+  surface: '#121A2C',
+  surfaceAlt: '#1B2540',
   surfacePress: 'rgba(255,255,255,0.06)',
   border: 'rgba(255,255,255,0.08)',
   borderStrong: 'rgba(255,255,255,0.16)',
 
-  text: '#F0F2F7',
-  textMuted: '#9CA3B4',
+  text: '#EDF1F8',
+  textMuted: '#93A1B8',
   /**
-   * Lightened from `#6B7080`, which failed WCAG AA everywhere it was used.
+   * Measured against the three grounds this app paints on — bg `#0A101C`, surface `#121A2C`,
+   * surfaceAlt `#1B2540` — this scores 5.86, 5.35 and 4.67 against the 4.5 AA floor (verified by
+   * `contrast.spec.ts`, which computes this at test time rather than trusting a comment).
+   * `overline` + `tone="faint"` is the FIELD LABEL style, used at 38+ sites including every label
+   * on the profile form, so this tone carries real legibility weight, not just decoration.
    *
-   * Measured against the three grounds this app paints on — bg `#0E1016`, surface `#191C24`,
-   * surfaceAlt `#232733` — the old value scored 3.85, 3.45 and 3.02 against a 4.5 requirement.
-   * That would be defensible for decoration, and it is not what this tone does: `overline` +
-   * `tone="faint"` is the FIELD LABEL style, used at 38 sites including every label on the
-   * profile form and all three on the change-password screen. Uppercase, letter-spaced, 12px and
-   * below the contrast floor is the least legible combination available, applied to the words a
-   * low-literacy field worker most needs to get right.
-   *
-   * `#8A91A0` scores 6.01, 5.38 and 4.71 — passing on all three — while staying a clear step
-   * below `textMuted` (1.25:1 between them), so the three-tier scale still reads as three tiers.
+   * Kept a clear step below `textMuted` (1.24:1) so the three-tier scale still reads as three
+   * tiers rather than two tones and a rounding error.
    */
-  textFaint: '#8A91A0',
+  textFaint: '#8090A8',
 
-  /* Electric violet — the brand signal. Bright enough that near-black text sits on
-     it (see onPrimary), which is the modern neon-button look. Reserved for the
-     single primary action on a screen; everything else is neutrals or status. */
-  primary: '#8B7CFF',
-  primarySoft: 'rgba(139,124,255,0.16)',
-  onPrimary: '#0E1016',
+  /* Electric blue — the brand signal. Blue's luminance weight in the WCAG formula is low
+     regardless of how vivid it looks, so (as with the old violet) dark ink reads better on it
+     than white does — verified: ink clears ~5:1, white only ~3.8:1. Reserved for the single
+     primary action on a screen; everything else is neutrals or status. */
+  primary: '#2F7DFF',
+  primarySoft: 'rgba(47,125,255,0.16)',
+  onPrimary: '#0A101C',
 
-  /* Electric cyan — money, highlights, the second neon. One clear step off the
-     violet so a balance figure and a primary button never compete. */
-  accent: '#22D3EE',
-  accentSoft: 'rgba(34,211,238,0.14)',
+  /* Electric teal — money, highlights, the second signal. One clear step off the primary so a
+     balance figure and a primary button never compete. */
+  accent: '#2DD4BF',
+  accentSoft: 'rgba(45,212,191,0.14)',
   onAccent: '#05141A',
 
-  /* Status hues kept vivid but clearly apart from the violet, so a screen of
-     badges reads as information rather than a set of competing alerts. */
-  success: '#34D399',
-  successSoft: 'rgba(52,211,153,0.13)',
-  /* Amber warning, distinct from the violet primary — a warning the same colour as
-     every button stops functioning as a warning. */
+  /* Status hues kept vivid but clearly apart from primary/accent, so a screen of badges reads as
+     information rather than a set of competing alerts. Success shifted to a purer green (was
+     closer to teal, which now doubles as the accent). */
+  success: '#22C55E',
+  successSoft: 'rgba(34,197,94,0.13)',
+  /* Amber warning, distinct from the blue primary — a warning the same colour as every button
+     stops functioning as a warning. */
   warning: '#FBBF24',
   warningSoft: 'rgba(251,191,36,0.13)',
   danger: '#FB7185',
   dangerSoft: 'rgba(251,113,133,0.13)',
-  /* Dark ink, not white: white on this rose is ~2.4:1 and fails AA for the one thing a badge
-     exists to show — a number. The near-black ink used on the violet button clears ~8.5:1. */
-  onDanger: '#0E1016',
-  info: '#60A5FA',
-  infoSoft: 'rgba(96,165,250,0.13)',
+  /* Dark ink, not white: white on this rose fails AA for the one thing a badge exists to show —
+     a number. The near-black ink clears ~7:1. */
+  onDanger: '#0A101C',
+  /* Indigo, not blue — with primary now occupying blue, info needs its own hue to stay a
+     distinguishable "third colour" rather than reading as a duller primary. */
+  info: '#818CF8',
+  infoSoft: 'rgba(129,140,248,0.13)',
 
-  scrim: 'rgba(6,7,12,0.82)',
+  scrim: 'rgba(4,7,14,0.82)',
 };
 
 const light: Palette = {
-  /* Cool off-white with a faint violet undertone, keeping the light theme in the
-     same family as the neon mark rather than a plain grey. */
-  bg: '#F5F5FB',
+  /* Cool off-white with a faint navy undertone, keeping the light theme in the same family as
+     the dark ground rather than a plain grey. */
+  bg: '#F3F6FB',
   surface: '#FFFFFF',
-  surfaceAlt: '#FBFBFE',
-  surfacePress: 'rgba(20,18,40,0.05)',
-  border: 'rgba(20,18,40,0.10)',
-  borderStrong: 'rgba(20,18,40,0.20)',
+  surfaceAlt: '#F7F9FC',
+  surfacePress: 'rgba(15,27,45,0.05)',
+  border: 'rgba(15,27,45,0.10)',
+  borderStrong: 'rgba(15,27,45,0.20)',
 
-  text: '#16151F',
-  textMuted: '#5B5A6B',
+  text: '#10192B',
+  textMuted: '#54637A',
   /**
-   * Darkened from `#8A8898` for the same reason as the dark theme's `textFaint` above, and this
-   * side was the worse of the two: 3.19, 3.47 and 3.36 against its own bg / surface / surfaceAlt,
-   * where 4.5 is the floor for text this size. `#706E80` scores 4.57, 4.96 and 4.81 and keeps a
-   * 1.36:1 step below `textMuted`.
+   * Measured against bg `#F3F6FB` / surface `#FFFFFF` / surfaceAlt `#F7F9FC`: 4.65, 5.04, 4.78
+   * against the 4.5 AA floor (checked by `contrast.spec.ts`), and a 1.21:1 step below
+   * `textMuted` so the three-tier scale stays three tiers.
    */
-  textFaint: '#706E80',
+  textFaint: '#5F7089',
 
-  /* Deepened violet. The neon #8B7CFF is only ~2.5:1 on white — fine as a glow on
-     dark, unreadable as a label or a link on light — so light mode carries the same
-     hue further down the ramp to clear ~5:1 with white text on the button. */
-  primary: '#5B4BD6',
-  primarySoft: 'rgba(91,75,214,0.10)',
+  /* Deepened electric blue. The vivid #2F7DFF used on dark is only borderline on white — light
+     mode carries the same hue further down the ramp to clear ~6.7:1 with white text. */
+  primary: '#1D4ED8',
+  primarySoft: 'rgba(29,78,216,0.10)',
   onPrimary: '#FFFFFF',
 
-  /* Cyan pulled to teal so it reads on white; the neon cyan is a highlight on dark,
-     a legible accent here. */
-  accent: '#0891B2',
-  accentSoft: 'rgba(8,145,178,0.10)',
+  /* Teal deepened for white text at ~6:1 — the vivid dark-mode teal is a highlight on navy, a
+     legible accent here. */
+  accent: '#0B6E66',
+  accentSoft: 'rgba(11,110,102,0.10)',
   onAccent: '#FFFFFF',
 
   success: '#16A34A',
   successSoft: 'rgba(22,163,74,0.10)',
-  /* Deep amber warning, distinct from the violet primary. */
+  /* Deep amber warning, distinct from the blue primary. */
   warning: '#A16207',
   warningSoft: 'rgba(161,98,7,0.12)',
   danger: '#E11D48',
   dangerSoft: 'rgba(225,29,72,0.10)',
   /* The crimson is deep enough for white (~4.7:1). */
   onDanger: '#FFFFFF',
-  info: '#2563EB',
-  infoSoft: 'rgba(37,99,235,0.10)',
+  /* Indigo, not blue — primary already owns blue here. */
+  info: '#4F46E5',
+  infoSoft: 'rgba(79,70,229,0.10)',
 
-  scrim: 'rgba(20,18,40,0.45)',
+  scrim: 'rgba(10,16,28,0.45)',
 };
 
 export const palettes: Record<Mode, Palette> = { light, dark };

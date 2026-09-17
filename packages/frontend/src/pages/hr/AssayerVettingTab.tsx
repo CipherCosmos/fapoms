@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, Plus, Check, Paperclip, Trash2, Lock } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, Plus, Check, Trash2, Lock, Eye } from 'lucide-react';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, HARD_COPY_LOCATIONS,
-  onboardingNextStep, standingAllowsPlanning,
+  onboardingNextStep, standingAllowsPlanning, scanMimeType, isDrawableScan, identityDocumentFacts,
+  isValidPan, isValidAadhaar,
 } from '@fapoms/shared';
 
+import { ScanOrAttach } from '../../components/scanner/ScanOrAttach';
 import { api } from '../../services/api';
 import { Select, useConfirm, useToast, AlertBanner, SkeletonList, DataTable, StatusBadge } from '../../components/ui';
 import { RejectDocumentModal } from './RejectDocumentModal';
@@ -13,7 +15,8 @@ import {
 } from './hr-ui';
 import { looksLikeMask } from './assayer-shared';
 import { fmtDate } from '../../utils/dates';
-import { userMessage } from '../../services/errors';
+import { userMessage, translateError } from '../../services/errors';
+import { DocumentPreviewModal, type DocumentPreviewItem } from '../../components/DocumentPreviewModal';
 import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { counted } from '../../utils/plural';
 import { relationshipOptions } from './reference-vocabulary';
@@ -87,11 +90,25 @@ const verdictTone = (v?: string | null): string =>
       ? 'var(--warning)'
       : 'var(--text-primary)';
 
-/** The background that pairs with each of `verdictTone`'s three foregrounds, for the chip form. */
-const VERDICT_TONE_BG: Record<string, string> = {
-  'var(--danger)': 'var(--status-cancelled-bg)',
-  'var(--warning)': 'var(--status-pending-bg)',
-  'var(--text-primary)': 'var(--bg-surface-2)',
+/**
+ * One result, in one set of words, wherever it appears — the chip, the history table and the
+ * choices in "Record a background check".
+ *
+ * There used to be two chips side by side for the one fact ("Civil case" and "Failed"), and the
+ * dropdown said it a third way ("Civil case (Failed)"). The clerk's word leads; the kind of
+ * finding follows only where there is one to name, because "Passed — clear" says nothing twice.
+ */
+const verdictResultLabel = (v: string): string => {
+  const pf = verdictPassFail(v);
+  if (pf === 'Passed') return 'Passed';
+  if (pf === 'Pending') return 'Pending — not checked yet';
+  const detail = (VERDICT_LABELS[v] ?? humanizeEnum(v)).toLowerCase();
+  return `Failed — ${detail}`;
+};
+
+const VerdictChip: React.FC<{ verdict: string; size?: 'md' }> = ({ verdict, size }) => {
+  const tone = PASS_FAIL_TONE[verdictPassFail(verdict) ?? 'Pending'];
+  return <StatusBadge size={size} color={tone.fg} bg={tone.bg} label={verdictResultLabel(verdict)} />;
 };
 
 /**
@@ -158,6 +175,11 @@ const REFUSED_STANDINGS = new Set<string>([
 
 /**
  * Invariant 1: Empanelment hard-blocks that are NEVER overridable in the UI by any role.
+ *
+ * Mirrors `STRICTLY_NON_OVERRIDABLE_STANDINGS` in
+ * packages/backend/src/modules/assignment/assignment-target-eligibility.policy.ts — EXPIRED and
+ * SUSPENDED are kept because that list has them, even though EmpanelmentStatus does not today.
+ * On screen this is called "Final", never "hard-blocked" and never by these enum names.
  */
 export const HARD_BLOCKED_STANDINGS = new Set<string>([
   'REJECTED',
@@ -165,6 +187,50 @@ export const HARD_BLOCKED_STANDINGS = new Set<string>([
   'EXPIRED',
   'SUSPENDED',
 ]);
+
+/** What a clerk is told when they try to change one of those. The chip beside the row says the same. */
+const FINAL_STANDING_MESSAGE = "This bank's decision is final and can't be changed here.";
+
+/**
+ * The four refusals that mean "somebody else got to this document first".
+ *
+ * Read off the error's code, not its words. `userMessage()` replaces the server's text with a
+ * plain sentence for exactly these codes, so a check for the code *inside the message* could
+ * never match a real response — the refresh below only ever ran in tests that threw a bare
+ * `Error`. `technical` still carries the server's own text, for an error that arrived without a
+ * code at all.
+ */
+const REVIEW_CONFLICT_CODES = [
+  'DOCUMENT_VERSION_STALE',
+  'CANNOT_VERIFY_SUPERSEDED_VERSION',
+  'CONTENT_HASH_MISMATCH',
+  'DOCUMENT_ALREADY_REVIEWED',
+] as const;
+
+const isReviewConflict = (e: unknown): boolean => {
+  const { domainCode, technical } = translateError(e);
+  return REVIEW_CONFLICT_CODES.some((code) => domainCode === code || (technical ?? '').includes(code));
+};
+
+const REVIEW_CONFLICT_MESSAGE = 'Someone else changed this document while you had it open, so your review was not saved. '
+  + 'It has been refreshed — please check it again.';
+
+/**
+ * Which stored version of a document the reviewer is looking at, and what its bytes hashed to.
+ *
+ * The dossier puts the hash on each entry of `versions`, not on the document row, so reading
+ * `doc.contentSha256` alone sent `expectedContentHash: null` on every real review and the
+ * server's "this file changed under you" check never had anything to compare against.
+ */
+const reviewTarget = (doc: any) => {
+  const targetVersionId = doc.currentVersionId ?? doc.id;
+  const current = (doc.versions ?? []).find((v: any) => v.id === targetVersionId);
+  return {
+    targetVersionId,
+    expectedDocVersion: doc.docVersion ?? doc.version,
+    expectedContentHash: doc.contentSha256 ?? current?.contentSha256 ?? null,
+  };
+};
 
 export type StandingStance = 'plannable' | 'refused' | 'notReady';
 
@@ -301,17 +367,27 @@ const VerificationChip: React.FC<{ status?: string | null }> = ({ status }) => {
   return <StatusBadge color="var(--text-muted)" bg="var(--bg-surface-2)" label="Not checked" />;
 };
 
+/*
+  The types a scan can be — read off the stored key's extension by `scanMimeType`, because
+  everything is served as `application/octet-stream` with `nosniff` and a blob left at that is
+  something the browser downloads rather than something the viewer can show.
+  That table used to live here, and in four other shapes elsewhere: a regular expression for
+  thumbnails, a third version inside the viewer whose fallback never ran, and two screens that
+  simply trusted the empty type and offered a download. One rule now, in @fapoms/shared beside the
+  list of types an upload is allowed to be.
+*/
+
 /**
- * The attached scans for one document, as thumbnails you can open.
+ * The attached scans for one document, opened in the app's one document viewer.
  *
- * The route needs an Authorization header, so a plain `<img src>` cannot fetch it — the bytes
- * come through `api.request` as a blob and become an object URL, the same way every other
- * protected file in this app is read. Revoked on unmount, or the tab leaks a copy of every
- * identity document somebody scrolls past.
+ * This used to fetch every scan the moment the row rendered and show it as a 34px thumbnail or a
+ * bare link into a new tab — too small to read a card number off, and for a PDF usually a
+ * download. It now opens `DocumentPreviewModal`, the same viewer (zoom, rotate, page through
+ * several scans) the verification drawer uses, and fetches only when somebody asks to look.
  *
- * Everything is served as `application/octet-stream` with `nosniff`, so what renders as an image
- * here can never execute in the app's own origin. That is also why the type is guessed from the
- * key's extension rather than trusted from the response.
+ * The route needs an Authorization header, so the bytes come through `api.request` as a blob and
+ * become an object URL. They are revoked when the viewer closes, or when the row goes away, or
+ * the tab keeps a copy of every identity document somebody opened.
  */
 const Attachments: React.FC<{
   documentId: string | null;
@@ -320,29 +396,40 @@ const Attachments: React.FC<{
   onRemoved: () => void;
   /** Failures go to the tab's one banner, not to a toast of this component's own. */
   onError: (message: string) => void;
-  /** Which document these scans belong to, so the delete button can name it. */
+  /** Which document these scans belong to, so the viewer and the remove button can name it. */
   documentLabel: string;
 }> = ({ documentId, filePaths, canManage, onRemoved, onError, documentLabel }) => {
-  const [urls, setUrls] = useState<(string | null)[]>([]);
+  const [preview, setPreview] = useState<{ items: DocumentPreviewItem[]; index: number } | null>(null);
+  const [opening, setOpening] = useState(false);
 
-  // Keyed on the joined paths rather than the array: the parent rebuilds `filePaths` every
-  // render, so depending on its identity would refetch every blob on every render.
-  const filePathsKey = filePaths.join('|');
-  useEffect(() => {
-    if (!documentId || filePaths.length === 0) { setUrls([]); return undefined; }
-    let live = true;
+  const shown = useRef<DocumentPreviewItem[]>([]);
+  useEffect(() => () => { shown.current.forEach((item) => URL.revokeObjectURL(item.url)); }, []);
+
+  const open = async (index: number) => {
+    if (!documentId || opening) return;
+    setOpening(true);
     const made: string[] = [];
-    void Promise.all(filePaths.map((_, i) =>
-      api.request<Blob>(`/assayers/document/${documentId}/file/${i}`, { raw: true })
-        .then((b) => { const u = URL.createObjectURL(b); made.push(u); return u; })
-        .catch(() => null),
-    )).then((list) => { if (live) setUrls(list); });
-    return () => { live = false; made.forEach((u) => URL.revokeObjectURL(u)); };
-  // see filePathsKey above
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentId, filePathsKey]);
+    try {
+      const items = await Promise.all(filePaths.map(async (key, i) => {
+        const bytes = await api.request<Blob>(`/assayers/document/${documentId}/file/${i}`, { raw: true });
+        const type = scanMimeType(key) ?? undefined;
+        const url = URL.createObjectURL(type ? new Blob([bytes], { type }) : bytes);
+        made.push(url);
+        return { title: documentLabel, url, fileName: key.split('/').pop() || `scan-${i + 1}`, mimeType: type };
+      }));
+      shown.current = items;
+      setPreview({ items, index });
+    } catch (e) {
+      made.forEach((u) => URL.revokeObjectURL(u));
+      onError(`The scan of ${documentLabel} could not be opened. ${userMessage(e)}`);
+    } finally { setOpening(false); }
+  };
 
-  const isImage = (key: string) => /\.(jpe?g|png|webp|heic|heif)$/i.test(key);
+  const close = () => {
+    shown.current.forEach((item) => URL.revokeObjectURL(item.url));
+    shown.current = [];
+    setPreview(null);
+  };
 
   const remove = async (index: number) => {
     if (!documentId) return;
@@ -354,46 +441,37 @@ const Attachments: React.FC<{
 
   if (filePaths.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
 
+  const several = filePaths.length > 1;
   return (
-    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-      {filePaths.map((key, i) => {
-        const url = urls[i];
-        const name = key.split('/').pop() ?? 'file';
-        return (
-          <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-            <a
-              href={url ?? undefined}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={name}
-              style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'var(--primary)' }}
+    <div style={{ display: 'flex', gap: '6px 12px', alignItems: 'center', flexWrap: 'wrap' }}>
+      {filePaths.map((key, i) => (
+        <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+          <LinkButton
+            onClick={() => { void open(i); }}
+            disabled={opening}
+            icon={<Eye size={12} />}
+            label={several ? `View scan ${i + 1} of ${documentLabel}` : `View scan of ${documentLabel}`}
+          >
+            {opening ? 'Opening…' : several ? `View scan ${i + 1}` : 'View scan'}
+          </LinkButton>
+          {canManage && (
+            <LinkButton
+              onClick={() => { void remove(i); }}
+              tone="muted"
+              label={several ? `Remove scan ${i + 1} of ${documentLabel}` : `Remove scan of ${documentLabel}`}
+              icon={<Trash2 size={11} />}
             >
-              {url && isImage(key) ? (
-                <img
-                  src={url}
-                  alt={name}
-                  style={{
-                    width: '34px', height: '34px', objectFit: 'cover', borderRadius: '5px',
-                    border: '1px solid var(--border-color)', display: 'block',
-                  }}
-                />
-              ) : (
-                <span style={{ fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                  <Paperclip size={11} /> {url ? 'Open' : 'Loading…'}
-                </span>
-              )}
-            </a>
-            {canManage && (
-              <LinkButton
-                onClick={() => remove(i)}
-                tone="muted"
-                label={`Remove this scan of ${documentLabel}`}
-                icon={<Trash2 size={11} />}
-              />
-            )}
-          </span>
-        );
-      })}
+              Remove
+            </LinkButton>
+          )}
+        </span>
+      ))}
+      <DocumentPreviewModal
+        open={preview !== null}
+        onClose={close}
+        items={preview?.items ?? []}
+        initialIndex={preview?.index ?? 0}
+      />
     </div>
   );
 };
@@ -417,22 +495,19 @@ const UploadButton: React.FC<{
     thing 11,160 requirement rows are waiting for — and a clerk hunting for where to put the
     photocopy they are holding does not scan a table for the word "Attach".
   */
-  <label
-    style={{ color: 'var(--primary)', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
-    title={`Upload a PDF or a photo of the ${documentLabel}`}
-  >
-    <Paperclip size={11} style={{ verticalAlign: '-1px' }} /> Upload scan
-    <input
-      type="file"
-      accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif"
-      style={{ display: 'none' }}
-      onChange={(e) => {
-        const file = e.target.files?.[0];
-        e.target.value = '';
-        if (file) onPick(requirement, file);
-      }}
-    />
-  </label>
+  /*
+    Two doors, one control (`ScanOrAttach`): the camera with a real scanner behind it for the
+    photocopy in the clerk's hand, and the file picker for a flatbed scan or a PDF that arrived by
+    email. The accept-list used to be spelled out here and was a narrower copy of the server's —
+    TIFF and BMP, which the desk scanners in branches actually write, were refused by this box and
+    accepted by every other one. It now comes from the shared list like everywhere else.
+  */
+  <ScanOrAttach
+    documentLabel={documentLabel}
+    requirement={requirement}
+    size="sm"
+    onFiles={(files) => { if (files[0]) onPick(requirement, files[0]); }}
+  />
 );
 
 /** The office a signed original sits in, chosen rather than typed. */
@@ -509,7 +584,7 @@ const StatusReasonField: React.FC<{ value: string; onChange: (v: string) => void
  * hand-styled Save. One nullable union cannot hold two, and it renders through one `Editor`.
  */
 type EditorState =
-  | { kind: 'check'; verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; findings: string }
+  | { kind: 'check'; verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; checkedByName: string; findings: string }
   | { kind: 'reference'; id?: string; fullName: string; relationship: string; phone: string }
   | { kind: 'identity'; requirement: string; label: string; documentNumber: string; expiryDate: string }
   | { kind: 'standing'; clientId: string; clientName: string; status: string; statusReason: string; adding: boolean };
@@ -529,6 +604,72 @@ const PRINTED_FIELD_LABELS: Record<string, string> = {
   holderGender: 'Gender on the card',
   holderGuardianName: "Father's or guardian's name on the card",
   holderAddress: 'Address as printed',
+};
+
+/**
+ * The scan being verified, shown inside the verification dialog.
+ *
+ * Verifying used to mean opening the scan in one window, closing it, opening this form, and typing
+ * from memory what you had just seen. Nobody does that twice: they type the name from the record —
+ * which is the one place it is guaranteed to match, and therefore the one place that proves
+ * nothing. The card has to be on screen at the moment somebody swears it says what it says.
+ */
+const ScanBeside: React.FC<{ documentId: string; filePaths: string[] }> = ({ documentId, filePaths }) => {
+  const [urls, setUrls] = useState<string[]>([]);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    const made: string[] = [];
+    Promise.all(filePaths.map(async (key, i) => {
+      const bytes = await api.request<Blob>(`/assayers/document/${documentId}/file/${i}`, { raw: true });
+      // The route streams with no usable type; `scanMimeType` reads it off the stored name so the
+      // browser draws the scan instead of offering to download it.
+      const type = scanMimeType(key) ?? undefined;
+      const url = URL.createObjectURL(type ? new Blob([bytes], { type }) : bytes);
+      made.push(url);
+      return url;
+    }))
+      .then((list) => { if (live) setUrls(list); else made.forEach((u) => URL.revokeObjectURL(u)); })
+      .catch(() => { if (live) setFailed(true); });
+    return () => { live = false; made.forEach((u) => URL.revokeObjectURL(u)); };
+  }, [documentId, filePaths.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (failed) {
+    return (
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>
+        The scan could not be opened. Verify from the original document, or ask for it again.
+      </div>
+    );
+  }
+  if (urls.length === 0) {
+    return <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Opening the scan…</div>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {urls.map((url, i) => {
+        const drawable = isDrawableScan(filePaths[i]);
+        return drawable ? (
+          <a key={url} href={url} target="_blank" rel="noopener noreferrer" title="Open full size">
+            <img
+              src={url}
+              alt={`Scan ${i + 1}`}
+              style={{
+                width: '100%', borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border-color)', display: 'block',
+              }}
+            />
+          </a>
+        ) : (
+          <a key={url} href={url} target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 'var(--text-xs)', color: 'var(--primary)' }}
+          >
+            Open page {i + 1} — this one is a PDF, so it opens in a new tab.
+          </a>
+        );
+      })}
+    </div>
+  );
 };
 
 const PrintedDetailsModal: React.FC<{
@@ -559,14 +700,26 @@ const PrintedDetailsModal: React.FC<{
     }
     onSubmit(out);
   };
+  const scans: string[] = existing?.filePaths ?? [];
+  const hasScan = !!existing?.id && scans.length > 0;
+
   return (
     <Editor
       title={`What does the ${label} say?`}
-      intro="Read off the document itself — this is what the record's name is checked against."
+      intro={hasScan
+        ? 'The scan is here beside the boxes. Read each value off it — this is what the record is checked against.'
+        : 'No scan has been attached yet, so read from the original document in front of you.'}
       onCancel={onCancel}
       onSave={submit}
       saveLabel="Use these details"
+      width={hasScan ? 860 : 480}
     >
+      {hasScan && (
+        <div style={{ flex: '1 1 320px', minWidth: '280px' }}>
+          <ScanBeside documentId={existing.id} filePaths={scans} />
+        </div>
+      )}
+      <div style={{ flex: '1 1 260px', minWidth: '240px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
       {wanted.map(([key]) => (
         <div key={key}>
           <label htmlFor={`vetting-printed-${key}`} style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
@@ -586,6 +739,7 @@ const PrintedDetailsModal: React.FC<{
           />
         </div>
       ))}
+      </div>
     </Editor>
   );
 };
@@ -614,14 +768,27 @@ export const AssayerVettingTab: React.FC<{
   /**
    * Switches the record over to the Documents half of this same dossier.
    *
-   * The background verification *report* — the scan itself — is a document like any other and is
-   * uploaded from the Documents half (`BGV_REPORT`, in the joining-paperwork table), not from
-   * here. Without a way to jump straight there, recording the verdict and attaching the report it
-   * is based on read as two disconnected tasks on two different tabs. Optional: a caller that has
-   * not wired tab-switching still gets the plain text this note falls back to.
+   * A clerk holding a PAN or Aadhaar card looks for where to check it on the tab named for
+   * background checks, because checking the card *is* part of vetting to them. The first line of
+   * the Background half says where that happens and, given this, links there. Optional: a caller
+   * that has not wired tab-switching still gets the same sentence as plain text.
    */
   onGoToDocuments?: () => void;
-}> = ({ assayerId, canManage, section, lifecycleStatus, onGoToDocuments }) => {
+  /**
+   * The same pointer the other way: switches the record over to the Background half.
+   *
+   * The background check report is a document, but the check it records and each bank's decision
+   * are on the other half, and somebody who arrived on Documents to file the report has no reason
+   * to guess that. Optional for the same reason as `onGoToDocuments`.
+   */
+  onGoToChecks?: () => void;
+  /**
+   * Called after this tab re-reads its dossier following a write. This tab keeps its own copy of
+   * the dossier, so a container that shows readiness from the same facts — the onboarding drawer's
+   * step checklist — needs to hear about a check recorded or a document verified here.
+   */
+  onChanged?: () => void;
+}> = ({ assayerId, canManage, section, lifecycleStatus, onGoToDocuments, onGoToChecks, onChanged }) => {
   const [data, setData] = useState<Dossier | null>(null);
   /**
    * Everything on this tab that failed and wants a decision, in one strip at the top.
@@ -647,10 +814,27 @@ export const AssayerVettingTab: React.FC<{
   const [dossierErr, setDossierErr] = useState<unknown>(null);
   /** The document whose card details are being read off — the dialog is open exactly when this is set. */
   const [printedTarget, setPrintedTarget] = useState<any | null>(null);
+  /**
+   * A failed save that belongs to the dialog currently open.
+   *
+   * Separate from `err`, which is the page's own banner: the banner renders behind the dialog, so
+   * a save failure reported there was invisible to the person who caused it. Cleared whenever an
+   * editor opens, so an old failure never greets a new attempt.
+   */
+  const [editorErr, setEditorErr] = useState<string | null>(null);
+  /**
+   * A message that has to stay up through the re-read it asks for.
+   *
+   * The dossier effect below clears `err` as it starts, which is right after an ordinary save and
+   * wrong for "someone else changed this document — it has been refreshed": that sentence was
+   * wiped in the same instant the refresh it announces began, so the clerk saw nothing at all.
+   */
+  const keepThroughReload = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setErr(null);
+    setErr(keepThroughReload.current);
+    keepThroughReload.current = null;
     setDossierErr(null);
     api.request<Dossier>(`/assayers/${assayerId}/dossier`)
       .then((d) => { if (!cancelled) { setData(d); setDossierErr(null); } })
@@ -674,8 +858,16 @@ export const AssayerVettingTab: React.FC<{
     return () => { cancelled = true; };
   }, []);
 
-  const reload = () => setReloadKey((k) => k + 1);
-  const closeEditor = () => setEditor(null);
+  const reload = () => { setReloadKey((k) => k + 1); onChanged?.(); };
+  const closeEditor = () => { setEditor(null); setEditorErr(null); };
+
+  /** A review that lost the race: say so, and re-read the document so what is on screen is current. */
+  const refreshAfterReviewConflict = (documentId: string) => {
+    keepThroughReload.current = REVIEW_CONFLICT_MESSAGE;
+    setErr(REVIEW_CONFLICT_MESSAGE);
+    void invalidateKycMutation(queryClient, assayerId, documentId);
+    reload();
+  };
 
   const paperwork = useMemo(() => {
     const rows = data?.onboarding ?? [];
@@ -728,12 +920,12 @@ export const AssayerVettingTab: React.FC<{
 
   const saveStanding = async (draft: Extract<EditorState, { kind: 'standing' }>) => {
     if (!draft.clientId) {
-      setErr('Choose the client this standing is about.');
+      setErr('Choose the bank this standing is about.');
       return;
     }
     const existing = (data?.empanelments ?? []).find((e) => e.clientId === draft.clientId);
     if (existing && HARD_BLOCKED_STANDINGS.has(existing.status)) {
-      setErr('Hard-blocked client standings (REJECTED, TERMINATED, EXPIRED, SUSPENDED) are final and cannot be overridden.');
+      setErr(FINAL_STANDING_MESSAGE);
       return;
     }
     setBusy(true);
@@ -757,7 +949,7 @@ export const AssayerVettingTab: React.FC<{
       });
       closeEditor();
       reload();
-    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+    } catch (e) { setEditorErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const saveCheck = async (draft: Extract<EditorState, { kind: 'check' }>) => {
@@ -772,13 +964,14 @@ export const AssayerVettingTab: React.FC<{
           cibilBand: draft.cibilBand || undefined,
           cibilScore: Number.isFinite(score) && score > 0 ? score : undefined,
           checkedOn: draft.checkedOn || undefined,
+          checkedByName: draft.checkedByName?.trim() || undefined,
           findings: draft.findings || undefined,
         }),
       });
       toast({ type: 'success', title: 'Check recorded', message: 'It is now the operative one; the previous check is kept below it.' });
       closeEditor();
       reload();
-    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+    } catch (e) { setEditorErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const saveReference = async (draft: Extract<EditorState, { kind: 'reference' }>) => {
@@ -829,7 +1022,7 @@ export const AssayerVettingTab: React.FC<{
      * refuse in language about revealing a field they never saw a reveal control for.
      */
     if (looksLikeMask(draft.documentNumber)) {
-      setErr(`That is the covered form of the ${draft.label.toLowerCase()} number, not the number. `
+      setEditorErr(`That is the covered form of the ${draft.label.toLowerCase()} number, not the number. `
         + 'Type it from the document itself, or press Cancel to leave the stored one alone.');
       return;
     }
@@ -839,12 +1032,14 @@ export const AssayerVettingTab: React.FC<{
         method: 'PUT',
         body: JSON.stringify({
           documentNumber: draft.documentNumber.trim(),
-          expiryDate: draft.expiryDate || null,
+          // Only sent for a document that has one. A PAN card was being saved with an expiry
+          // field it can never carry.
+          ...(identityDocumentFacts(draft.requirement).expires ? { expiryDate: draft.expiryDate || null } : {}),
         }),
       });
       closeEditor();
       reload();
-    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+    } catch (e) { setEditorErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   /** One entry point, because there is one Save button. Which endpoint it is stays per kind. */
@@ -906,9 +1101,7 @@ export const AssayerVettingTab: React.FC<{
     if (!ok) return;
 
     setBusy(true);
-    const targetVersionId = doc.currentVersionId ?? doc.id;
-    const expectedDocVersion = doc.docVersion ?? doc.version;
-    const expectedContentHash = doc.contentSha256 ?? null;
+    const { targetVersionId, expectedDocVersion, expectedContentHash } = reviewTarget(doc);
 
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
@@ -924,18 +1117,11 @@ export const AssayerVettingTab: React.FC<{
       void invalidateKycMutation(queryClient, assayerId, doc.id);
       reload();
     } catch (e) {
-      const message = userMessage(e);
-      if (
-        message.includes('DOCUMENT_VERSION_STALE') ||
-        message.includes('CANNOT_VERIFY_SUPERSEDED_VERSION') ||
-        message.includes('CONTENT_HASH_MISMATCH') ||
-        message.includes('DOCUMENT_ALREADY_REVIEWED')
-      ) {
-        setErr(`Conflict: ${message}. Stale review discarded. Reloading fresh server truth.`);
-        void invalidateKycMutation(queryClient, assayerId, doc.id);
-        reload();
+      if (isReviewConflict(e)) {
+        refreshAfterReviewConflict(doc.id);
         return;
       }
+      const message = userMessage(e);
       if (/does not match the name on the record/i.test(message)) {
         // Genuinely the same person under a different name — maiden versus married, initials
         // expanded — is routine, so the reviewer answers in the app's own dialog rather than
@@ -968,7 +1154,11 @@ export const AssayerVettingTab: React.FC<{
           });
           reload();
           return;
-        } catch (retry) { setErr(userMessage(retry)); return; }
+        } catch (retry) {
+          if (isReviewConflict(retry)) refreshAfterReviewConflict(doc.id);
+          else setErr(userMessage(retry));
+          return;
+        }
       }
       setErr(message);
     } finally { setBusy(false); }
@@ -983,9 +1173,7 @@ export const AssayerVettingTab: React.FC<{
    */
   const reject = async (doc: any, reason: string, note: string) => {
     setBusy(true);
-    const targetVersionId = doc.currentVersionId ?? doc.id;
-    const expectedDocVersion = doc.docVersion ?? doc.version;
-    const expectedContentHash = doc.contentSha256 ?? null;
+    const { targetVersionId, expectedDocVersion, expectedContentHash } = reviewTarget(doc);
 
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
@@ -1002,19 +1190,11 @@ export const AssayerVettingTab: React.FC<{
       void invalidateKycMutation(queryClient, assayerId, doc.id);
       reload();
     } catch (e) {
-      const message = userMessage(e);
-      if (
-        message.includes('DOCUMENT_VERSION_STALE') ||
-        message.includes('CANNOT_VERIFY_SUPERSEDED_VERSION') ||
-        message.includes('CONTENT_HASH_MISMATCH') ||
-        message.includes('DOCUMENT_ALREADY_REVIEWED')
-      ) {
-        setErr(`Conflict: ${message}. Stale review discarded. Reloading fresh server truth.`);
-        void invalidateKycMutation(queryClient, assayerId, doc.id);
-        reload();
+      if (isReviewConflict(e)) {
+        refreshAfterReviewConflict(doc.id);
         return;
       }
-      setErr(message);
+      setErr(userMessage(e));
     } finally { setBusy(false); }
   };
 
@@ -1140,10 +1320,29 @@ export const AssayerVettingTab: React.FC<{
 
       <Lede>{lede}</Lede>
 
+      {/*
+        Where the other half is. The two tabs read one dossier, and a clerk's idea of "vetting"
+        includes checking the PAN card, so each half says in one line what lives on the other.
+      */}
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '-6px 0 14px', lineHeight: 1.5 }}>
+        {section === 'checks' ? (
+          <>
+            PAN, Aadhaar and other document checks are on the{' '}
+            {onGoToDocuments ? <LinkButton onClick={onGoToDocuments}>Documents tab</LinkButton> : 'Documents tab'}.
+          </>
+        ) : (
+          <>
+            The background check and bank approvals are on the{' '}
+            {onGoToChecks ? <LinkButton onClick={onGoToChecks}>Background tab</LinkButton> : 'Background tab'}.
+          </>
+        )}
+      </div>
+
       {editor?.kind === 'standing' && (
         <Editor
-          title={editor.adding ? 'Add a client standing' : `Standing with ${editor.clientName}`}
-          intro={`This decides whether ${editor.adding ? 'that client' : editor.clientName} will accept this person on their branches. It says nothing about any other client.`}
+          error={editorErr}
+          title={editor.adding ? 'Add standing with a bank' : `Standing with ${editor.clientName}`}
+          intro={`This decides whether ${editor.adding ? 'that bank' : editor.clientName} will accept this person on their branches. It says nothing about any other bank.`}
           onCancel={closeEditor}
           onSave={saveEditor}
           saveLabel="Save standing"
@@ -1159,7 +1358,7 @@ export const AssayerVettingTab: React.FC<{
             surface; the client is simply the first thing you pick.
           */}
           {editor.adding && (
-            <Field title="Client" wide>
+            <Field title="Bank" wide>
               <Select
                 value={editor.clientId}
                 onChange={(v) => setEditor({
@@ -1168,7 +1367,7 @@ export const AssayerVettingTab: React.FC<{
                   clientName: unstanded.find((c) => c.id === String(v))?.name ?? '',
                 })}
                 options={[
-                  { value: '', label: 'Choose a client…' },
+                  { value: '', label: 'Choose a bank…' },
                   ...unstanded.map((c) => ({ value: c.id, label: c.name })),
                 ]}
               />
@@ -1198,6 +1397,7 @@ export const AssayerVettingTab: React.FC<{
 
       {editor?.kind === 'check' && (
         <Editor
+          error={editorErr}
           title="Record a background check"
           intro="This becomes the operative check. The one it replaces is kept below it — a picture that changed is the reason to look at a second one."
           onCancel={closeEditor}
@@ -1206,19 +1406,14 @@ export const AssayerVettingTab: React.FC<{
           busy={busy}
           width={560}
         >
-          <Field
-            title="Verdict"
-            hint={(() => {
-              const pf = verdictPassFail(editor.verdict);
-              return pf ? <>Recorded as <strong style={{ color: PASS_FAIL_TONE[pf].fg }}>{pf}</strong>.</> : undefined;
-            })()}
-          >
+          <Field title="Result">
+            {/* The same words the chip will show once it is saved — see `verdictResultLabel`. */}
             <Select
               value={editor.verdict}
               onChange={(v) => setEditor({ ...editor, verdict: String(v) })}
               options={Object.values(BackgroundCheckVerdict).map((v) => ({
                 value: v,
-                label: `${VERDICT_LABELS[v] ?? v} (${verdictPassFail(v)})`,
+                label: verdictResultLabel(v),
               }))}
             />
           </Field>
@@ -1246,6 +1441,12 @@ export const AssayerVettingTab: React.FC<{
               value={editor.checkedOn}
               onChange={(e) => setEditor({ ...editor, checkedOn: e.target.value })} />
           </Field>
+          <Field title="Background check agency">
+            <input style={fieldInput}
+              placeholder="e.g. AuthBridge / First Advantage"
+              value={editor.checkedByName}
+              onChange={(e) => setEditor({ ...editor, checkedByName: e.target.value })} />
+          </Field>
           <Field title="Findings" wide>
             <input style={fieldInput}
               placeholder="What the check actually turned up. Leave empty if it turned up nothing."
@@ -1257,6 +1458,7 @@ export const AssayerVettingTab: React.FC<{
 
       {editor?.kind === 'reference' && (
         <Editor
+          error={editorErr}
           title={editor.id ? `Correct ${editor.fullName || 'this reference'}` : 'Add a reference'}
           onCancel={closeEditor}
           onSave={saveEditor}
@@ -1281,29 +1483,77 @@ export const AssayerVettingTab: React.FC<{
         </Editor>
       )}
 
-      {editor?.kind === 'identity' && (
-        <Editor
-          title={`${editor.label} number`}
-          note="Saving replaces the stored number and clears any verification, because somebody checked the old number against the original."
-          onCancel={closeEditor}
-          onSave={saveEditor}
-          saveLabel="Save"
-          busy={busy}
-        >
-          <Field
-            title={`${editor.label} number`}
-            hint="Type it from the document itself — the stored one is covered on screen, so this box starts empty."
-            wide
+      {editor?.kind === 'identity' && (() => {
+        /*
+          ASK FOR WHAT IS ON THE PAPER, AND NOTHING ELSE.
+
+          This form asked all eight identity documents for a number and an "Expires" date. Six of
+          them never expire — a PAN, an Aadhaar and a Voter ID are issued once — and an address
+          proof, usually an electricity bill, has no number anybody would call a document number.
+          A reviewer holding a PAN card and looking at a box marked "Expires" either invents
+          something or stops trusting the form, and the second costs more: the next box they skip
+          is the one that mattered.
+        */
+        const facts = identityDocumentFacts(editor.requirement);
+        /*
+          THE SAME RULE THE SERVER APPLIES, ASKED BEFORE THE ROUND TRIP.
+
+          A PAN and an Aadhaar both carry a check digit, and the server refuses a number whose
+          check digit does not match — correctly, because a mistyped Aadhaar that still has twelve
+          digits is indistinguishable from a real one afterwards, and this number is exactly what a
+          human is later asked to check a scan against. Saying so while the number is still being
+          typed turns a failed save into a caught typo.
+
+          Advisory only where the rule is not certain: nothing is blocked except the two formats
+          this app can genuinely test.
+        */
+        const typed = editor.documentNumber.trim();
+        const numberProblem = !typed ? null
+          : editor.requirement === 'PAN_CARD' && !isValidPan(typed.toUpperCase())
+            ? 'That is not a valid PAN — it should be ten characters, like ABCDE1234F.'
+            : (editor.requirement === 'AADHAAR_FRONT' || editor.requirement === 'AADHAAR_BACK')
+              && /^\d{12}$/.test(typed) && !isValidAadhaar(typed)
+              ? 'Those twelve digits do not check out — one of them has been misread. Please read the number off the document again.'
+              : null;
+        return (
+          <Editor
+            title={facts.numberLabel ? `${editor.label} — ${facts.numberLabel.toLowerCase()}` : editor.label}
+            note="Saving replaces the stored number and clears any verification, because somebody checked the old number against the original."
+            onCancel={closeEditor}
+            onSave={saveEditor}
+            saveLabel="Save"
+            busy={busy}
+            saveDisabled={!!numberProblem}
+            error={editorErr ?? numberProblem}
           >
-            <input style={fieldInput} autoFocus value={editor.documentNumber}
-              onChange={(e) => setEditor({ ...editor, documentNumber: e.target.value })} />
-          </Field>
-          <Field title="Expires">
-            <input style={fieldInput} type="date" value={editor.expiryDate}
-              onChange={(e) => setEditor({ ...editor, expiryDate: e.target.value })} />
-          </Field>
-        </Editor>
-      )}
+            {facts.numberLabel ? (
+              <Field
+                title={facts.numberLabel}
+                hint={facts.numberHint
+                  ? `${facts.numberHint} The stored one is covered on screen, so this box starts empty.`
+                  : 'Type it from the document itself — the stored one is covered on screen, so this box starts empty.'}
+                wide
+              >
+                <input style={fieldInput} autoFocus value={editor.documentNumber}
+                  onChange={(e) => setEditor({ ...editor, documentNumber: e.target.value })} />
+              </Field>
+            ) : (
+              <Field title="This document has no number" wide>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  An address proof is judged on the address printed on it and how recent it is,
+                  which is recorded when it is verified.
+                </span>
+              </Field>
+            )}
+            {facts.expires && (
+              <Field title="Expires" hint="The valid-until date printed on the document.">
+                <input style={fieldInput} type="date" value={editor.expiryDate}
+                  onChange={(e) => setEditor({ ...editor, expiryDate: e.target.value })} />
+              </Field>
+            )}
+          </Editor>
+        );
+      })()}
 
       {data.openIssues.length > 0 && (
         <Notice
@@ -1325,7 +1575,7 @@ export const AssayerVettingTab: React.FC<{
       {section === 'checks' && (
         <>
       <Section
-        title="Vetting"
+        title="Background check"
         icon={check && verdictTone(check.verdict) === 'var(--danger)' ? ShieldAlert : ShieldCheck}
         style={{ marginBottom: '14px' }}
         action={canManage ? (
@@ -1334,48 +1584,20 @@ export const AssayerVettingTab: React.FC<{
             onClick={() => setEditor({
               kind: 'check',
               verdict: BackgroundCheckVerdict.CLEAR, riskGrade: '', cibilScore: '',
-              cibilBand: '', checkedOn: '', findings: '',
+              cibilBand: '', checkedOn: '', checkedByName: '', findings: '',
             })}
           >
             Record a check
           </LinkButton>
         ) : undefined}
       >
-        {/*
-          The report itself lives one tab over, filed as a document (`BGV_REPORT`) like any
-          other joining paperwork — see the note on `onGoToDocuments` above for why. Said before
-          the verdict rather than after: a clerk opening this card with nothing recorded yet
-          should not have to guess where the scan they are holding goes.
-        */}
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
-          The signed report itself is attached as a document —{' '}
-          {onGoToDocuments ? (
-            <LinkButton onClick={onGoToDocuments}>open Documents → Background verification report</LinkButton>
-          ) : (
-            <>see Documents → Background verification report.</>
-          )}
-        </div>
         {!check ? (
           <Empty>No background check has been recorded.</Empty>
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '18px', marginBottom: data.backgroundChecks.length > 1 ? '12px' : 0 }}>
             <div>
-              <div style={label}>Verdict</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-                <StatusBadge
-                  size="md"
-                  color={verdictTone(check.verdict)}
-                  bg={VERDICT_TONE_BG[verdictTone(check.verdict)]}
-                  label={VERDICT_LABELS[check.verdict] ?? humanizeEnum(check.verdict)}
-                />
-                {/* The same verdict, in the word HR actually asks for — see `verdictPassFail`. */}
-                {(() => {
-                  const pf = verdictPassFail(check.verdict);
-                  return pf ? (
-                    <StatusBadge size="md" color={PASS_FAIL_TONE[pf].fg} bg={PASS_FAIL_TONE[pf].bg} label={pf} />
-                  ) : null;
-                })()}
-              </div>
+              <div style={label}>Result</div>
+              <VerdictChip size="md" verdict={check.verdict} />
             </div>
             {check.riskGrade && (
               <div><div style={label}>Risk</div><div style={{ fontSize: 'var(--text-sm)' }}>{RISK_LABELS[check.riskGrade] ?? humanizeEnum(check.riskGrade)}</div></div>
@@ -1389,7 +1611,10 @@ export const AssayerVettingTab: React.FC<{
                 </div>
               </div>
             )}
-            <div><div style={label}>Checked</div><div style={{ fontSize: 'var(--text-sm)' }}>{fmtDate(check.checkedOn) || '—'}</div></div>
+            <div><div style={label}>Checked on</div><div style={{ fontSize: 'var(--text-sm)' }}>{fmtDate(check.checkedOn) || '—'}</div></div>
+            {check.checkedByName && (
+              <div><div style={label}>Background check agency</div><div style={{ fontSize: 'var(--text-sm)' }}>{check.checkedByName}</div></div>
+            )}
             {check.findings && (
               <div style={{ flexBasis: '100%' }}>
                 <div style={label}>Findings</div>
@@ -1398,6 +1623,53 @@ export const AssayerVettingTab: React.FC<{
             )}
           </div>
         )}
+
+        {/*
+          The report the check is based on, where the check is. It is filed as the `BGV_REPORT`
+          document, so it also appears in the Documents tab's paperwork table — this is the same
+          row, not a second copy, and uploading here or there lands in the same place.
+        */}
+        {(() => {
+          const bgvDoc = paperwork.rows.find((r) => r.requirement === 'BGV_REPORT');
+          const hasScans = (bgvDoc?.filePaths ?? []).length > 0;
+          return (
+            <div style={{
+              marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-hair)',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px',
+            }}>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  Background check report
+                </div>
+                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {hasScans
+                    ? `${counted(bgvDoc!.filePaths.length, 'scan')} of the signed report on file`
+                    : 'No scan of the signed report yet'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {hasScans && bgvDoc?.id && (
+                  <Attachments
+                    documentId={bgvDoc.id}
+                    filePaths={bgvDoc.filePaths ?? []}
+                    canManage={canManage}
+                    onRemoved={reload}
+                    onError={setErr}
+                    documentLabel="Background verification report"
+                  />
+                )}
+                {canManage && (
+                  <UploadButton
+                    requirement="BGV_REPORT"
+                    onPick={attach}
+                    documentLabel="Background verification report"
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {data.backgroundChecks.length > 1 && (
           <DataTable
             density="compact"
@@ -1406,17 +1678,7 @@ export const AssayerVettingTab: React.FC<{
             rowKey={(c) => c.id}
             columns={[
               { key: 'date', header: 'Date', render: (c) => <>{fmtDate(c.checkedOn) || '—'}</> },
-              {
-                key: 'verdict',
-                header: 'Verdict',
-                render: (c) => (
-                  <StatusBadge
-                    color={verdictTone(c.verdict)}
-                    bg={VERDICT_TONE_BG[verdictTone(c.verdict)]}
-                    label={VERDICT_LABELS[c.verdict] ?? humanizeEnum(c.verdict)}
-                  />
-                ),
-              },
+              { key: 'verdict', header: 'Result', render: (c) => <VerdictChip verdict={c.verdict} /> },
               { key: 'risk', header: 'Risk', render: (c) => <>{c.riskGrade ? (RISK_LABELS[c.riskGrade] ?? humanizeEnum(c.riskGrade)) : '—'}</> },
               // Free prose written by whoever did the check — the one column here that is a
               // paragraph rather than a value, so it wraps instead of stretching the table.
@@ -1451,10 +1713,10 @@ export const AssayerVettingTab: React.FC<{
       </Section>
 
       <Section
-        title="Client standing"
+        title="Standing with each bank"
         icon={Building2}
         count={data.empanelments.length}
-        hint="Whether each bank accepts this person. One answer per client — being active for one says nothing about another."
+        hint="Whether each bank accepts this person. One answer per bank — being active for one says nothing about another."
         style={{ marginBottom: '14px' }}
         action={canManage && unstanded.length > 0 ? (
           <LinkButton
@@ -1465,12 +1727,12 @@ export const AssayerVettingTab: React.FC<{
               status: EmpanelmentStatus.RECOMMENDED, statusReason: '',
             })}
           >
-            Add a client standing
+            Add a bank
           </LinkButton>
         ) : undefined}
       >
         {data.empanelments.length === 0 ? (
-          <Empty>No client standing has been recorded.</Empty>
+          <Empty>No standing with any bank has been recorded.</Empty>
         ) : (
           /*
             The Change column is one entry filtered out rather than a second header array. It used
@@ -1483,7 +1745,7 @@ export const AssayerVettingTab: React.FC<{
             rows={data.empanelments}
             rowKey={(e) => e.id}
             columns={[
-              { key: 'client', header: 'Client', render: (e) => <>{e.client?.name ?? '—'}</> },
+              { key: 'client', header: 'Bank', render: (e) => <>{e.client?.name ?? '—'}</> },
               {
                 key: 'standing',
                 header: 'Standing',
@@ -1500,13 +1762,21 @@ export const AssayerVettingTab: React.FC<{
                 header: '',
                 render: (e: typeof data.empanelments[number]) => {
                   if (HARD_BLOCKED_STANDINGS.has(e.status)) {
+                    // Said on the row, not in a tooltip: a clerk on a tablet cannot hover, and
+                    // "why is there no Change button here" is the question this answers.
                     return (
                       <span
                         data-testid="hard-block-tag"
-                        style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 500 }}
-                        title="This client standing is hard-blocked by policy and cannot be overridden by any user"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '4px',
+                          fontSize: 'var(--text-2xs)', color: 'var(--text-muted)',
+                        }}
                       >
-                        Hard-blocked
+                        <Lock size={11} style={{ flexShrink: 0 }} />
+                        <span>
+                          <strong style={{ color: 'var(--text-secondary)' }}>Final</strong>
+                          {' '}— this bank&apos;s decision can&apos;t be changed here
+                        </span>
                       </span>
                     );
                   }
@@ -1643,7 +1913,11 @@ export const AssayerVettingTab: React.FC<{
           rows={paperwork.identity}
           rowKey={(d) => d.requirement}
           columns={[
-            { key: 'doc', header: 'Document', render: (d) => <>{d.label}</> },
+            // `wrap` because `DataTable` makes every cell `nowrap` unless told otherwise, and
+            // "Police verification certificate" on one line was half of what pushed this table
+            // past the drawer's edge. `minWidth={false}` only removed the floor; it never let
+            // a long label break.
+            { key: 'doc', header: 'Document', wrap: true, render: (d) => <>{d.label}</> },
             {
               key: 'number',
               header: 'Number',
@@ -1654,9 +1928,21 @@ export const AssayerVettingTab: React.FC<{
             {
               key: 'expires',
               header: 'Expires',
-              render: (d) => (d.expiryDate ? <>{fmtDate(d.expiryDate)}</> : <span style={{ color: 'var(--text-muted)' }}>—</span>),
+              /*
+                A dash reads as "this is missing". For a PAN card, an Aadhaar or a Voter ID there is
+                nothing to miss — they are issued once and never run out — so the column says that
+                instead of sending a clerk hunting the card for a date it does not print.
+              */
+              render: (d) => {
+                if (d.expiryDate) return <>{fmtDate(d.expiryDate)}</>;
+                return (
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {identityDocumentFacts(d.requirement).expires ? 'Not recorded' : 'Does not expire'}
+                  </span>
+                );
+              },
             },
-            { key: 'checked', header: 'Checked', render: (d) => <VerificationChip status={d.verificationStatus} /> },
+            { key: 'checked', header: 'Status', render: (d) => <VerificationChip status={d.verificationStatus} /> },
             {
               key: 'scan',
               header: 'Scan',
@@ -1702,7 +1988,7 @@ export const AssayerVettingTab: React.FC<{
           rows={paperwork.joining}
           rowKey={(d) => d.requirement}
           columns={[
-            { key: 'doc', header: 'Document', render: (d) => <>{d.label}</> },
+            { key: 'doc', header: 'Document', wrap: true, render: (d) => <>{d.label}</> },
             {
               key: 'scan',
               header: 'Scan',
@@ -1716,6 +2002,7 @@ export const AssayerVettingTab: React.FC<{
             {
               key: 'where',
               header: 'Where',
+              wrap: true,
               render: (d) => (canManage
                 ? <LocationPicker value={d.hardCopyLocation} onChange={(v) => setWhere(d.requirement, v)} documentLabel={d.label} />
                 : <>{d.hardCopyLocation || '—'}</>),

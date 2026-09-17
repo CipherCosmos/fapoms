@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle2, Eye, EyeOff, Building } from 'lucide-react';
+import { assayerLifecycleLabel, payoutBlockingGaps, stillWorkable } from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
 import type { Assayer } from '../assayer-shared';
@@ -22,19 +23,11 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
   const [revealing, setRevealing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isDeparted =
-    assayer.lifecycleStatus === 'RESIGNED' ||
-    assayer.lifecycleStatus === 'TERMINATED' ||
-    assayer.lifecycleStatus === 'ARCHIVED';
-
-  const hasPan = Boolean(assayer.panNumber?.trim());
-
-  const blockers: string[] = [];
-  if (!isDeparted) {
-    if (!assayer.bankAccountNumber?.trim()) blockers.push('Missing bank account number');
-    if (!assayer.ifscCode?.trim()) blockers.push('Missing IFSC code');
-    if (!hasPan) blockers.push('Missing PAN number (mandatory for Indian statutory TDS compliance)');
-  }
+  // The shared payability rulebook — the same "cannot be paid" test the roster and HR Pay use.
+  const isDeparted = !stillWorkable(assayer as any);
+  const blockers: string[] = isDeparted
+    ? []
+    : payoutBlockingGaps(assayer as unknown as Record<string, unknown>).map((f) => f.label);
 
   const handleReveal = async () => {
     if (revealedAccount) {
@@ -42,7 +35,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
       return;
     }
     if (!canReveal) {
-      setError('You lack permission to uncover raw banking identifiers.');
+      setError('You do not have permission to see the full account number.');
       return;
     }
     setRevealing(true);
@@ -55,7 +48,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
       if (val) {
         setRevealedAccount(val);
       } else {
-        setError('No unmasked value returned.');
+        setError('The full account number could not be shown.');
       }
     } catch (e) {
       setError(userMessage(e));
@@ -82,10 +75,10 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
           <Building size={16} style={{ color: 'var(--accent)' }} />
           <div>
             <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-              CURRENT BANK PROFILE
+              Bank account
             </span>
             <span style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
-              Live profile destination for future payables
+              New payments go into this account
             </span>
           </div>
         </div>
@@ -96,7 +89,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
             className="btn btn-secondary"
             style={{ fontSize: 'var(--text-2xs)', padding: '4px 8px' }}
           >
-            Edit Profile Bank
+            Change bank details
           </button>
         )}
       </div>
@@ -114,11 +107,11 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
         }}
       >
         <div>
-          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Bank Name</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Bank</span>
           <strong style={{ color: 'var(--text-primary)' }}>{assayer.bankName || 'Not recorded'}</strong>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Account Number</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>Account number</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
               {revealedAccount || maskedIdentifier(assayer.bankAccountNumber)}
@@ -128,7 +121,8 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
                 type="button"
                 onClick={handleReveal}
                 disabled={revealing}
-                title={revealedAccount ? 'Hide account' : 'Reveal full account (Audited)'}
+                title={revealedAccount ? 'Hide the full number' : 'Show the full number — this is recorded with your name'}
+                aria-label={revealedAccount ? 'Hide the full account number' : 'Show the full account number'}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -145,7 +139,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
           </div>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>IFSC Code</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', display: 'block' }}>IFSC</span>
           <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>
             {assayer.ifscCode || 'Not recorded'}
           </strong>
@@ -161,7 +155,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
           data-testid="departed-payout-notice"
           style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}
         >
-          No active payout blockers: assayer is departed ({assayer.lifecycleStatus}). Profile is inactive and not queued for active payout.
+          They have left ({assayerLifecycleLabel(assayer.lifecycleStatus)}), so nothing needs chasing here.
         </div>
       ) : blockers.length > 0 ? (
         <div
@@ -175,7 +169,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)' }}>
             <AlertTriangle size={14} />
-            Payout Readiness Blocked:
+            Cannot be paid yet — missing:
           </div>
           <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: 'var(--text-xs)', color: 'var(--text-primary)' }}>
             {blockers.map((b, i) => (
@@ -186,7 +180,7 @@ export const BankProfileCard: React.FC<BankProfileCardProps> = ({
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', color: 'var(--success)' }}>
           <CheckCircle2 size={13} />
-          <span>Profile bank details and PAN are complete for new payout creation.</span>
+          <span>Bank details and PAN are complete — they can be paid.</span>
         </div>
       )}
     </div>

@@ -197,3 +197,89 @@ describe('NotificationAdminController — mutating routes resist the custom-role
     });
   });
 });
+
+/**
+ * PUBLISHING AN EMAIL NOBODY HAS EVER RECEIVED.
+ *
+ * The gate on publishing was a checkbox in the browser: the administrator ticked "I have inspected
+ * the preview" and the server published whatever arrived. A preview is a browser drawing HTML; an
+ * inbox is a different engine, on a different screen, usually with images switched off — and the
+ * recipients of these seven templates are candidates being asked for their Aadhaar number and their
+ * bank details, who do not write in to say an email looked broken.
+ *
+ * So the browser's promise was replaced by a fact the server checks: the checksum of the HTML that
+ * was actually delivered, against the draft about to go live. These pin the refusal itself — the
+ * loader's memory of it is pinned separately in `email-template-publish-gate.spec.ts`.
+ */
+describe('publishing requires a test that was actually delivered', () => {
+  const KEY = 'otp-verification';
+  const DRAFT = '<html><body><p>Your code is {{otpCode}}, valid {{validMinutes}} minutes. '
+    + '<img src="{{logoUrl}}" alt="logo"> <a href="mailto:{{supportEmail}}">Help</a></p></body></html>';
+
+  const controllerWith = (over: {
+    emailEnabled?: boolean;
+    tested?: boolean;
+    storedDraftHtml?: string | null;
+  } = {}) => {
+    const publishDraft = jest.fn().mockResolvedValue({ version: 3, checksum: 'abc' });
+    const loader = {
+      saveDraft: jest.fn().mockResolvedValue(undefined),
+      publishDraft,
+      hasTestedDraft: jest.fn().mockResolvedValue(over.tested ?? false),
+      getStoredSettings: jest.fn().mockResolvedValue({
+        versions: [],
+        draft: over.storedDraftHtml === null ? null : { html: over.storedDraftHtml ?? DRAFT },
+        lastTestSend: over.tested ? { checksum: 'x', to: 'priya@example.com', at: '2026-09-16T00:00:00Z' } : null,
+      }),
+    };
+    const { NotificationAdminController } = require('./notification-admin.controller');
+    const controller = new NotificationAdminController(
+      {} as never,
+      { isEnabled: () => over.emailEnabled ?? true } as never,
+      {} as never,
+      { recordEventSafe: jest.fn().mockResolvedValue(undefined), record: jest.fn(), log: jest.fn() } as never,
+      {} as never,
+      loader as never,
+      {} as never,
+    );
+    return { controller, loader, publishDraft };
+  };
+
+  const req = { user: { id: 'u-1', displayName: 'Priya' } };
+
+  it('refuses a draft nobody has received, and says what to do about it', async () => {
+    const { controller, publishDraft } = controllerWith({ tested: false });
+
+    await expect(controller.publishEmailTemplate(KEY, { html: DRAFT }, req))
+      .rejects.toThrow(/Send yourself a test of this exact version first/i);
+    expect(publishDraft).not.toHaveBeenCalled();
+  });
+
+  /** The specific trap: tested once, edited again, published. */
+  it('names the case where the test was of an earlier version', async () => {
+    const { controller } = controllerWith({ tested: false, storedDraftHtml: DRAFT });
+    // `lastTestSend` exists but does not match — the message has to distinguish the two.
+    await expect(controller.publishEmailTemplate(KEY, { html: DRAFT }, req))
+      .rejects.toThrow(/No test of this email has been sent yet|earlier version/i);
+  });
+
+  it('publishes once the delivered version is the one on screen', async () => {
+    const { controller, publishDraft } = controllerWith({ tested: true });
+
+    await expect(controller.publishEmailTemplate(KEY, { html: DRAFT }, req))
+      .resolves.toEqual({ version: { version: 3, checksum: 'abc' } });
+    expect(publishDraft).toHaveBeenCalled();
+  });
+
+  /**
+   * With no transport configured a test cannot be sent at all, and refusing to publish would leave
+   * the feature unusable rather than safe — the guard exists to stop a broken email reaching
+   * people, not to stop the product working before email is switched on.
+   */
+  it('does not demand the impossible when email delivery is not configured', async () => {
+    const { controller, publishDraft } = controllerWith({ emailEnabled: false, tested: false });
+
+    await expect(controller.publishEmailTemplate(KEY, { html: DRAFT }, req)).resolves.toBeTruthy();
+    expect(publishDraft).toHaveBeenCalled();
+  });
+});

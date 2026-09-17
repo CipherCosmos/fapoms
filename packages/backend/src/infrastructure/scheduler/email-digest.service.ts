@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 // expandAudience: the addressing direction of the role hierarchy — a section aimed at a role
 // also reaches every role that implies it (DEVELOPER, for ADMIN and PRODUCT_SUPPORT), same
@@ -10,6 +10,7 @@ import { FeedbackEscalationService } from '../../modules/feedback/feedback-escal
 import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
 import { FEEDBACK_TEAM_ROLE_NAMES } from '../../modules/feedback/feedback-roles';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../notifications/email-provider';
+import { EmailTemplateRenderer } from '../notifications/email-template-renderer';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { UserEntity } from '../../modules/user/user.entity';
 import { usersHoldingPermission } from '../../modules/notifications/permission-audience';
@@ -86,6 +87,7 @@ export class EmailDigestService {
     private readonly hrWorkforce: HrWorkforceService,
     private readonly email: EmailProvider,
     private readonly settings: PlatformSettingsService,
+    @Optional() private readonly templateRenderer?: EmailTemplateRenderer,
   ) {}
 
   async run(): Promise<{ sent: number; skipped: number }> {
@@ -119,16 +121,54 @@ export class EmailDigestService {
         .map((s) => `${s.heading}\n${s.lines.map((l) => `  • ${l}`).join('\n')}\n  ${appPublicUrl()}${s.link}`)
         .join('\n\n');
 
+      const digestSectionsHtml = theirSections
+        .map((s) => `
+          <div style="background:#ffffff; border:1px solid #E4E7EB; border-left:4px solid #ED6714; border-radius:6px; padding:16px 20px; margin-bottom:16px;">
+            <div style="font-size:15px; font-weight:700; color:#1E293B; margin-bottom:10px;">${s.heading}</div>
+            <ul style="margin:0 0 14px 0; padding-left:20px; font-size:14px; color:#4B5563; line-height:1.6;">
+              ${s.lines.map((l) => `<li>${l}</li>`).join('')}
+            </ul>
+            <a href="${appPublicUrl()}${s.link}" style="display:inline-block; font-size:13px; font-weight:600; color:#ED6714; text-decoration:none;">View in FAPOMS &rarr;</a>
+          </div>
+        `)
+        .join('');
+
+      let subject = `FAPOMS morning brief — ${subjectCounts}`;
+      let html = renderEmailHtml({
+        title: 'Operations Morning Brief',
+        bodyLines: theirSections.flatMap((s) => [s.heading, ...s.lines.map((l) => `• ${l}`)]),
+        linkUrl: `${appPublicUrl()}${theirSections[0].link}`,
+        linkLabel: 'Open Operations Desk',
+      });
+
+      if (this.templateRenderer) {
+        try {
+          const dateStr = new Date().toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          });
+          const rendered = await this.templateRenderer.render('morning-digest', {
+            subjectCounts,
+            briefDate: dateStr,
+            digestSectionsHtml,
+            portalUrl: `${appPublicUrl()}${theirSections[0].link}`,
+            logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+            companyName: 'Sumeru Global',
+          });
+          subject = rendered.subject;
+          html = rendered.html;
+        } catch (err: any) {
+          this.logger.warn(`Template render failed for morning-digest: ${err.message}`);
+        }
+      }
+
       const result = await this.email.send({
         to: r.email,
-        subject: `FAPOMS morning brief — ${subjectCounts}`,
+        subject,
         text,
-        html: renderEmailHtml({
-          title: 'Needs your attention this morning',
-          bodyLines: theirSections.flatMap((s) => [`▸ ${s.heading}`, ...s.lines.map((l) => `   • ${l}`)]),
-          linkUrl: `${appPublicUrl()}${theirSections[0].link}`,
-          linkLabel: 'Open FAPOMS',
-        }),
+        html,
       });
 
       if (result.success) sent++;

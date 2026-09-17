@@ -28,7 +28,9 @@ export const LEGACY_TABS: Record<string, string> = {
 
   // Retired: each was a list of people needing something, which is a chip, plus an editor for
   // one person, which is the record.
-  onboarding: '/hr/roster?segment=onboarding',
+  onboarding: '/hr/hiring',
+  interviews: '/hr/hiring',
+  applications: '/hr/hiring',
   paperwork: '/hr/roster?segment=incomplete',
   records: '/hr/roster?segment=incomplete',
   compliance: '/hr/roster?segment=lapsed',
@@ -44,7 +46,6 @@ export const LEGACY_TABS: Record<string, string> = {
 
 /** The retired paths, keyed without the `/hr/` prefix — same destinations as the tab keys. */
 export const LEGACY_PATHS: Record<string, string> = {
-  onboarding: LEGACY_TABS.onboarding,
   paperwork: LEGACY_TABS.paperwork,
   records: LEGACY_TABS.records,
   compliance: LEGACY_TABS.compliance,

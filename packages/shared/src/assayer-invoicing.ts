@@ -20,6 +20,8 @@ export interface AssayerInvoiceLine {
   assignmentId: string | null;
   assignmentNumber: string | null;
   branchName: string | null;
+  /** Bank or corporate client name that commissioned the audit assignment. */
+  clientName?: string | null;
   /** The assignment's completion date (YYYY-MM-DD), the service date a reviewer anchors on. */
   serviceDate: string | null;
   /** Set on EXPENSE lines only — the claim's category, so the reveal says what was reimbursed. */
@@ -41,9 +43,14 @@ export interface AssayerInvoiceSummary {
   submittedAt: string | null;
   approvedAt: string | null;
   approvedBy: string | null;
+  paidAt?: string | null;
   cancelledAt: string | null;
   cancelledBy: string | null;
   cancelReason: string | null;
+  revision?: number;
+  supersedesInvoiceId?: string | null;
+  supersededByInvoiceId?: string | null;
+  confirmedVersion?: number | null;
   lineCount: number;
   subtotalBase: number;
   subtotalTravel: number;

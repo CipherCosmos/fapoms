@@ -219,10 +219,10 @@ describe('security controls are still wired', () => {
     {
       id: 'minio-root-password-production-check',
       file: `${B}/main.ts`,
-      marker: 'MINIO_ROOT_PASSWORD is unset or the burned dev default',
-      why: 'Self-hosted MinIO in production must not boot on the dev-compose fallback password — '
-        + 'that is the actual root credential on the bucket holding every audit document and KYC '
-        + 'scan, and the literal is committed to git history.',
+      marker: 'The API signs storage requests with the MinIO ROOT credential',
+      why: 'Self-hosted MinIO in production must not boot on the burned dev password, and the API '
+        + 'must not sign with the root credential at all — root on the bucket holding every audit '
+        + 'document and KYC scan belongs to the store, not to the process facing the internet.',
     },
     {
       id: 'verify-assayer-is-throttled',

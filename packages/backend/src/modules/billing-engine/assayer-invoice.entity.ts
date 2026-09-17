@@ -97,6 +97,33 @@ export class AssayerInvoiceEntity extends BaseEntity {
   @Column({ name: 'total_amount', type: 'decimal', precision: 14, scale: 2, default: 0 })
   totalAmount: number;
 
+  @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
+  paidAt: Date | null;
+
+  @Column({ name: 'paid_by', type: 'uuid', nullable: true })
+  paidBy: string | null;
+
+  /**
+   * Financial revision number (1 for initial issuance, increments on controlled correction).
+   * Scenario F: If figures change after assayer confirmation, the old confirmation is invalidated
+   * (SUPERSEDED), and a new revision (N+1) is generated requiring fresh confirmation.
+   */
+  @Column({ name: 'revision', type: 'integer', default: 1 })
+  revision: number;
+
+  @Column({ name: 'supersedes_invoice_id', type: 'uuid', nullable: true })
+  supersedesInvoiceId: string | null;
+
+  @Column({ name: 'superseded_by_invoice_id', type: 'uuid', nullable: true })
+  supersededByInvoiceId: string | null;
+
+  /**
+   * The revision number that the assayer explicitly confirmed.
+   * Approval gate asserts: `status === SUBMITTED && confirmedVersion === revision`.
+   */
+  @Column({ name: 'confirmed_version', type: 'integer', nullable: true })
+  confirmedVersion: number | null;
+
   @Column({ length: 3, default: 'INR' })
   currency: string;
 

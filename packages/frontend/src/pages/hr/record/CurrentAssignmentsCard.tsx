@@ -1,6 +1,7 @@
 import React from 'react';
 import * as RouterDom from 'react-router-dom';
 import { Briefcase, ExternalLink, Calendar, MapPin, AlertCircle } from 'lucide-react';
+import { assignmentStatusLabel } from '@fapoms/shared';
 import type { ActiveAssignment } from './record-types';
 import { fmtDate } from '../../../utils/dates';
 
@@ -78,8 +79,8 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Briefcase size={16} style={{ color: 'var(--text-secondary)' }} />
-          <h3 style={{ margin: 0, fontSize: 'var(--text-sm)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-secondary)' }}>
-            Current Work & Commitments
+          <h3 style={{ margin: 0, fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
+            Current work
           </h3>
         </div>
         <SafeLink
@@ -93,16 +94,15 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
             gap: '4px',
             fontWeight: 500,
           }}
-          title="Open complete Assignment Queue for this assayer"
         >
-          View in Assignment Queue
+          See all their work
           <ExternalLink size={12} />
         </SafeLink>
       </div>
 
       {loading ? (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '12px 0' }}>
-          Loading active assignments…
+          Loading…
         </div>
       ) : inFlight.length === 0 ? (
         <div
@@ -116,16 +116,26 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
             color: 'var(--text-muted)',
           }}
         >
-          No active or in-flight assignments scheduled for this assayer.
+          No work is assigned to them right now.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            maxHeight: '190px',
+            overflowY: 'auto',
+            paddingRight: '4px',
+            scrollbarWidth: 'thin',
+          }}
+        >
           {inFlight.map((asn) => {
             const branchName =
               (asn as any).projectBranch?.branch?.name ||
               (asn as any).branch?.name ||
               asn.branchName ||
-              'Assigned Branch';
+              'Branch not recorded';
             const projectName = (asn as any).project?.name || asn.projectName;
             const isAttention = asn.status === 'PENDING' || asn.status === 'IN_PROGRESS';
 
@@ -152,7 +162,6 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
                         color: 'var(--accent-primary)',
                         textDecoration: 'none',
                       }}
-                      title="Open assignment in queue"
                     >
                       {asn.assignmentNumber || asn.id.slice(0, 8)}
                     </SafeLink>
@@ -170,7 +179,7 @@ export const CurrentAssignmentsCard: React.FC<CurrentAssignmentsCardProps> = ({
                       ...statusBadgeStyle(asn.status),
                     }}
                   >
-                    {asn.status.replace('_', ' ')}
+                    {assignmentStatusLabel(asn.status)}
                   </span>
                 </div>
 

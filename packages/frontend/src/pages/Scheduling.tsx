@@ -738,7 +738,7 @@ export const Scheduling: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700 }}>UNSCHEDULED QUEUE</span>
+              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 700 }}>WAITING TO SCHEDULE</span>
               <div style={{ fontSize: 'var(--text-sm)', fontWeight: 800, color: 'var(--text-primary)' }}>Confirmed Offers</div>
             </div>
             <span style={{ fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>

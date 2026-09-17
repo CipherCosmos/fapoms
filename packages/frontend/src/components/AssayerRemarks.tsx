@@ -57,13 +57,27 @@ const MODERATE_ROLES: SystemRole[] = [
   SystemRole.OPERATIONS,
 ];
 
-const RATINGS: Array<{ value: number; label: string; hint: string }> = [
-  { value: 2, label: '+2', hint: 'Exemplary — go out of your way to send them again' },
-  { value: 1, label: '+1', hint: 'Good — better than expected' },
-  { value: 0, label: '0', hint: 'A note, neither for nor against' },
-  { value: -1, label: '−1', hint: 'A concern worth knowing before the next offer' },
-  { value: -2, label: '−2', hint: 'Serious — the desk should think twice' },
+/**
+ * The five ratings. `word` is what the button says; the number is kept beside it, small, because
+ * the average quoted above is on the same −2…+2 scale. The meaning used to live only in a hover
+ * `title` — invisible on the tablets clerks use, so the buttons read as five bare numbers.
+ */
+const RATINGS: Array<{ value: number; label: string; word: string; hint: string }> = [
+  { value: 2, label: '+2', word: 'Excellent', hint: 'Excellent — go out of your way to send them again' },
+  { value: 1, label: '+1', word: 'Good', hint: 'Good — better than expected' },
+  { value: 0, label: '0', word: 'Neutral', hint: 'A note, neither for nor against' },
+  { value: -1, label: '−1', word: 'Concern', hint: 'A concern worth knowing before the next offer' },
+  { value: -2, label: '−2', word: 'Serious', hint: 'Serious — the desk should think twice' },
 ];
+
+const REMARKS_WEIGHT_NOTE =
+  'Remarks count for a small part of how well someone matches a job — never enough on their own to rule them out.';
+
+const ratingWord = (rating: number | null | undefined): string | null =>
+  RATINGS.find((r) => r.value === rating)?.word ?? null;
+
+/** "Quality of work", not `QUALITY` — the same words the compose dropdown offers. */
+const categoryLabel = (category: string): string => CATEGORY_LABEL[category as Category] ?? category;
 
 export interface AssayerRemark {
   id: string;
@@ -183,15 +197,21 @@ export const AssayerRemarks: React.FC<{
         {summary && summary.count > 0 ? (
           <span style={{ fontSize: fs, color: 'var(--text-secondary)' }}>
             <strong>{summary.count}</strong> rated remark{summary.count === 1 ? '' : 's'} in the last year ·
-            {' '}recency-weighted average{' '}
+            {' '}average{' '}
             <strong style={{ color: ratingTone(summary.weightedMean).fg }}>{fmtSignedMean(summary.weightedMean)}</strong>
-            <span title="How the engine folds remarks in: score = 50 + 25 × weighted mean, so −2 across the board is 0 and +2 is 100. Worth 6% of a recommendation — enough to settle a close call, never enough to remove anyone." style={{ marginLeft: '6px', color: 'var(--text-muted)', cursor: 'help', fontSize: 'var(--text-3xs)' }}>
-              (scores {Math.round(50 + 25 * (summary.weightedMean ?? 0))}/100 in planning)
+            {' '}(newer remarks count more)
+            {/*
+              Said on screen, in words. This used to be a hover title spelling out the engine's
+              arithmetic and its percentage weight — a formula a clerk cannot use, in a place a
+              tablet never shows.
+            */}
+            <span style={{ display: 'block', marginTop: '2px', color: 'var(--text-muted)', fontSize: 'var(--text-3xs)' }}>
+              {REMARKS_WEIGHT_NOTE}
             </span>
           </span>
         ) : (
           <span style={{ fontSize: fs, color: 'var(--text-muted)' }}>
-            {query.isLoading ? 'Loading remarks…' : 'No rated remarks in the last year — scores a neutral 50/100 in planning.'}
+            {query.isLoading ? 'Loading remarks…' : 'No rated remarks in the last year, so remarks neither help nor hurt when work is offered.'}
           </span>
         )}
       </div>
@@ -204,13 +224,16 @@ export const AssayerRemarks: React.FC<{
               const on = rating === r.value;
               const tone = ratingTone(r.value);
               return (
-                <button key={r.value} type="button" title={r.hint} onClick={() => setRating(r.value)}
+                <button key={r.value} type="button" title={r.hint} aria-pressed={on} onClick={() => setRating(r.value)}
+                  aria-label={`${r.word} (${r.label})`}
                   style={{
                     fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '3px 9px', borderRadius: '6px', cursor: 'pointer',
                     background: on ? tone.bg : 'transparent', color: on ? tone.fg : 'var(--text-secondary)',
                     border: `1px solid ${on ? tone.fg : 'var(--border-color)'}`,
+                    display: 'inline-flex', alignItems: 'baseline', gap: '4px',
                   }}>
-                  {r.label}
+                  {r.word}
+                  <span aria-hidden="true" style={{ fontWeight: 500, opacity: 0.7 }}>{r.label}</span>
                 </button>
               );
             })}
@@ -222,6 +245,11 @@ export const AssayerRemarks: React.FC<{
               style={{ marginLeft: 'auto', background: 'var(--bg-page)' }}
             />
           </div>
+          {rating !== null && (
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+              {RATINGS.find((r) => r.value === rating)?.hint}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '6px' }}>
             <input value={text} onChange={(e) => setText(e.target.value)} maxLength={1000}
               onKeyDown={(e) => { if (e.key === 'Enter' && submittable) create.mutate(); }}
@@ -247,13 +275,15 @@ export const AssayerRemarks: React.FC<{
             const mine = !!userId && r.authorId === userId;
             return (
               <div key={r.id} style={{ padding: compact ? '7px 0' : '10px 0', borderBottom: '1px solid var(--border-hair)', display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                <span title={r.rating == null ? 'Unrated note' : `Rating ${fmtSignedMean(r.rating)}`} style={{ flexShrink: 0, minWidth: '30px', textAlign: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '2px 6px', borderRadius: '6px', background: tone.bg, color: tone.fg }}>
-                  {r.rating == null ? '·' : fmtSignedMean(r.rating).replace('.0', '')}
+                <span style={{ flexShrink: 0, minWidth: '30px', textAlign: 'center', fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '2px 6px', borderRadius: '6px', background: tone.bg, color: tone.fg, whiteSpace: 'nowrap' }}>
+                  {r.rating == null
+                    ? 'No rating'
+                    : <>{ratingWord(r.rating) ?? ''} <span style={{ fontWeight: 500, opacity: 0.7 }}>{fmtSignedMean(r.rating).replace('.0', '')}</span></>}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: fs, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{r.content}</div>
                   <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
-                    <span style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.02em' }}>{r.category}</span>
+                    <span style={{ fontWeight: 600 }}>{categoryLabel(r.category)}</span>
                     {' · '}{r.authorName} <span style={{ fontStyle: 'italic' }}>({authorRoleLabel(r.authorRole)})</span>
                     {' · '}{fmtWhen(r.createdAt)}
                     {r.assignmentId && <> · about one assignment</>}

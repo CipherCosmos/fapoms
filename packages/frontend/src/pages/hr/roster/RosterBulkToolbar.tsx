@@ -6,11 +6,13 @@ import {
   assayerLifecyclePath,
 } from '@fapoms/shared';
 import { Select } from '../../../components/ui/Select';
+import { useConfirm } from '../../../components/ui/ConfirmDialog';
+import { counted } from '../../../utils/plural';
 import {
   LIFECYCLE_MOVE_REASONS,
   OTHER_LIFECYCLE_REASON,
 } from '../lifecycle-reason-vocabulary';
-import { STAGE_CONSEQUENCE } from '../AssayerRecord';
+import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from '../AssayerRecord';
 import type { RosterPerson } from '../roster-filters';
 import { RosterNotifyDialog } from './RosterNotifyDialog';
 
@@ -43,6 +45,8 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
   const [reason, setReason] = useState('');
   const [isOther, setIsOther] = useState(false);
   const [notifyOpen, setNotifyOpen] = useState(false);
+  // Above the empty-selection early return: hooks cannot sit below it.
+  const { confirm, confirmDialog } = useConfirm();
 
   if (selectedRows.length === 0) return null;
 
@@ -57,13 +61,43 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
 
   const handleApply = async () => {
     if (!targetStatus || !reason.trim()) return;
+    // One tap used to move everybody selected with no second look — including
+    // into stages that are hard to come back from. The dialog names the count,
+    // the stage and the reason, so a wrong selection gets caught here.
+    const stage = assayerLifecycleLabel(targetStatus);
+    const hard = HARD_TO_REVERSE_STAGES.includes(targetStatus);
+    const ok = await confirm({
+      title: `Move ${counted(selectedRows.length, 'person', 'people')} to ${stage}?`,
+      message: `All ${selectedRows.length} selected ${selectedRows.length === 1 ? 'person moves' : 'people move'} to “${stage}” with reason “${reason.trim()}”. Rows that cannot legally move there are skipped.`,
+      confirmLabel: `Move to ${stage}`,
+      tone: hard ? 'danger' : undefined,
+      reversibleNote: hard
+        ? 'Suspended, resigned, terminated and archived are hard to reverse — check the list before confirming.'
+        : 'Each move is written into the person’s history.',
+    });
+    if (!ok) return;
     await onBulkTransition(targetStatus, reason.trim());
     setTargetStatus('');
     setReason('');
     setIsOther(false);
   };
 
+  const handleIssueAppAccess = async () => {
+    // Issuing credentials cannot be unseen by the people who receive them, so
+    // it gets the same second look as a stage move.
+    const ok = await confirm({
+      title: `Give app access to ${counted(selectedRows.length, 'person', 'people')}?`,
+      message: `Each of the ${selectedRows.length} selected ${selectedRows.length === 1 ? 'person gets' : 'people get'} login credentials for the app, by email or SMS where available.`,
+      confirmLabel: 'Give app access',
+      reversibleNote: 'Access can be reset afterwards from the person’s record.',
+    });
+    if (!ok) return;
+    await onBulkIssueAppAccess();
+  };
+
   return (
+    <>
+      {confirmDialog}
     <div
       style={{
         display: 'flex',
@@ -162,7 +196,7 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
 
       <button
         type="button"
-        onClick={onBulkIssueAppAccess}
+        onClick={() => void handleIssueAppAccess()}
         disabled={appAccessBusy}
         className="btn btn-secondary"
         style={{
@@ -221,5 +255,6 @@ export const RosterBulkToolbar: React.FC<RosterBulkToolbarProps> = ({
         }}
       />
     </div>
+    </>
   );
 };

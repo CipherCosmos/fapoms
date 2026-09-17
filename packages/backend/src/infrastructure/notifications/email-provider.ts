@@ -272,34 +272,110 @@ export function appPublicUrl(): string {
   return raw.replace(/\/+$/, '');
 }
 
-/**
- * The one HTML shell every notification email uses.
- *
- * Deliberately plain: inline styles only (mail clients strip stylesheets), a readable dark-on-
- * light body regardless of the app's theme, one button. The plain-text part carries the same
- * content, so nothing depends on HTML rendering.
- */
-export function renderEmailHtml(opts: {
+export type EmailTone = 'gold' | 'flame' | 'emerald' | 'crimson' | 'slate';
+
+export interface EmailBadge {
+  text: string;
+  tone?: EmailTone;
+}
+
+export interface EmailCallout {
+  title?: string;
+  text: string;
+  tone?: EmailTone;
+}
+
+export interface EmailKeyValueItem {
+  label: string;
+  value: string;
+}
+
+export interface EmailRenderOptions {
   title: string;
+  subtitle?: string;
+  badge?: EmailBadge;
   bodyLines: string[];
+  otpCode?: string;
+  kvTable?: EmailKeyValueItem[];
+  callout?: EmailCallout;
   linkUrl?: string | null;
   linkLabel?: string;
   footer?: string;
-}): string {
-  // Quotes included: this output lands inside attribute values as well as text nodes, and an
-  // unescaped `"` there closes the attribute and starts a new one.
-  const esc = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  securityNotice?: string;
+}
 
-  /**
-   * Only http(s) reaches an href.
-   *
-   * Link values are assembled from `APP_PUBLIC_URL` plus a route an administrator can now edit
-   * in the template screen, so `javascript:` is reachable by configuration rather than only by
-   * compromise. Anything else is dropped: an email with no button beats an email carrying a
-   * hostile one.
-   */
+const TONE_STYLES: Record<
+  EmailTone,
+  {
+    badgeBg: string;
+    badgeText: string;
+    badgeBorder: string;
+    calloutBg: string;
+    calloutBorder: string;
+    calloutText: string;
+  }
+> = {
+  gold: {
+    badgeBg: '#FEF9E7',
+    badgeText: '#8D6809',
+    badgeBorder: '#F8E7A2',
+    calloutBg: '#FFFDF5',
+    calloutBorder: '#D8AE47',
+    calloutText: '#382F26',
+  },
+  flame: {
+    badgeBg: '#FFF3EB',
+    badgeText: '#B8460D',
+    badgeBorder: '#FFD0B5',
+    calloutBg: '#FFF8F5',
+    calloutBorder: '#ED6714',
+    calloutText: '#382F26',
+  },
+  emerald: {
+    badgeBg: '#EBF8F2',
+    badgeText: '#136C45',
+    badgeBorder: '#BCE6D2',
+    calloutBg: '#F4FBF7',
+    calloutBorder: '#10B981',
+    calloutText: '#382F26',
+  },
+  crimson: {
+    badgeBg: '#FDF2F2',
+    badgeText: '#A82222',
+    badgeBorder: '#F9C8C8',
+    calloutBg: '#FEF7F7',
+    calloutBorder: '#EF4444',
+    calloutText: '#382F26',
+  },
+  slate: {
+    badgeBg: '#F1F5F9',
+    badgeText: '#475569',
+    badgeBorder: '#CBD5E1',
+    calloutBg: '#F8FAFC',
+    calloutBorder: '#64748B',
+    calloutText: '#382F26',
+  },
+};
+
+/**
+ * The clean, authoritative HTML shell for all Sumeru Global & FAPOMS emails.
+ *
+ * Implements an executive, uncluttered aesthetic:
+ *  - Authentic corporate mark (sumeru-logo@2x.png) with flame tips and wordmark
+ *  - Spacious white card on a subtle neutral ground (#F8F9FA)
+ *  - Clear typographic hierarchy with high contrast readability
+ *  - Minimal, context-specific components without visual clutter
+ *  - Full compatibility across email clients (Gmail, Apple Mail, Outlook)
+ */
+export function renderEmailHtml(opts: EmailRenderOptions): string {
+  const esc = (s: string) =>
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
   const safeUrl = (url: string | null | undefined): string | null => {
     if (!url) return null;
     try {
@@ -310,34 +386,182 @@ export function renderEmailHtml(opts: {
     }
   };
   const href = safeUrl(opts.linkUrl);
+  const logoUrl = `${appPublicUrl()}/sumeru-logo@2x.png`;
 
-  const paragraphs = opts.bodyLines
-    .map((line) => `<p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:#333333;">${esc(line)}</p>`)
-    .join('\n');
+  // Badge HTML (only rendered if badge is explicitly provided)
+  let badgeHtml = '';
+  if (opts.badge?.text) {
+    const tone = opts.badge.tone && TONE_STYLES[opts.badge.tone] ? opts.badge.tone : 'gold';
+    const style = TONE_STYLES[tone];
+    badgeHtml = `
+      <div style="margin-bottom:12px;">
+        <span style="display:inline-block;padding:2px 8px;border-radius:4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;background-color:${style.badgeBg};color:${style.badgeText};border:1px solid ${style.badgeBorder};">
+          ${esc(opts.badge.text)}
+        </span>
+      </div>`;
+  }
 
-  const button = href
-    ? `<a href="${href}" style="display:inline-block;margin-top:8px;padding:10px 22px;background:#b8860b;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">${esc(opts.linkLabel ?? 'Open in FAPOMS')}</a>`
+  // Subtitle HTML
+  const subtitleHtml = opts.subtitle
+    ? `<p style="margin:0 0 16px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;color:#6B7280;line-height:1.5;">${esc(opts.subtitle)}</p>`
     : '';
 
-  const footer = esc(
+  // Body paragraphs
+  const paragraphs = opts.bodyLines
+    .map(
+      (line) =>
+        `<p style="margin:0 0 12px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;line-height:1.65;color:#374151;">${esc(line)}</p>`,
+    )
+    .join('\n');
+
+  // Key-Value Table HTML
+  let kvTableHtml = '';
+  if (opts.kvTable && opts.kvTable.length > 0) {
+    const rows = opts.kvTable
+      .map(
+        (item, idx) => `
+        <tr>
+          <td valign="top" style="padding:10px 14px;border-bottom:${idx === opts.kvTable!.length - 1 ? 'none' : '1px solid #E5E7EB'};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:500;color:#6B7280;width:38%;">
+            ${esc(item.label)}
+          </td>
+          <td valign="top" style="padding:10px 14px;border-bottom:${idx === opts.kvTable!.length - 1 ? 'none' : '1px solid #E5E7EB'};font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:13px;font-weight:600;color:#111827;">
+            ${esc(item.value)}
+          </td>
+        </tr>`,
+      )
+      .join('\n');
+
+    kvTableHtml = `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:18px 0 20px 0;border:1px solid #E5E7EB;border-radius:8px;overflow:hidden;background-color:#F9FAFB;">
+        ${rows}
+      </table>`;
+  }
+
+  // OTP Code Box HTML (sleek, warm, clean)
+  let otpCodeHtml = '';
+  if (opts.otpCode) {
+    otpCodeHtml = `
+      <div style="margin:20px 0 22px 0;padding:20px 16px;background-color:#FFF7ED;border:1px solid #FED7AA;border-radius:8px;text-align:center;">
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;color:#C2410C;text-transform:uppercase;margin-bottom:6px;">
+          One-Time Verification Code
+        </div>
+        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono',monospace;font-size:34px;font-weight:700;letter-spacing:8px;color:#9A3412;padding:2px 0;">
+          ${esc(opts.otpCode)}
+        </div>
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;color:#9A3412;opacity:0.85;margin-top:6px;">
+          Valid for 10 minutes &bull; Strictly confidential
+        </div>
+      </div>`;
+  }
+
+  // Callout HTML (light alert box with left accent)
+  let calloutHtml = '';
+  if (opts.callout?.text) {
+    const tone = opts.callout.tone && TONE_STYLES[opts.callout.tone] ? opts.callout.tone : 'flame';
+    const style = TONE_STYLES[tone];
+    const calloutTitle = opts.callout.title
+      ? `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:600;color:#111827;margin-bottom:3px;">${esc(opts.callout.title)}</div>`
+      : '';
+    calloutHtml = `
+      <div style="margin:16px 0 18px 0;padding:12px 14px;background-color:${style.calloutBg};border-left:3px solid ${style.calloutBorder};border-radius:0 6px 6px 0;">
+        ${calloutTitle}
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;color:${style.calloutText};">
+          ${esc(opts.callout.text)}
+        </div>
+      </div>`;
+  }
+
+  // Action Button HTML (solid Sumeru flame orange)
+  let buttonHtml = '';
+  if (href) {
+    buttonHtml = `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 8px 0;">
+        <tr>
+          <td align="center" style="border-radius:6px;background-color:#ED6714;">
+            <a href="${href}" target="_blank" style="display:inline-block;padding:11px 26px;background-color:#ED6714;color:#FFFFFF;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:0.2px;text-decoration:none;border-radius:6px;">
+              ${esc(opts.linkLabel ?? 'Open in FAPOMS')}
+            </a>
+          </td>
+        </tr>
+      </table>
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;color:#9CA3AF;margin-top:8px;word-break:break-all;line-height:1.4;">
+        Direct link: <a href="${href}" style="color:#ED6714;text-decoration:underline;">${href}</a>
+      </div>`;
+  }
+
+  // Security Notice HTML
+  const securityNoticeHtml = opts.securityNotice
+    ? `<div style="margin-top:16px;padding-top:12px;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;color:#6B7280;line-height:1.45;">
+        <strong style="color:#374151;">Note:</strong> ${esc(opts.securityNotice)}
+      </div>`
+    : '';
+
+  // Footer HTML
+  const footerText = esc(
     opts.footer ??
-      'You are receiving this because of your role in FAPOMS. Manage which emails you get under Notifications → Preferences.',
+      'You are receiving this communication regarding your role in FAPOMS. Update preferences under Notifications → Preferences.',
   );
 
   return `<!doctype html>
-<html><body style="margin:0;padding:0;background:#f4f4f4;">
-  <div style="max-width:560px;margin:24px auto;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;font-family:Arial,Helvetica,sans-serif;">
-    <div style="background:#1a1a1a;padding:16px 24px;">
-      <span style="color:#d8ae47;font-size:16px;font-weight:700;">Sumeru Audit Suite</span>
-    </div>
-    <div style="padding:24px;">
-      <h2 style="margin:0 0 16px 0;font-size:17px;color:#111111;">${esc(opts.title)}</h2>
-      ${paragraphs}
-      ${button}
-    </div>
-    <div style="padding:14px 24px;border-top:1px solid #eeeeee;">
-      <span style="font-size:11px;color:#999999;">${footer}</span>
-    </div>
-  </div>
-</body></html>`;
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${esc(opts.title)}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F8F9FA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#F8F9FA;padding:32px 12px;">
+    <tr>
+      <td align="center">
+        <!--[if (gte mso 9)|(IE)]>
+        <table role="presentation" width="560" align="center" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td>
+        <![endif]-->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;background-color:#FFFFFF;border-radius:10px;overflow:hidden;border:1px solid #E5E7EB;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+          <!-- Header with Authentic Logo -->
+          <tr>
+            <td align="center" style="padding:28px 32px 20px 32px;border-bottom:1px solid #F3F4F6;">
+              <img src="${esc(logoUrl)}" alt="Sumeru Global" width="65" height="50" style="display:block;margin:0 auto;border:0;outline:none;" />
+            </td>
+          </tr>
+          <!-- Content Body -->
+          <tr>
+            <td style="padding:28px 32px 24px 32px;background-color:#FFFFFF;">
+              ${badgeHtml}
+              <h1 style="margin:0 0 ${opts.subtitle ? '6px' : '14px'} 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;font-weight:700;color:#111827;line-height:1.35;letter-spacing:-0.2px;">
+                ${esc(opts.title)}
+              </h1>
+              ${subtitleHtml}
+              ${paragraphs}
+              ${otpCodeHtml}
+              ${kvTableHtml}
+              ${calloutHtml}
+              ${buttonHtml}
+              ${securityNoticeHtml}
+            </td>
+          </tr>
+          <!-- Clean Footer -->
+          <tr>
+            <td align="center" style="padding:20px 32px;background-color:#F9FAFB;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+              <div style="font-size:12px;font-weight:600;color:#4B5563;">
+                Sumeru Global &bull; Field Audit Operations Management
+              </div>
+              <div style="font-size:11.5px;color:#9CA3AF;margin-top:4px;line-height:1.5;">
+                ${footerText}
+              </div>
+            </td>
+          </tr>
+        </table>
+        <!--[if (gte mso 9)|(IE)]>
+            </td>
+          </tr>
+        </table>
+        <![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 }
+

@@ -1,17 +1,19 @@
 import React from 'react';
-import { Printer, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { ChevronDown, ChevronUp, Printer, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { useConfirm, StatusBadge, AlertBanner, SkeletonList } from '../../components/ui';
-import { card, label, Bar, Empty, Section, Lede, LinkButton } from './hr-ui';
+import { card, label, Bar, Empty, Section, Lede, LinkButton, Field, fieldInput, Editor } from './hr-ui';
 import { STANDING_LABELS, standingStance, STANDING_STANCE_TONE } from './AssayerVettingTab';
 import { openAssayerProfilePrintWindow } from './assayerProfilePrint';
 import type { Assayer } from './assayer-shared';
 import type { AssayerQualificationView, PartnerQualificationView, DimensionScoreView } from '@fapoms/shared';
 
 /**
- * The Qualification tab — the roster's data synthesized into judgments.
+ * The Profile score tab (the API still calls it "qualification") — the roster's data synthesized
+ * into judgments. On screen it is never "qualification": that word already names a person's
+ * education on the same record, and one word for two things is how a clerk edits the wrong one.
  *
  * Everything here is computed on read from the vetting tables, so what HR just edited on the
  * Vetting or Documents tab is already reflected; nothing is cached to go stale. A number can
@@ -32,8 +34,33 @@ const toneFor = (n: number | null): string =>
 /** "This number was set by a person." Written once, because two lists on this tab say it. */
 const adjustedChip: React.CSSProperties = {
   fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)',
-  textTransform: 'uppercase', letterSpacing: '.04em',
 };
+
+/**
+ * A score as typed into the change dialog: a whole number from 0 to 100, or null.
+ *
+ * The dialog used to be one free-text line — "85 — verified in person" — split by a regex after
+ * the clerk pressed the button, so a typo was only found out once the dialog had already closed.
+ * Two boxes, checked as they are typed, and the button stays off until both are right.
+ */
+const parseScore = (raw: string): number | null => {
+  const t = raw.trim();
+  if (!/^\d{1,3}$/.test(t)) return null;
+  const n = Number(t);
+  return n <= 100 ? n : null;
+};
+
+/** The score being changed by hand while its dialog is open. */
+interface ScoreChangeDraft {
+  dimension: string;
+  clientId?: string;
+  /** How the dialog names the score: "the profile score", "the “Background check” score". */
+  what: string;
+  value: string;
+  reason: string;
+  /** The save's own failure, shown inside the dialog so the typing is not lost behind it. */
+  error: string | null;
+}
 
 const ScoreChip: React.FC<{ value: number | null; small?: boolean }> = ({ value, small }) => (
   <span style={{
@@ -55,7 +82,10 @@ export const AssayerQualificationTab: React.FC<{
   const [loadErr, setLoadErr] = React.useState<unknown>(null);
   const [busy, setBusy] = React.useState(false);
   const [openPartner, setOpenPartner] = React.useState<string | null>(null);
-  const { confirmWithReason, confirm, confirmDialog } = useConfirm();
+  /** The per-part worksheet is detail most visits do not need; the one-line summary is the answer. */
+  const [showParts, setShowParts] = React.useState(false);
+  const [draft, setDraft] = React.useState<ScoreChangeDraft | null>(null);
+  const { confirm, confirmDialog } = useConfirm();
 
   const load = React.useCallback(async () => {
     try {
@@ -71,38 +101,35 @@ export const AssayerQualificationTab: React.FC<{
 
   React.useEffect(() => { void load(); }, [load]);
 
-  const setOverride = async (dimension: string, clientId?: string) => {
-    const { confirmed, reason } = await confirmWithReason({
-      title: `Override the ${dimension === 'overall' ? 'overall' : dimension} score`,
-      message: 'The computed score stays visible beside your number, and the change is recorded on the History tab with your name. Enter the new score (0–100) followed by the reason — e.g. "85 — site visit confirmed the lapsed certificate was renewed".',
-      confirmLabel: 'Set override',
-      reasonPrompt: { label: 'New score and reason', placeholder: 'e.g. 85 — verified in person' },
-    });
-    if (!confirmed) return;
-    // The dialog collects one line; the leading number is the score, the rest is the reason.
-    const m = reason.match(/^\s*(\d{1,3})\s*[—–:,-]?\s*(.*)$/s);
-    const value = m ? Number(m[1]) : NaN;
-    const why = m && m[2] ? m[2].trim() : '';
-    if (!Number.isFinite(value) || value < 0 || value > 100 || !why) {
-      setErr('An override needs a score from 0 to 100 and a reason — e.g. "85 — verified in person".');
-      return;
-    }
+  const setOverride = (dimension: string, what: string, clientId?: string) => {
+    setDraft({ dimension, clientId, what, value: '', reason: '', error: null });
+  };
+
+  const saveOverride = async () => {
+    if (!draft) return;
+    const value = parseScore(draft.value);
+    const reason = draft.reason.trim();
+    if (value == null || !reason) return;
     setBusy(true);
     try {
       await api.request(`/assayers/${assayerId}/qualification/override`, {
         method: 'PUT',
-        body: JSON.stringify({ dimension, clientId: clientId ?? null, value, reason: why }),
+        body: JSON.stringify({ dimension: draft.dimension, clientId: draft.clientId ?? null, value, reason }),
       });
+      setDraft(null);
       await load();
-    } catch (e) { setErr(userMessage(e)); }
+    } catch (e) {
+      const message = userMessage(e);
+      setDraft((d) => (d ? { ...d, error: message } : d));
+    }
     setBusy(false);
   };
 
   const clearOverride = async (overrideId: string, what: string) => {
     const ok = await confirm({
-      title: 'Clear this override?',
-      message: `The computed ${what} score comes back into force, and the clearance is recorded on the History tab.`,
-      confirmLabel: 'Clear override',
+      title: 'Undo this change?',
+      message: `The ${what} score goes back to the one the system worked out. This is saved on the History tab.`,
+      confirmLabel: 'Undo change',
     });
     if (!ok) return;
     setBusy(true);
@@ -151,19 +178,66 @@ export const AssayerQualificationTab: React.FC<{
    * waiting five minutes. Checked before the skeleton, which otherwise spins on a refusal forever.
    */
   if (loadErr != null) {
-    return <LoadFailure loads={[{ label: "this assayer's qualification scores", query: caughtLoad(loadErr, () => { void load(); }) }]} />;
+    return <LoadFailure loads={[{ label: 'their profile score', query: caughtLoad(loadErr, () => { void load(); }) }]} />;
   }
   // The scores are computed on read, so this wait is real; hold the shape rather than
   // replacing the tab with one line of prose.
   if (!data || !partners) return <SkeletonList rows={4} height={58} />;
 
   const overall = data.overall;
+  const draftScore = draft ? parseScore(draft.value) : null;
+  const draftScoreTypedWrong = !!draft && draft.value.trim() !== '' && draftScore == null;
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
       {confirmDialog}
       {/* One failure channel per screen — see AssayerRecord.tsx. */}
       <AlertBanner type="error" message={err} onClose={() => setErr(null)} />
+
+      {draft && (
+        <Editor
+          title={`Change ${draft.what}`}
+          intro="The score the system worked out stays on screen next to yours. Your change and your reason are saved with your name on the History tab."
+          onCancel={() => setDraft(null)}
+          onSave={() => { void saveOverride(); }}
+          saveLabel="Save score"
+          busy={busy}
+          saveDisabled={draftScore == null || !draft.reason.trim()}
+          width={440}
+        >
+          <Field title="New score (0 to 100)">
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={100}
+              step={1}
+              aria-label="New score"
+              aria-invalid={draftScoreTypedWrong || undefined}
+              value={draft.value}
+              onChange={(e) => setDraft({ ...draft, value: e.target.value, error: null })}
+              placeholder="For example 85"
+              style={fieldInput}
+            />
+            {draftScoreTypedWrong && (
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '4px' }}>
+                Enter a whole number from 0 to 100.
+              </div>
+            )}
+          </Field>
+          <Field title="Why are you changing it?" wide>
+            <textarea
+              aria-label="Reason for the change"
+              rows={3}
+              value={draft.reason}
+              onChange={(e) => setDraft({ ...draft, reason: e.target.value, error: null })}
+              placeholder="For example: checked their renewed certificate in person"
+              style={{ ...fieldInput, resize: 'vertical' }}
+            />
+          </Field>
+          {draft.error && <AlertBanner type="error" message={draft.error} style={{ flex: '1 1 100%' }} />}
+        </Editor>
+      )}
 
       {/*
         One line carries what to do; the Overall card beside it already says what the number is.
@@ -172,8 +246,8 @@ export const AssayerQualificationTab: React.FC<{
       */}
       <Lede>
         {overall.effective == null
-          ? 'Not yet assessable — nothing scoreable is on their file yet.'
-          : 'A low score is raised by filling the gap it names, not by editing the number.'}
+          ? 'No profile score yet — there is nothing on their file to score.'
+          : 'To raise a low score, fill in what is missing on their file rather than changing the number by hand.'}
       </Lede>
 
       {/* ── Overall ── */}
@@ -182,21 +256,21 @@ export const AssayerQualificationTab: React.FC<{
           <div style={{ fontSize: 'var(--text-3xl)', fontWeight: 800, color: toneFor(overall.effective), lineHeight: 1 }}>
             {overall.effective == null ? '—' : overall.effective}
           </div>
-          <div style={{ ...label, marginTop: '4px' }}>Overall / 100</div>
+          <div style={{ ...label, marginTop: '4px' }}>Profile score out of 100</div>
         </div>
         <div style={{ flex: 1, minWidth: '220px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
           {overall.effective == null
-            ? 'Not yet assessed — nothing scoreable is on file. Scores appear as vetting, documents and work history are recorded.'
+            ? 'No score yet. It appears once their identity papers, background checks and work history are on file.'
             : overall.override
-              ? <>Adjusted from a computed {overall.computed ?? '—'} by {overall.override.setByName ?? 'staff'}: “{overall.override.reason}”
-                  {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(overall.override!.id, 'overall')} style={{ marginLeft: '8px', fontSize: 'var(--text-xs)', padding: '2px 8px' }}><RotateCcw size={11} /> Clear</button>}
+              ? <>Changed by hand by {overall.override.setByName ?? 'staff'} (the system worked out {overall.computed ?? '—'}): “{overall.override.reason}”
+                  {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(overall.override!.id, 'profile')} style={{ marginLeft: '8px', fontSize: 'var(--text-xs)', padding: '2px 8px' }}><RotateCcw size={11} /> Undo change</button>}
                 </>
-              : 'Computed live from identity verification, record completeness, background checks, references, credentials and work history. Weights are set under Administration → Platform Settings → Assayer qualification.'}
+              : 'Worked out from their identity papers, how complete their record is, background checks, references, certificates and work history. An administrator sets how much each part counts.'}
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           {canManage && (
-            <button className="btn btn-secondary" disabled={busy} onClick={() => setOverride('overall')} style={{ fontSize: 'var(--text-xs)', display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <SlidersHorizontal size={13} /> Override
+            <button className="btn btn-secondary" disabled={busy} onClick={() => setOverride('overall', 'the profile score')} style={{ fontSize: 'var(--text-xs)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <SlidersHorizontal size={13} /> Change score
             </button>
           )}
           {canManage && (
@@ -207,52 +281,73 @@ export const AssayerQualificationTab: React.FC<{
         </div>
       </div>
 
-      {/* ── Dimensions ── */}
-      <Section title="What the score is made of">
-        <div style={{ display: 'grid', gap: '12px' }}>
-          {data.dimensions.map((d: DimensionScoreView) => (
-            <div key={d.key}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
-                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, flex: 1 }}>{d.label}</div>
+      {/* ── Dimensions ── collapsed by default: the summary above is the answer, this is the working. */}
+      <Section
+        title="Parts of the score"
+        action={(
+          <button
+            type="button"
+            className="btn btn-secondary"
+            aria-expanded={showParts}
+            aria-controls="profile-score-parts"
+            onClick={() => setShowParts((v) => !v)}
+            style={{ fontSize: 'var(--text-xs)', display: 'flex', gap: '6px', alignItems: 'center', padding: '4px 10px' }}
+          >
+            {showParts ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            {showParts ? 'Hide details' : 'See what makes up this score'}
+          </button>
+        )}
+      >
+        {showParts && (
+          <div id="profile-score-parts" style={{ display: 'grid', gap: '12px' }}>
+            {data.dimensions.map((d: DimensionScoreView) => (
+              <div key={d.key}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, flex: 1 }}>{d.label}</div>
+                  {d.override && (
+                    <span style={adjustedChip}>
+                      Changed by hand
+                      {canManage && (
+                        <LinkButton
+                          onClick={() => clearOverride(d.override!.id, d.label)}
+                          disabled={busy}
+                          label={`Undo the change to ${d.label}`}
+                          icon={<RotateCcw size={10} />}
+                          style={{ color: 'var(--warning)', marginLeft: '4px' }}
+                        />
+                      )}
+                    </span>
+                  )}
+                  <ScoreChip value={d.effective} small />
+                  {canManage && (
+                    <LinkButton
+                      onClick={() => setOverride(d.key, `the “${d.label}” score`)}
+                      disabled={busy}
+                      tone="muted"
+                      label={`Change the ${d.label} score`}
+                      icon={<SlidersHorizontal size={12} />}
+                    />
+                  )}
+                </div>
+                <div style={{ margin: '5px 0 3px' }}><Bar pct={d.effective ?? 0} tone={toneFor(d.effective)} /></div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  {d.effective == null ? 'No score yet — ' : ''}{d.basis.join(' · ')}
+                </div>
                 {d.override && (
-                  <span title={`Computed ${d.computed ?? '—'} · adjusted by ${d.override.setByName ?? 'staff'}: ${d.override.reason}`}
-                        style={adjustedChip}>
-                    adjusted
-                    {canManage && (
-                      <LinkButton
-                        onClick={() => clearOverride(d.override!.id, d.label)}
-                        disabled={busy}
-                        label={`Clear the override on ${d.label}`}
-                        icon={<RotateCcw size={10} />}
-                        style={{ color: 'var(--warning)', marginLeft: '4px' }}
-                      />
-                    )}
-                  </span>
-                )}
-                <ScoreChip value={d.effective} small />
-                {canManage && (
-                  <LinkButton
-                    onClick={() => setOverride(d.key)}
-                    disabled={busy}
-                    tone="muted"
-                    label={`Override the ${d.label} score`}
-                    icon={<SlidersHorizontal size={12} />}
-                  />
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginTop: '2px' }}>
+                    Changed by hand by {d.override.setByName ?? 'staff'} (the system worked out {d.computed ?? '—'}): “{d.override.reason}”
+                  </div>
                 )}
               </div>
-              <div style={{ margin: '5px 0 3px' }}><Bar pct={d.effective ?? 0} tone={toneFor(d.effective)} /></div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                {d.effective == null ? 'Not yet assessed — ' : ''}{d.basis.join(' · ')}
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </Section>
 
       {/* ── Partners ── */}
-      <Section title="Partner qualification" count={partners.length}>
+      <Section title="Score for each bank" count={partners.length}>
         {partners.length === 0 ? (
-          <Empty>No partners on record yet. Add clients and their requirements to score against them.</Empty>
+          <Empty>No banks on record yet. A score for each bank appears here once its requirements are added.</Empty>
         ) : (
           <div style={{ display: 'grid', gap: '2px' }}>
             {partners.map((pt) => (
@@ -260,7 +355,7 @@ export const AssayerQualificationTab: React.FC<{
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}
                      onClick={() => setOpenPartner(openPartner === pt.client.id ? null : pt.client.id)}>
                   <div style={{ flex: 1, fontSize: 'var(--text-sm)', fontWeight: 600 }}>{pt.client.name}</div>
-                  {pt.barred && <StatusBadge label="Barred by client" color="var(--danger)" bg="var(--status-cancelled-bg)" variant="pill" />}
+                  {pt.barred && <StatusBadge label="Barred by this bank" color="var(--danger)" bg="var(--status-cancelled-bg)" variant="pill" />}
                   {!pt.barred && pt.standing && (
                     /*
                       The written label, not `replace(/_/g, ' ').toLowerCase()`.
@@ -288,29 +383,36 @@ export const AssayerQualificationTab: React.FC<{
                       variant="tag"
                     />
                   )}
-                  {pt.standingCap != null && !pt.barred && (
-                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)' }} title={pt.standingReason ?? undefined}>capped at {pt.standingCap}</span>
-                  )}
-                  {/* The same word, the same way it is written against a dimension six lines up —
+                  {/* The same word, the same way it is written against a dimension above —
                       it was shouting in capitals here and lower case there. */}
-                  {pt.override && <span style={adjustedChip}>adjusted</span>}
+                  {pt.override && <span style={adjustedChip}>Changed by hand</span>}
                   <ScoreChip value={pt.effective} small />
                   {canManage && (
                     <span onClick={(e) => e.stopPropagation()}>
                       <LinkButton
-                        onClick={() => setOverride('overall', pt.client.id)}
+                        onClick={() => setOverride('overall', `the score for ${pt.client.name}`, pt.client.id)}
                         disabled={busy}
                         tone="muted"
-                        label={`Override the overall score for ${pt.client.name}`}
+                        label={`Change the score for ${pt.client.name}`}
                         icon={<SlidersHorizontal size={12} />}
                       />
                     </span>
                   )}
                 </div>
+                {/*
+                  Why the number stops where it does, said on the row. It used to be the words
+                  "capped at 40" with the reason only in a hover title — which a tablet never shows.
+                */}
+                {pt.standingCap != null && !pt.barred && (
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', marginTop: '2px' }}>
+                    Held at {pt.standingCap} or below because of this bank’s standing
+                    {pt.standingReason ? <>: “{pt.standingReason}”</> : '.'}
+                  </div>
+                )}
                 {openPartner === pt.client.id && (
                   <div style={{ padding: '8px 0 4px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                     {pt.gaps.length === 0
-                      ? 'Nothing outstanding for this partner.'
+                      ? 'Nothing missing for this bank.'
                       : (<>
                           <div style={{ ...label, marginBottom: '4px' }}>To raise this score</div>
                           <ul style={{ margin: 0, paddingLeft: '18px', display: 'grid', gap: '2px' }}>
@@ -319,8 +421,8 @@ export const AssayerQualificationTab: React.FC<{
                         </>)}
                     {pt.override && (
                       <div style={{ marginTop: '6px', color: 'var(--warning)' }}>
-                        Adjusted to {pt.override.value} by {pt.override.setByName ?? 'staff'}: “{pt.override.reason}”
-                        {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(pt.override!.id, pt.client.name)} style={{ marginLeft: '8px', fontSize: 'var(--text-xs)', padding: '2px 8px' }}>Clear</button>}
+                        Changed by hand to {pt.override.value} by {pt.override.setByName ?? 'staff'}: “{pt.override.reason}”
+                        {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(pt.override!.id, pt.client.name)} style={{ marginLeft: '8px', fontSize: 'var(--text-xs)', padding: '2px 8px' }}>Undo change</button>}
                       </div>
                     )}
                   </div>

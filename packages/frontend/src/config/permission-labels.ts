@@ -34,7 +34,7 @@ export const PERMISSION_AREAS: AreaSpec[] = [
   },
   {
     key: 'field',
-    label: 'Assayers & Branch Paperwork',
+    label: 'Assayers & Documents',
     hint: 'The assayer workforce and audit paperwork',
     resources: ['ASSAYER', 'DOCUMENT', 'OCR'],
   },

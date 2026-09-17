@@ -1084,3 +1084,47 @@ export async function reverseFreely(
     display: data.display_name,
   };
 }
+
+/**
+ * A pincode to the place it names — state, district and town — from our own geocoder.
+ *
+ * The registration form used to ask `api.postalpincode.in` directly, and from inside the deployed
+ * container that host is unreachable: every lookup timed out and every candidate was told "we
+ * could not find this pincode in the postal directory — check the digits", about digits that were
+ * perfectly correct. This instance answers the same question in milliseconds, has no rate limit,
+ * and is the geocoder the rest of the platform already trusts for addresses.
+ *
+ * Nominatim spreads the settlement across several keys depending on how OSM models the place —
+ * `city` for a metro, `town`/`village` for smaller places, `county` where a corporation is mapped
+ * as one (Kochi comes back as a county) — so the town is the first of those that is present, and
+ * the district falls back to the county for the same reason.
+ */
+export async function pincodePlace(
+  pincode: string,
+): Promise<{ state: string; district: string; city: string | null } | null> {
+  if (!/^\d{6}$/.test(pincode)) return null;
+
+  const params = new URLSearchParams({
+    format: 'jsonv2',
+    countrycodes: 'in',
+    postalcode: pincode,
+    limit: '1',
+    addressdetails: '1',
+  });
+  const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
+    getJson(`${NOMINATIM_BASE_URL}/search?${params.toString()}`),
+  );
+
+  const address = (Array.isArray(data) ? data[0] : null)?.address;
+  if (!address) return null;
+
+  const state = (address.state || '').trim();
+  const district = (address.state_district || address.county || '').trim();
+  if (!state || !district) return null;
+
+  const town = [address.city, address.town, address.village, address.suburb, address.county]
+    .map((v: unknown) => (typeof v === 'string' ? v.trim() : ''))
+    .find((v: string) => v.length > 0);
+
+  return { state, district, city: town || district };
+}

@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, View, TextInput, ScrollView, ActivityIndicator, Platform } from 'react-native';
+import { View, TextInput, ScrollView, ActivityIndicator } from 'react-native';
 import Constants from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
 import { MAX_FEEDBACK_ATTACHMENTS } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Icon, IconButton, Card, Tappable, Badge, EmptyState } from './ui/primitives';
+import { AppText, Button, ChipSelector, Icon, IconButton, Card, ModalSheet, Tappable, Badge, EmptyState } from './ui/primitives';
 import { MobileApiService } from '../services/api.service';
 
 import { FEEDBACK_STATUS_LABELS, feedbackCategoryLabel } from '@fapoms/shared';
@@ -185,30 +185,23 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
   const close = () => { setView('list'); setErr(null); onClose(); };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={close}>
-      <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
-        <View style={{
-          backgroundColor: t.colors.bg,
-          borderTopLeftRadius: t.radius.xl, borderTopRightRadius: t.radius.xl,
-          height: '88%', paddingTop: t.space.md,
-        }}>
-          <View style={{ alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: t.colors.border, marginBottom: t.space.sm }} />
-
-          {/* Header */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, paddingHorizontal: t.space.xl, paddingBottom: t.space.md }}>
-            {view !== 'list' ? (
-              <IconButton icon="chevron-back" onPress={() => { setView('list'); setErr(null); loadList(); }} accessibilityLabel={tr('common.back')} size={36} />
-            ) : (
-              <Icon name="chatbox-ellipses-outline" size={20} color={t.colors.primary} />
-            )}
-            <AppText variant="h2" style={{ flex: 1 }}>
-              {view === 'compose'
-                ? tr('feedback.newTitle')
-                : view === 'thread' ? (activeThread?.title ?? tr('feedback.title')) : tr('feedback.title')}
-            </AppText>
-            <IconButton icon="close" onPress={close} accessibilityLabel={tr('common.close')} size={36} />
-          </View>
-
+    <ModalSheet
+      visible={visible}
+      onClose={close}
+      closeLabel={tr('common.close')}
+      title={
+        view === 'compose'
+          ? tr('feedback.newTitle')
+          : view === 'thread' ? (activeThread?.title ?? tr('feedback.title')) : tr('feedback.title')
+      }
+      leading={
+        view !== 'list' ? (
+          <IconButton icon="chevron-back" onPress={() => { setView('list'); setErr(null); loadList(); }} accessibilityLabel={tr('common.back')} size={36} />
+        ) : (
+          <Icon name="chatbox-ellipses-outline" size={20} color={t.colors.primary} />
+        )
+      }
+    >
           {view === 'list' && (
             <>
               <View style={{ paddingHorizontal: t.space.xl, paddingBottom: t.space.sm }}>
@@ -238,24 +231,11 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
             <ScrollView contentContainerStyle={{ padding: t.space.xl, paddingTop: 0, gap: t.space.lg }} keyboardShouldPersistTaps="handled">
               <View style={{ gap: t.space.sm }}>
                 <AppText variant="overline" tone="faint">{tr('feedback.kindLabel')}</AppText>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-                  {categories().map((c) => {
-                    const active = category === c.key;
-                    return (
-                      <Tappable key={c.key || 'AUTO'} onPress={() => setCategory(c.key)}>
-                        <View style={{
-                          flexDirection: 'row', alignItems: 'center', gap: 6,
-                          paddingVertical: t.space.sm, paddingHorizontal: t.space.md, borderRadius: t.radius.pill,
-                          backgroundColor: active ? t.colors.primarySoft : t.colors.surface,
-                          borderWidth: 1, borderColor: active ? t.colors.primary : t.colors.border,
-                        }}>
-                          <Icon name={c.icon} size={15} color={active ? t.colors.primary : t.colors.textFaint} />
-                          <AppText variant="caption" tone={active ? 'primary' : 'muted'}>{c.label}</AppText>
-                        </View>
-                      </Tappable>
-                    );
-                  })}
-                </View>
+                <ChipSelector
+                  options={categories().map((c) => ({ key: c.key || 'AUTO', label: c.label, icon: c.icon }))}
+                  value={category || 'AUTO'}
+                  onChange={(key) => setCategory(key === 'AUTO' ? '' : key)}
+                />
               </View>
 
               <View style={{ gap: t.space.sm }}>
@@ -398,9 +378,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
               )}
             </View>
           )}
-        </View>
-      </View>
-    </Modal>
+    </ModalSheet>
   );
 };
 

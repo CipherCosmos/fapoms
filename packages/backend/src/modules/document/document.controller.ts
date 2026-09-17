@@ -379,6 +379,16 @@ export class DocumentController {
       throw err;
     }
 
+    // The client wrote this object straight into the store, so the app never had the chance to
+    // encrypt it on the way in. It is encrypted here, after it has passed the scan and before it is
+    // registered — see document-cipher.ts. A failure leaves no plaintext document on the record.
+    try {
+      await this.storage.sealObject?.(body.objectKey);
+    } catch (err) {
+      await this.storage.deleteFile(body.objectKey).catch(() => undefined);
+      throw err;
+    }
+
     const doc = await this.documentService.create(
       {
         assessmentId: body.assessmentId,

@@ -1,0 +1,3 @@
+root * /srv/fapoms-downloads
+rewrite * /app.apk
+file_server

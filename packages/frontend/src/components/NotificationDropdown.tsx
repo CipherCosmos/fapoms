@@ -475,7 +475,7 @@ export const NotificationDropdown: React.FC = () => {
                     padding: '2px 4px',
                   }}
                 >
-                  <CheckCheck size={13} /> Mark all read
+                  <CheckCheck size={13} /> Mark all as read
                 </button>
               )}
             </div>

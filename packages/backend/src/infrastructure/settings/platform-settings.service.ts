@@ -298,7 +298,17 @@ export class PlatformSettingsService implements OnModuleInit {
 
   private resolve(def: SettingDef, savedValue: any): { value: any; source: ResolvedSetting['source'] } {
     if (savedValue !== undefined && savedValue !== null && savedValue !== '') {
-      return { value: savedValue, source: 'saved' };
+      const val =
+        def.type === 'json' && typeof savedValue === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(savedValue);
+              } catch {
+                return savedValue;
+              }
+            })()
+          : savedValue;
+      return { value: val, source: 'saved' };
     }
     if (def.envVar) {
       const env = process.env[def.envVar];
@@ -314,6 +324,16 @@ export class PlatformSettingsService implements OnModuleInit {
     if (raw === null || raw === undefined || raw === '') return null;
 
     switch (def.type) {
+      case 'json': {
+        if (typeof raw === 'string') {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            throw new BadRequestException(`${def.label} must be valid JSON.`);
+          }
+        }
+        return raw;
+      }
       case 'number': {
         const n = Number(raw);
         if (!Number.isFinite(n)) throw new BadRequestException(`${def.label} must be a number.`);

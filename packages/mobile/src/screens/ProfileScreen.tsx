@@ -5,7 +5,7 @@ import { ProfilePhoto } from '../components/ProfilePhoto';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
   AppText, Avatar, Badge, Button, Card, GroupedRow, GroupedSection, GroupedSwitch,
-  Icon, IconName, StatTile, Tappable,
+  Icon, IconName, Input, StatTile, Tag, Tappable,
 } from '../components/ui/primitives';
 import { SubScreen, useStackNav } from '../components/ui/SimpleStack';
 import { ChangePasswordScreen } from './ChangePasswordScreen';
@@ -299,90 +299,13 @@ const EditToggle: React.FC<{ editing: boolean; onToggle: () => void }> = ({ edit
   );
 };
 
-const FieldInput: React.FC<{
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  // 'email-address' included so the email field gets the @ key rather than a general keyboard —
-  // a field typed once and mistyped once is a notification address nobody notices is wrong.
-  keyboardType?: 'default' | 'numeric' | 'phone-pad' | 'email-address';
-  autoCapitalize?: 'none' | 'characters' | 'words';
-  /**
-   * Maintained by HR and refused by the server on a self-edit. Rendered read-only with the
-   * reason instead of as an input: an editable box that always fails is worse than no box,
-   * because the worker types, saves, and only then learns it was never theirs to change.
-   */
-  lockedReason?: TranslationKey;
-  /**
-   * Not permanently locked — just not currently in this section's edit mode (see each editable
-   * SubScreen's "Edit" toggle below). Same flat display treatment as `lockedReason`, minus the
-   * lock icon and reason line, since it's reachable by the assayer themselves, just not by
-   * accident. Without this, every field on the screen was a live TextInput at all times: a stray
-   * character brushed in while scrolling, or a field wiped by a mis-aimed tap, sat there
-   * indistinguishable from a deliberate edit until the (previously always-visible) Save button
-   * sent it to the server.
-   */
-  readOnly?: boolean;
-}> = ({ label, value, onChange, placeholder, keyboardType = 'default', autoCapitalize = 'none', lockedReason, readOnly }) => {
-  const t = useTheme();
-  const tr = useT();
-  const [focus, setFocus] = useState(false);
-
-  if (lockedReason || readOnly) {
-    return (
-      <View style={{ gap: t.space.sm }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-          <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
-          {lockedReason && <Icon name="lock-closed" size={11} color={t.colors.textFaint} />}
-        </View>
-        <View style={{
-          backgroundColor: t.colors.surface,
-          borderRadius: t.radius.md,
-          borderWidth: 1.5,
-          borderColor: t.colors.border,
-          paddingHorizontal: t.space.lg,
-          paddingVertical: t.space.md,
-        }}>
-          <AppText variant="small" tone={value ? 'default' : 'faint'}>
-            {value ? String(value) : tr('common.notOnFile')}
-          </AppText>
-        </View>
-        {lockedReason && <AppText variant="caption" tone="faint">{tr(lockedReason)}</AppText>}
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ gap: t.space.sm }}>
-      <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
-      {/* Focus feedback is a border-colour change ONLY. Toggling elevation/shadow on focus of
-          an input (or any ancestor) makes Fabric drop IME focus — see LoginScreen.tsx. */}
-      <TextInput
-        value={String(value ?? '')}
-        onChangeText={onChange}
-        onFocus={() => setFocus(true)}
-        onBlur={() => setFocus(false)}
-        placeholder={placeholder}
-        placeholderTextColor={t.colors.textFaint}
-        keyboardType={keyboardType}
-        autoCapitalize={autoCapitalize}
-        style={{
-          backgroundColor: t.colors.bg,
-          borderRadius: t.radius.md,
-          borderWidth: 1.5,
-          borderColor: focus ? t.colors.primary : t.colors.border,
-          paddingHorizontal: t.space.lg,
-          height: 50,
-          color: t.colors.text,
-          fontSize: 15,
-          fontWeight: '600',
-          paddingVertical: 0,
-        } as TextStyle}
-      />
-    </View>
-  );
-};
+/**
+ * `lockedReason`/`readOnly` field values below (PAN, bank account, HR-maintained fields) render
+ * flat via `Input`'s own `lockedReason`/`readOnly` props rather than a live `TextInput` — an
+ * editable box that always fails on save is worse than no box, and (for `readOnly`) the previous
+ * always-live `TextInput` let a stray character brushed in while scrolling sit indistinguishable
+ * from a deliberate edit until the Save button sent it to the server.
+ */
 
 /* ── Address ─────────────────────────────────────────────────────────────────────────────── */
 
@@ -403,7 +326,7 @@ const StatePicker: React.FC<{ value: string; onChange: (v: string) => void; read
   const [open, setOpen] = useState(false);
 
   if (readOnly) {
-    return <FieldInput label={tr('profile.fields.state')} value={value} onChange={() => {}} readOnly />;
+    return <Input label={tr('profile.fields.state')} value={value} onChangeText={() => {}} readOnly />;
   }
 
   return (
@@ -492,7 +415,7 @@ const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void
   );
 
   if (readOnly) {
-    return <FieldInput label={tr('profile.fields.preferredRegions')} value={summary} onChange={() => {}} readOnly />;
+    return <Input label={tr('profile.fields.preferredRegions')} value={summary} onChangeText={() => {}} readOnly />;
   }
 
   const toggle = (region: Region) => onChange(composePreferredRegions(toggleRegionSelection(parsed, region)));
@@ -522,19 +445,12 @@ const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void
       {parsed.legacy.length > 0 && (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
           {parsed.legacy.map((token) => (
-            <View
+            <Tag
               key={token}
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 4,
-                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
-                backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
-              }}
-            >
-              <AppText variant="caption" tone="muted">{token} {tr('profile.address.asRecordedSuffix')}</AppText>
-              <Tappable onPress={() => removeLegacy(token)} accessibilityRole="button" accessibilityLabel={tr('common.remove')}>
-                <Icon name="close-circle" size={14} color={t.colors.textFaint} />
-              </Tappable>
-            </View>
+              label={`${token} ${tr('profile.address.asRecordedSuffix')}`}
+              onRemove={() => removeLegacy(token)}
+              removeAccessibilityLabel={tr('common.remove')}
+            />
           ))}
         </View>
       )}
@@ -614,7 +530,7 @@ const AttributeChipPicker: React.FC<{
   );
 
   if (readOnly) {
-    return <FieldInput label={label} value={composeAttributeList(items)} onChange={() => {}} readOnly />;
+    return <Input label={label} value={composeAttributeList(items)} onChangeText={() => {}} readOnly />;
   }
 
   const trimmedQuery = query.trim();
@@ -630,19 +546,7 @@ const AttributeChipPicker: React.FC<{
       {items.length > 0 && (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
           {items.map((item) => (
-            <View
-              key={item}
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 4,
-                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
-                backgroundColor: t.colors.primarySoft, borderWidth: 1, borderColor: t.colors.primary,
-              }}
-            >
-              <AppText variant="caption" tone="primary">{item}</AppText>
-              <Tappable onPress={() => remove(item)} accessibilityRole="button" accessibilityLabel={tr('common.remove')}>
-                <Icon name="close-circle" size={14} color={t.colors.primary} />
-              </Tappable>
-            </View>
+            <Tag key={item} label={item} tone="primary" onRemove={() => remove(item)} removeAccessibilityLabel={tr('common.remove')} />
           ))}
         </View>
       )}
@@ -712,7 +616,7 @@ const EmergencyRelationPicker: React.FC<{ value: string; onChange: (v: string) =
   const selection = useMemo(() => resolveEmergencyRelation(value), [value]);
 
   if (readOnly) {
-    return <FieldInput label={tr('profile.fields.relation')} value={value} onChange={() => {}} readOnly />;
+    return <Input label={tr('profile.fields.relation')} value={value} onChangeText={() => {}} readOnly />;
   }
 
   const choose = (choice: string) => {
@@ -1041,23 +945,23 @@ const AddressEditor: React.FC<{
       </Card>
 
       <Card level={1} style={{ gap: t.space.lg }}>
-        <FieldInput
+        <Input
           label={tr('profile.fields.address')}
           value={profile.address}
-          onChange={(v) => onUpdateProfileField('address', v)}
+          onChangeText={(v) => onUpdateProfileField('address', v)}
           placeholder={tr('profile.fields.addressPlaceholder')}
           autoCapitalize="words"
           readOnly={!editing}
         />
         <View style={{ flexDirection: 'row', gap: t.space.md }}>
           <View style={{ flex: 1 }}>
-            <FieldInput label={tr('profile.fields.city')} value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" readOnly={!editing} />
+            <Input label={tr('profile.fields.city')} value={profile.city} onChangeText={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" readOnly={!editing} />
           </View>
           <View style={{ flex: 1 }}>
-            <FieldInput
+            <Input
               label={tr('profile.fields.pincode')}
               value={profile.pincode}
-              onChange={(v) => { void onPincodeChange(v); }}
+              onChangeText={(v) => { void onPincodeChange(v); }}
               keyboardType="numeric"
               placeholder={tr('profile.fields.pincodePlaceholder')}
               readOnly={!editing}
@@ -1066,7 +970,7 @@ const AddressEditor: React.FC<{
         </View>
         <View style={{ flexDirection: 'row', gap: t.space.md }}>
           <View style={{ flex: 1 }}>
-            <FieldInput label={tr('profile.fields.district')} value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" readOnly={!editing} />
+            <Input label={tr('profile.fields.district')} value={profile.district} onChangeText={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" readOnly={!editing} />
           </View>
           <View style={{ flex: 1 }}>
             <StatePicker value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} readOnly={!editing} />
@@ -1113,6 +1017,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const t = useTheme();
   const tr = useT();
   const language = useLanguage();
+
+  /** `Input`'s `lockedReason` wants an already-translated sentence; `lockReasonFor` (shared with
+   *  the editable-fields policy) hands back the translation KEY, or nothing for an editable field. */
+  const lockedReasonText = (key: string): string | undefined => {
+    const reasonKey = lockReasonFor(key);
+    return reasonKey ? tr(reasonKey) : undefined;
+  };
 
   // Every settings group used to expand in place (CollapsibleSection). Zerodha/Apple-style
   // professional apps instead push each group to its own screen — a row on the list, a full
@@ -1491,6 +1402,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           onPress={onSaveProfile}
           loading={savingProfile}
           size="lg"
+          glow
           full
         />
       )}
@@ -1629,9 +1541,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label={tr('profile.fields.phone')} value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" readOnly={!editing} />
-            <FieldInput label={tr('profile.fields.alternatePhone')} value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" readOnly={!editing} />
-            <FieldInput label={tr('profile.fields.email')} value={profile.email} onChange={(v) => onUpdateProfileField('email', v)} keyboardType="email-address" autoCapitalize="none" placeholder={tr('profile.fields.emailPlaceholder')} readOnly={!editing} />
+            <Input label={tr('profile.fields.phone')} value={profile.phone} onChangeText={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" readOnly={!editing} />
+            <Input label={tr('profile.fields.alternatePhone')} value={profile.alternatePhone} onChangeText={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" readOnly={!editing} />
+            <Input label={tr('profile.fields.email')} value={profile.email} onChangeText={(v) => onUpdateProfileField('email', v)} keyboardType="email-address" autoCapitalize="none" placeholder={tr('profile.fields.emailPlaceholder')} readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
@@ -1649,10 +1561,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label={tr('profile.fields.name')} value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" readOnly={!editing} />
+            <Input label={tr('profile.fields.name')} value={profile.emergencyName} onChangeText={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" readOnly={!editing} />
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               <View style={{ flex: 1 }}>
-                <FieldInput label={tr('profile.fields.phone')} value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" readOnly={!editing} />
+                <Input label={tr('profile.fields.phone')} value={profile.emergencyPhone} onChangeText={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" readOnly={!editing} />
               </View>
               <View style={{ flex: 1 }}>
                 <EmergencyRelationPicker value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} readOnly={!editing} />
@@ -1670,7 +1582,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <Card level={1} style={{ gap: t.space.lg }}>
             <AttributeChipPicker label={tr('profile.fields.skills')} value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} vocabulary={vocabulary?.skills ?? []} placeholder={tr('profile.fields.skillsPlaceholder')} readOnly={!editing} />
             <AttributeChipPicker label={tr('profile.fields.languages')} value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} vocabulary={vocabulary?.languages ?? []} placeholder={tr('profile.fields.languagesPlaceholder')} readOnly={!editing} />
-            <FieldInput label={tr('profile.fields.experienceYears')} value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
+            <Input label={tr('profile.fields.experienceYears')} value={String(profile.experienceYears ?? '')} onChangeText={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
@@ -1683,10 +1595,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <Card level={1} style={{ gap: t.space.lg }}>
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               <View style={{ flex: 1 }}>
-                <FieldInput label={tr('profile.fields.maxPerDay')} value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxDailyWorkload')} />
+                <Input label={tr('profile.fields.maxPerDay')} value={String(profile.maxDailyWorkload ?? '')} onChangeText={() => {}} lockedReason={lockedReasonText('maxDailyWorkload')} />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput label={tr('profile.fields.maxPerWeek')} value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxWeeklyWorkload')} />
+                <Input label={tr('profile.fields.maxPerWeek')} value={String(profile.maxWeeklyWorkload ?? '')} onChangeText={() => {}} lockedReason={lockedReasonText('maxWeeklyWorkload')} />
               </View>
             </View>
             {/*
@@ -1711,9 +1623,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <AppText variant="caption" tone="faint">{tr('profile.lockReasons.paymentHeader')}</AppText>
             {/* "PAN" and "IFSC" are not translated in any locale: they are the names printed on the
                 card and the passbook the assayer is copying from. See the note in locales/hi.ts. */}
-            <FieldInput label="PAN" value={profile.panNumber} onChange={() => {}} lockedReason={lockReasonFor('panNumber')} />
-            <FieldInput label={tr('profile.fields.bankAccount')} value={profile.bankAccountNumber} onChange={() => {}} lockedReason={lockReasonFor('bankAccountNumber')} />
-            <FieldInput label={tr('profile.fields.ifsc')} value={profile.ifscCode} onChange={() => {}} lockedReason={lockReasonFor('ifscCode')} />
+            <Input label="PAN" value={profile.panNumber} onChangeText={() => {}} lockedReason={lockedReasonText('panNumber')} />
+            <Input label={tr('profile.fields.bankAccount')} value={profile.bankAccountNumber} onChangeText={() => {}} lockedReason={lockedReasonText('bankAccountNumber')} />
+            <Input label={tr('profile.fields.ifsc')} value={profile.ifscCode} onChangeText={() => {}} lockedReason={lockedReasonText('ifscCode')} />
           </Card>
         </View>
       </SubScreen>

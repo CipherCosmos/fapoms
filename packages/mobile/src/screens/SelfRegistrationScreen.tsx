@@ -1,16 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, TextStyle, Modal,
+  View, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Modal,
 } from 'react-native';
 import { EmploymentCategory, ONBOARDING_DOCUMENT_LABELS, INDIAN_STATES, type OnboardingDocument } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import {
-  AmbientGlow, AppText, Badge, Button, Card, Icon, IconButton, Tappable,
+  AmbientGlow, AppText, Badge, Button, Card, ChipSelector, Icon, IconButton, Input, Tappable,
 } from '../components/ui/primitives';
 import { OrbitMark } from '../components/ui/BrandMark';
 import { useFeedback } from '../components/ui/Feedback';
 import { useT, serverErrorText } from '../i18n';
 import { DocumentScanner, type ScannedDocument } from '../components/DocumentScanner';
+import { hintKeyFor } from '../services/registration-checklist';
 import {
   SelfRegistrationApi,
   extractRegistrationToken,
@@ -53,110 +54,6 @@ const RESEND_COOLDOWN_SECONDS = 60;
 
 const documentLabel = (requirement: string): string =>
   ONBOARDING_DOCUMENT_LABELS[requirement as OnboardingDocument] ?? requirement;
-
-// ────────────────────────────────────────────────────────── small building blocks
-
-/** A bordered text field in the same style `LoginScreen`'s inputs use — this screen is reached
- *  from the logged-out state, so it borrows that screen's look rather than the authenticated
- *  `ProfileScreen`'s flat locked-field treatment. */
-const LabeledInput: React.FC<{
-  label: string;
-  value: string;
-  onChangeText: (v: string) => void;
-  onBlur?: () => void;
-  placeholder?: string;
-  keyboardType?: 'default' | 'numeric' | 'phone-pad' | 'email-address';
-  autoCapitalize?: 'none' | 'characters' | 'words' | 'sentences';
-  multiline?: boolean;
-  hint?: string;
-  maxLength?: number;
-}> = ({
-  label, value, onChangeText, onBlur, placeholder, keyboardType = 'default',
-  autoCapitalize = 'sentences', multiline, hint, maxLength,
-}) => {
-  const t = useTheme();
-  const [focused, setFocused] = useState(false);
-  return (
-    <View style={{ gap: t.space.sm }}>
-      <AppText variant="overline" tone="faint">{label}</AppText>
-      {/* Focus is a border-colour change only — see LoginScreen.tsx for why toggling
-          elevation/shadow on focus drops IME focus under Fabric on Android. */}
-      <View
-        style={{
-          backgroundColor: t.colors.surfaceAlt,
-          borderRadius: t.radius.lg,
-          borderWidth: 1.5,
-          borderColor: focused ? t.colors.primary : t.colors.border,
-          paddingHorizontal: t.space.lg,
-          paddingVertical: multiline ? t.space.md : 0,
-          minHeight: multiline ? 90 : 50,
-          justifyContent: multiline ? 'flex-start' : 'center',
-        }}
-      >
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          onFocus={() => setFocused(true)}
-          onBlur={() => { setFocused(false); onBlur?.(); }}
-          placeholder={placeholder}
-          placeholderTextColor={t.colors.textFaint}
-          keyboardType={keyboardType}
-          autoCapitalize={autoCapitalize}
-          multiline={multiline}
-          maxLength={maxLength}
-          style={{
-            color: t.colors.text,
-            fontSize: 15,
-            fontWeight: '600',
-            paddingVertical: 0,
-            textAlignVertical: multiline ? 'top' : 'center',
-          } as TextStyle}
-        />
-      </View>
-      {hint ? <AppText variant="caption" tone="faint">{hint}</AppText> : null}
-    </View>
-  );
-};
-
-/**
- * A row of mutually-exclusive chips.
- *
- * Not `Segmented`: that control always shows SOME option as chosen (it clamps a missing value
- * to index 0), which is wrong here — gender is optional, and employment category has to render
- * as genuinely unset until the candidate actually picks one, or the submit gate below would be
- * lying about what is chosen.
- */
-const ChoiceChips: React.FC<{
-  options: { key: string; label: string }[];
-  value: string | null;
-  onChange: (key: string) => void;
-}> = ({ options, value, onChange }) => {
-  const t = useTheme();
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-      {options.map((o) => {
-        const active = o.key === value;
-        return (
-          <Tappable
-            key={o.key}
-            onPress={() => onChange(o.key)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={o.label}
-          >
-            <View style={{
-              paddingVertical: t.space.sm, paddingHorizontal: t.space.lg, borderRadius: t.radius.pill,
-              backgroundColor: active ? t.colors.primarySoft : t.colors.surfaceAlt,
-              borderWidth: 1.5, borderColor: active ? t.colors.primary : t.colors.border,
-            }}>
-              <AppText variant="small" tone={active ? 'primary' : 'muted'}>{o.label}</AppText>
-            </View>
-          </Tappable>
-        );
-      })}
-    </View>
-  );
-};
 
 /**
  * State, chosen from the canonical list rather than typed.
@@ -589,7 +486,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
             </View>
 
             <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl, borderRadius: t.radius['2xl'] }}>
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.tokenEntry.inputLabel')}
                 value={tokenInput}
                 onChangeText={setTokenInput}
@@ -713,7 +610,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
           ) : (
             <>
               <AppText variant="small" tone="muted">{tr('selfRegistration.otp.body')}</AppText>
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.otp.phoneLabel')}
                 value={phone}
                 onChangeText={setPhone}
@@ -735,7 +632,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                   <AppText variant="caption" tone="faint">
                     {tr('selfRegistration.otp.sentBody', { phone: phone.trim() })}
                   </AppText>
-                  <LabeledInput
+                  <Input
                     label={tr('selfRegistration.otp.codeLabel')}
                     value={otpCode}
                     onChangeText={setOtpCode}
@@ -781,7 +678,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
               </View>
               <AppText variant="caption" tone="faint">{tr('selfRegistration.form.savingHint')}</AppText>
 
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.fullName')}
                 value={draft.fullName ?? ''}
                 onChangeText={(v) => updateDraftField('fullName', v)}
@@ -789,7 +686,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 placeholder={tr('selfRegistration.form.fullNamePlaceholder')}
                 autoCapitalize="words"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.email')}
                 value={draft.email ?? ''}
                 onChangeText={(v) => updateDraftField('email', v)}
@@ -798,7 +695,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 keyboardType="email-address"
                 autoCapitalize="none"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.dateOfBirth')}
                 value={draft.dateOfBirth ?? ''}
                 onChangeText={(v) => updateDraftField('dateOfBirth', v)}
@@ -811,7 +708,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
               <View style={{ gap: t.space.sm }}>
                 <AppText variant="overline" tone="faint">{tr('selfRegistration.form.gender')}</AppText>
-                <ChoiceChips
+                <ChipSelector
                   options={[
                     { key: 'MALE', label: tr('selfRegistration.form.genderMale') },
                     { key: 'FEMALE', label: tr('selfRegistration.form.genderFemale') },
@@ -822,7 +719,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 />
               </View>
 
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.address')}
                 value={draft.address ?? ''}
                 onChangeText={(v) => updateDraftField('address', v)}
@@ -834,7 +731,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
               <StateField value={draft.state ?? ''} onChange={handleStateChange} />
 
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.city')}
                 value={draft.city ?? ''}
                 onChangeText={(v) => updateDraftField('city', v)}
@@ -842,7 +739,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 placeholder={tr('selfRegistration.form.cityPlaceholder')}
                 autoCapitalize="words"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.pincode')}
                 value={draft.pincode ?? ''}
                 onChangeText={(v) => updateDraftField('pincode', v)}
@@ -851,7 +748,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 keyboardType="numeric"
                 autoCapitalize="none"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.experienceYears')}
                 value={draft.experienceYears != null ? String(draft.experienceYears) : ''}
                 onChangeText={(v) => {
@@ -863,7 +760,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 keyboardType="numeric"
                 autoCapitalize="none"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.currentEmployer')}
                 value={draft.currentEmployer ?? ''}
                 onChangeText={(v) => updateDraftField('currentEmployer', v)}
@@ -871,7 +768,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 placeholder={tr('selfRegistration.form.currentEmployerPlaceholder')}
                 autoCapitalize="words"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.expertise')}
                 value={draft.expertise ?? ''}
                 onChangeText={(v) => updateDraftField('expertise', v)}
@@ -879,7 +776,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 placeholder={tr('selfRegistration.form.expertisePlaceholder')}
                 autoCapitalize="sentences"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.availability')}
                 value={draft.availability ?? ''}
                 onChangeText={(v) => updateDraftField('availability', v)}
@@ -903,7 +800,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 <AppText variant="overline" tone="faint">{tr('selfRegistration.form.identityTitle')}</AppText>
                 <AppText variant="caption" tone="faint">{tr('selfRegistration.form.identityHint')}</AppText>
               </View>
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.pan')}
                 value={recordDraft.panNumber ?? ''}
                 onChangeText={(v) => updateRecordField('panNumber', v.toUpperCase())}
@@ -911,7 +808,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 placeholder={tr('selfRegistration.form.panPlaceholder')}
                 autoCapitalize="characters"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.aadhaar')}
                 value={recordDraft.aadhaarNumber ?? ''}
                 onChangeText={(v) => updateRecordField('aadhaarNumber', v)}
@@ -920,7 +817,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 keyboardType="numeric"
                 autoCapitalize="none"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.bankAccountNumber')}
                 value={recordDraft.bankAccountNumber ?? ''}
                 onChangeText={(v) => updateRecordField('bankAccountNumber', v)}
@@ -928,7 +825,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 keyboardType="numeric"
                 autoCapitalize="none"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.ifsc')}
                 value={recordDraft.ifscCode ?? ''}
                 onChangeText={(v) => updateRecordField('ifscCode', v.toUpperCase())}
@@ -936,7 +833,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 placeholder={tr('selfRegistration.form.ifscPlaceholder')}
                 autoCapitalize="characters"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.alternatePhone')}
                 value={recordDraft.alternatePhone ?? ''}
                 onChangeText={(v) => updateRecordField('alternatePhone', v)}
@@ -944,21 +841,21 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 keyboardType="phone-pad"
                 autoCapitalize="none"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.district')}
                 value={recordDraft.district ?? ''}
                 onChangeText={(v) => updateRecordField('district', v)}
                 onBlur={commitRecordField('district')}
                 autoCapitalize="words"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.bankName')}
                 value={recordDraft.bankName ?? ''}
                 onChangeText={(v) => updateRecordField('bankName', v)}
                 onBlur={commitRecordField('bankName')}
                 autoCapitalize="words"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.qualification')}
                 value={recordDraft.qualification ?? ''}
                 onChangeText={(v) => updateRecordField('qualification', v)}
@@ -971,14 +868,14 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 <AppText variant="overline" tone="faint">{tr('selfRegistration.form.emergencyTitle')}</AppText>
                 <AppText variant="caption" tone="faint">{tr('selfRegistration.form.emergencyHint')}</AppText>
               </View>
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.emergencyName')}
                 value={recordDraft.emergencyContactName ?? ''}
                 onChangeText={(v) => updateRecordField('emergencyContactName', v)}
                 onBlur={commitRecordField('emergencyContactName')}
                 autoCapitalize="words"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.emergencyPhone')}
                 value={recordDraft.emergencyContactPhone ?? ''}
                 onChangeText={(v) => updateRecordField('emergencyContactPhone', v)}
@@ -986,7 +883,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 keyboardType="phone-pad"
                 autoCapitalize="none"
               />
-              <LabeledInput
+              <Input
                 label={tr('selfRegistration.form.emergencyRelation')}
                 value={recordDraft.emergencyContactRelation ?? ''}
                 onChangeText={(v) => updateRecordField('emergencyContactRelation', v)}
@@ -997,7 +894,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
               <View style={{ gap: t.space.sm }}>
                 <AppText variant="overline" tone="faint">{tr('selfRegistration.form.employmentCategory')}</AppText>
-                <ChoiceChips
+                <ChipSelector
                   options={[
                     { key: EmploymentCategory.FREELANCER, label: tr('selfRegistration.form.freelancer') },
                     { key: EmploymentCategory.PROPRIETOR, label: tr('selfRegistration.form.proprietor') },
@@ -1033,6 +930,17 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                           <AppText variant="bodyStrong" style={{ flex: 1 }}>{documentLabel(requirement)}</AppText>
                           {uploaded && <Badge label={tr('selfRegistration.documents.uploaded')} tone="success" />}
                         </View>
+                        {/*
+                          What to do with this particular paper, read BEFORE the button is pressed —
+                          the scanner hands straight to Google's viewfinder with no screen of ours in
+                          between, so a sentence inside it would never be seen on Android. Same
+                          wording as the browser's outline hint, from the one shared profile.
+                        */}
+                        {!uploaded && hintKeyFor(requirement) && (
+                          <AppText variant="small" tone="muted">
+                            {tr(hintKeyFor(requirement)!)}
+                          </AppText>
+                        )}
                         <Button
                           label={
                             busy ? tr('selfRegistration.documents.uploading')
@@ -1101,6 +1009,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
         <DocumentScanner
           visible
           purpose={documentLabel(capturingRequirement)}
+          requirement={capturingRequirement}
           onClose={() => setCapturingRequirement(null)}
           onSaved={(doc) => { void handleDocumentSaved(capturingRequirement, doc); }}
         />

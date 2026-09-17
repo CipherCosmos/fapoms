@@ -962,22 +962,31 @@ export const RegistrationWizard: React.FC<{
         <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Opening their record…</div>
       ) : step === 'person' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/*
+            THESE KEYS HAD DRIFTED FROM THE STEP'S OWN DECLARATION. `STEP_FIELDS.person` says this
+            step collects gender and "Freelancer or proprietor"; the Blocks below asked for neither,
+            and asked instead for four keys — code, engagement, employment type, joining date — that
+            are not in the field map, which `Block` drops without a word. So the desk could never set
+            whether somebody is a freelancer or a proprietor: the one answer that decides which
+            documents they are asked for, and that the application refuses to submit without.
+            `registration-step-fields.spec` now fails for any key a step declares and does not draw.
+          */}
           <Block
             title="Who they are"
             note="Their full name — exactly as printed on their Aadhaar or PAN — is the one thing here we cannot do without."
-            keys={['fullName', 'assayerCode', 'dateOfBirth', 'qualification']}
+            keys={['fullName', 'dateOfBirth', 'gender', 'qualification']}
             render={renderOne}
           />
           <Block
             title="How to reach them"
-            note="All optional. Somebody with no mobile phone and no email address is registered exactly the same way — offers reach them as a call task for the desk instead."
+            note="The mobile they were invited on is filled in already — change it only if it is wrong. All optional: somebody with no mobile phone and no email address is registered exactly the same way — offers reach them as a call task for the desk instead."
             keys={['phone', 'alternatePhone', 'email']}
             render={renderOne}
           />
           <Block
             title="Where and how they work"
-            note="The state is what makes somebody plannable at all. The rest can be changed at any time."
-            keys={['state', 'engagementType', 'employmentType', 'joiningDate']}
+            note="The state is what makes somebody plannable. Freelancer or proprietor decides which documents they are asked for."
+            keys={['state', 'employmentCategory']}
             render={renderOne}
           />
         </div>
@@ -1046,7 +1055,7 @@ export const RegistrationWizard: React.FC<{
           <Block
             title="Their identity numbers"
             note="Typed from the cards themselves. A number that does not look right is flagged as you type, and the server checks it again when this page is saved. Anything already on file is kept in full and encrypted, and shows here as its last few digits only."
-            keys={['panNumber', 'aadhaarNumber', 'vstsCode']}
+            keys={['panNumber', 'aadhaarNumber']}
             render={renderIdentity}
           />
           <Block

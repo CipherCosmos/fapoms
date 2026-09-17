@@ -260,7 +260,7 @@ export const RecommendationPanel: React.FC<{
                     <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
                       title="Override the independence rule: hide people closer than this to the branch">
                       <input type="checkbox" checked={slaEnabled} onChange={(e) => onToggleSla(e.target.checked)} />
-                      Minimum distance rule
+                      Hide nearby people
                     </label>
                     {slaEnabled && (
                       <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>

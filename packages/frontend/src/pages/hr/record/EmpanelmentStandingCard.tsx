@@ -1,7 +1,13 @@
 import React from 'react';
 import { Building2, CheckCircle2, Clock, Ban } from 'lucide-react';
-import { EmpanelmentStatus, standingAllowsPlanning } from '@fapoms/shared';
-import { STANDING_STANCE_TONE, standingStance } from '../AssayerVettingTab';
+import { standingAllowsPlanning } from '@fapoms/shared';
+import {
+  HARD_BLOCKED_STANDINGS,
+  STANDING_LABELS,
+  STANDING_STANCE_TONE,
+  humanizeEnum,
+  standingStance,
+} from '../AssayerVettingTab';
 import type { ClientEmpanelment } from './record-types';
 
 export interface EmpanelmentStandingCardProps {
@@ -12,16 +18,18 @@ export interface EmpanelmentStandingCardProps {
   onEditStanding?: (empanelment: ClientEmpanelment) => void;
 }
 
-// Invariant: Hard-blocked standings that can NEVER be overridden by any user/supervisor
-export const HARD_BLOCKED_STANDINGS = new Set<string>([
-  EmpanelmentStatus.REJECTED,
-  EmpanelmentStatus.TERMINATED,
-  'EXPIRED',
-  'SUSPENDED',
-]);
-
+/**
+ * Invariant: hard-blocked standings can NEVER be overridden by any user or supervisor.
+ *
+ * The set itself lives once, in AssayerVettingTab.tsx, beside the dialog that enforces it there.
+ * This card used to keep its own copy of the same four values, which is two lists waiting to
+ * disagree the day a fifth is added.
+ */
 export const isHardBlockedStanding = (status: string | null | undefined): boolean =>
   HARD_BLOCKED_STANDINGS.has(status ?? '');
+
+/** "Documents pending", never `DOCUMENTS_PENDING` — the words every other screen already uses. */
+const standingLabel = (status: string): string => STANDING_LABELS[status] ?? humanizeEnum(status);
 
 export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = ({
   empanelments,
@@ -50,10 +58,10 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
           <Building2 size={16} style={{ color: 'var(--accent)' }} />
           <div>
             <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Client Bank Empanelments
+              Client banks
             </span>
             <span style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
-              Client-specific dispatch authorization
+              Each bank’s decision about this person
             </span>
           </div>
         </div>
@@ -78,10 +86,20 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
 
       {empanelments.length === 0 ? (
         <div style={{ padding: '12px', background: 'var(--bg-surface-2)', borderRadius: '6px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          No client empanelments recorded on file. Add client standings under Vetting to enable partner-specific dispatch.
+          No banks recorded yet. Add each bank’s decision under Background so work from that bank can be offered.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            maxHeight: '190px',
+            overflowY: 'auto',
+            paddingRight: '4px',
+            scrollbarWidth: 'thin',
+          }}
+        >
           {empanelments.map((e) => {
             const isPlannable = standingAllowsPlanning(e.status);
             const isHardBlocked = isHardBlockedStanding(e.status);
@@ -133,7 +151,7 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
                     {isPlannable && <CheckCircle2 size={11} />}
                     {isHardBlocked && <Ban size={11} />}
                     {!isPlannable && !isHardBlocked && <Clock size={11} />}
-                    {e.status}
+                    {standingLabel(e.status)}
                   </span>
 
                   {/* Actions: HARD-BLOCKED STANDINGS CANNOT BE OVERRIDDEN */}
@@ -141,10 +159,9 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
                     isHardBlocked ? (
                       <span
                         data-testid={`hard-block-indicator-${rowKey}`}
-                        title="This standing is permanently hard-blocked by policy and cannot be overridden by operators or supervisors."
                         style={{ fontSize: 'var(--text-2xs)', color: 'var(--danger)', fontWeight: 600 }}
                       >
-                        Non-overridable
+                        Final
                       </span>
                     ) : (
                       <button
@@ -177,7 +194,9 @@ export const EmpanelmentStandingCard: React.FC<EmpanelmentStandingCardProps> = (
           data-testid="hard-block-explanation"
           style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.4, borderTop: '1px dashed var(--border-hair)', paddingTop: '6px' }}
         >
-          <strong>Policy Notice:</strong> Standing is final and hard-blocked by policy. Restricted client standings (rejected, terminated, expired, suspended) are strictly non-overridable. No operator or supervisor bypass is permitted.
+          {hardBlocked.length === 1
+            ? `${hardBlocked[0].client?.name || 'This bank'}’s decision is final. Nobody here can change it.`
+            : 'These banks’ decisions are final. Nobody here can change them.'}
         </div>
       )}
     </div>

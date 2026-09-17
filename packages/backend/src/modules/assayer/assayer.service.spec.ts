@@ -761,7 +761,15 @@ describe('AssayerService', () => {
     });
 
     it('should sync operational status on transition', async () => {
-      const testAssayer = { ...assayer, lifecycleStatus: AssayerLifecycleStatus.TRAINING };
+      const testAssayer = {
+        ...assayer,
+        lifecycleStatus: AssayerLifecycleStatus.TRAINING,
+        panNumber: 'ABCDE1234F',
+        bankAccountNumber: '123456789012',
+        ifscCode: 'HDFC0001234',
+        latitude: 19.076,
+        longitude: 72.877,
+      };
       mockAssayerRepo.findOne.mockResolvedValue(testAssayer);
       mockAssayerRepo.save.mockImplementation((e) => Promise.resolve(e));
 
@@ -1418,7 +1426,10 @@ describe('AssayerService', () => {
     const working = (over: Record<string, unknown> = {}) => ({
       id: 'as-1', assayerCode: 'AS0431', displayName: 'Meera Nair', isActive: true,
       lifecycleStatus: AssayerLifecycleStatus.ACTIVE, status: 'ACTIVE',
-      joiningDate: '2021-06-01', exitDate: null, terminationDate: null, ...over,
+      joiningDate: '2021-06-01', exitDate: null, terminationDate: null,
+      panNumber: 'ABCDE1234F', bankAccountNumber: '123456789012', ifscCode: 'HDFC0001234',
+      latitude: 19.076, longitude: 72.877,
+      ...over,
     });
 
     beforeEach(() => {

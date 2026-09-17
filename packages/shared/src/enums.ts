@@ -529,7 +529,9 @@ export enum AssayerInvoiceStatus {
   INVITED = 'INVITED',
   SUBMITTED = 'SUBMITTED',
   APPROVED = 'APPROVED',
+  PAID = 'PAID',
   CANCELLED = 'CANCELLED',
+  SUPERSEDED = 'SUPERSEDED',
 }
 
 /** What kind of record a billing history row refers to. */

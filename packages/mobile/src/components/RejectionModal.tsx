@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, TextInput, TextStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Card, Tappable } from './ui/primitives';
+import { AppText, Button, ChipSelector, ModalSheet } from './ui/primitives';
 import { useT, type TranslationKey } from '../i18n';
 import {
   REJECTION_REASON_CATEGORIES,
@@ -99,64 +99,33 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onCancel}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <View style={{
-          flex: 1,
-          backgroundColor: t.colors.scrim,
-          justifyContent: 'center',
-          padding: t.space.xl,
-        }}>
-        <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
-          <AppText variant="h2">{tr('decline.title')}</AppText>
+    <ModalSheet visible={visible} onClose={onCancel} title={tr('decline.title')} avoidKeyboard>
+      <View style={{ gap: t.space.sm }}>
+        <AppText variant="overline" tone="faint">{tr('decline.reasonLabel')}</AppText>
+        <ChipSelector
+          options={REJECTION_REASON_CATEGORIES.map((c) => ({ key: c, label: tr(CATEGORY_LABEL_KEYS[c]) }))}
+          value={category}
+          onChange={(c) => selectCategory(c as RejectionReasonCategory)}
+        />
+      </View>
 
-          <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">{tr('decline.reasonLabel')}</AppText>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-              {REJECTION_REASON_CATEGORIES.map((c) => {
-                const active = category === c;
-                return (
-                  <Tappable key={c} onPress={() => selectCategory(c)} accessibilityRole="button" accessibilityLabel={tr(CATEGORY_LABEL_KEYS[c])}>
-                    <View
-                      style={{
-                        paddingVertical: t.space.sm,
-                        paddingHorizontal: t.space.md,
-                        borderRadius: t.radius.pill,
-                        backgroundColor: active ? t.colors.primarySoft : t.colors.surface,
-                        borderWidth: 1,
-                        borderColor: active ? t.colors.primary : t.colors.border,
-                      }}
-                    >
-                      <AppText variant="caption" tone={active ? 'primary' : 'muted'}>
-                        {tr(CATEGORY_LABEL_KEYS[c])}
-                      </AppText>
-                    </View>
-                  </Tappable>
-                );
-              })}
-            </View>
-          </View>
+      <View style={{ gap: t.space.xs, marginTop: t.space.lg }}>
+        <AppText variant="overline" tone="faint">{tr('decline.detailsLabel')}</AppText>
+        <TextInput
+          style={inputStyle}
+          placeholder={tr('decline.reasonPlaceholder')}
+          placeholderTextColor={t.colors.textFaint}
+          multiline
+          maxLength={1000}
+          value={detail}
+          onChangeText={changeDetail}
+        />
+      </View>
 
-          <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">{tr('decline.detailsLabel')}</AppText>
-            <TextInput
-              style={inputStyle}
-              placeholder={tr('decline.reasonPlaceholder')}
-              placeholderTextColor={t.colors.textFaint}
-              multiline
-              maxLength={1000}
-              value={detail}
-              onChangeText={changeDetail}
-            />
-          </View>
-
-          <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
-            <Button label={tr('decline.confirm')} variant="danger" icon="close" loading={submitting} disabled={submitting || !canSubmit} onPress={onConfirm} style={{ flex: 1 }} />
-            <Button label={tr('common.cancel')} variant="neutral" disabled={submitting} onPress={onCancel} style={{ flex: 1 }} />
-          </View>
-        </Card>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.lg }}>
+        <Button label={tr('decline.confirm')} variant="danger" icon="close" loading={submitting} disabled={submitting || !canSubmit} onPress={onConfirm} style={{ flex: 1 }} />
+        <Button label={tr('common.cancel')} variant="neutral" disabled={submitting} onPress={onCancel} style={{ flex: 1 }} />
+      </View>
+    </ModalSheet>
   );
 };

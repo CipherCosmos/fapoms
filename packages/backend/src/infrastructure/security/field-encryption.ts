@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, createHash, createHmac } from 'crypto';
+import { createCipheriv, createDecipheriv, randomBytes, createHash, createHmac, hkdfSync } from 'crypto';
 import { Logger } from '@nestjs/common';
 import type { ValueTransformer } from 'typeorm';
 
@@ -97,6 +97,23 @@ export function fieldFingerprint(plain: string | null | undefined): string | nul
   return createHmac('sha256', createHash('sha256').update(key).update('fingerprint-v1').digest())
     .update(normalised)
     .digest('hex');
+}
+
+/**
+ * A key for one purpose, derived from the one root key with HKDF-SHA256.
+ *
+ * Why derive rather than add a second secret: the audit that led here found the root key has no
+ * escrow copy, and losing it loses every encrypted PAN, Aadhaar and bank number. A second
+ * independent key for documents would be a second thing to lose, with the same consequence for
+ * every scanned ID card. Deriving keeps one secret to protect and back up, while each purpose still
+ * gets its own key — a document key cannot decrypt a field, nor the other way round.
+ *
+ * Null with no root key configured, like everything else here.
+ */
+export function deriveSubkey(purpose: string): Buffer | null {
+  const root = resolveKey();
+  if (!root) return null;
+  return Buffer.from(hkdfSync('sha256', root, Buffer.alloc(0), Buffer.from(purpose, 'utf8'), 32));
 }
 
 export function isEncrypted(value: string): boolean {

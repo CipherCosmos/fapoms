@@ -28,6 +28,19 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
+import {
+  EMAIL_TEMPLATE_REGISTRY,
+  EmailTemplateKey,
+} from '../../infrastructure/notifications/email-template-registry';
+import { validateTemplateContract } from '../../infrastructure/notifications/email-template-validator';
+import {
+  EmailTemplateLoader,
+  EmailTemplateVersion,
+  TemplateSource,
+} from '../../infrastructure/notifications/email-template-loader';
+import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
+import { plainTextFor } from '../../infrastructure/notifications/html-to-text';
+
 export class UpdateNotificationSettingRequestDto {
   @IsOptional() @IsBoolean()
   enabled?: boolean;
@@ -90,41 +103,70 @@ export class TestEmailRequestDto {
   to: string;
 }
 
+export class ValidateEmailTemplateDto {
+  @IsString()
+  html: string;
+
+  @IsOptional() @IsString()
+  subjectTemplate?: string;
+}
+
+export class PreviewEmailTemplateDto {
+  @IsOptional() @IsString()
+  html?: string;
+
+  @IsOptional() @IsString()
+  subjectTemplate?: string;
+
+  @IsOptional() @IsObject()
+  payload?: Record<string, any>;
+}
+
+export class SaveEmailTemplateDraftDto {
+  @IsString()
+  html: string;
+
+  @IsOptional() @IsString()
+  subjectTemplate?: string;
+}
+
+export class PublishEmailTemplateDto {
+  @IsOptional() @IsString()
+  html?: string;
+
+  @IsOptional() @IsString()
+  subjectTemplate?: string;
+
+  @IsOptional() @IsString()
+  changeNotes?: string;
+}
+
+export class RollbackEmailTemplateDto {
+  @IsInt() @Min(1)
+  version: number;
+}
+
+export class SetTemplateSourceDto {
+  @IsString()
+  source: TemplateSource;
+}
+
+export class TestEmailTemplateDto {
+  @IsEmail({}, { message: 'Give a valid email address to send the test to.' })
+  to: string;
+
+  @IsOptional() @IsString()
+  html?: string;
+
+  @IsOptional() @IsString()
+  subjectTemplate?: string;
+
+  @IsOptional() @IsObject()
+  payload?: Record<string, any>;
+}
+
 /**
  * Super administrators only — reads and writes alike.
- *
- * This was narrowed once already, from all eleven staff roles to the four the web app admitted
- * to `/admin/notifications`, on the principle that a boundary the UI enforces and the API does
- * not is not a boundary. On 2026-08-17 the platform owner asked for notification rules (with
- * platform settings and feedback) to be visible to the super administrator and nobody else, so
- * both lists collapse to that one role. Kept as two names because the read/write split is a
- * real seam — if the desk is ever widened again, it is the read list that widens first.
- *
- * "And nobody else" turned out to need saying twice. Every write below pairs `@Roles(ADMIN)`
- * with `@RequirePermissions('configuration:edit:platform')` — the ordinary shape almost every
- * admin route in this app takes — which is exactly what `RolesGuard`'s custom-role fallback
- * looks for: a role built in Admin -> Roles that merely holds the matching permission is let in,
- * on the reasoning that a role the route never named by name should still get in if it holds
- * what the route asks for. That reasoning is correct almost everywhere. It is wrong here, for
- * the same reason it is wrong on `admin/rule-bypass`'s `enable`/`disable` (see that controller):
- * `configuration:edit:platform` is a checkbox in a role-editor matrix, and rewriting who gets
- * told what across the whole organisation — or sending a real email, or firing the morning
- * digest at 6 real recipients on demand — should not follow from ticking it. Confirmed live,
- * 2026-09-04: a role holding nothing else reached `PUT`/`DELETE catalog/:type`,
- * `POST email/test` and `POST digest/run`, and the digest call sent a real, unscheduled,
- * duplicate digest to 6 real recipients. `@RoleOnly()` on those four routes is what makes this
- * comment true; `GET catalog`, `GET email/status` and `POST preview` need no such marker because
- * they declare no `@RequirePermissions` at all and were already fail-closed to any role this
- * class-level `@Roles(ADMIN)` does not name.
- *
- * Amended 2026-09-05, when the DEVELOPER role split off the technical estate: the four writes
- * are no longer one audience. `PUT`/`DELETE catalog/:type` are business messaging policy — who
- * gets told what, in whose words — and stay ADMIN-gated exactly as above (a developer reaches
- * them too, through the ADMIN implication in role-hierarchy.ts). `POST email/test` and
- * `POST digest/run` are transport plumbing — proving the mail path works is the developer's
- * job, not a business decision — so those two carry method-level `@Roles(DEVELOPER)` (one-way:
- * an administrator does not pass) and `system:edit:platform`, the technical-estate grant, in
- * place of the configuration one. The class-level `@Roles(ADMIN)` stays for everything else.
  */
 const NOTIFICATION_ADMIN_ROLES = [SystemRole.ADMIN] as const;
 const NOTIFICATION_ADMIN_READ_ROLES = [...NOTIFICATION_ADMIN_ROLES];
@@ -138,15 +180,11 @@ export class NotificationAdminController {
   constructor(
     private readonly settings: NotificationSettingsService,
     private readonly email: EmailProvider,
-    /**
-     * The digest runs on the SLA scanner's queue. Triggering it by enqueuing the same job the
-     * cron enqueues — rather than injecting the service — keeps this module independent of the
-     * scheduler (which imports this one, so the reverse would be a cycle) and means the manual
-     * run exercises the identical path, not a parallel one that could drift.
-     */
     @InjectQueue('sla-scanner') private readonly scannerQueue: Queue,
     private readonly audit: AuditService,
     private readonly platformSettings: PlatformSettingsService,
+    private readonly templateLoader: EmailTemplateLoader,
+    private readonly templateRenderer: EmailTemplateRenderer,
   ) {}
 
   /**
@@ -279,6 +317,7 @@ export class NotificationAdminController {
         title: rendered.emailSubject,
         bodyLines: rendered.emailBody.split('\n').filter(Boolean),
         linkUrl: rendered.link ? `${appPublicUrl()}${rendered.link}` : null,
+        linkLabel: 'Open in FAPOMS',
       }),
     };
   }
@@ -365,13 +404,19 @@ export class NotificationAdminController {
       subject: 'FAPOMS test email',
       text: `This is a test email from FAPOMS, sent by ${who}.\n\nIf you are reading it, outbound email works.`,
       html: renderEmailHtml({
-        title: 'FAPOMS test email',
+        title: 'Email Delivery Test',
         bodyLines: [
-          `This is a test email from FAPOMS, sent by ${who}.`,
-          'If you are reading it, outbound email works.',
+          `This test email was sent by ${who} to verify outbound email delivery for FAPOMS.`,
+          'If you received this message, outbound email delivery is working properly.',
+        ],
+        kvTable: [
+          { label: 'Initiated By', value: who },
+          { label: 'Timestamp (UTC)', value: new Date().toUTCString() },
+          { label: 'Transport Status', value: 'Active & Verified' },
         ],
         linkUrl: appPublicUrl(),
-        linkLabel: 'Open FAPOMS',
+        linkLabel: 'Open FAPOMS Portal',
+        securityNotice: 'This is an automated system verification test. No user action is required.',
       }),
     });
     // The provider's own words, not a generic failure: an SMTP rejection usually says exactly
@@ -414,5 +459,404 @@ export class NotificationAdminController {
         `Could not queue the digest — the job queue is unreachable (${err?.message ?? 'unknown error'}).`,
       );
     }
+  }
+
+  // =========================================================================
+  // Configurable Email Template Management Endpoints
+  // =========================================================================
+
+  @Get('email-templates')
+  @ApiOperation({ summary: 'List all registered email templates with active state and contracts' })
+  async listEmailTemplates(): Promise<any[]> {
+    const list = await Promise.all(
+      Object.keys(EMAIL_TEMPLATE_REGISTRY).map(async (k) => {
+        const key = k as EmailTemplateKey;
+        const def = EMAIL_TEMPLATE_REGISTRY[key];
+        const active = await this.templateLoader.loadActiveTemplate(key);
+        const stored = await this.templateLoader.getStoredSettings(key);
+        const fsTemplate = this.templateLoader.readFilesystemTemplate(key);
+
+        return {
+          key,
+          name: def.name,
+          description: def.description,
+          category: def.category,
+          requiredTokens: def.requiredTokens,
+          optionalTokens: def.optionalTokens,
+          rawTokens: def.rawTokens,
+          allowRawHtmlTokens: def.allowRawHtmlTokens,
+          defaultSubjectTemplate: def.defaultSubjectTemplate,
+          sampleData: def.sampleData,
+          activeState: {
+            source: active.source,
+            version: active.version,
+            checksum: active.checksum,
+            isFallback: active.isFallback,
+          },
+          settings: {
+            sourcePreference: stored?.sourcePreference || 'platform',
+            activeVersion: stored?.activeVersion,
+            hasDraft: !!stored?.draft,
+            versionCount: stored?.versions?.length || 0,
+            hasFilesystemTemplate: !!fsTemplate,
+          },
+        };
+      }),
+    );
+    return list;
+  }
+
+  @Get('email-templates/:key')
+  @ApiOperation({ summary: 'Get detailed configuration and versions for a specific email template' })
+  async getEmailTemplate(@Param('key') key: string, @Req() req?: any): Promise<any> {
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    const host = req?.get ? (req.get('x-forwarded-host') || req.get('host')) : null;
+    const proto = req?.get ? (req.get('x-forwarded-proto') || req.protocol || 'http') : 'http';
+    const computedPublicUrl = host ? `${proto}://${host}` : appPublicUrl();
+    const effectiveLogoUrl = `${computedPublicUrl}/sumeru-logo@2x.png`;
+
+    const active = await this.templateLoader.loadActiveTemplate(templateKey);
+    const stored = await this.templateLoader.getStoredSettings(templateKey);
+    const fsTemplate = this.templateLoader.readFilesystemTemplate(templateKey);
+
+    return {
+      definition: {
+        ...def,
+        sampleData: {
+          ...def.sampleData,
+          logoUrl: effectiveLogoUrl,
+        },
+      },
+      activeTemplate: active,
+      storedSettings: stored,
+      filesystemTemplate: fsTemplate ? { exists: true, html: fsTemplate.html, checksum: fsTemplate.checksum } : { exists: false },
+      /*
+        What the publish gate needs, answered here rather than guessed at in the browser: whether a
+        test of the CURRENT draft has actually been delivered. The editor cannot work this out for
+        itself — the comparison is a checksum of the exact HTML that was sent — and a screen that
+        guesses would either block a publish that should be allowed or promise one the server will
+        refuse.
+
+        `required` is false when email delivery is not configured at all: there is no way to send a
+        test then, and demanding one would leave the feature unusable rather than safe.
+      */
+      testStatus: {
+        required: this.email.isEnabled(),
+        lastTestSend: stored?.lastTestSend
+          ? { to: stored.lastTestSend.to, at: stored.lastTestSend.at, by: stored.lastTestSend.by }
+          : null,
+        matchesDraft: !!stored?.draft?.html
+          && (await this.templateLoader.hasTestedDraft(templateKey, stored.draft.html)),
+      },
+    };
+  }
+
+  @Post('email-templates/:key/validate')
+  @ApiOperation({ summary: 'Validate HTML and subject against template contract and security rules' })
+  async validateEmailTemplate(
+    @Param('key') key: string,
+    @Body() dto: ValidateEmailTemplateDto,
+  ): Promise<any> {
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    const result = validateTemplateContract(def, dto.html, dto.subjectTemplate);
+    return result;
+  }
+
+  @Post('email-templates/:key/preview')
+  @ApiOperation({ summary: 'Render a preview of an email template with sample or custom payload' })
+  async previewEmailTemplate(
+    @Param('key') key: string,
+    @Body() dto: PreviewEmailTemplateDto,
+    @Req() req?: any,
+  ): Promise<any> {
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    const host = req?.get ? (req.get('x-forwarded-host') || req.get('host')) : null;
+    const proto = req?.get ? (req.get('x-forwarded-proto') || req.protocol || 'http') : 'http';
+    const computedPublicUrl = host ? `${proto}://${host}` : appPublicUrl();
+    const effectiveLogoUrl = `${computedPublicUrl}/sumeru-logo@2x.png`;
+
+    const payload = {
+      ...def.sampleData,
+      logoUrl: dto.payload?.logoUrl || effectiveLogoUrl,
+      ...(dto.payload || {}),
+    };
+
+    if (dto.html) {
+      const validation = validateTemplateContract(def, dto.html, dto.subjectTemplate);
+      try {
+        const renderedHtml = this.templateRenderer.interpolate(dto.html, payload, def);
+        const subjectTpl = dto.subjectTemplate || def.defaultSubjectTemplate;
+        const renderedSubject = this.templateRenderer.interpolate(subjectTpl, payload, def);
+        const fallback = def.fallbackRenderer(payload);
+
+        return {
+          html: renderedHtml,
+          // The text the RECIPIENT would get for this draft, not the built-in wording — the
+          // editor's "Text" tab was showing a body that had nothing to do with what was on screen.
+          text: plainTextFor(renderedHtml, fallback.text),
+          subject: renderedSubject,
+          validation,
+        };
+      } catch (err: any) {
+        return {
+          html: null,
+          text: null,
+          subject: null,
+          error: err.message,
+          validation,
+        };
+      }
+    }
+
+    const rendered = await this.templateRenderer.render(templateKey, payload);
+    return rendered;
+  }
+
+  @Post('email-templates/:key/draft')
+  @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RoleOnly()
+  @RequirePermissions('configuration:edit:platform')
+  @ApiOperation({ summary: 'Save draft HTML for an email template' })
+  async saveEmailTemplateDraft(
+    @Param('key') key: string,
+    @Body() dto: SaveEmailTemplateDraftDto,
+    @Req() req: any,
+  ): Promise<{ message: string }> {
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    const author = req.user?.displayName || req.user?.username || 'admin';
+    await this.templateLoader.saveDraft(templateKey, dto, author);
+    await this.record(
+      'EMAIL_TEMPLATE_DRAFT_SAVED',
+      templateKey,
+      req.user?.id,
+      `Saved draft for email template "${templateKey}".`,
+    );
+
+    // `ResponseInterceptor` puts the `{ success, data }` envelope on; a controller that builds
+    // one by hand ends up double-enveloped or, worse, half-enveloped.
+    return { message: 'Draft saved successfully.' };
+  }
+
+  @Post('email-templates/:key/publish')
+  @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RoleOnly()
+  @RequirePermissions('configuration:edit:platform')
+  @ApiOperation({ summary: 'Validate and publish a new version of an email template' })
+  async publishEmailTemplate(
+    @Param('key') key: string,
+    @Body() dto: PublishEmailTemplateDto,
+    @Req() req: any,
+  ): Promise<{ version: EmailTemplateVersion }> {
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    const author = req.user?.displayName || req.user?.username || 'admin';
+    if (dto.html) {
+      await this.templateLoader.saveDraft(templateKey, { html: dto.html, subjectTemplate: dto.subjectTemplate }, author);
+    }
+
+    /*
+      SEEN IN AN INBOX, NOT TICKED IN A BOX.
+
+      Publishing used to be gated by a checkbox the administrator ticked themselves, which meant an
+      email nobody had ever received could go live to candidates. A browser preview is not a test:
+      a real inbox is a different rendering engine, on a different screen, usually with images
+      switched off. So the draft's own checksum must match a test that was actually delivered.
+
+      The requirement lifts when email delivery is not configured at all — there is no way to send
+      a test then, and refusing to publish would leave the whole feature unusable rather than safe.
+    */
+    const stored = await this.templateLoader.getStoredSettings(templateKey);
+    const draftHtml = dto.html ?? stored?.draft?.html;
+    if (this.email.isEnabled() && draftHtml && !(await this.templateLoader.hasTestedDraft(templateKey, draftHtml))) {
+      throw new BadRequestException(
+        'Send yourself a test of this exact version first — then publish. '
+        + (stored?.lastTestSend
+          ? 'The last test was of an earlier version of this email.'
+          : 'No test of this email has been sent yet.'),
+      );
+    }
+
+    try {
+      const version = await this.templateLoader.publishDraft(templateKey, author);
+      await this.record(
+        'EMAIL_TEMPLATE_PUBLISHED',
+        templateKey,
+        req.user?.id,
+        `Published version v${version.version} for email template "${templateKey}".`,
+        { version: version.version, checksum: version.checksum, changeNotes: dto.changeNotes },
+      );
+      return { version };
+    } catch (err: any) {
+      throw new BadRequestException(err.message || 'Failed to publish email template.');
+    }
+  }
+
+  @Post('email-templates/:key/rollback')
+  @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RoleOnly()
+  @RequirePermissions('configuration:edit:platform')
+  @ApiOperation({ summary: 'Roll back an email template to a previous version' })
+  async rollbackEmailTemplate(
+    @Param('key') key: string,
+    @Body() dto: RollbackEmailTemplateDto,
+    @Req() req: any,
+  ): Promise<{ version: EmailTemplateVersion }> {
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    const author = req.user?.displayName || req.user?.username || 'admin';
+    try {
+      const version = await this.templateLoader.rollbackVersion(templateKey, dto.version, author);
+      await this.record(
+        'EMAIL_TEMPLATE_ROLLED_BACK',
+        templateKey,
+        req.user?.id,
+        `Rolled back email template "${templateKey}" to version v${dto.version}.`,
+        { version: dto.version },
+      );
+      return { version };
+    } catch (err: any) {
+      throw new BadRequestException(err.message || 'Failed to rollback email template.');
+    }
+  }
+
+  @Post('email-templates/:key/source')
+  @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RoleOnly()
+  @RequirePermissions('configuration:edit:platform')
+  @ApiOperation({ summary: 'Switch active source preference (platform, filesystem, fallback)' })
+  async setTemplateSource(
+    @Param('key') key: string,
+    @Body() dto: SetTemplateSourceDto,
+    @Req() req: any,
+  ): Promise<{ source: TemplateSource }> {
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    if (!['platform', 'filesystem', 'fallback'].includes(dto.source)) {
+      throw new BadRequestException(`Invalid source: "${dto.source}". Must be 'platform', 'filesystem', or 'fallback'.`);
+    }
+
+    await this.templateLoader.setSourcePreference(templateKey, dto.source);
+    await this.record(
+      'EMAIL_TEMPLATE_SOURCE_CHANGED',
+      templateKey,
+      req.user?.id,
+      `Changed template source for "${templateKey}" to "${dto.source}".`,
+      { source: dto.source },
+    );
+    return { source: dto.source };
+  }
+
+  @Post('email-templates/:key/test')
+  @Roles(...NOTIFICATION_ADMIN_ROLES, SystemRole.DEVELOPER)
+  @RoleOnly()
+  @RequirePermissions('configuration:edit:platform')
+  @ApiOperation({ summary: 'Send a live test email rendered with the specified template' })
+  async sendTestEmail(
+    @Param('key') key: string,
+    @Body() dto: TestEmailTemplateDto,
+    @Req() req: any,
+  ): Promise<{ message: string; metadata?: any }> {
+    if (!this.email.isEnabled()) {
+      throw new BadRequestException(
+        'Email delivery is not configured — please configure SMTP or Gmail transport in Platform Settings first.',
+      );
+    }
+
+    const templateKey = key as EmailTemplateKey;
+    const def = EMAIL_TEMPLATE_REGISTRY[templateKey];
+    if (!def) {
+      throw new BadRequestException(`Unknown email template key: "${key}"`);
+    }
+
+    const payload = { ...def.sampleData, ...(dto.payload || {}) };
+    let renderedHtml: string;
+    let renderedSubject: string;
+    let renderedText: string;
+    let metadata: any;
+
+    if (dto.html) {
+      const val = validateTemplateContract(def, dto.html, dto.subjectTemplate);
+      if (!val.valid) {
+        throw new BadRequestException(`Cannot send test email: template validation failed (${val.errors.join('; ')})`);
+      }
+      renderedHtml = this.templateRenderer.interpolate(dto.html, payload, def);
+      renderedSubject = this.templateRenderer.interpolate(
+        dto.subjectTemplate || def.defaultSubjectTemplate,
+        payload,
+        def,
+      );
+      // The same text half the recipient of a published version would get, so the test is a test
+      // of both bodies rather than of the HTML with somebody else's words underneath it.
+      renderedText = plainTextFor(renderedHtml, def.fallbackRenderer(payload).text);
+      metadata = { source: 'custom_test_payload' };
+    } else {
+      const rendered = await this.templateRenderer.render(templateKey, payload);
+      renderedHtml = rendered.html;
+      renderedSubject = rendered.subject;
+      renderedText = rendered.text;
+      metadata = rendered.metadata;
+    }
+
+    const who = req.user?.displayName ?? req.user?.username ?? 'an administrator';
+    const result = await this.email.send({
+      to: dto.to,
+      subject: `[TEST] ${renderedSubject}`,
+      text: renderedText,
+      html: renderedHtml,
+    });
+
+    if (!result.success) {
+      throw new BadRequestException(`Failed to send test email: ${result.error || 'Delivery failed'}`);
+    }
+
+    /*
+      Remembered against the checksum of what was actually sent, which is what lets publishing
+      require it. A test of a previous draft proves nothing about the one about to go live.
+    */
+    if (dto.html) {
+      await this.templateLoader.recordTestSend(templateKey, dto.html, dto.to, who);
+    }
+
+    await this.record(
+      'EMAIL_TEMPLATE_TEST_SENT',
+      templateKey,
+      req.user?.id,
+      `Sent test email for template "${templateKey}" to "${dto.to}" by ${who}.`,
+      { to: dto.to },
+    );
+
+    return { message: `Test email successfully sent to ${dto.to}`, metadata };
   }
 }

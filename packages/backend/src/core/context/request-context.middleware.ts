@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { redactUrl } from '../../infrastructure/http/redact-url';
 import { runWithRequestContext, type RequestContext } from './request-context';
 
 /**
@@ -22,7 +23,8 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
     method: req.method,
     // `route.path` is only populated after routing; `originalUrl` is always present. The path
     // (no query string) is enough for access-log context and never carries PII in this API.
-    route: req.originalUrl?.split('?')[0],
+    // Redacted: this context is attached to log lines, and a registration token is a bearer credential.
+    route: redactUrl(req.originalUrl?.split('?')[0]),
   };
   runWithRequestContext(context, () => next());
 }

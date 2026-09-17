@@ -46,6 +46,7 @@ import { tenantFilterId } from '../../infrastructure/tenancy/ambient-tenant-cont
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { AuditRead } from '../../core/audit/audit-read.decorator';
 
 /**
  * The paperwork a person can actually produce from a phone.
@@ -220,6 +221,8 @@ export class AssayerSelfServiceController {
    * even if the id check were ever loosened.
    */
   @Get(':assayerId/document/:requirement/file/:index')
+  // Opening an identity scan is recorded: "who looked at whose Aadhaar card" had no answer at all.
+  @AuditRead({ resource: 'ASSAYER_DOCUMENT', idParam: 'assayerId', eventType: 'ASSAYER_DOCUMENT_SCAN_VIEWED' })
   @OnboardingAllowed()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Fetch a scan attached to your own document' })
@@ -284,6 +287,8 @@ export class AssayerSelfServiceController {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', `inline; filename="${row!.requirement}"`);
+    // Never cached: an identity scan must not survive in a shared machine's browser cache.
+    res.setHeader('Cache-Control', 'private, no-store');
     stream.on('error', () => {
       if (!res.headersSent) res.status(500).end();
       else res.destroy();

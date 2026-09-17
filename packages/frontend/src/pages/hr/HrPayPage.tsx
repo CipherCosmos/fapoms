@@ -293,24 +293,22 @@ export const HrPayPage: React.FC = () => {
           "needs chasing" count, and a missing PAN blocks a payout exactly as hard as a missing
           account number, so it counts too. Same rule, same words, as the roster's own chip.
         */}
+        {/*
+          One tile for unpayable people, not two. The wider count — everyone with a
+          payout-blocking gap, including people who left and may still be owed a final
+          settlement — used to sit beside it under a near-identical label, and the two
+          read as disagreeing answers to one question. It now rides along as one line
+          under the strict count, visible exactly when it adds information.
+        */}
         <div style={{ ...tile(false, unbankedCount > 0), cursor: 'default' }}>
           <div style={{ ...statValue, color: unbankedCount > 0 ? 'var(--danger)' : undefined }}>{unbankedCount}</div>
           <div style={label}>Cannot be paid</div>
+          {anyoneMissingBankDetailsCount > unbankedCount && (
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
+              +{anyoneMissingBankDetailsCount - unbankedCount} who left · settlement may still be owed
+            </div>
+          )}
         </div>
-        {/*
-          The looser number, ON PURPOSE and NEVER under the strict tile's own label. A departed
-          contractor with no account number on file is not "cannot be paid" in the sense above —
-          they are gone — but they can still be owed a final settlement, and payroll has a real
-          reason to see that this many people (working or not) have a payout-blocking gap. Shown
-          only when it says something the strict tile does not, i.e. there really is at least one
-          such gap.
-        */}
-        {anyoneMissingBankDetailsCount > 0 && (
-          <div style={{ ...tile(false, false), cursor: 'default' }}>
-            <div style={statValue}>{anyoneMissingBankDetailsCount}</div>
-            <div style={label}>Missing bank details (including people who left)</div>
-          </div>
-        )}
       </div>
 
       {/* The row-level links below already say which record field is missing and open it for

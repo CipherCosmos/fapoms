@@ -56,7 +56,7 @@ module.exports = {
     splash: {
       image: './assets/splash-icon.png',
       resizeMode: 'contain',
-      backgroundColor: '#0E1016',
+      backgroundColor: '#0A101C',
     },
     assetBundlePatterns: ['**/*'],
     /**
@@ -78,11 +78,11 @@ module.exports = {
      * Status-bar/push icon. Android renders the small icon as a pure silhouette — a
      * full-colour launcher icon there degrades to a grey blob, which is what field
      * phones showed. This is a white orbit glyph on transparency; `color` tints it
-     * (and the app name row) with the brand violet.
+     * (and the app name row) with the brand blue.
      */
     notification: {
       icon: './assets/notification-icon.png',
-      color: '#8B7CFF',
+      color: '#2F7DFF',
     },
     extra: {
       googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
@@ -154,9 +154,9 @@ module.exports = {
       },
       adaptiveIcon: {
         foregroundImage: './assets/adaptive-icon.png',
-        // Matches the flame artwork's own background, and `iconBackground` in colors.xml —
-        // the value this bare project actually builds against.
-        backgroundColor: '#0E1016',
+        // Matches the mark's own ground colour, and `iconBackground` in colors.xml — the value
+        // this bare project actually builds against.
+        backgroundColor: '#0A101C',
       },
     },
     plugins: [
@@ -171,7 +171,7 @@ module.exports = {
         'expo-location',
         {
           locationWhenInUsePermission:
-            'Allow Karat to use your location to show the route and travel time to your assigned audit branch.',
+            'Allow Orbit to use your location to show the route and travel time to your assigned audit branch.',
         },
       ],
       [

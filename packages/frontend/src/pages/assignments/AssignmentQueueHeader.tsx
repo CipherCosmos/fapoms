@@ -203,7 +203,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
               letterSpacing: '0.3px',
             }}
           >
-            NARROW TO ONE STAGE
+            Show one stage
           </span>
           {STAGE3_STATUSES.map((s) => {
             const isActive = statusFilter === s;

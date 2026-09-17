@@ -23,6 +23,8 @@ export * from './platform-limits';
 // Canonical geographic regions and the state → region map
 export * from './regions';
 export * from './pincode';
+// Per-document scanning guidance (shape, finish, page count)
+export * from './document-scan-profile';
 
 // Domain entity interfaces
 export * from './interfaces';

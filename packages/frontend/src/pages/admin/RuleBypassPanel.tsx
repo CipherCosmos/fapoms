@@ -279,7 +279,7 @@ export const RuleBypassPanel: React.FC = () => {
       {confirmDialog}
       <PageHeader
         icon={<Unlock size={20} />}
-        title="Rule bypass"
+        title="Paused rules"
         subtitle="Suspend named operational rules so a workflow can be tested end to end. Every suspension is recorded against the records it affects, announced while it is on, and expires on its own."
       />
 

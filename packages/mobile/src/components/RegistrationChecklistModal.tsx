@@ -340,6 +340,7 @@ export const RegistrationChecklistModal: React.FC<RegistrationChecklistModalProp
         <DocumentScanner
           visible
           purpose={capturing.label}
+          requirement={capturing.requirement}
           onClose={() => setCapturing(null)}
           onSaved={async (doc) => {
             // Narrowed by this render, the way the audit-packet scanner call site does it, so the

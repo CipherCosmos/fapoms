@@ -19,6 +19,48 @@ interface RecentTimelineCardProps {
   onViewAll?: () => void;
 }
 
+/** One recorded event — shared by this card and the History tab so the two read the same. */
+export const TimelineRow: React.FC<{ event: TimelineEvent }> = ({ event: ev }) => (
+  <div
+    style={{
+      paddingBottom: '10px',
+      borderBottom: '1px solid var(--border-hair)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '3px',
+    }}
+  >
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+      <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
+        {activityEventLabel(ev.eventType)}
+      </span>
+      <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '3px' }}>
+        <Clock size={11} />
+        {fmtWhen(ev.occurredAt)}
+      </span>
+    </div>
+
+    {(ev.previousState || ev.newState) && (
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>{assayerLifecycleLabel(ev.previousState || '')}</span>
+        <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />
+        <strong>{assayerLifecycleLabel(ev.newState || '')}</strong>
+      </div>
+    )}
+
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+      <User size={11} />
+      <span>{ev.performedByName || 'System'}</span>
+    </div>
+
+    {ev.remarks && (
+      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', padding: '4px 8px', borderRadius: '4px', marginTop: '2px' }}>
+        {ev.remarks}
+      </div>
+    )}
+  </div>
+);
+
 export const RecentTimelineCard: React.FC<RecentTimelineCardProps> = ({
   events,
   loading = false,
@@ -42,8 +84,8 @@ export const RecentTimelineCard: React.FC<RecentTimelineCardProps> = ({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <History size={16} style={{ color: 'var(--text-secondary)' }} />
-          <h3 style={{ margin: 0, fontSize: 'var(--text-sm)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-secondary)' }}>
-            Recent Activity & Audit
+          <h3 style={{ margin: 0, fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
+            Recent activity
           </h3>
         </div>
         {onViewAll && events.length > 5 && (
@@ -60,14 +102,14 @@ export const RecentTimelineCard: React.FC<RecentTimelineCardProps> = ({
               fontWeight: 500,
             }}
           >
-            View all ({events.length})
+            See full history ({events.length})
           </button>
         )}
       </div>
 
       {loading ? (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '12px 0' }}>
-          Loading confirmed activity…
+          Loading…
         </div>
       ) : recent.length === 0 ? (
         <div
@@ -81,51 +123,21 @@ export const RecentTimelineCard: React.FC<RecentTimelineCardProps> = ({
             color: 'var(--text-muted)',
           }}
         >
-          No confirmed activity recorded yet. Audit events appear only after server verification.
+          Nothing has been recorded for this person yet.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {recent.map((ev) => (
-            <div
-              key={ev.id}
-              style={{
-                paddingBottom: '10px',
-                borderBottom: '1px solid var(--border-hair)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '3px',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                  {activityEventLabel(ev.eventType)}
-                </span>
-                <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                  <Clock size={11} />
-                  {fmtWhen(ev.occurredAt)}
-                </span>
-              </div>
-
-              {(ev.previousState || ev.newState) && (
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>{assayerLifecycleLabel(ev.previousState || '')}</span>
-                  <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />
-                  <strong>{assayerLifecycleLabel(ev.newState || '')}</strong>
-                </div>
-              )}
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
-                <User size={11} />
-                <span>{ev.performedByName || 'System'}</span>
-              </div>
-
-              {ev.remarks && (
-                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', padding: '4px 8px', borderRadius: '4px', marginTop: '2px' }}>
-                  {ev.remarks}
-                </div>
-              )}
-            </div>
-          ))}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+            maxHeight: '240px',
+            overflowY: 'auto',
+            paddingRight: '4px',
+            scrollbarWidth: 'thin',
+          }}
+        >
+          {recent.map((ev) => <TimelineRow key={ev.id} event={ev} />)}
         </div>
       )}
     </section>

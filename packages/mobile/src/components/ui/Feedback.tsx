@@ -36,7 +36,7 @@ const FeedbackContext = createContext<FeedbackApi | null>(null);
 
 /** How long each tone stays up. Errors linger; success gets out of the way. */
 const DURATION: Record<Tone, number> = {
-  success: 2600,
+  success: 30000,
   info: 3000,
   warning: 4200,
   error: 5200,
@@ -131,8 +131,13 @@ const ToastStack: React.FC<{ notices: Notice[]; onDismiss: (id: number) => void 
       style={{
         position: 'absolute',
         top: Platform.OS === 'ios' ? 56 : 28,
-        left: t.space.lg,
-        right: t.space.lg,
+        left: 0,
+        right: 0,
+        // Centred with a capped width rather than stretched edge-to-edge: full-width was fine on
+        // a phone but read as an oversized banner on the web build's wider viewports, and a short
+        // one-line toast stretched that wide looks like an error state even when it's a success.
+        alignItems: 'center',
+        paddingHorizontal: t.space.lg,
         gap: t.space.sm,
         zIndex: 9999,
       }}
@@ -155,35 +160,50 @@ const Toast: React.FC<{ notice: Notice; onDismiss: () => void }> = ({ notice, on
   }, [anim, t.motion.spring]);
 
   const tint = t.colors[notice.tone === 'error' ? 'danger' : notice.tone];
+  const tintSoft = t.colors[notice.tone === 'error' ? 'dangerSoft' : `${notice.tone}Soft` as 'successSoft' | 'warningSoft' | 'infoSoft'];
 
   return (
     <Animated.View
       style={{
+        width: '100%',
+        maxWidth: 420,
         opacity: anim,
         transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-16, 0] }) }],
       }}
     >
+      {/*
+        No left-accent border — a bright stripe down one edge of an otherwise plain box is the
+        same "outlined form" cue the rest of the kit moved away from (see Card, Input). A tinted
+        icon circle carries the tone instead, the same device GroupedIconTile already uses for a
+        row's category colour, so a toast reads as one more piece of this design system rather
+        than a different, older one bolted on.
+      */}
       <Pressable
         onPress={onDismiss}
         accessibilityRole="alert"
         accessibilityLabel={`${notice.title}${notice.message ? `. ${notice.message}` : ''}`}
         style={{
           flexDirection: 'row',
-          alignItems: 'flex-start',
-          gap: t.space.md,
-          padding: t.space.md,
+          alignItems: 'center',
+          gap: t.space.sm,
+          paddingVertical: t.space.sm,
+          paddingHorizontal: t.space.sm,
           borderRadius: t.radius.lg,
-          backgroundColor: t.colors.surfaceAlt,
-          borderLeftWidth: 3,
-          borderLeftColor: tint,
+          backgroundColor: t.colors.surface,
           ...t.elevation(3),
         }}
       >
-        <Icon name={ICON[notice.tone]} size={18} color={tint} />
-        <View style={{ flex: 1, gap: 2 }}>
-          <AppText variant="bodyStrong">{notice.title}</AppText>
+        <View style={{
+          width: 28, height: 28, borderRadius: 14, flexShrink: 0,
+          alignItems: 'center', justifyContent: 'center',
+          backgroundColor: tintSoft,
+        }}>
+          <Icon name={ICON[notice.tone]} size={15} color={tint} />
+        </View>
+        <View style={{ flex: 1, gap: 1 }}>
+          <AppText variant="small" style={{ fontWeight: '700' }} numberOfLines={1}>{notice.title}</AppText>
           {notice.message ? (
-            <AppText variant="small" tone="muted">
+            <AppText variant="caption" tone="muted" numberOfLines={2}>
               {notice.message}
             </AppText>
           ) : null}

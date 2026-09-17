@@ -71,6 +71,7 @@ blob-report/
 coverage/
 evidence/
 release-artifacts/
+/*.png
 
 # Android bug reports. One of these (9.5 MB) was committed to the repository root and
 # downloaded by every clone for three weeks before anyone noticed it was there.

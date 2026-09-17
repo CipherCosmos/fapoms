@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Paperclip, Upload } from 'lucide-react';
+import { Paperclip } from 'lucide-react';
 import {
-  ONBOARDING_DOCUMENT_LABELS, SCAN_UPLOAD_ACCEPT, SCAN_UPLOAD_MIME_TYPES, DEFAULT_MAX_UPLOAD_MB,
+  ONBOARDING_DOCUMENT_LABELS, SCAN_UPLOAD_MIME_TYPES, DEFAULT_MAX_UPLOAD_MB,
+  uploadSizeProblem, isDrawableScan,
   type OnboardingDocument,
 } from '@fapoms/shared';
+import { ScanOrAttach } from '../../../components/scanner/ScanOrAttach';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
 import { AlertBanner, useToast } from '../../../components/ui';
@@ -47,10 +49,11 @@ function scanUploadProblem(file: File): string | null {
   if (type && !SCAN_UPLOAD_MIME_TYPES.includes(type)) {
     return `is a "${type}" file — this only takes ${HUMAN_SCAN_TYPES}.`;
   }
-  const maxBytes = DEFAULT_MAX_UPLOAD_MB * 1024 * 1024;
-  if (file.size > maxBytes) {
-    return `is ${(file.size / 1024 / 1024).toFixed(1)} MB, over the ${DEFAULT_MAX_UPLOAD_MB} MB limit.`;
-  }
+  // The size rule is `uploadSizeProblem`, not a second copy of it. This file had its own
+  // comparison and its own sentence, which is how one screen ends up quoting a different limit
+  // from the next after somebody changes `MAX_UPLOAD_MB`.
+  const tooBig = uploadSizeProblem(file);
+  if (tooBig) return tooBig.replace(/^"[^"]*" /, '');
   return null;
 }
 
@@ -93,9 +96,10 @@ const Scans: React.FC<{
   }, [applicationId, requirement, fingerprint]);
 
   if (filePaths.length === 0) return null;
-  // TIFF is deliberately not here: browsers cannot render it, so a TIFF page stays a link rather
-  // than a broken thumbnail.
-  const isImage = (key: string) => /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(key);
+  // `isDrawableScan` knows which of the accepted types a browser can actually draw — TIFF is an
+  // accepted upload and not a drawable one, so a TIFF page stays a link instead of becoming a
+  // broken thumbnail. That rule used to be this regular expression, one of five copies.
+  const isImage = isDrawableScan;
 
   return (
     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
@@ -145,9 +149,9 @@ const Requirement: React.FC<{
   const { toast } = useToast();
   const label = ONBOARDING_DOCUMENT_LABELS[requirement as OnboardingDocument] ?? requirement;
 
-  const upload = async (files: FileList | null) => {
-    if (!files?.length) return;
-    const chosen = Array.from(files);
+  const upload = async (files: File[]) => {
+    if (!files.length) return;
+    const chosen = files;
     for (const file of chosen) {
       const problem = scanUploadProblem(file);
       if (problem) { setRefusal(`${file.name} ${problem}`); return; }
@@ -188,24 +192,21 @@ const Requirement: React.FC<{
             ? `${filePaths.length} ${filePaths.length === 1 ? 'page' : 'pages'} on file`
             : 'Not yet attached'}
         </span>
-        <label
-          className="btn btn-secondary btn-sm"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', margin: 0 }}
-        >
-          <Upload size={13} />
-          {uploading ? 'Uploading…' : filePaths.length > 0 ? 'Add a page' : 'Attach'}
-          <input
-            type="file"
-            multiple
-            accept={SCAN_UPLOAD_ACCEPT}
-            // Phone browsers offer the camera directly alongside the gallery when a capture hint
-            // is present, which is how a scan gets taken at the desk with the card in hand.
-            capture="environment"
-            disabled={uploading}
-            onChange={(e) => { void upload(e.target.files); e.target.value = ''; }}
-            style={{ display: 'none' }}
-          />
-        </label>
+        {/*
+          "Scan" is the camera with a document scanner behind it — the card in the clerk's hand,
+          squared up and cleaned, rather than the photograph of a desk that `capture="environment"`
+          used to hand back. "Choose file" is the same picker as before, for the flatbed at the
+          desk and for scans that arrive by email.
+        */}
+        <ScanOrAttach
+          documentLabel={label}
+          requirement={requirement}
+          multiple
+          size="sm"
+          disabled={uploading}
+          attachLabel={uploading ? 'Uploading…' : 'Choose file'}
+          onFiles={(files) => { void upload(files); }}
+        />
       </div>
       {refusal && (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '6px' }}>{refusal}</div>

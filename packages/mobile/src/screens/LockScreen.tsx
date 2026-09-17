@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Animated } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Icon, Tappable } from '../components/ui/primitives';
+import { AmbientGlow, AppText, Button, Icon, Tappable } from '../components/ui/primitives';
 import * as haptics from '../lib/haptics';
 import { useT, serverErrorText } from '../i18n';
 
@@ -95,6 +95,8 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
         gap: t.space['2xl'],
       }}
     >
+      <AmbientGlow />
+
       {/* Soft primary-tinted circle rather than a plain-bordered one — the same auth-gate
           affordance ChangePasswordScreen gives its header icon, so the two screens that stand
           between a device and the app read as one family. The pulse is now on scale as well as

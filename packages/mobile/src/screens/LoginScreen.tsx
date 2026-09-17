@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, TextStyle,
+  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, useWindowDimensions,
 } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AmbientGlow, AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
+import { AppText, Button, Card, Icon, Input, Tappable } from '../components/ui/primitives';
 import { OrbitMark } from '../components/ui/BrandMark';
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.service';
 import { probeServerUrl, normaliseServerUrl, isBlockedCleartext, CLEARTEXT_REFUSED } from '../services/server-config';
@@ -33,14 +33,24 @@ interface LoginScreenProps {
 /**
  * Sign-in.
  *
- * Rebuilt on the theme: no hardcoded colours, real keyboard avoidance (the old
- * screen had none, so on a short screen the keyboard covered the sign-in
- * button), and inputs that visibly respond to focus.
+ * Structurally different from a centred-card auth form on purpose: a fixed-width brand pane
+ * (mark, name, tagline) beside an unboxed form pane, split by a single hairline rather than a
+ * card the form sits inside. `useWindowDimensions` switches it to a stacked layout — brand
+ * block on top, form below — under `WIDE_BREAKPOINT`, which covers every phone in portrait and
+ * most in landscape; the side-by-side pane is for tablet and the web build this app also ships.
+ * No decorative background wash on either build: the split, the type scale, and the brand colour
+ * on the one primary action are what carry it, not an ambient glow — a color experiment (a
+ * multi-hue frosted-glass version) was tried and reverted here for reading as decoration rather
+ * than brand.
  *
- * The old "4-Digit PIN" toggle is gone — it switched a local flag and changed
- * the input's maxLength, but submitted through the same password field to the
- * same endpoint, so it was a mode that did not exist on the backend.
+ * Real keyboard avoidance (the old screen had none, so on a short screen the keyboard covered
+ * the sign-in button) and inputs that visibly respond to focus carry over unchanged.
+ *
+ * The old "4-Digit PIN" toggle is gone — it switched a local flag and changed the input's
+ * maxLength, but submitted through the same password field to the same endpoint, so it was a
+ * mode that did not exist on the backend.
  */
+const WIDE_BREAKPOINT = 820;
 export const LoginScreen: React.FC<LoginScreenProps> = ({
   loginUsername: controlledUsername,
   loginPassword: controlledPassword,
@@ -54,6 +64,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   }) => {
   const t = useTheme();
   const tr = useT();
+  const { width } = useWindowDimensions();
+  const isWide = width >= WIDE_BREAKPOINT;
   const [internalUsername, setInternalUsername] = useState('');
   const [internalPassword, setInternalPassword] = useState('');
   const [internalLoading, setInternalLoading] = useState(false);
@@ -162,7 +174,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   const [showPassword, setShowPassword] = useState(false);
-  const [focused, setFocused] = useState<'user' | 'pass' | 'server' | null>(null);
 
 
   // ── Server address ──────────────────────────────────────────────────────────
@@ -223,262 +234,260 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     Animated.timing(enter, { toValue: 1, duration: t.motion.slow, useNativeDriver: true }).start();
   }, [enter, t.motion.slow]);
 
-  /**
-   * Focus is signalled by the border colour ONLY — never by adding shadow/elevation.
-   *
-   * A focus glow (`elevation` + `shadow*` applied when `isFocused`) made every input on this
-   * screen untypeable on Android: under the New Architecture (Fabric — always on in Expo Go),
-   * mutating elevation on the wrapper at the moment its TextInput gains focus recreates the
-   * native view, which drops the freshly-granted IME focus. Verified on the emulator —
-   * `dumpsys input_method` showed `mServedView=null` after every tap with the glow present,
-   * and a ReactEditText holding focus the moment it was removed. Border colour is a plain
-   * prop update on the same view and is safe.
-   */
-  const inputWrap = (isFocused: boolean) => ({
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: t.space.md,
-    backgroundColor: t.colors.surfaceAlt,
-    borderRadius: t.radius.lg,
-    borderWidth: 1.5,
-    borderColor: isFocused ? t.colors.primary : t.colors.border,
-    paddingHorizontal: t.space.lg,
-    height: 56,
-  });
+  const hairline = t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(20,18,40,0.10)';
 
-  const inputStyle: TextStyle = {
-    flex: 1,
-    color: t.colors.text,
-    fontSize: 15,
-    fontWeight: '600',
-    // Android adds its own vertical padding that misaligns the row.
-    paddingVertical: 0,
-  };
+  const brandPane = (
+    <View
+      style={
+        isWide
+          ? {
+              width: 340, paddingHorizontal: t.space['2xl'], paddingVertical: t.space['4xl'],
+              borderRightWidth: 1, borderRightColor: hairline, justifyContent: 'space-between',
+            }
+          : { alignItems: 'center', paddingTop: t.space['3xl'], paddingBottom: t.space.xl, paddingHorizontal: t.space.xl }
+      }
+    >
+      <View style={{ alignItems: isWide ? 'flex-start' : 'center', gap: t.space.lg }} accessibilityLabel={tr('login.appName')}>
+        <OrbitMark size={isWide ? 60 : 92} />
+        <View style={{ gap: 4, alignItems: isWide ? 'flex-start' : 'center' }}>
+          <AppText variant={isWide ? 'display' : 'largeTitle'}>{tr('login.appName')}</AppText>
+          <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>
+            {tr('login.tagline')}
+          </AppText>
+        </View>
+      </View>
+      {/* Tucked into the brand pane rather than repeated at the page foot — there is room for it
+          here on a wide screen, and it answers the most common support question ("which version
+          are you on?") without needing its own line in the (unboxed, deliberately spare) form. */}
+      {isWide && (
+        <View style={{ gap: 2 }}>
+          <AppText variant="caption" tone="faint">{tr('login.authorisedOnly')}</AppText>
+          <AppText variant="caption" tone="faint">{versionLine()}</AppText>
+        </View>
+      )}
+    </View>
+  );
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: t.colors.bg }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <AmbientGlow />
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
+          <Animated.View
+            style={{
+              flex: 1,
+              flexDirection: isWide ? 'row' : 'column',
+              opacity: enter,
+              transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }],
+            }}
+          >
+            {brandPane}
 
-      <ScrollView
-        contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: t.space.xl }}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Animated.View style={{
-          opacity: enter,
-          transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }],
-          gap: t.space['2xl'],
-        }}>
-          <View style={{ alignItems: 'center', gap: t.space.lg }} accessibilityLabel={tr('login.appName')}>
-            <OrbitMark size={150} />
-            <View style={{ alignItems: 'center', gap: 6 }}>
-              <AppText variant="largeTitle">{tr('login.appName')}</AppText>
-              <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>{tr('login.tagline')}</AppText>
-            </View>
-          </View>
-
-          <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl, borderRadius: t.radius['2xl'] }}>
-            <View style={{ gap: t.space.sm }}>
-              <AppText variant="overline" tone="faint">{tr('login.codeLabel')}</AppText>
-              <View style={inputWrap(focused === 'user')}>
-                <Icon name="person-outline" size={18} color={focused === 'user' ? t.colors.primary : t.colors.textFaint} />
-                <TextInput
+            {/* The form: fields sit directly on the page, not inside a bordered card — the split
+                itself (and the one hairline dividing it from the brand pane) is what gives the
+                screen structure now, not a box drawn around the inputs. */}
+            <View style={{
+              flex: 1,
+              // Centred on a wide screen, where the form pane is a tall column with room to
+              // spare either way. Stacked (phone) the brand block already fills the top of the
+              // screen, so centring the form in what's LEFT put a dead gap between the tagline
+              // and the first field — this keeps it flowing straight on from the brand block.
+              justifyContent: isWide ? 'center' : 'flex-start',
+              paddingHorizontal: t.space.xl,
+              paddingTop: isWide ? t.space['2xl'] : t.space.md,
+              paddingBottom: t.space['2xl'],
+            }}>
+              <View style={{ width: '100%', maxWidth: 400, alignSelf: 'center', gap: t.space.lg }}>
+                <Input
+                  label={tr('login.codeLabel')}
+                  icon="person-outline"
                   value={username}
                   onChangeText={setUsername}
-                  onFocus={() => setFocused('user')}
-                  onBlur={() => setFocused(null)}
                   placeholder={tr('login.codePlaceholder')}
-                  placeholderTextColor={t.colors.textFaint}
                   autoCapitalize="characters"
                   autoCorrect={false}
-                  style={inputStyle}
                   accessibilityLabel={tr('login.codeAccessibility')}
                   returnKeyType="next"
                   /**
-                   * The keyboard has always shown a "Next" key here and nothing was wired to it,
-                   * so pressing it did nothing at all — the assayer had to dismiss the keyboard
-                   * and aim at the password field. `blurOnSubmit={false}` keeps the keyboard up
-                   * across the handover; without it the keyboard closes and reopens, which on
-                   * Android drops the focus this is trying to move.
+                   * The keyboard has always shown a "Next" key here and nothing was wired to it, so
+                   * pressing it did nothing at all — the assayer had to dismiss the keyboard and aim
+                   * at the password field. `blurOnSubmit={false}` keeps the keyboard up across the
+                   * handover; without it the keyboard closes and reopens, which on Android drops the
+                   * focus this is trying to move.
                    */
                   blurOnSubmit={false}
                   onSubmitEditing={() => passwordRef.current?.focus()}
+                  size="lg"
                 />
-              </View>
-            </View>
 
-            <View style={{ gap: t.space.sm }}>
-              <AppText variant="overline" tone="faint">{tr('login.passwordLabel')}</AppText>
-              <View style={inputWrap(focused === 'pass')}>
-                <Icon name="lock-closed-outline" size={18} color={focused === 'pass' ? t.colors.primary : t.colors.textFaint} />
-                <TextInput
-                  ref={passwordRef}
+                <Input
+                  label={tr('login.passwordLabel')}
+                  icon="lock-closed-outline"
                   value={password}
                   onChangeText={setPassword}
-                  onFocus={() => setFocused('pass')}
-                  onBlur={() => setFocused(null)}
                   placeholder="••••••••"
-                  placeholderTextColor={t.colors.textFaint}
                   secureTextEntry={!showPassword}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  style={inputStyle}
                   accessibilityLabel={tr('login.passwordAccessibility')}
                   returnKeyType="go"
                   onSubmitEditing={handleLoginPress}
+                  size="lg"
+                  inputRef={passwordRef}
+                  rightAccessory={
+                    // Tappable for the same press feedback every other control in the app gives —
+                    // this toggle used a bare Pressable and was the one dead-feeling tap on the
+                    // login screen.
+                    <Tappable
+                      onPress={() => setShowPassword((v) => !v)}
+                      hitSlop={14}
+                      accessibilityRole="button"
+                      accessibilityLabel={showPassword ? tr('login.hidePassword') : tr('login.showPassword')}
+                    >
+                      <Icon name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
+                    </Tappable>
+                  }
                 />
-                {/* Tappable for the same press feedback every other control in the app gives —
-                    this toggle used a bare Pressable and was the one dead-feeling tap on the
-                    login screen. */}
-                <Tappable
-                  onPress={() => setShowPassword((v) => !v)}
-                  hitSlop={14}
-                  accessibilityRole="button"
-                  accessibilityLabel={showPassword ? tr('login.hidePassword') : tr('login.showPassword')}
-                >
-                  <Icon name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
+
+                {errorMsg ? (
+                  // No border — a tinted fill alone is enough signal, and matches the restrained
+                  // (borderless) error treatment ChangePasswordScreen uses for the same alert role.
+                  // A hard danger-coloured outline around a form field's own error box read as a
+                  // second, competing warning stacked on the red icon and text already inside it.
+                  <View
+                    accessibilityRole="alert"
+                    accessibilityLiveRegion="assertive"
+                    style={{
+                      flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+                      backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md,
+                    }}
+                  >
+                    <Icon name="alert-circle" size={16} color={t.colors.danger} />
+                    <AppText variant="caption" style={{ color: t.colors.danger, flex: 1 }}>
+                      {errorMsg}
+                    </AppText>
+                  </View>
+                ) : null}
+
+                <Button
+                  label={authenticating ? tr('login.signingIn') : tr('login.signIn')}
+                  onPress={handleLoginPress}
+                  loading={authenticating}
+                  size="lg"
+                  glow
+                  full
+                />
+
+                {/* Offered only when the assayer has biometric sign-in switched on in their
+                    profile. That switch previously set a state field nothing consulted, so the
+                    option appeared regardless of the preference. */}
+                {biometricsEnabled && (
+                <Tappable onPress={handleBiometricPress}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
+                    <Icon name="finger-print" size={18} color={t.colors.textMuted} />
+                    <AppText variant="small" tone="muted">{tr('login.useBiometric')}</AppText>
+                  </View>
                 </Tappable>
-              </View>
-            </View>
-
-            {errorMsg ? (
-              // No border — a tinted fill alone is enough signal, and matches the restrained
-              // (borderless) error treatment ChangePasswordScreen uses for the same alert role.
-              // A hard danger-coloured outline around a form field's own error box read as a
-              // second, competing warning stacked on the red icon and text already inside it.
-              <View
-                accessibilityRole="alert"
-                accessibilityLiveRegion="assertive"
-                style={{
-                  flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
-                  backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md,
-                }}
-              >
-                <Icon name="alert-circle" size={16} color={t.colors.danger} />
-                <AppText variant="caption" style={{ color: t.colors.danger, flex: 1 }}>
-                  {errorMsg}
-                </AppText>
-              </View>
-            ) : null}
-
-            <Button
-              label={authenticating ? tr('login.signingIn') : tr('login.signIn')}
-              onPress={handleLoginPress}
-              loading={authenticating}
-              size="lg"
-              glow
-              full
-            />
-
-            {/* Offered only when the assayer has biometric sign-in switched on in their
-                profile. That switch previously set a state field nothing consulted, so the
-                option appeared regardless of the preference. */}
-            {biometricsEnabled && (
-            <Tappable onPress={handleBiometricPress}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
-                <Icon name="finger-print" size={18} color={t.colors.textMuted} />
-                <AppText variant="small" tone="muted">{tr('login.useBiometric')}</AppText>
-              </View>
-            </Tappable>
-            )}
-
-            {/*
-              The one way in for a candidate who has never signed in and never will through this
-              form — self-registration issues no password. Placed inside the same card as sign-in
-              rather than buried under the server-address disclosure below, since this is the
-              option a first-time candidate is actually looking for on this screen.
-            */}
-            {onRegister && (
-              <Tappable onPress={onRegister} accessibilityRole="button" accessibilityLabel={tr('login.registerLinkAccessibility')}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
-                  <Icon name="person-add-outline" size={16} color={t.colors.primary} />
-                  <AppText variant="small" style={{ color: t.colors.primary, fontWeight: '700' }}>
-                    {tr('login.registerLink')}
-                  </AppText>
-                </View>
-              </Tappable>
-            )}
-          </Card>
-
-          {/* Server address.
-              Reachable from the sign-in screen deliberately: if the app is pointed at the wrong
-              backend, this is the only screen the user can get to, so anywhere else would be
-              unreachable exactly when it is needed. The address used to be fixed at build time,
-              defaulting to an Android-emulator-only alias that no real handset can resolve. */}
-          <View style={{ alignItems: 'center', gap: t.space.sm }}>
-            {/* The address itself, not just a way in to it.
-                Pointing at the wrong backend produces "Invalid credentials" — the same message a
-                mistyped password gives — so the one fact that distinguishes the two was hidden
-                behind a tap nobody takes until they are already stuck. Shown as the bare host so
-                a wrong port is visible at a glance, which is exactly how this was mis-set. */}
-            <Tappable onPress={() => { setShowServerSettings((v) => !v); setProbeResult(null); }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: t.space.xs }}>
-                <Icon name="server-outline" size={14} color={t.colors.textFaint} />
-                <AppText variant="caption" tone="faint">
-                  {showServerSettings
-                    ? tr('login.server.hideSettings')
-                    : serverUrl.replace(/^https?:\/\//, '') || tr('login.server.openSettings')}
-                </AppText>
-              </View>
-            </Tappable>
-
-            {showServerSettings && (
-              <Card level={1} style={{ gap: t.space.md, padding: t.space.lg, width: '100%' }}>
-                <AppText variant="overline" tone="faint">{tr('login.server.addressLabel')}</AppText>
-                <View style={inputWrap(focused === 'server')}>
-                  <Icon name="globe-outline" size={16} color={focused === 'server' ? t.colors.primary : t.colors.textFaint} />
-                  <TextInput
-                    value={serverUrl}
-                    onChangeText={setServerUrl}
-                    onFocus={() => setFocused('server')}
-                    onBlur={() => setFocused(null)}
-                    placeholder={tr('login.server.addressPlaceholder')}
-                    placeholderTextColor={t.colors.textFaint}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="url"
-                    style={inputStyle}
-                    accessibilityLabel={tr('login.server.addressAccessibility')}
-                  />
-                </View>
-
-                {probeResult && (
-                  <AppText
-                    variant="caption"
-                    style={{ color: probeResult.ok ? (t.colors.success || t.colors.primary) : t.colors.danger }}>
-                    {probeResult.message}
-                  </AppText>
                 )}
 
-                <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                  <Button label={tr('login.server.test')} variant="neutral" onPress={handleTestServer} loading={testingServer} style={{ flex: 1 }} />
-                  <Button label={tr('common.save')} onPress={handleSaveServer} style={{ flex: 1 }} />
+                {/*
+                  The one way in for a candidate who has never signed in and never will through this
+                  form — self-registration issues no password. Placed with sign-in rather than buried
+                  under the server-address disclosure below, since this is the option a first-time
+                  candidate is actually looking for on this screen.
+                */}
+                {onRegister && (
+                  <Tappable onPress={onRegister} accessibilityRole="button" accessibilityLabel={tr('login.registerLinkAccessibility')}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
+                      <Icon name="person-add-outline" size={16} color={t.colors.primary} />
+                      <AppText variant="small" style={{ color: t.colors.primary, fontWeight: '700' }}>
+                        {tr('login.registerLink')}
+                      </AppText>
+                    </View>
+                  </Tappable>
+                )}
+
+                {/* Server address.
+                    Reachable from the sign-in screen deliberately: if the app is pointed at the
+                    wrong backend, this is the only screen the user can get to, so anywhere else
+                    would be unreachable exactly when it is needed. The address used to be fixed at
+                    build time, defaulting to an Android-emulator-only alias that no real handset
+                    can resolve. */}
+                <View style={{ alignItems: 'center', gap: t.space.sm, marginTop: t.space.sm }}>
+                  {/* The address itself, not just a way in to it.
+                      Pointing at the wrong backend produces "Invalid credentials" — the same message
+                      a mistyped password gives — so the one fact that distinguishes the two was
+                      hidden behind a tap nobody takes until they are already stuck. Shown as the bare
+                      host so a wrong port is visible at a glance, which is exactly how this was mis-set. */}
+                  <Tappable onPress={() => { setShowServerSettings((v) => !v); setProbeResult(null); }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: t.space.xs }}>
+                      <Icon name="server-outline" size={14} color={t.colors.textFaint} />
+                      <AppText variant="caption" tone="faint">
+                        {showServerSettings
+                          ? tr('login.server.hideSettings')
+                          : serverUrl.replace(/^https?:\/\//, '') || tr('login.server.openSettings')}
+                      </AppText>
+                    </View>
+                  </Tappable>
+
+                  {showServerSettings && (
+                    <Card level={1} style={{ gap: t.space.md, padding: t.space.lg, width: '100%' }}>
+                      <Input
+                        label={tr('login.server.addressLabel')}
+                        icon="globe-outline"
+                        value={serverUrl}
+                        onChangeText={setServerUrl}
+                        placeholder={tr('login.server.addressPlaceholder')}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="url"
+                        accessibilityLabel={tr('login.server.addressAccessibility')}
+                      />
+
+                      {probeResult && (
+                        <AppText
+                          variant="caption"
+                          style={{ color: probeResult.ok ? (t.colors.success || t.colors.primary) : t.colors.danger }}>
+                          {probeResult.message}
+                        </AppText>
+                      )}
+
+                      <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                        <Button label={tr('login.server.test')} variant="neutral" onPress={handleTestServer} loading={testingServer} style={{ flex: 1 }} />
+                        <Button label={tr('common.save')} onPress={handleSaveServer} style={{ flex: 1 }} />
+                      </View>
+
+                      <Tappable onPress={handleResetServer}>
+                        <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+                          {tr('login.server.reset')}
+                        </AppText>
+                      </Tappable>
+                    </Card>
+                  )}
                 </View>
 
-                <Tappable onPress={handleResetServer}>
-                  <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-                    {tr('login.server.reset')}
-                  </AppText>
-                </Tappable>
-              </Card>
-            )}
-          </View>
-
-          <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-            {tr('login.authorisedOnly')}
-          </AppText>
-          {/*
-            Shown BEFORE sign-in on purpose. The most common support question — "which version
-            are you on?" — is asked most often by someone who cannot get past this screen, and
-            a version that only lives on the Profile tab is unreachable to exactly them.
-          */}
-          <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-            {versionLine()}
-          </AppText>
-        </Animated.View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+                {/* On a wide screen the version already sits in the brand pane; here it would be a
+                    third small-print line under a form deliberately kept to one thing at a time. */}
+                {!isWide && (
+                  <View style={{ alignItems: 'center', gap: 2 }}>
+                    <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+                      {tr('login.authorisedOnly')}
+                    </AppText>
+                    {/*
+                      Shown BEFORE sign-in on purpose. The most common support question — "which
+                      version are you on?" — is asked most often by someone who cannot get past this
+                      screen, and a version that only lives on the Profile tab is unreachable to
+                      exactly them.
+                    */}
+                    <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+                      {versionLine()}
+                    </AppText>
+                  </View>
+                )}
+              </View>
+            </View>
+          </Animated.View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 };
