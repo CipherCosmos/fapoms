@@ -80,6 +80,35 @@ export class AssayerApplicationEntity extends BaseEntity {
   @Column({ name: 'consent_version', type: 'varchar', length: 20, nullable: true })
   consentVersion: string | null;
 
+  /**
+   * The exact notice this person was shown, kept beside their acceptance.
+   *
+   * The wording is versioned in code, so the version alone would usually be enough — but what has
+   * to be produced later is what THIS candidate actually saw, including the grievance contact that
+   * was current that day. Storing the text means a notice can never be quietly rewritten under an
+   * acceptance that already happened.
+   */
+  @Column({ name: 'consent_notice', type: 'jsonb', nullable: true })
+  consentNotice: Record<string, unknown> | null;
+
+  /** When they took it back. Set together with status WITHDRAWN; see `withdrawConsent`. */
+  @Column({ name: 'consent_withdrawn_at', type: 'timestamptz', nullable: true })
+  consentWithdrawnAt: Date | null;
+
+  /** Their words, if they gave a reason. Never required — withdrawal is not something to justify. */
+  @Column({ name: 'consent_withdrawal_reason', type: 'text', nullable: true })
+  consentWithdrawalReason: string | null;
+
+  /**
+   * When the retention sweep erased this person's answers and deleted their scans.
+   *
+   * The row survives as a record that an application existed and how it ended; everything that
+   * identified the person is gone. Null means "still holding their data" — either because it is
+   * not due yet, or because the application is still live.
+   */
+  @Column({ name: 'personal_data_erased_at', type: 'timestamptz', nullable: true })
+  personalDataErasedAt: Date | null;
+
   // ── Review workflow ────────────────────────────────────────────────────
   @Column({ type: 'varchar', length: 20, default: ApplicationStatus.DRAFT })
   status: ApplicationStatus;

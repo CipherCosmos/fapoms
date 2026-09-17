@@ -23,6 +23,12 @@ export enum ApplicationStatus {
   REJECTED = 'REJECTED',
   /** Terminal (successful). Promoted to a real assayer — see `promotedAssayerId`. */
   APPROVED = 'APPROVED',
+  /**
+   * Terminal. The candidate withdrew their consent, so the application stops where it is and what
+   * they had given us is erased. Distinct from REJECTED on purpose: nobody judged this person, and
+   * a register of people we turned down should not quietly fill up with people who simply left.
+   */
+  WITHDRAWN = 'WITHDRAWN',
 }
 
 /** States that accept no further action from either the candidate or HR. */

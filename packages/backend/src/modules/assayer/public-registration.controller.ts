@@ -98,6 +98,15 @@ class AcceptConsentDto {
   consentVersion: string;
 }
 
+class WithdrawConsentDto {
+  /**
+   * Optional, and deliberately so: the DPDP Act makes withdrawal as easy as consent, and a required
+   * "why" is friction in the way of a right.
+   */
+  @IsOptional() @IsString() @MaxLength(500)
+  reason?: string;
+}
+
 /**
  * The Appraiser Recruitment spec's Modules 2–3: candidate self-registration, reachable by the
  * emailed invite link alone — no `@Roles`/`JwtAuthGuard` on this controller at all, matching the
@@ -177,6 +186,17 @@ export class PublicRegistrationController {
   @ApiOperation({ summary: 'Record the declaration & consent acknowledgement' })
   async acceptConsent(@Param('token') token: string, @Body() dto: AcceptConsentDto) {
     return await this.registrationApplications.acceptConsent(token, dto.consentVersion);
+  }
+
+  /**
+   * Taking it back. Same link, same effort as giving it — see `withdrawConsent`, which erases the
+   * answers and deletes the scans rather than just marking a flag.
+   */
+  @Post(':token/consent/withdraw')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Withdraw consent and erase what was given' })
+  async withdrawConsent(@Param('token') token: string, @Body() dto: WithdrawConsentDto) {
+    return await this.registrationApplications.withdrawConsent(token, dto.reason);
   }
 
   @Post(':token/documents/:requirement')

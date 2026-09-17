@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Shield, Users as UsersIcon, Plus, Trash2, Lock, Info, X, ChevronRight, Search } from 'lucide-react';
-import { roleLabel } from '@fapoms/shared';
+import { roleLabel, ROLE_DESCRIPTIONS, SystemRole,
+} from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { Modal, AlertBanner, useConfirm } from '../../components/ui';
@@ -322,10 +323,15 @@ export const RolesPermissionsPanel: React.FC = () => {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
+                {/*
+                  A permission COUNT is not a description. "18 permissions" told an administrator
+                  nothing about whether to give somebody this role; the plain sentence for every
+                  built-in role was already in the shared vocabulary, unused by any screen.
+                */}
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '3px', lineHeight: 1.5 }}>
                   {role.description
-                    ? role.description
-                    : `${grants} ${grants === 1 ? 'permission' : 'permissions'}`}
+                    || ROLE_DESCRIPTIONS[role.name as SystemRole]
+                    || `A custom role granting ${grants} ${grants === 1 ? 'permission' : 'permissions'} — open it to see which.`}
                 </div>
               </div>
 

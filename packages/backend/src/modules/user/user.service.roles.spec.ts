@@ -9,6 +9,7 @@ import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 
 /**
  * Guard rails on the role editor.
@@ -57,6 +58,8 @@ describe('UserService — roles & permissions', () => {
         { provide: AuditService, useValue: mockAudit },
         { provide: DomainEventPublisher, useValue: mockEvents },
         { provide: CacheService, useValue: mockCache },
+        // Staff invites go out by email; nothing in these suites sends one.
+        { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: true }) } },
       ],
     }).compile();
 

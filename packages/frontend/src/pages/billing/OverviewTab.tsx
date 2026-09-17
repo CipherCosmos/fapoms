@@ -14,7 +14,7 @@ import { LoadFailure } from '../../components/LoadFailure';
  * how each client is doing. Every figure is one the server computed from the same rows the
  * Payouts and Invoices tabs show; nothing is added up here.
  */
-export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices', filter?: string) => void }> = ({ onGo }) => {
+export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices' | 'assayer-invoices', filter?: string) => void }> = ({ onGo }) => {
   const overview = useBillingOverview();
   const { data, isLoading } = overview;
 
@@ -37,8 +37,8 @@ export const OverviewTab: React.FC<{ onGo: (tab: 'payouts' | 'invoices', filter?
     {
       show: payouts.due > 0, icon: <Clock size={15} />, tone: 'var(--warning)',
       title: `${payouts.dueCount} payout${payouts.dueCount === 1 ? '' : 's'} to approve`, amount: payouts.due,
-      detail: 'Assayers have completed this work. One approval, then it can be paid.',
-      cta: 'Approve', go: () => onGo('payouts', 'PENDING'),
+      detail: 'Assayers have completed this work. Confirmed claims waiting for ops approval.',
+      cta: 'Review claims', go: () => onGo('assayer-invoices', 'SUBMITTED'),
     },
     {
       show: payouts.approved > 0, icon: <ArrowUpRight size={15} />, tone: 'var(--accent)',

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, ScrollView, View, Platform } from 'react-native';
+import { Modal, ScrollView, View, Platform, Alert } from 'react-native';
 import { outboxTitle, type OutboxUpload, type OutboxStatus } from '../services/upload-outbox';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon, IconButton, ProgressBar, Tappable } from './ui/primitives';
@@ -97,7 +97,26 @@ const UploadRow: React.FC<{
           </AppText>
           <View style={{ flexDirection: 'row', gap: t.space.sm }}>
             <Button label={tr('common.retry')} icon="refresh" onPress={() => onRetry(upload.id)} style={{ flex: 1 }} />
-            <Button label={tr('uploads.remove')} icon="trash-outline" variant="ghost" onPress={() => onDismiss(upload.id)} />
+            <Button
+              label={tr('uploads.remove')}
+              icon="trash-outline"
+              variant="ghost"
+              onPress={() => {
+                // This is the one place in the outbox where a tap actually loses work — Retry
+                // and the completed-item "Clear" are both harmless, this one is not: it sits
+                // right next to Retry, same row, same size, and a mis-tap means a scan or a
+                // registration document has to be redone from scratch with no local record it
+                // ever existed. A native confirm, same as sign-out elsewhere in the app.
+                Alert.alert(
+                  tr('uploads.removeConfirmTitle'),
+                  tr('uploads.removeConfirmBody'),
+                  [
+                    { text: tr('common.cancel'), style: 'cancel' },
+                    { text: tr('uploads.remove'), style: 'destructive', onPress: () => onDismiss(upload.id) },
+                  ],
+                );
+              }}
+            />
           </View>
         </View>
       )}
@@ -151,7 +170,10 @@ export const UploadsModal: React.FC<UploadsModalProps> = ({ visible, uploads, on
             borderColor: t.colors.border,
           }}
         >
-          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel={tr('common.back')} />
+          {/* "close" (X), not "arrow-back" — this dismisses the list entirely, matching the
+              same full-dismiss icon everywhere else in the app rather than a second meaning
+              for the same action. */}
+          <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('common.close')} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <AppText variant="h3" numberOfLines={1}>{tr('uploads.title')}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>

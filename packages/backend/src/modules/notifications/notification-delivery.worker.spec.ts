@@ -8,6 +8,7 @@ import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { NotificationSettingsService } from './notification-settings.service';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { UserEntity } from '../user/user.entity';
 import { NotificationSweeper } from './notification.sweeper';
 
@@ -39,6 +40,7 @@ describe('NotificationDeliveryWorker', () => {
   const tokenRepo = { find: jest.fn(), update: jest.fn() };
   const prefRepo = { findOne: jest.fn() };
   const userRepo = { findOne: jest.fn() };
+  const assayerRepo = { findOne: jest.fn() };
   const fcm = { sendMulticast: jest.fn() };
   const emailProvider = { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() };
   const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn(), requeueStrandedEmails: jest.fn() };
@@ -49,6 +51,7 @@ describe('NotificationDeliveryWorker', () => {
     updates = [];
     jest.clearAllMocks();
     prefRepo.findOne.mockResolvedValue(null);
+    assayerRepo.findOne.mockResolvedValue(null);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -57,6 +60,7 @@ describe('NotificationDeliveryWorker', () => {
         { provide: getRepositoryToken(DeviceTokenEntity), useValue: tokenRepo },
         { provide: getRepositoryToken(NotificationPreferenceEntity), useValue: prefRepo },
         { provide: getRepositoryToken(UserEntity), useValue: userRepo },
+        { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
         { provide: FcmProvider, useValue: fcm },
         { provide: EmailProvider, useValue: emailProvider },
         {

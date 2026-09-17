@@ -14,7 +14,9 @@
  * "keep indefinitely" on purpose — the same convention `locationTrail.retentionDays` already uses,
  * so an organisation whose policy really is "never delete" can say so.
  */
-export type RetentionClass = 'SESSION_HISTORY' | 'AUDIT_TRAIL' | 'ACCESS_LOG' | 'UI_TELEMETRY';
+export type RetentionClass =
+  | 'SESSION_HISTORY' | 'AUDIT_TRAIL' | 'ACCESS_LOG' | 'UI_TELEMETRY'
+  | 'CANDIDATE_APPLICATION_CLOSED' | 'CANDIDATE_APPLICATION_ABANDONED';
 
 export interface RetentionPolicy {
   /** Statutory minimum in days; a positive configured value below this is raised to it. Null = no floor. */
@@ -53,6 +55,39 @@ export const RETENTION_POLICIES: Record<RetentionClass, RetentionPolicy> = {
     floorDays: 90,
     defaultDays: 180,
     rationale: 'DPDP data-minimisation: UI telemetry kept briefly, 90-day floor.',
+  },
+
+  /*
+    PERSONAL DATA PULLS THE OPPOSITE WAY TO LOGS.
+
+    Every class above is evidence: the law sets a MINIMUM and the danger is deleting too early, so a
+    configured value is clamped UP. The two below are somebody's identity documents, and the danger
+    runs the other way — DPDP says personal data is erased once the purpose it was collected for is
+    served. Keeping a rejected candidate's Aadhaar scan for five years is not caution, it is a
+    breach waiting to have a date attached to it.
+
+    So these carry no statutory floor (`floorDays: null`) and a default that actually deletes. They
+    are still configurable, because a real dispute window is a business decision and not ours to
+    fix — but a longer setting here is a decision somebody is making about other people's
+    documents, not a safe default.
+  */
+
+  // Rejected or withdrawn: the purpose is finished. 365 days matches what the consent notice
+  // promises candidates in writing — "if the application does not go ahead, it is deleted within
+  // twelve months" — and that promise is the reason this number is not shorter or longer.
+  CANDIDATE_APPLICATION_CLOSED: {
+    floorDays: null,
+    defaultDays: 365,
+    rationale: 'DPDP erasure: a closed application has served its purpose; matches the consent notice\'s twelve months.',
+  },
+
+  // Never submitted, link long expired. Nobody applied, so there is nothing to keep: the half-form
+  // is only a liability. Shorter than the closed window on purpose — and still inside the twelve
+  // months the notice promises.
+  CANDIDATE_APPLICATION_ABANDONED: {
+    floorDays: null,
+    defaultDays: 90,
+    rationale: 'DPDP data-minimisation: an unsubmitted form was never an application.',
   },
 };
 

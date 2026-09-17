@@ -1,15 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, Loader2, Phone, ShieldCheck, Eye, ArrowLeft,
-  CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck,
-  MapPin, Landmark, GraduationCap, Users, Info, Lock, Camera,
-  HelpCircle, Award,
+  Check, Loader2, Phone, ShieldCheck, Eye, ArrowLeft, CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck, MapPin, Landmark, GraduationCap, Users, Info, Camera, HelpCircle, Award,
 } from 'lucide-react';
 import {
   ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS,
-  uploadSizeProblem, isValidIfsc, normalisePhone, scanMimeType,
+  uploadSizeProblem, isValidIfsc, normalisePhone, scanMimeType, storedScanFileName,
 } from '@fapoms/shared';
-import { BrandLogo } from '../components/BrandLogo';
 import { Select } from '../components/ui/Select';
 import { ScanOrAttach } from '../components/scanner/ScanOrAttach';
 import { AlertBanner } from '../components/ui/AlertBanner';
@@ -25,12 +21,18 @@ import {
 import {
   hydrateRegistration, requestRegistrationOtp, verifyRegistrationOtp, updateRegistrationDraft,
   checkRegistrationPhoneConflict,
-  acceptRegistrationConsent, uploadRegistrationDocument, submitRegistration, isOtpVerificationLost,
+  acceptRegistrationConsent,
+  withdrawRegistrationConsent,
+  type RegistrationHydrateResult, uploadRegistrationDocument, submitRegistration, isOtpVerificationLost,
   getRegistrationDocumentFileBlob,
   type RegistrationApplication, type RegistrationApplicationDocument, type UpdateRegistrationDraftInput,
 } from '../services/public-registration';
 import { DocumentPreviewModal, type DocumentPreviewItem } from '../components/DocumentPreviewModal';
 import { LocationPicker } from '../components/LocationPicker';
+import PrimaryButton from './registration/PrimaryButton';
+// The masthead and the stylesheet moved out when a second public page needed them.
+import { FORM_CSS, PublicMasthead } from './registration/PublicShell';
+import ConsentGate from './registration/ConsentGate';
 
 /**
  * Appraiser self-registration — public, reachable by the emailed invite link alone.
@@ -52,7 +54,6 @@ import { LocationPicker } from '../components/LocationPicker';
  * shape (`fieldPatch`/`wholeFormPatch`) is exactly what the backend allow-lists — picks store the
  * same plain strings the old text boxes stored, so the server needs no change.
  */
-const CONSENT_VERSION = 'v1';
 
 const SECTION_TITLE_STYLE: React.CSSProperties = {
   fontSize: 'var(--text-md)',
@@ -153,62 +154,6 @@ const ERROR_TEXT_STYLE: React.CSSProperties = {
  * Kept out of the template literal below on purpose: a comment inside it is shipped to every
  * candidate as part of the stylesheet.
  */
-const FORM_CSS = `
-.pub-reg-root input::placeholder,
-.pub-reg-root textarea::placeholder {
-  color: var(--text-muted) !important;
-  opacity: 1 !important;
-}
-.pub-reg-root input,
-.pub-reg-root select,
-.pub-reg-root textarea {
-  border-color: var(--border-color) !important;
-  color: var(--text-primary) !important;
-  background: var(--bg-input) !important;
-}
-.pub-reg-root input:focus,
-.pub-reg-root select:focus,
-.pub-reg-root textarea:focus {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent) !important;
-}
-.reg-input:focus {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent) !important;
-}
-.reg-code-input {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.4em;
-  text-indent: 0.4em;
-  text-align: center;
-  font-weight: 700;
-  border-width: 2px !important;
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color)) !important;
-  background: var(--bg-surface) !important;
-}
-.reg-code-input:disabled {
-  opacity: 0.7;
-}
-.reg-cat-card {
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  background: var(--bg-surface-2) !important;
-  border: 1.5px solid var(--border-color) !important;
-}
-.reg-cat-card:hover {
-  border-color: var(--accent) !important;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
-}
-.reg-cat-selected {
-  border-color: var(--accent) !important;
-  background: rgba(245, 158, 11, 0.12) !important;
-  box-shadow: 0 0 0 2px var(--accent) !important;
-}
-`;
 
 const FieldHint: React.FC<{ field: string; value: string }> = ({ field, value }) => {
   const hint = identityFormatHint(field, value);
@@ -380,61 +325,14 @@ const STATUS_COPY: Partial<Record<ApplicationStatus, (app: RegistrationApplicati
     'Congratulations! Your Sumeru Global Appraiser application has been officially approved.',
   [ApplicationStatus.REJECTED]: (app) =>
     `Your application was not approved.${app.reviewNotes ? ` Review note: ${app.reviewNotes}` : ''}`,
+  [ApplicationStatus.WITHDRAWN]: () =>
+    'You withdrew this application. What you had given us has been deleted, apart from the record '
+    + 'that an application was made and withdrawn. If you change your mind, ask the office that '
+    + 'invited you for a fresh link.',
 };
 
-const PublicMasthead: React.FC = () => (
-  <header className="pub-reg-header">
-    <div className="pub-reg-header-inner">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-        <BrandLogo size="md" showSubtext={false} />
-        <div style={{ borderLeft: '1px solid var(--border-hair)', paddingLeft: '14px', display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--accent)' }}>
-            Appraiser Onboarding Portal
-          </span>
-          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
-            Sumeru Global &middot; Bullion &amp; Collateral Verification
-          </span>
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--bg-surface-2)', padding: '5px 10px', borderRadius: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
-          <Lock size={12} style={{ color: 'var(--success)' }} />
-          <span>Secure Session</span>
-        </div>
-      </div>
-    </div>
-  </header>
-);
 
-const PrimaryButton: React.FC<{
-  onClick: () => void;
-  disabled?: boolean;
-  busy?: boolean;
-  children: React.ReactNode;
-  style?: React.CSSProperties;
-}> = ({ onClick, disabled, busy, children, style }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    disabled={disabled || busy}
-    className="btn btn-primary"
-    style={{
-      padding: '12px 22px',
-      minHeight: '48px',
-      fontSize: 'var(--text-sm)',
-      fontWeight: 600,
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '8px',
-      cursor: disabled || busy ? 'not-allowed' : 'pointer',
-      ...style,
-    }}
-  >
-    {busy && <Loader2 size={16} className="spin" />}
-    {children}
-  </button>
-);
+// PrimaryButton now lives in ./registration/PrimaryButton — the consent screen uses it too.
 
 const WIZARD_STEPS = [
   { id: 1, title: 'Personal & Contact', shortTitle: 'Personal', icon: User, desc: 'Identity & Mobile Verification' },
@@ -646,6 +544,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [uploadErrors, setUploadErrors] = useState<Record<string, string | undefined>>({});
 
   const [consentBusy, setConsentBusy] = useState(false);
+  /** The versioned notice the API serves; the form does not exist until it has been accepted. */
+  const [consentNotice, setConsentNotice] = useState<RegistrationHydrateResult['consentNotice'] | null>(null);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
 
   const [submitBusy, setSubmitBusy] = useState(false);
@@ -703,6 +604,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       setLoadError(null);
       const result = await hydrateRegistration(token);
       setApplication(result.application);
+      setConsentNotice(result.consentNotice);
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
       const seeded = seedForm(result.application);
@@ -1188,7 +1090,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       const items: DocumentPreviewItem[] = [];
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];
-        const fileName = filePath.split('/').pop() ?? `${requirement}-${i + 1}`;
+        // Named after the document, not the key: keys are opaque now (see object-key.ts).
+        const fileName = storedScanFileName(
+          ONBOARDING_DOCUMENT_LABELS[requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? requirement,
+          filePath,
+          filePaths.length > 1 ? i + 1 : undefined,
+        );
         const blob = await getRegistrationDocumentFileBlob(token, requirement, i);
         /*
           Re-typed from the filename before it becomes a URL. The route streams the bytes with no
@@ -1221,18 +1128,43 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     setPreviewItems([]);
   };
 
-  const handleConsentToggle = async (checked: boolean) => {
-    if (!checked || application?.consentAcceptedAt) return;
+  const handleAcceptConsent = async () => {
+    if (!consentNotice || application?.consentAcceptedAt) return;
     setConsentBusy(true);
     setConsentError(null);
     try {
-      const saved = await acceptRegistrationConsent(token, CONSENT_VERSION);
+      // The version the API served, never one written into this page: what the row records and
+      // what the person read have to be the same thing.
+      const saved = await acceptRegistrationConsent(token, consentNotice.version);
       setApplication(saved);
     } catch (err) {
       setConsentError(userMessage(err));
       onVerificationLost(err);
     } finally {
       setConsentBusy(false);
+    }
+  };
+
+  /**
+   * Taking it back. Asks once in plain words, because it erases what they have given us and the
+   * application cannot go ahead afterwards — but it asks ONCE: a right buried under three
+   * confirmations is a right in name only.
+   */
+  const handleWithdraw = async () => {
+    const reason = window.prompt(
+      'Withdrawing stops your application and deletes what you have given us. '
+      + 'You can say why if you want to — it is not required.',
+      '',
+    );
+    if (reason === null) return;
+    setWithdrawing(true);
+    try {
+      const saved = await withdrawRegistrationConsent(token, reason.trim() || undefined);
+      setApplication(saved);
+    } catch (err) {
+      setConsentError(userMessage(err));
+    } finally {
+      setWithdrawing(false);
     }
   };
 
@@ -1513,6 +1445,30 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  /*
+    THE NOTICE COMES FIRST.
+
+    Not a step inside the wizard — a gate in front of it. The server refuses every write until this
+    has been accepted, so a form rendered here would only be able to collect rejections.
+  */
+  if (consentNotice && !application.consentAcceptedAt) {
+    return (
+      <div className="pub-reg-root">
+        <style>{FORM_CSS}</style>
+        <PublicMasthead />
+        <div className="pub-reg-container" style={{ maxWidth: '760px' }}>
+          <ConsentGate
+            notice={consentNotice}
+            candidateName={application.fullName}
+            busy={consentBusy}
+            error={consentError}
+            onAccept={() => void handleAcceptConsent()}
+          />
         </div>
       </div>
     );
@@ -2687,29 +2643,47 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   </div>
                 </div>
 
-                {/* Consent & Declaration */}
+                {/*
+                  WHAT THEY ALREADY AGREED TO, AND HOW TO UNDO IT.
+
+                  This used to be the tick-box itself, sitting beside Submit after every answer had
+                  been collected. The agreement now happens before the form opens, so what belongs
+                  here is the record of it — and the way out, which is the half that never existed.
+                */}
                 <div className="pub-reg-card">
                   <div style={SECTION_TITLE_STYLE}>
                     <ShieldCheck size={18} style={{ color: 'var(--accent)' }} />
-                    <span>Candidate declaration &amp; consent</span>
+                    <span>Your agreement</span>
                   </div>
-                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55, cursor: consentAccepted ? 'default' : 'pointer', padding: '14px', borderRadius: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)' }}>
-                    <input
-                      type="checkbox"
-                      checked={consentAccepted}
-                      disabled={consentAccepted || consentBusy}
-                      onChange={(e) => void handleConsentToggle(e.target.checked)}
-                      style={{ marginTop: '3px', flexShrink: 0, width: '18px', height: '18px', accentColor: 'var(--accent)' }}
-                    />
-                    <span>
-                      I solemnly declare that all personal and professional information provided in this registration form is accurate, complete, and true to the best of my knowledge. I hereby grant consent to Sumeru Global to verify my documents, professional credentials, and background records for the purpose of appraiser empanelment and onboarding.
-                    </span>
-                  </label>
-                  {consentAccepted && (
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                      <ShieldCheck size={15} /> Declaration and consent acknowledged.
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                    You agreed to the notice
+                    {application.consentAcceptedAt ? ` on ${new Date(application.consentAcceptedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}
+                    {consentNotice ? ` (version ${consentNotice.version})` : ''}. A copy of exactly what you
+                    read is kept with your application.
+                  </div>
+                  {consentNotice && (
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                      Questions about your details: {consentNotice.grievanceContact}
                     </div>
                   )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <ShieldCheck size={15} /> Agreed
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleWithdraw()}
+                      disabled={withdrawing}
+                      style={{
+                        background: 'none', border: 'none', padding: '2px',
+                        color: 'var(--danger)', textDecoration: 'underline',
+                        cursor: withdrawing ? 'default' : 'pointer',
+                        fontSize: 'var(--text-xs)', fontWeight: 600,
+                      }}
+                    >
+                      {withdrawing ? 'Withdrawing…' : 'Withdraw and delete what I have given'}
+                    </button>
+                  </div>
                   {consentError && <AlertBanner type="error" message={consentError} onClose={() => setConsentError(null)} />}
                 </div>
 

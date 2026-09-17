@@ -44,6 +44,7 @@ export interface AssayerInvoiceSummary {
   approvedAt: string | null;
   approvedBy: string | null;
   paidAt?: string | null;
+  paidBy?: string | null;
   cancelledAt: string | null;
   cancelledBy: string | null;
   cancelReason: string | null;

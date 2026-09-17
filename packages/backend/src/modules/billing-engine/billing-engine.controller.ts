@@ -420,6 +420,20 @@ export class BillingEngineController {
     return await this.assayerInvoices.cancel(id, this.userId(req), dto.reason);
   }
 
+  @Post('assayer-invoices/:id/revise')
+  @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:edit:organization')
+  @ApiOperation({ summary: 'Issue a corrected revision of an assayer claim, superseding the current invoice' })
+  async reviseAssayerInvoice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReasonDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInvoiceInScope(id, scope);
+    return await this.assayerInvoices.reviseInvoice(id, this.userId(req), dto.reason);
+  }
+
   @Get('assayers/:assayerId/invoice-invitation')
   @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
   // Deliberately no @RequirePermissions, for the same reason as the statement route above: an

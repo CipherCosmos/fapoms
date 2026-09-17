@@ -10,6 +10,7 @@ import { PermissionEntity } from './permission.entity';
 import { CapabilityEntity } from './capability.entity';
 import { ResponsibilityEntity } from './responsibility.entity';
 import { UserService } from './user.service';
+import { AccountSetupController } from './account-setup.controller';
 import { UserController } from './user.controller';
 import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemDashboardController } from './system-dashboard.controller';
@@ -18,7 +19,7 @@ import { SystemDashboardController } from './system-dashboard.controller';
   imports: [
     TypeOrmModule.forFeature([UserEntity, RoleEntity, PermissionEntity, CapabilityEntity, ResponsibilityEntity]),
   ],
-  controllers: [UserController, SystemDashboardController],
+  controllers: [UserController, SystemDashboardController, AccountSetupController],
   providers: [OperationsSnapshotService, UserService],
   exports: [UserService],
 })

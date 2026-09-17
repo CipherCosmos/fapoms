@@ -188,6 +188,10 @@ export function useCancelAssayerInvoice() {
   return useBillingMutation(({ id, reason }: { id: string; reason: string }) => billingApi.cancelAssayerInvoice(id, reason));
 }
 
+export function useReviseAssayerInvoice() {
+  return useBillingMutation(({ id, reason }: { id: string; reason: string }) => billingApi.reviseAssayerInvoice(id, reason));
+}
+
 export function useCreateBillingInvoice() {
   return useBillingMutation((payload: CreateInvoicePayload) => billingApi.createInvoice(payload));
 }

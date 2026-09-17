@@ -71,7 +71,9 @@ const INVOICE_STATE: Record<AssayerInvoiceStatus, { labelKey: TranslationKey; to
   [AssayerInvoiceStatus.INVITED]: { labelKey: 'earnings.invoiceStatus.invited', tone: 'info' },
   [AssayerInvoiceStatus.SUBMITTED]: { labelKey: 'earnings.invoiceStatus.submitted', tone: 'warning' },
   [AssayerInvoiceStatus.APPROVED]: { labelKey: 'earnings.invoiceStatus.approved', tone: 'success' },
+  [AssayerInvoiceStatus.PAID]: { labelKey: 'earnings.invoiceStatus.paid', tone: 'success' },
   [AssayerInvoiceStatus.CANCELLED]: { labelKey: 'earnings.invoiceStatus.cancelled', tone: 'neutral' },
+  [AssayerInvoiceStatus.SUPERSEDED]: { labelKey: 'earnings.invoiceStatus.superseded', tone: 'neutral' },
 };
 
 /** A rejected claim read as "pending" before — the same neutral grey as awaiting approval. */

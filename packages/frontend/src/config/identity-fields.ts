@@ -1,5 +1,5 @@
 import {
-  AADHAAR_PATTERN, isValidAadhaar, isValidIfsc, isValidPan, normalisePhone,
+  AADHAAR_PATTERN, isValidAadhaar, isValidIfsc, isValidPan, normalisePhone, looksMasked,
 } from '@fapoms/shared';
 
 /**
@@ -24,6 +24,12 @@ import {
 export function identityFormatHint(key: string, value: string): string | null {
   const v = (value || '').trim();
   if (!v) return null;
+  /*
+    A masked value is not a malformed one. Applications now hand staff screens the last four digits
+    of a PAN, Aadhaar or account number, and telling a clerk that "••••234F" does not look like a
+    PAN would be both true and useless — the number is on file, and it is not theirs to retype.
+  */
+  if (looksMasked(v)) return null;
   if (key === 'panNumber' && !isValidPan(v)) {
     return 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.';
   }

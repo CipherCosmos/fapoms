@@ -343,6 +343,7 @@ export class AssayerInvoiceService {
       inv.status = AssayerInvoiceStatus.SUBMITTED;
       inv.submittedAt = new Date();
       inv.submittedRequestId = clientRequestId;
+      inv.confirmedVersion = inv.revision ?? 1;
       inv.updatedBy = assayerId;
       const out = await m.save(inv);
 
@@ -417,12 +418,23 @@ export class AssayerInvoiceService {
       const inv = await m.findOne(AssayerInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
       if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
       if (inv.status === AssayerInvoiceStatus.APPROVED) return inv; // the double-press — no-op
+      if (inv.status === AssayerInvoiceStatus.PAID) {
+        throw new ConflictException(`${inv.invoiceNumber} is already paid.`);
+      }
+      if (inv.status === AssayerInvoiceStatus.SUPERSEDED) {
+        throw new ConflictException(`${inv.invoiceNumber} has been superseded by a newer revision.`);
+      }
       if (inv.status === AssayerInvoiceStatus.CANCELLED) {
         throw new ConflictException(`${inv.invoiceNumber} is cancelled.`);
       }
       if (inv.status !== AssayerInvoiceStatus.SUBMITTED) {
         throw new BadRequestException(
           `${inv.invoiceNumber} has not been submitted by the assayer yet — approval accepts THEIR confirmation, it cannot precede it.`,
+        );
+      }
+      if (inv.confirmedVersion !== inv.revision) {
+        throw new ConflictException(
+          `${inv.invoiceNumber} revision ${inv.revision} has not been confirmed by the assayer (last confirmed: ${inv.confirmedVersion ?? 'none'}).`,
         );
       }
 
@@ -582,6 +594,167 @@ export class AssayerInvoiceService {
     return this.toSummary(saved);
   }
 
+  /**
+   * Controlled Revision & Supersession (Scenario F):
+   * If a confirmed or submitted claim requires correction (e.g. line dispute or fee correction),
+   * the current invoice is marked SUPERSEDED, and a new revision (Rev N+1) is generated.
+   *
+   * The revised claim requires fresh assayer review & confirmation (INVITED -> SUBMITTED)
+   * before Ops can approve it for disbursement.
+   */
+  async reviseInvoice(invoiceId: string, actorId: string, reason: string): Promise<AssayerInvoiceSummary> {
+    if (!reason?.trim()) throw new BadRequestException('Reason is required when revising a claim.');
+    let notify: { assayerId: string; invoiceId: string; invoiceNumber: string; count: number; total: number; revision: number } | null = null;
+    const newInv = await this.inTx(async (m, emit) => {
+      const inv = await m.findOne(AssayerInvoiceEntity, {
+        where: { id: invoiceId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!inv) throw new NotFoundException(`Assayer invoice ${invoiceId} not found.`);
+      if (inv.status === AssayerInvoiceStatus.APPROVED || inv.status === AssayerInvoiceStatus.PAID) {
+        throw new ConflictException(`${inv.invoiceNumber} is already ${inv.status.toLowerCase()} and cannot be revised.`);
+      }
+      if (inv.status === AssayerInvoiceStatus.SUPERSEDED) {
+        throw new ConflictException(`${inv.invoiceNumber} is already superseded.`);
+      }
+      if (inv.status === AssayerInvoiceStatus.CANCELLED) {
+        throw new ConflictException(`${inv.invoiceNumber} is cancelled.`);
+      }
+
+      const lines = await m
+        .createQueryBuilder(AssayerPayableEntity, 'p')
+        .setLock('pessimistic_write')
+        .where('p.assayer_invoice_id = :invoiceId AND p.is_active = true', { invoiceId: inv.id })
+        .orderBy('p.id', 'ASC')
+        .getMany();
+
+      const eligibleLines = lines.filter((l) => !l.onHold && l.status === AssayerPayableStatus.PENDING);
+      if (!eligibleLines.length) {
+        throw new BadRequestException('No eligible unheld lines remain to create a revised claim.');
+      }
+
+      const prevStatus = inv.status;
+      const baseNumber = inv.invoiceNumber.split('-R')[0];
+      const nextRevision = (inv.revision || 1) + 1;
+      const revisedInvoiceNumber = `${baseNumber}-R${nextRevision}`;
+
+      // Transition old invoice to SUPERSEDED first (clears active partial unique index slot)
+      inv.status = AssayerInvoiceStatus.SUPERSEDED;
+      inv.updatedBy = actorId;
+      await m.save(inv);
+
+      // Create new revised invoice
+      const revisedInvoice = this.invoiceRepository.create({
+        invoiceNumber: revisedInvoiceNumber,
+        assayerId: inv.assayerId,
+        status: AssayerInvoiceStatus.INVITED,
+        invitedAt: new Date(),
+        invitedBy: actorId,
+        revision: nextRevision,
+        supersedesInvoiceId: inv.id,
+        lineCount: eligibleLines.length,
+        subtotalBase: round2(eligibleLines.reduce((s, l) => s + Number(l.baseAmount), 0)),
+        subtotalTravel: round2(eligibleLines.reduce((s, l) => s + Number(l.travelAmount), 0)),
+        tdsAmount: round2(eligibleLines.reduce((s, l) => s + Number(l.tdsAmount), 0)),
+        totalAmount: round2(eligibleLines.reduce((s, l) => s + Number(l.totalAmount), 0)),
+        currency: inv.currency,
+        notes: `Revision ${nextRevision} superseding ${inv.invoiceNumber}. Reason: ${reason.trim()}`,
+        createdBy: actorId,
+        updatedBy: actorId,
+      });
+      const savedRevised = await m.save(revisedInvoice);
+
+      // Re-link eligible lines to the new revised invoice
+      await m.update(
+        AssayerPayableEntity,
+        eligibleLines.map((l) => l.id),
+        { assayerInvoiceId: savedRevised.id, updatedBy: actorId },
+      );
+
+      // Lines on hold (if any) are detached from the old invoice so they return to eligible pool upon unholding
+      const heldLines = lines.filter((l) => l.onHold || l.status !== AssayerPayableStatus.PENDING);
+      if (heldLines.length) {
+        await m.update(
+          AssayerPayableEntity,
+          heldLines.map((l) => l.id),
+          { assayerInvoiceId: null, updatedBy: actorId },
+        );
+      }
+
+      // Record pointer from old invoice to the new revision
+      inv.supersededByInvoiceId = savedRevised.id;
+      await m.save(inv);
+
+      await this.engine.history(actorId, {
+        assayerId: inv.assayerId,
+        entityType: BillingEntityType.ASSAYER_INVOICE, entityId: inv.id, action: 'ASSAYER_INVOICE_SUPERSEDED',
+        fromState: prevStatus, toState: AssayerInvoiceStatus.SUPERSEDED,
+        newValue: { supersededByInvoiceId: savedRevised.id, revision: nextRevision, reason: reason.trim() },
+        reason: reason.trim(),
+      }, m);
+
+      await this.engine.history(actorId, {
+        assayerId: inv.assayerId,
+        entityType: BillingEntityType.ASSAYER_INVOICE, entityId: savedRevised.id, action: 'ASSAYER_INVOICE_INVITED',
+        fromState: null, toState: AssayerInvoiceStatus.INVITED,
+        newValue: {
+          invoiceNumber: savedRevised.invoiceNumber, lineCount: savedRevised.lineCount,
+          totalAmount: Number(savedRevised.totalAmount), revision: nextRevision,
+          supersedesInvoiceId: inv.id,
+        },
+        reason: reason.trim(),
+      }, m);
+
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSAYER_INVOICE_SUPERSEDED',
+        entityType: 'ASSAYER_INVOICE',
+        entityId: inv.id,
+        previousState: prevStatus,
+        newState: AssayerInvoiceStatus.SUPERSEDED,
+        userId: actorId,
+        remarks: `Superseded by revision ${savedRevised.invoiceNumber}: ${reason.trim()}`,
+        metadata: { oldInvoiceId: inv.id, newInvoiceId: savedRevised.id, reason: reason.trim() },
+      }, { manager });
+
+      emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
+      emit('billing:assayer-invoice-changed', { invoiceId: savedRevised.id, assayerId: savedRevised.assayerId, status: savedRevised.status });
+
+      notify = {
+        assayerId: inv.assayerId,
+        invoiceId: savedRevised.id,
+        invoiceNumber: savedRevised.invoiceNumber,
+        count: savedRevised.lineCount,
+        total: Number(savedRevised.totalAmount),
+        revision: nextRevision,
+      };
+
+      return savedRevised;
+    });
+
+    if (notify) {
+      const n = notify as { assayerId: string; invoiceId: string; invoiceNumber: string; count: number; total: number; revision: number };
+      this.notificationDispatch.emitSafe({
+        type: 'ASSAYER_INVOICE_INVITED',
+        entityType: 'ASSAYER_INVOICE',
+        entityId: n.invoiceId,
+        actorUserId: actorId,
+        assayerId: n.assayerId,
+        dedupeKey: `ASSAYER_INVOICE_REVISED:${n.invoiceId}`,
+        payload: {
+          invoiceNumber: n.invoiceNumber,
+          count: n.count,
+          total: n.total,
+          revision: n.revision,
+          isRevision: true,
+        },
+      });
+    }
+
+    return this.toSummary(newInv);
+  }
+
   // -----------------------------------------------------------------------
   // Reads
   // -----------------------------------------------------------------------
@@ -646,6 +819,12 @@ export class AssayerInvoiceService {
       totalAmount: Number(inv.totalAmount),
       currency: inv.currency,
       notes: inv.notes ?? null,
+      revision: inv.revision ?? 1,
+      supersedesInvoiceId: inv.supersedesInvoiceId ?? null,
+      supersededByInvoiceId: inv.supersededByInvoiceId ?? null,
+      confirmedVersion: inv.confirmedVersion ?? null,
+      paidAt: inv.paidAt ? new Date(inv.paidAt).toISOString() : null,
+      paidBy: inv.paidBy ?? null,
     };
   }
 
@@ -659,9 +838,11 @@ export class AssayerInvoiceService {
       `SELECT p.id, p.payable_number, p.status, p.on_hold, p.expense_id, p.assignment_id,
               p.base_amount, p.travel_amount, p.tds_amount, p.total_amount,
               a.assignment_number, a.completion_date, b.name AS branch_name,
+              c.name AS client_name,
               x.category AS expense_category
          FROM assayer_payables p
          LEFT JOIN assignments a ON a.id = p.assignment_id
+         LEFT JOIN clients c ON c.id = p.client_id
          LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
          LEFT JOIN branches b ON b.id = pb.branch_id
          LEFT JOIN assignment_expenses x ON x.id = p.expense_id
@@ -677,6 +858,7 @@ export class AssayerInvoiceService {
       onHold: !!r.on_hold,
       assignmentId: r.assignment_id ?? null,
       assignmentNumber: r.assignment_number ?? null,
+      clientName: r.client_name ?? null,
       branchName: r.branch_name ?? null,
       // ISO yyyy-mm-dd, like every other date this API returns — the frontend formats it once.
       // `String(date).slice(0,10)` looked right for a raw string column but this comes back from

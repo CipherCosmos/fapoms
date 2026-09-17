@@ -222,7 +222,11 @@ export const RegistrationChecklistModal: React.FC<RegistrationChecklistModalProp
             borderColor: t.colors.border,
           }}
         >
-          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel={tr('common.back')} />
+          {/* "close" (X), not "arrow-back" — this dismisses the checklist entirely, there is
+              nothing behind it to go "back" to. Matches the same full-dismiss icon used
+              everywhere else in the app (DocumentScanner, every ModalSheet-based sheet) rather
+              than inventing a second meaning for the same action. */}
+          <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('common.close')} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <AppText variant="h3" numberOfLines={1}>{tr('registration.title')}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>

@@ -147,6 +147,13 @@ export function applicationRow(app: ApplicationLike): PipelineRow | null {
       return { ...base, stage: 'waiting', stageLabel: 'Sent back to them', needs: 'Waiting for them to correct what was asked for' };
     case ApplicationStatus.REJECTED:
       return { ...base, stage: 'closed', stageLabel: 'Turned down', needs: 'No further action' };
+    /*
+      Shown, not hidden. A candidate who withdraws would otherwise vanish from the desk's pipeline
+      with no explanation — the clerk who was chasing them deserves to see what happened, even
+      though there is nothing left to chase.
+    */
+    case ApplicationStatus.WITHDRAWN:
+      return { ...base, stage: 'closed', stageLabel: 'Withdrawn', needs: 'They withdrew; their details were erased' };
     case ApplicationStatus.APPROVED:
       return null;
     default:

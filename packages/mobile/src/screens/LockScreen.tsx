@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Animated } from 'react-native';
+import { View, Animated, Alert } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AmbientGlow, AppText, Button, Icon, Tappable } from '../components/ui/primitives';
 import * as haptics from '../lib/haptics';
@@ -165,10 +165,27 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
           size="lg"
           full
         />
-        {/* A real, separate account switch — not the retry above — so it needs its own
-            comfortable target and an explicit warning that it ends the current session. */}
+        {/*
+          A real, separate account switch — not the retry above — so it needs its own
+          comfortable target and an explicit warning that it ends the current session.
+
+          Confirmed the same way ProfileScreen's own sign-out row is: a bare tap here used to
+          fire `onSignOut` immediately, and this button sits right under the primary "Unlock"
+          button — the exact spot a thumb lands on a repeated, frustrated tap at a stuck
+          fingerprint sensor. ProfileScreen's sign-out was fixed for this identical mis-tap
+          risk (see its own comment); this one hadn't been.
+        */}
         <Tappable
-          onPress={onSignOut}
+          onPress={() => {
+            Alert.alert(
+              tr('profile.signOutConfirm.title'),
+              tr('profile.signOutConfirm.body'),
+              [
+                { text: tr('common.cancel'), style: 'cancel' },
+                { text: tr('common.signOut'), style: 'destructive', onPress: onSignOut },
+              ],
+            );
+          }}
           hitSlop={{ top: 10, bottom: 10, left: 20, right: 20 }}
           accessibilityRole="button"
           accessibilityLabel={tr('lock.switchAccountAccessibility')}

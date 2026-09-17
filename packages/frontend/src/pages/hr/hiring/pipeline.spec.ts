@@ -175,3 +175,29 @@ describe('the chips', () => {
     expect(alerting).toEqual(['to-review', 'ready']);
   });
 });
+
+/**
+ * A candidate who withdraws would otherwise vanish from the desk's board with no explanation —
+ * `applicationRow` returns null for anything it does not recognise, and the clerk who had been
+ * chasing them would simply find the row gone one morning.
+ */
+describe('a withdrawn application', () => {
+  const app = (over: Partial<ApplicationLike> = {}): ApplicationLike => ({
+    id: 'a1', fullName: 'Ramesh Kulkarni', mobile: '9822014455', email: null,
+    status: ApplicationStatus.WITHDRAWN, createdAt: '2026-09-10T00:00:00.000Z',
+    updatedAt: '2026-09-12T00:00:00.000Z', ...over,
+  } as ApplicationLike);
+
+  it('stays on the board as closed, saying what happened', () => {
+    const row = applicationRow(app());
+    expect(row).not.toBeNull();
+    expect(row!.stage).toBe('closed');
+    expect(row!.stageLabel).toBe('Withdrawn');
+    expect(row!.needs).toMatch(/erased/);
+  });
+
+  /** Closed, not a task: nobody is waiting on the desk for this one. */
+  it('asks nothing of the desk', () => {
+    expect(PIPELINE_STAGES.find((s) => s.key === 'closed')!.tone).not.toBe('alert');
+  });
+});

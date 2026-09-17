@@ -36,7 +36,7 @@ const FeedbackContext = createContext<FeedbackApi | null>(null);
 
 /** How long each tone stays up. Errors linger; success gets out of the way. */
 const DURATION: Record<Tone, number> = {
-  success: 30000,
+  success: 2600,
   info: 3000,
   warning: 4200,
   error: 5200,

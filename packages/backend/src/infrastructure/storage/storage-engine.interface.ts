@@ -31,6 +31,16 @@ export interface StorageEngine {
   deleteFile(key: string): Promise<void>;
 
   /**
+   * Walk everything in the store, oldest API page at a time.
+   *
+   * Only the orphan audit uses this: the question "is there anything in the bucket that no row
+   * points at?" cannot be answered from the database side alone. Optional, because a driver that
+   * cannot enumerate (or should not) is allowed to say so by not implementing it — the audit then
+   * reports that it could not look, rather than reporting zero orphans.
+   */
+  listObjects?(cursor?: string): Promise<{ objects: Array<{ key: string; lastModified: Date | null; size: number }>; cursor: string | null }>;
+
+  /**
    * Generate a pre-signed GET URL that expires after `expiresIn` seconds.
    * Only required when clients need to fetch the binary directly (e.g. signed
    * download links for the assayer mobile app).

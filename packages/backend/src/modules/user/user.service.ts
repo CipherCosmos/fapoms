@@ -14,13 +14,17 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, ILike, Not } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { randomInt } from 'crypto';
+import { randomInt, randomBytes, createHash } from 'crypto';
 import { UserEntity } from './user.entity';
+
+/** The token as it is stored: a hash, never the thing itself. */
+const sha256Hex = (value: string): string => createHash('sha256').update(value).digest('hex');
 import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
 import { EventCategory, UserStatus, SystemRole, Region, isRegion } from '@fapoms/shared';
 
@@ -43,6 +47,8 @@ export interface CreateUserDto {
    * account unrestricted, same as every staff account today — see `UserEntity.clientId`.
    */
   clientId?: string | null;
+  /** Region scope at creation; validated like an edit. See `assertRegionsAreCanonical`. */
+  regions?: string[];
 }
 
 export interface UpdateUserDto {
@@ -75,6 +81,8 @@ export class UserService {
     // CacheModule is @Global(), so this needs no module wiring. Used only to invalidate the RBAC
     // principal cache synchronously on a password change — see resetPassword/changePassword.
     private readonly cache: CacheService,
+    /* Staff invites are emailed, not typed out and passed on — see `sendPasswordSetupLink`. */
+    private readonly emailProvider: EmailProvider,
   ) {}
 
   /**
@@ -150,6 +158,9 @@ export class UserService {
       phone: dto.phone ?? null,
       departmentId: dto.departmentId ?? null,
       clientId: dto.clientId ?? null,
+      // Set at creation now, not on a second trip to the edit drawer — every new territorial
+      // account used to exist, briefly, as a national one.
+      regions: this.canonicalRegions(dto.regions),
       organizationId: creator?.organizationId ?? null,
       status: UserStatus.ACTIVE,
       /**
@@ -297,15 +308,7 @@ export class UserService {
       user.clientId = dto.clientId ?? null;
     }
     if (dto.regions !== undefined) {
-      // Canonicalise and reject junk here, not in the DB: a typo'd region stored on a user
-      // would silently widen or narrow what they can see.
-      const cleaned = (dto.regions ?? []).filter(isRegion);
-      if ((dto.regions ?? []).length !== cleaned.length) {
-        throw new BadRequestException(
-          `Regions must be canonical values: ${Object.values(Region).join(', ')}.`,
-        );
-      }
-      const next = cleaned.length > 0 ? [...new Set(cleaned)] : null;
+      const next = this.canonicalRegions(dto.regions);
       if (JSON.stringify(next) !== JSON.stringify(user.regions ?? null)) scopeChanged = true;
       user.regions = next;
     }
@@ -463,6 +466,154 @@ export class UserService {
     return saved;
   }
 
+  /**
+   * ── THE INVITE LINK ────────────────────────────────────────────────────────────────────────
+   *
+   * Adding a colleague used to mean inventing a password for them, typing it into a form, and
+   * passing it on — so every account began life with a password two people knew, usually sent over
+   * a messaging app, and usually never changed. This replaces that: the person gets a link, sets
+   * their own password, and nobody else ever sees it.
+   *
+   * Same discipline as the candidate registration invite: only the token's HASH is stored, the
+   * link expires, and using it clears the hash so it works exactly once.
+   */
+  private static readonly SETUP_TOKEN_BYTES = 32;
+  private static readonly SETUP_TOKEN_HOURS = 48;
+
+  /**
+   * Mint a link for this account and return the raw token — the ONLY moment it exists in readable
+   * form. The caller mails it; nothing stores it.
+   */
+  async mintPasswordSetupToken(id: string, actorId: string, reason: 'NEW_ACCOUNT' | 'RESET'): Promise<{
+    user: UserEntity;
+    rawToken: string;
+    expiresAt: Date;
+  }> {
+    const user = await this.findById(id);
+    if (!user.email) {
+      throw new BadRequestException(
+        `${user.displayName} has no email address on file, so there is nowhere to send the link. `
+        + 'Add one first.',
+      );
+    }
+    const rawToken = randomBytes(UserService.SETUP_TOKEN_BYTES).toString('hex');
+    const expiresAt = new Date(Date.now() + UserService.SETUP_TOKEN_HOURS * 60 * 60 * 1000);
+    user.passwordSetupTokenHash = sha256Hex(rawToken);
+    user.passwordSetupExpiresAt = expiresAt;
+    user.passwordSetupSentAt = new Date();
+    await this.userRepository.save(user);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: reason === 'NEW_ACCOUNT' ? 'USER_SETUP_LINK_SENT' : 'USER_PASSWORD_RESET_LINK_SENT',
+      entityType: 'USER',
+      entityId: user.id,
+      userId: actorId,
+      // The token is never in the remark: an audit trail readable by auditors must not hand one of
+      // them a working link into somebody else's account.
+      remarks: `A password link was emailed to ${user.username}; it expires in ${UserService.SETUP_TOKEN_HOURS} hours.`,
+    });
+    return { user, rawToken, expiresAt };
+  }
+
+  /**
+   * Mint a link and email it. Returns whether it actually went out.
+   *
+   * The caller must not assume it did: `EmailProvider.send` answers `{ success: false }` when the
+   * transport is off rather than throwing, and a screen that says "invite sent" on a deployment
+   * with email disabled leaves a colleague waiting for a message nobody posted. When it fails, the
+   * link is returned so the administrator can pass it on themselves — a link is safe to hand over
+   * in a way a password is not, because only its holder can spend it and only once.
+   */
+  async sendPasswordSetupLink(id: string, actorId: string, reason: 'NEW_ACCOUNT' | 'RESET'): Promise<{
+    emailed: boolean;
+    email: string | null;
+    link: string;
+    expiresAt: Date;
+  }> {
+    const { user, rawToken, expiresAt } = await this.mintPasswordSetupToken(id, actorId, reason);
+    const link = `${appPublicUrl()}/account-setup/${rawToken}`;
+    const greeting = `Hello ${user.firstName || user.displayName},`;
+    const intro = reason === 'NEW_ACCOUNT'
+      ? 'An account has been created for you on FAPOMS. Choose a password to finish setting it up.'
+      : 'A password reset was requested for your FAPOMS account. Choose a new password below.';
+
+    const result = await this.emailProvider.send({
+      to: user.email!,
+      subject: reason === 'NEW_ACCOUNT' ? 'Set up your FAPOMS account' : 'Reset your FAPOMS password',
+      text: `${greeting}\n\n${intro}\n\n${link}\n\nThe link works once and expires in ${UserService.SETUP_TOKEN_HOURS} hours.`,
+      html: renderEmailHtml({
+        title: reason === 'NEW_ACCOUNT' ? 'Set up your account' : 'Reset your password',
+        bodyLines: [
+          greeting,
+          intro,
+          `Your username is ${user.username}.`,
+          `This link works once and expires in ${UserService.SETUP_TOKEN_HOURS} hours.`,
+        ],
+        linkUrl: link,
+        linkLabel: reason === 'NEW_ACCOUNT' ? 'Choose my password' : 'Set a new password',
+        securityNotice: 'If you were not expecting this, ignore it and tell your administrator — '
+          + 'nothing changes until somebody uses the link.',
+      }),
+    });
+
+    return { emailed: Boolean(result?.success), email: user.email, link, expiresAt };
+  }
+
+  /**
+   * Who a link belongs to, or nothing.
+   *
+   * Deliberately says the same thing for "no such token", "expired" and "already used": a page
+   * that distinguished them would let somebody probe which links had once been real.
+   */
+  async findByPasswordSetupToken(rawToken: string): Promise<UserEntity | null> {
+    const hash = sha256Hex(rawToken);
+    const user = await this.userRepository.findOne({ where: { passwordSetupTokenHash: hash } });
+    if (!user) return null;
+    if (!user.passwordSetupExpiresAt || user.passwordSetupExpiresAt.getTime() < Date.now()) return null;
+    if (user.status === UserStatus.SUSPENDED) return null;
+    return user;
+  }
+
+  /**
+   * Spend the link: the person's own password, and the token gone.
+   *
+   * Also clears the lockout, because somebody setting a password through a link they were sent is
+   * exactly the person a lockout was protecting — and leaving them locked out would mean the link
+   * appeared to work and the login still refused them.
+   */
+  async completePasswordSetup(rawToken: string, newPassword: string): Promise<UserEntity> {
+    const user = await this.findByPasswordSetupToken(rawToken);
+    if (!user) {
+      throw new BadRequestException(
+        'This link is no longer valid. Ask whoever set up your account to send a fresh one.',
+      );
+    }
+    this.assertStaffPasswordAcceptable(newPassword, user);
+
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    user.passwordSetupTokenHash = null;
+    user.passwordSetupExpiresAt = null;
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
+    if (user.status === UserStatus.LOCKED) user.status = UserStatus.ACTIVE;
+    // They chose it themselves, so there is nothing to force them to change.
+    user.mustChangePassword = false;
+    const saved = await this.userRepository.save(user);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'USER_PASSWORD_SET_BY_HOLDER',
+      entityType: 'USER',
+      entityId: user.id,
+      userId: user.id,
+      remarks: `${user.username} set their own password through an emailed link.`,
+    });
+    // The principal cache holds the old state; a password change must not wait on it to expire.
+    await this.cache.del(rbacPrincipalCacheKey(user.id)).catch(() => undefined);
+    return saved;
+  }
+
   async resetPassword(id: string, newPassword: string, actorId: string): Promise<void> {
     const user = await this.findById(id);
     this.assertStaffPasswordAcceptable(newPassword, user);
@@ -568,9 +719,39 @@ export class UserService {
    * account's own username or email local-part. Deliberately does NOT enforce character-class
    * complexity or expiry/reuse history; those remain a separate business-policy decision.
    */
+  /** One number, one home — see `assertStaffPasswordAcceptable`. */
+  static readonly MIN_PASSWORD_LENGTH = 10;
+
+  /**
+   * Canonicalise a region list, or refuse it.
+   *
+   * Shared by create and update: a typo'd region stored on a user silently widens or narrows what
+   * they can see, and the two paths must not disagree about what counts as a region.
+   */
+  private canonicalRegions(regions: string[] | null | undefined): string[] | null {
+    const cleaned = (regions ?? []).filter(isRegion);
+    if ((regions ?? []).length !== cleaned.length) {
+      throw new BadRequestException(
+        `Regions must be canonical values: ${Object.values(Region).join(', ')}.`,
+      );
+    }
+    return cleaned.length > 0 ? [...new Set(cleaned)] : null;
+  }
+
   private assertStaffPasswordAcceptable(password: string, user: Pick<UserEntity, 'username' | 'email'>): void {
     const pw = (password ?? '').trim();
     const lower = pw.toLowerCase();
+
+    /*
+      Length lived only on the request DTOs, so every entry point carried its own copy of the
+      number — and they disagreed: 8 on the admin reset, 10 on the emailed setup link. The rule
+      belongs with the other password rules, where anything reaching a password hash passes it.
+    */
+    if (pw.length < UserService.MIN_PASSWORD_LENGTH) {
+      throw new BadRequestException(
+        `A password must be at least ${UserService.MIN_PASSWORD_LENGTH} characters.`,
+      );
+    }
 
     const BANNED = [
       'admin123',

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { CacheService } from '../cache/cache.service';
@@ -7,6 +7,7 @@ import { AuthService } from '../../modules/auth/auth.service';
 import { MetricsService } from '../observability/metrics.service';
 import { ensureFuturePartitions, dropExpiredPartitions } from './location-ping-partitions';
 import { resolveRetention } from './retention-classes';
+import type { StorageEngine } from '../storage/storage-engine.interface';
 
 /**
  * FAPOMS — the only *scheduled* thing in this system that deletes anything.
@@ -149,6 +150,12 @@ export class RetentionService {
     private readonly settings: PlatformSettingsService,
     private readonly auth: AuthService,
     private readonly metrics: MetricsService,
+    /*
+      The only phase that reaches outside the database. A candidate's scans live in object storage,
+      and erasing the row without them would leave their Aadhaar sitting in the bucket with nothing
+      pointing at it — invisible to every screen and still perfectly readable.
+    */
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
   ) {}
 
   // ---------------------------------------------------------------------------------------------
@@ -177,6 +184,8 @@ export class RetentionService {
       locationPings: 0,
       sessions: 0,
       telemetry: 0,
+      closedApplications: 0,
+      abandonedApplications: 0,
       durationMs: 0,
       saturated: [],
       failures: [],
@@ -228,6 +237,13 @@ export class RetentionService {
     await phase('locationPings', 'assayer_location_pings', () => this.purgeLocationPings());
     await phase('sessions', 'user_sessions', () => this.purgeSessions());
     await phase('telemetry', 'activity_telemetry', () => this.purgeTelemetry());
+    /*
+      The two below are the only phases that erase PERSONAL data rather than logs, and the only
+      ones that reach outside the database: a candidate's scans live in object storage, and a row
+      deleted without them would leave the documents behind with nothing pointing at them.
+    */
+    await phase('closedApplications', 'assayer_applications', () => this.eraseClosedApplications());
+    await phase('abandonedApplications', 'assayer_applications', () => this.eraseAbandonedApplications());
 
     report.durationMs = Date.now() - started;
 
@@ -534,6 +550,117 @@ export class RetentionService {
    * accumulates WAL for as long as it runs, and on the first run after this ships that backlog is
    * everything since the system was installed.
    */
+  // -----------------------------------------------------------------------------------------------
+  // Candidate applications — personal data, not logs
+  // -----------------------------------------------------------------------------------------------
+
+  /**
+   * Rejected or withdrawn, and past the window the consent notice promises.
+   *
+   * "Erase" here means what the word means: the scans are deleted from object storage, the document
+   * rows go, and every column that identified the person is emptied. What survives is a stub — the
+   * id, how it ended, and when — because a register that an application existed and was closed is
+   * not personal data, and deleting the row outright would also delete the evidence that the
+   * erasure happened.
+   */
+  private async eraseClosedApplications(): Promise<BatchOutcome> {
+    const configured = await this.settings
+      .get<number | null>('retention.closedApplicationDays')
+      .catch(() => undefined);
+    const raw = configured ?? asDays(process.env.CLOSED_APPLICATION_RETENTION_DAYS);
+    const { days } = resolveRetention('CANDIDATE_APPLICATION_CLOSED', raw);
+    if (days === null || days <= 0) return NOTHING_TO_DO;
+
+    return this.eraseApplications(
+      `SELECT id FROM assayer_applications
+        WHERE status IN ('REJECTED', 'WITHDRAWN')
+          AND personal_data_erased_at IS NULL
+          AND COALESCE(reviewed_at, updated_at, created_at) < $1
+        ORDER BY COALESCE(reviewed_at, updated_at, created_at)
+        LIMIT $2`,
+      this.cutoff(days),
+    );
+  }
+
+  /**
+   * Never submitted, and the link that would have let them finish expired long ago.
+   *
+   * Nobody applied here — this is a half-typed form, and keeping it is all risk and no purpose. A
+   * DRAFT whose link is still valid is left completely alone, however old: the candidate may be
+   * mid-way through it.
+   */
+  private async eraseAbandonedApplications(): Promise<BatchOutcome> {
+    const configured = await this.settings
+      .get<number | null>('retention.abandonedApplicationDays')
+      .catch(() => undefined);
+    const raw = configured ?? asDays(process.env.ABANDONED_APPLICATION_RETENTION_DAYS);
+    const { days } = resolveRetention('CANDIDATE_APPLICATION_ABANDONED', raw);
+    if (days === null || days <= 0) return NOTHING_TO_DO;
+
+    return this.eraseApplications(
+      `SELECT id FROM assayer_applications
+        WHERE status = 'DRAFT'
+          AND personal_data_erased_at IS NULL
+          AND token_expires_at IS NOT NULL
+          AND token_expires_at < $1
+        ORDER BY token_expires_at
+        LIMIT $2`,
+      this.cutoff(days),
+    );
+  }
+
+  /**
+   * The erasure itself, shared by both windows.
+   *
+   * Files first, then rows: a crash between the two leaves an application whose scans are gone and
+   * whose marker is unset, so the next pass finishes the job. The other order would mark the row
+   * erased while the documents were still sitting in the bucket — the one failure that would be
+   * invisible.
+   */
+  private async eraseApplications(selectSql: string, cutoff: Date): Promise<BatchOutcome> {
+    let removed = 0;
+    for (let batch = 0; batch < RetentionService.MAX_BATCHES; batch++) {
+      const rows: Array<{ id: string }> = await this.dataSource.query(
+        selectSql, [cutoff, RetentionService.BATCH_SIZE],
+      );
+      if (rows.length === 0) return { removed, saturated: false };
+
+      for (const { id } of rows) {
+        const docs: Array<{ id: string; file_paths: string[] | null }> = await this.dataSource.query(
+          `SELECT id, file_paths FROM assayer_application_documents WHERE application_id = $1`, [id],
+        );
+        for (const doc of docs) {
+          for (const key of doc.file_paths ?? []) {
+            try {
+              await this.storage.deleteFile(key);
+            } catch (error) {
+              // Already gone, or storage is unreachable. Either way the row stays unmarked below
+              // only if the UPDATE fails too — a file we could not delete is left to the orphan
+              // sweep rather than blocking every other candidate's erasure.
+              this.logger.warn(`Retention could not delete ${key}: ${(error as Error).message}`);
+            }
+          }
+        }
+        await this.dataSource.query(`DELETE FROM assayer_application_documents WHERE application_id = $1`, [id]);
+        await this.dataSource.query(
+          `UPDATE assayer_applications SET
+             full_name = NULL, email = NULL, address = NULL, city = NULL, state = NULL,
+             pincode = NULL, gender = NULL, date_of_birth = NULL, extended_profile = NULL,
+             current_employer = NULL, expertise = NULL, availability = NULL,
+             review_notes = NULL, consent_withdrawal_reason = NULL,
+             -- NOT NULL, so it cannot be emptied; a fixed placeholder is the erasure.
+             mobile = '0000000000',
+             personal_data_erased_at = now()
+           WHERE id = $1`,
+          [id],
+        );
+        removed++;
+      }
+      if (rows.length < RetentionService.BATCH_SIZE) return { removed, saturated: false };
+    }
+    return { removed, saturated: true };
+  }
+
   private async deleteInBatches(sql: string, params: unknown[]): Promise<BatchOutcome> {
     let removed = 0;
     for (let batch = 0; batch < RetentionService.MAX_BATCHES; batch++) {
@@ -582,6 +709,10 @@ export interface RetentionReport {
   locationPings: number;
   sessions: number;
   telemetry: number;
+  /** Rejected or withdrawn applications whose answers were erased and scans deleted. */
+  closedApplications: number;
+  /** Never-submitted forms, long past their link's expiry, erased the same way. */
+  abandonedApplications: number;
   durationMs: number;
   /**
    * Tables whose purge stopped because it hit the batch ceiling rather than because it ran out of

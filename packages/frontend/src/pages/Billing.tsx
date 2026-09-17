@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FileSpreadsheet, RefreshCw, IndianRupee } from 'lucide-react';
+import { FileSpreadsheet, RefreshCw, IndianRupee, Building2, Receipt, Landmark, BarChart3 } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { Modal, StyledInput, useToast, PageHeader } from '../components/ui';
 import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
@@ -71,36 +71,131 @@ export const Billing: React.FC = () => {
     <Page>
       <PageHeader
         icon={<IndianRupee size={20} />}
-        title="Billing"
-        subtitle="Every completed assignment books a payout to the assayer and a line to invoice the client."
+        title="Billing & Payouts"
+        subtitle="Manage client invoices, approve assayer bills, and track bank payouts."
         actions={<>
-          {/* The billing sheet is built over the whole book, so it can take a while — now on a
-              queue rather than blocking the request, and capped at the first 5,000 client lines
-              (the sheet's own "Notice" tab says so if a filter combination is that wide).
-              Disabled while it runs — a second click used to start a second full build. */}
           <button
             onClick={() => void downloadExcel('/reports/billing/jobs', {})}
             disabled={exporting}
-            title="Excel export, capped at the first 5,000 client lines. Narrow the filters if your book is larger."
+            title="Download billing records to Excel"
             className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <FileSpreadsheet size={14} /> {exporting ? 'Preparing…' : 'Export'}
+            <FileSpreadsheet size={14} /> {exporting ? 'Preparing…' : 'Export Excel'}
           </button>
           {canInvoice && (
-            <button onClick={() => setReconcileOpen(true)} className="btn btn-secondary" title="Book any completed assignment that is missing a payout or client line" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button onClick={() => setReconcileOpen(true)} className="btn btn-secondary" title="Sync any missing records" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <RefreshCw size={14} /> Reconcile
             </button>
           )}
         </>}
       />
 
-      <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid var(--border-color)', paddingBottom: 8 }}>
-        {TABS.map((t) => (
-          <button key={t.key} onClick={() => go(t.key)} style={{
-            padding: '8px 14px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-sm)', fontWeight: 600,
-            background: tab === t.key ? 'var(--status-pending-bg)' : 'transparent', color: tab === t.key ? 'var(--text-primary)' : 'var(--text-secondary)',
-            border: `1px solid ${tab === t.key ? 'var(--accent-primary)' : 'transparent'}`,
-          }}>{t.label}</button>
-        ))}
+      {/* Clean, Simple Top-Level Tabs */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        borderBottom: '1px solid var(--border-color)',
+        paddingBottom: 0,
+        marginBottom: 12,
+        gap: 8,
+        overflowX: 'auto',
+      }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => go('invoices')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              border: 'none',
+              borderBottom: tab === 'invoices' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              background: 'transparent',
+              color: tab === 'invoices' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              fontWeight: tab === 'invoices' ? 600 : 500,
+              fontSize: 'var(--text-sm)',
+              cursor: 'pointer',
+              marginBottom: -1,
+              whiteSpace: 'nowrap',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Building2 size={16} style={{ color: tab === 'invoices' ? 'var(--accent-primary)' : 'var(--text-muted)' }} />
+            <span>Client Invoices</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => go('assayer-invoices')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              border: 'none',
+              borderBottom: tab === 'assayer-invoices' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              background: 'transparent',
+              color: tab === 'assayer-invoices' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              fontWeight: tab === 'assayer-invoices' ? 600 : 500,
+              fontSize: 'var(--text-sm)',
+              cursor: 'pointer',
+              marginBottom: -1,
+              whiteSpace: 'nowrap',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Receipt size={16} style={{ color: tab === 'assayer-invoices' ? 'var(--accent-primary)' : 'var(--text-muted)' }} />
+            <span>Assayer Bills</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => go('payouts')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              border: 'none',
+              borderBottom: tab === 'payouts' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              background: 'transparent',
+              color: tab === 'payouts' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              fontWeight: tab === 'payouts' ? 600 : 500,
+              fontSize: 'var(--text-sm)',
+              cursor: 'pointer',
+              marginBottom: -1,
+              whiteSpace: 'nowrap',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Landmark size={16} style={{ color: tab === 'payouts' ? 'var(--accent-primary)' : 'var(--text-muted)' }} />
+            <span>Pay Assayers</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => go('overview')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              border: 'none',
+              borderBottom: tab === 'overview' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              background: 'transparent',
+              color: tab === 'overview' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              fontWeight: tab === 'overview' ? 600 : 500,
+              fontSize: 'var(--text-sm)',
+              cursor: 'pointer',
+              marginBottom: -1,
+              whiteSpace: 'nowrap',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <BarChart3 size={16} style={{ color: tab === 'overview' ? 'var(--accent-primary)' : 'var(--text-muted)' }} />
+            <span>Overview</span>
+          </button>
+        </div>
       </div>
 
       {tab === 'overview' && <OverviewTab onGo={(t, f) => go(t, f)} />}

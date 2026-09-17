@@ -98,3 +98,4 @@ export * from './livekit-url';
 // Socket.IO reconnection behaviour, byte-identical between the web and mobile socket clients
 // since the mobile fix was ported to web verbatim — one object so the two cannot silently drift.
 export * from './socket-transport-config';
+export * from './registration-consent';

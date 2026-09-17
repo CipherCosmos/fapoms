@@ -35,6 +35,10 @@ describe('RetentionService', () => {
   // would make the assertions about parsing exposition text rather than about retention.
   const metrics = { retentionSaturated: { inc: jest.fn() } };
 
+  // The candidate-application phases delete the scans themselves; this is the only dependency
+  // that reaches outside the database.
+  const storage = { deleteFile: jest.fn(async () => undefined) };
+
   const RETENTION_ENV = [
     'RETENTION_OUTBOX_DAYS',
     'RETENTION_REFRESH_TOKEN_GRACE_DAYS',
@@ -42,6 +46,8 @@ describe('RetentionService', () => {
     'LOCATION_TRAIL_RETENTION_DAYS',
     'SESSION_HISTORY_RETENTION_DAYS',
     'UI_TELEMETRY_RETENTION_DAYS',
+    'CLOSED_APPLICATION_RETENTION_DAYS',
+    'ABANDONED_APPLICATION_RETENTION_DAYS',
   ];
   let savedEnv: Record<string, string | undefined>;
 
@@ -81,6 +87,7 @@ describe('RetentionService', () => {
         { provide: PlatformSettingsService, useValue: settings },
         { provide: AuthService, useValue: auth },
         { provide: MetricsService, useValue: metrics },
+        { provide: 'StorageEngine', useValue: storage },
       ],
     }).compile();
     service = module.get(RetentionService);
@@ -148,8 +155,22 @@ describe('RetentionService', () => {
       const deletes = statements.filter(({ sql }) => sql.trim().startsWith('DELETE FROM'));
       expect(deletes.length).toBeGreaterThan(0);
       for (const { sql, params } of deletes) {
-        // A single unbounded DELETE takes a lock and accumulates WAL for as long as it runs,
-        // and on the first run after this ships the backlog is everything ever written.
+        /*
+          What this is really about is the SIZE of one statement, not the presence of the word
+          LIMIT. A sweep over a whole table must be batched — an unbounded DELETE takes a lock and
+          accumulates WAL for as long as it runs, and on the first run after this ships the backlog
+          is everything ever written.
+
+          A delete scoped to one parent id is already bounded, by that parent: erasing a candidate
+          removes that candidate's handful of document rows. Wrapping it in a LIMIT loop would add
+          a batching machine around a statement that can never be big, so the rule is stated as
+          "bounded", with the two ways of being bounded spelled out.
+        */
+        const scopedToOneParent = /WHERE \w+ = \$1$/.test(sql.trim());
+        if (scopedToOneParent) {
+          expect(params).toHaveLength(1);
+          continue;
+        }
         expect(sql).toMatch(/LIMIT \$\d+/);
         expect(params[params.length - 1]).toBe(5_000);
       }
@@ -480,5 +501,131 @@ describe('rowsAffected', () => {
     expect(rowsAffected(undefined)).toBe(0);
     expect(rowsAffected([[]])).toBe(0);
     expect(rowsAffected({ affected: 5 })).toBe(0);
+  });
+});
+
+
+/**
+ * CANDIDATE APPLICATIONS ARE NOT LOGS.
+ *
+ * Every other phase deletes evidence on a statutory FLOOR — keep at least this long. These two run
+ * the other way: somebody who was turned down, or who never finished the form, should not have
+ * their Aadhaar scan sitting in the bucket indefinitely. Nothing was ever deleted before this.
+ */
+describe('erasing candidate applications', () => {
+  let service: RetentionService;
+  let statements: Array<{ sql: string; params: unknown[] }>;
+  const dataSource = { query: jest.fn() };
+  const cache = { withLock: jest.fn(async (_k: string, _t: number, fn: () => Promise<any>) => fn()) };
+  const settings = { get: jest.fn().mockResolvedValue(null) };
+  const auth = { pruneRefreshTokens: jest.fn().mockResolvedValue(0) };
+  const metrics = { retentionSaturated: { inc: jest.fn() } };
+  const storage = { deleteFile: jest.fn(async () => undefined) };
+
+  /** Applications the SELECT should claim are due, consumed one batch at a time. */
+  let due: Array<{ id: string }>;
+  let docs: Array<{ id: string; file_paths: string[] }>;
+
+  beforeEach(async () => {
+    statements = [];
+    due = [];
+    docs = [];
+    jest.clearAllMocks();
+    dataSource.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      statements.push({ sql, params });
+      if (sql.includes('pg_class') || sql.includes('pg_inherits') || sql.includes('fapoms_manage_location_ping_partition')) return [];
+      if (sql.includes('SELECT id FROM assayer_applications')) {
+        const batch = due;
+        due = [];
+        return batch;
+      }
+      if (sql.includes('FROM assayer_application_documents')) return docs;
+      return [[], 0];
+    });
+    settings.get.mockResolvedValue(null);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        RetentionService,
+        { provide: getDataSourceToken(), useValue: dataSource as unknown as DataSource },
+        { provide: CacheService, useValue: cache },
+        { provide: PlatformSettingsService, useValue: settings },
+        { provide: AuthService, useValue: auth },
+        { provide: MetricsService, useValue: metrics },
+        { provide: 'StorageEngine', useValue: storage },
+      ],
+    }).compile();
+    service = module.get(RetentionService);
+  });
+
+  const find = (needle: string) => statements.filter((s) => s.sql.includes(needle));
+
+  it('deletes the scans from storage, not just the rows that point at them', async () => {
+    due = [{ id: 'app-1' }];
+    docs = [{ id: 'd1', file_paths: ['scans/a.jpg', 'scans/b.jpg'] }];
+
+    const report = await service.runOnce();
+
+    expect(storage.deleteFile).toHaveBeenCalledWith('scans/a.jpg');
+    expect(storage.deleteFile).toHaveBeenCalledWith('scans/b.jpg');
+    expect(find('DELETE FROM assayer_application_documents')).toHaveLength(1);
+    expect(report.closedApplications + report.abandonedApplications).toBeGreaterThan(0);
+  });
+
+  it('empties every column that identified the person, and stamps when', async () => {
+    due = [{ id: 'app-1' }];
+    await service.runOnce();
+
+    const update = find('UPDATE assayer_applications SET')[0].sql;
+    for (const column of [
+      'full_name', 'email', 'address', 'city', 'state', 'pincode', 'gender',
+      'date_of_birth', 'extended_profile', 'review_notes', 'consent_withdrawal_reason',
+    ]) {
+      expect(update).toContain(`${column} = NULL`);
+    }
+    // mobile is NOT NULL, so a placeholder is the erasure.
+    expect(update).toContain("mobile = '0000000000'");
+    expect(update).toContain('personal_data_erased_at = now()');
+  });
+
+  /** Otherwise the same rows come back on every hourly pass, for ever. */
+  it('only looks at applications it has not already erased', async () => {
+    await service.runOnce();
+    for (const s of find('SELECT id FROM assayer_applications')) {
+      expect(s.sql).toContain('personal_data_erased_at IS NULL');
+    }
+  });
+
+  it('asks for the closed ones by how they ended, and the abandoned ones by their dead link', async () => {
+    await service.runOnce();
+    const selects = find('SELECT id FROM assayer_applications').map((s) => s.sql);
+    expect(selects.some((sql) => sql.includes("status IN ('REJECTED', 'WITHDRAWN')"))).toBe(true);
+    // A DRAFT whose link is still valid is somebody mid-way through their form.
+    expect(selects.some((sql) => sql.includes("status = 'DRAFT'") && sql.includes('token_expires_at <'))).toBe(true);
+  });
+
+  it('keeps holding everything when an administrator sets the window to "never"', async () => {
+    // Seeded deliberately: with no row waiting, this test passed even with the "never" check
+    // deleted — the phase found nothing either way and proved nothing.
+    due = [{ id: 'app-1' }];
+    docs = [{ id: 'd1', file_paths: ['scans/a.jpg'] }];
+    settings.get.mockImplementation(async (key: string) => (key.includes('ApplicationDays') ? 0 : null));
+    const report = await service.runOnce();
+    expect(storage.deleteFile).not.toHaveBeenCalled();
+    expect(report.closedApplications).toBe(0);
+    expect(report.abandonedApplications).toBe(0);
+    expect(find('UPDATE assayer_applications SET')).toHaveLength(0);
+  });
+
+  /** A file storage has already lost must not stop the other candidates being erased. */
+  it('carries on when a scan cannot be deleted', async () => {
+    due = [{ id: 'app-1' }];
+    docs = [{ id: 'd1', file_paths: ['scans/gone.jpg'] }];
+    storage.deleteFile.mockRejectedValueOnce(new Error('NoSuchKey') as never);
+
+    const report = await service.runOnce();
+
+    expect(report.failures).toHaveLength(0);
+    expect(find('UPDATE assayer_applications SET')).toHaveLength(1);
   });
 });

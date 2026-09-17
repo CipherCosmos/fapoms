@@ -837,6 +837,55 @@ describe('AssayerInvoiceService', () => {
     });
   });
 
+  // ── Scenario F: Revision and supersession ───────────────────────────────────
+
+  describe('reviseInvoice — Scenario F: controlled revision & supersession', () => {
+    it('marks current invoice SUPERSEDED, links new revision (R2), and re-attaches eligible lines', async () => {
+      const inv = invoice({ id: 'ainv-1', invoiceNumber: 'AINV-1', status: AssayerInvoiceStatus.SUBMITTED, revision: 1 });
+      assayerInvoiceRepo.findOne.mockImplementation(async (opts: any) => {
+        if (opts?.where?.id === 'ainv-1') return inv;
+        return null;
+      });
+      const lines = [feeLine({ assayerInvoiceId: 'ainv-1' }), expenseLine({ assayerInvoiceId: 'ainv-1' })];
+      lockedPayableRows = lines;
+
+      const revised = await service.reviseInvoice('ainv-1', 'ops-1', 'Disputed travel amount');
+
+      expect(revised.revision).toBe(2);
+      expect(revised.invoiceNumber).toBe('AINV-1-R2');
+      expect(revised.status).toBe(AssayerInvoiceStatus.INVITED);
+      expect(revised.supersedesInvoiceId).toBe('ainv-1');
+
+      const oldInvUpdate = committed.find((r) => r.id === 'ainv-1');
+      expect(oldInvUpdate).toMatchObject({
+        status: AssayerInvoiceStatus.SUPERSEDED,
+      });
+
+      expect(committed.some((r) => r.action === 'ASSAYER_INVOICE_SUPERSEDED')).toBe(true);
+      expect(committed.some((r) => r.action === 'ASSAYER_INVOICE_INVITED')).toBe(true);
+    });
+
+    it('refuses to revise an already approved or paid invoice', async () => {
+      assayerInvoiceRepo.findOne.mockImplementation(async () =>
+        invoice({ id: 'ainv-1', status: AssayerInvoiceStatus.APPROVED }),
+      );
+      await expect(service.reviseInvoice('ainv-1', 'ops-1', 'some reason')).rejects.toThrow(ConflictException);
+    });
+
+    it('refuses to approve an invoice whose current revision has not been confirmed', async () => {
+      assayerInvoiceRepo.findOne.mockImplementation(async () =>
+        invoice({
+          id: 'ainv-2',
+          invoiceNumber: 'AINV-1-R2',
+          status: AssayerInvoiceStatus.SUBMITTED,
+          revision: 2,
+          confirmedVersion: 1, // Assayer only confirmed Rev 1, not Rev 2!
+        }),
+      );
+      await expect(service.approve('ainv-2', 'finance-1')).rejects.toThrow(ConflictException);
+    });
+  });
+
   // ── The rollout gate ──────────────────────────────────────────────────────
 
   describe('assertEnabled — the rollout gate', () => {

@@ -19,7 +19,8 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum, IsUUID, MaxLength, Matches } from 'class-validator';
+import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum, IsUUID, MaxLength, Matches, IsIn,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 
 /**
@@ -108,6 +109,16 @@ class CreateUserRequestDto implements CreateUserDto {
 
   @IsOptional() @IsString()
   clientId?: string;
+
+  /**
+   * Which regions this account may see, set at the moment the account is made.
+   *
+   * It was previously only settable afterwards, through a second trip to the edit drawer — so
+   * every new territorial account existed, briefly, as a national one. Validated in the service
+   * against the canonical list, the same way an edit is.
+   */
+  @IsOptional() @IsArray()
+  regions?: string[];
 }
 
 class AssignRolesDto {
@@ -163,6 +174,15 @@ class UpdateUserRequestDto implements UpdateUserDto {
 class ResetPasswordRequestDto {
   @IsString() @MinLength(8)
   newPassword: string;
+}
+
+class SendSetupLinkDto {
+  /**
+   * Only changes the wording of the email — "set up your account" for somebody new, "reset your
+   * password" for somebody who already has one. The link itself is identical.
+   */
+  @IsOptional() @IsIn(['NEW_ACCOUNT', 'RESET'])
+  reason?: 'NEW_ACCOUNT' | 'RESET';
 }
 
 class SelfUpdateProfileDto {
@@ -441,6 +461,25 @@ export class UserController {
   async unlockAccount(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const user = await this.userService.unlockAccount(id, req.user.id);
     return this.sanitizeUser(user);
+  }
+
+  /**
+   * Email this person a link so they can choose their own password.
+   *
+   * The default way to give somebody access, and the default way to get them back in. The endpoint
+   * below — an administrator typing a password on somebody else's behalf — stays for the case this
+   * cannot cover: a deployment with email switched off, or an address that bounces.
+   */
+  @Post(':id/send-setup-link')
+  @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:edit:organization')
+  @ApiOperation({ summary: 'Email a one-time link to set a password' })
+  async sendSetupLink(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SendSetupLinkDto,
+    @Req() req: any,
+  ) {
+    return this.userService.sendPasswordSetupLink(id, req.user.id, dto.reason ?? 'RESET');
   }
 
   @Post(':id/reset-password')

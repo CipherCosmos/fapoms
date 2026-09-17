@@ -16,6 +16,11 @@ import {
   pickRegistrationRecordFields,
   groupRegistrationRecordFields,
   REGISTRATION_SECRET_FIELD_KEYS,
+  CURRENT_CONSENT_NOTICE,
+  CURRENT_CONSENT_VERSION,
+  consentNoticeFor,
+  type ConsentNotice,
+  REGISTRATION_FIELD_GROUPS,
   maskRegistrationFields,
   looksMasked,
   pickEmploymentTermFields,
@@ -229,6 +234,31 @@ function maskProfile(profile: Record<string, unknown> | null | undefined): Recor
 function maskApplication<T extends { extendedProfile?: unknown }>(application: T): T {
   if (!application?.extendedProfile) return application;
   return { ...application, extendedProfile: maskProfile(application.extendedProfile as Record<string, unknown>) } as T;
+}
+
+
+/**
+ * Remove from the application the identity numbers the record accepted.
+ *
+ * Keyed off the same groups promotion applies (`REGISTRATION_FIELD_GROUPS`), so a refused group
+ * keeps its numbers here — the only remaining copy — rather than losing them.
+ */
+function clearAppliedSecrets(application: AssayerApplicationEntity, failedGroups: string[]): void {
+  const profile = (application.extendedProfile ?? null) as Record<string, unknown> | null;
+  const fields = profile?.fields as Record<string, unknown> | undefined;
+  if (!fields) return;
+
+  const failed = new Set(failedGroups);
+  const next = { ...fields };
+  let changed = false;
+  for (const key of REGISTRATION_SECRET_FIELD_KEYS) {
+    if (!(key in next)) continue;
+    const group = REGISTRATION_FIELD_GROUPS.find((g) => (g.keys as readonly string[]).includes(key));
+    if (group && failed.has(group.name)) continue;
+    delete next[key];
+    changed = true;
+  }
+  if (changed) application.extendedProfile = { ...profile, fields: next } as never;
 }
 
 /**
@@ -838,6 +868,8 @@ export class RegistrationApplicationService {
     documents: AssayerApplicationDocumentEntity[];
     documentsRequested: readonly OnboardingDocument[];
     otpVerified: boolean;
+    /** What the form must show, and agree to, before it collects anything. */
+    consentNotice: ConsentNotice & { grievanceContact: string };
   }> {
     const application = await this.findByRawToken(rawToken);
     if (!application.tokenConsumedAt) {
@@ -871,6 +903,9 @@ export class RegistrationApplicationService {
         })) as AssayerApplicationDocumentEntity[],
         documentsRequested: documentsRequestedFor(application.employmentCategory),
         otpVerified: Boolean(verified),
+        // Still shown after submission: what they agreed to is theirs to re-read, and the page
+        // offers withdrawal from here until a decision is made.
+        consentNotice: await this.consentNotice(),
       };
     }
 
@@ -881,6 +916,7 @@ export class RegistrationApplicationService {
       documents,
       documentsRequested: documentsRequestedFor(application.employmentCategory),
       otpVerified: Boolean(verified),
+      consentNotice: await this.consentNotice(),
     };
   }
 
@@ -906,6 +942,8 @@ export class RegistrationApplicationService {
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
     }
+    // A code is a message to a real phone number: nothing is sent before they have agreed.
+    this.assertConsented(application);
     if (!application.email) {
       throw new BadRequestException(
         'There is no email address on this application to send a code to. Ask HR to add one and resend your link.',
@@ -1065,6 +1103,8 @@ export class RegistrationApplicationService {
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
     }
+    // The first answer is the first collection — this is the line consent has to come before.
+    this.assertConsented(application);
     if (patch.mobile && normalisePhone(patch.mobile) !== normalisePhone(application.mobile)) {
       const conflict = await this.checkMobileConflict(patch.mobile, application.organizationId, application.id, application.promotedAssayerId);
       if (conflict) {
@@ -1072,7 +1112,18 @@ export class RegistrationApplicationService {
       }
     }
     this.applyDraftPatch(application, patch);
-    return this.applications.save(application);
+    const stored = await this.applications.save(application);
+    /*
+      The candidate gets their own answers back readable.
+
+      `hydrate` already opens them and this response feeds the same form, so returning the stored
+      value put "enc:v1:sJ9hA…" into the PAN box the moment the draft saved — and the next keystroke
+      would have sent that back as the number. Found by probing the running system, not by a test.
+    */
+    return {
+      ...stored,
+      extendedProfile: openProfile(stored.extendedProfile as Record<string, unknown> | null),
+    } as AssayerApplicationEntity;
   }
 
   /**
@@ -1240,16 +1291,6 @@ export class RegistrationApplicationService {
      * the candidate cannot see, is a gap nobody can close. Blank clears the field and is allowed:
      * a candidate correcting their own mistake must be able to empty the box.
      */
-    const invalid: string[] = [];
-    const filled = (v: unknown) => v != null && String(v).trim() !== '';
-    if (filled(accepted.panNumber) && !isValidPan(accepted.panNumber)) invalid.push('PAN');
-    if (filled(accepted.ifscCode) && !isValidIfsc(accepted.ifscCode)) invalid.push('IFSC');
-    if (filled(accepted.aadhaarNumber) && !isValidAadhaar(accepted.aadhaarNumber)) invalid.push('Aadhaar');
-    if (invalid.length > 0) {
-      throw new BadRequestException(
-        `Check the ${invalid.join(' and ')} — ${invalid.length > 1 ? 'those do' : 'that does'} not look right.`,
-      );
-    }
     /*
       A masked value must never be stored. Staff screens now receive the last four digits, so a form
       that sent back what it was shown would replace a real PAN with "••••234F" — and the number
@@ -1266,6 +1307,16 @@ export class RegistrationApplicationService {
       );
     }
 
+    const invalid: string[] = [];
+    const filled = (v: unknown) => v != null && String(v).trim() !== '';
+    if (filled(accepted.panNumber) && !isValidPan(accepted.panNumber)) invalid.push('PAN');
+    if (filled(accepted.ifscCode) && !isValidIfsc(accepted.ifscCode)) invalid.push('IFSC');
+    if (filled(accepted.aadhaarNumber) && !isValidAadhaar(accepted.aadhaarNumber)) invalid.push('Aadhaar');
+    if (invalid.length > 0) {
+      throw new BadRequestException(
+        `Check the ${invalid.join(' and ')} — ${invalid.length > 1 ? 'those do' : 'that does'} not look right.`,
+      );
+    }
     const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
     const fields = (profile.fields ?? {}) as Record<string, unknown>;
     application.extendedProfile = { ...profile, fields: sealSecretFields({ ...fields, ...accepted }) } as never;
@@ -1282,14 +1333,140 @@ export class RegistrationApplicationService {
       .map((f) => ({ key: f.key, label: f.label, blocks: f.blocks }));
   }
 
+  /**
+   * The notice as this candidate should see it today.
+   *
+   * The wording is versioned in `@fapoms/shared`; the grievance contact is whoever holds the post
+   * right now, which is a platform setting rather than a constant. If nobody has been named, the
+   * notice says so plainly instead of printing a blank line — a data-protection notice that lists
+   * no way to complain is worse than one that admits the gap, and the Settings screen flags it.
+   */
+  async consentNotice(): Promise<ConsentNotice & { grievanceContact: string }> {
+    const [name, email, phone] = await Promise.all([
+      this.settings.get<string>('dpdp.grievanceOfficerName').catch(() => ''),
+      this.settings.get<string>('dpdp.grievanceOfficerEmail').catch(() => ''),
+      this.settings.get<string>('dpdp.grievanceOfficerPhone').catch(() => ''),
+    ]);
+    const parts = [name, email, phone].map((p) => (p ?? '').trim()).filter(Boolean);
+    return {
+      ...CURRENT_CONSENT_NOTICE,
+      grievanceContact: parts.length > 0
+        ? parts.join(' · ')
+        : 'A grievance officer has not been named yet — write to the office that sent you this link.',
+    };
+  }
+
+  /**
+   * NOTHING IS COLLECTED BEFORE THE PERSON HAS AGREED TO IT.
+   *
+   * Called by every candidate-facing write: the draft, the documents, the OTP. Consent used to be
+   * the last step of the form, which meant the name, PAN, Aadhaar, bank account and every scan were
+   * already saved by the time it was asked for — so the tick could not be a decision about whether
+   * to hand any of it over. This is what makes the order real rather than a matter of which screen
+   * the form happens to show first.
+   */
+  private assertConsented(application: AssayerApplicationEntity): void {
+    if (application.consentWithdrawnAt) {
+      throw new BadRequestException(
+        'This application was withdrawn, so nothing further can be added to it. If that was a '
+        + 'mistake, ask the office that invited you for a fresh link.',
+      );
+    }
+    if (!application.consentAcceptedAt) {
+      throw new BadRequestException(
+        'Please read what we are asking for and agree to it before filling anything in.',
+      );
+    }
+  }
+
   async acceptConsent(rawToken: string, consentVersion: string): Promise<AssayerApplicationEntity> {
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
     }
+    if (application.consentWithdrawnAt) {
+      throw new BadRequestException(
+        'This application was withdrawn. Ask the office that invited you for a fresh link.',
+      );
+    }
+    /*
+      The version has to be one we actually published. A client that sent anything else — an old
+      build still holding the hard-coded "v1", or a hand-made request — would otherwise leave a row
+      claiming consent to wording nobody can produce.
+    */
+    if (consentVersion !== CURRENT_CONSENT_VERSION) {
+      throw new BadRequestException(
+        'This form is out of date. Reload the page to see the current notice before agreeing.',
+      );
+    }
     application.consentAcceptedAt = new Date();
     application.consentVersion = consentVersion;
+    // The words they saw, kept beside the acceptance — see the column's note.
+    application.consentNotice = await this.consentNotice() as unknown as Record<string, unknown>;
     return this.applications.save(application);
+  }
+
+  /**
+   * TAKING IT BACK.
+   *
+   * The DPDP Act makes withdrawal as easy as giving consent, and means it: processing stops and
+   * what was given is erased. So this deletes the answers and the scans — the files themselves, not
+   * just the rows pointing at them — and leaves behind only the fact that somebody applied and
+   * withdrew, which is the record that a request was honoured.
+   *
+   * Refuses once the person has been taken on: an approved candidate is an employee whose record
+   * lives on the roster under its own retention rules, and pretending this link can erase that
+   * would be a promise the system cannot keep.
+   */
+  async withdrawConsent(rawToken: string, reason?: string): Promise<AssayerApplicationEntity> {
+    const application = await this.findByRawToken(rawToken);
+    if (application.status === ApplicationStatus.APPROVED) {
+      throw new BadRequestException(
+        'This application has already been approved and your record now sits with the office. '
+        + 'Write to the grievance officer named in the notice to ask for it to be erased.',
+      );
+    }
+    if (application.consentWithdrawnAt) return application;
+
+    const documents = await this.applicationDocuments.find({ where: { applicationId: application.id } });
+    let filesDeleted = 0;
+    let filesLeft = 0;
+    for (const doc of documents) {
+      for (const key of doc.filePaths ?? []) {
+        try {
+          await this.storage.deleteFile(key);
+          filesDeleted++;
+        } catch {
+          // Storage may already have lost it, or be unreachable. The erasure of the rows still
+          // stands, and the orphan sweep is what catches a file left behind.
+          filesLeft++;
+        }
+      }
+    }
+    if (documents.length > 0) await this.applicationDocuments.remove(documents);
+
+    application.status = ApplicationStatus.WITHDRAWN;
+    application.consentWithdrawnAt = new Date();
+    application.consentWithdrawalReason = (reason ?? '').trim() || null;
+    application.extendedProfile = null;
+    application.dateOfBirth = null;
+    application.email = null;
+    application.address = null;
+    await this.applications.save(application);
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'REGISTRATION_CONSENT_WITHDRAWN',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: application.id,
+      remarks: `Candidate withdrew consent; answers erased and ${filesDeleted} file(s) deleted`
+        + `${filesLeft > 0 ? `, ${filesLeft} could not be deleted and are left to the orphan sweep` : ''}.`,
+    });
+    this.notificationDispatch.emitSafe({
+      type: 'ASSAYER_APPLICATION_WITHDRAWN',
+      payload: { applicationId: application.id, candidateName: application.fullName },
+    } as never);
+    return application;
   }
 
   // ── Documents ────────────────────────────────────────────────────────────
@@ -1303,6 +1480,8 @@ export class RegistrationApplicationService {
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
     }
+    // A scan is the most personal thing this form asks for; it waits for the same agreement.
+    this.assertConsented(application);
     if (!Object.values(OnboardingDocument).includes(requirement)) {
       throw new BadRequestException('That is not a recognised document type.');
     }
@@ -1766,7 +1945,7 @@ export class RegistrationApplicationService {
     assayerId: string,
     application: AssayerApplicationEntity,
     actorUserId: string,
-  ): Promise<string[]> {
+  ): Promise<{ gaps: string[]; failedGroups: string[] }> {
     // Opened: the record's own columns encrypt these again on the way in. Promotion is one of the
     // three places the plaintext is genuinely needed — see `sealSecretFields`.
     const profile = openProfile(application.extendedProfile as Record<string, unknown> | null) as {
@@ -1775,9 +1954,11 @@ export class RegistrationApplicationService {
       references?: Array<Record<string, unknown>>;
       empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
     } | null;
-    if (!profile) return [];
+    if (!profile) return { gaps: [], failedGroups: [] };
 
     const gaps: string[] = [];
+    /** Which groups did NOT land, so approval knows what it may clear from the application. */
+    const failedGroups: string[] = [];
 
     if (profile.fields && Object.keys(profile.fields).length > 0) {
       const fields = { ...profile.fields };
@@ -1803,6 +1984,7 @@ export class RegistrationApplicationService {
           await this.assayerService.update(assayerId, group.values as never, actorUserId);
         } catch (err: any) {
           gaps.push(`${group.label} (${err?.message ?? 'refused'})`);
+          failedGroups.push(group.name);
         }
       }
     }
@@ -1848,7 +2030,7 @@ export class RegistrationApplicationService {
       }
     }
 
-    return gaps;
+    return { gaps, failedGroups };
   }
 
   /**
@@ -1894,6 +2076,17 @@ export class RegistrationApplicationService {
         'This candidate has not submitted their application yet — they have not accepted the '
         + 'declaration or confirmed their code. Ask them to finish it, or use Request info to '
         + 'prompt them.',
+      );
+    }
+    /*
+      A withdrawn application cannot be approved into a person. They took their consent back, we
+      erased what they gave us, and promoting the empty shell that remains would both contradict
+      the request and create a roster record with nothing in it.
+    */
+    if (application.status === ApplicationStatus.WITHDRAWN) {
+      throw new BadRequestException(
+        'This candidate withdrew their application and their details were erased. If they want to '
+        + 'go ahead after all, invite them again with a fresh link.',
       );
     }
 
@@ -2060,7 +2253,7 @@ export class RegistrationApplicationService {
       }
     }
 
-    const profileGaps = await this.applyExtendedProfile(assayer.id, application, actorUserId);
+    const { gaps: profileGaps, failedGroups } = await this.applyExtendedProfile(assayer.id, application, actorUserId);
 
     /**
      * The desk's own half, applied through the same guarded update the record screen uses.
@@ -2083,6 +2276,16 @@ export class RegistrationApplicationService {
     application.reviewedBy = actorUserId;
     application.reviewedAt = new Date();
     application.promotedAssayerId = assayer.id;
+    /*
+      THE APPLICATION STOPS BEING A SECOND COPY OF THEIR IDENTITY.
+
+      Once the record holds a number, the application has no further use for it: nothing reads these
+      keys after promotion, and an approved application kept them for ever — three of them were
+      still sitting in the live database. Only what actually landed is cleared; a group the record
+      refused (a duplicate PAN, say) stays here, because otherwise the number would be gone from
+      both places and the desk would have to ask the person for it again.
+    */
+    clearAppliedSecrets(application, failedGroups);
     await this.applications.save(application);
 
     await this.auditService.recordEventSafe({

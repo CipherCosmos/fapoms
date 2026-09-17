@@ -63,6 +63,8 @@ describe('Direct-ID Mutation Attacks & State Invariance Spec', () => {
         mockAuditService,
         mockEventPublisher,
         mockCache,
+        // Staff invites are emailed; this suite never sends one.
+        { send: jest.fn().mockResolvedValue({ success: true }) } as never,
       );
     });
 

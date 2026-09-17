@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, KeyRound, Lock, LockOpen, Clock } from 'lucide-react';
-import { REGION_ORDER, REGION_LABELS, Region, roleLabel, userStatusLabel } from '@fapoms/shared';
+import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, KeyRound, Lock, LockOpen, Clock, Mail } from 'lucide-react';
+import {
+  REGION_ORDER, REGION_LABELS, Region, roleLabel, userStatusLabel, ROLE_DESCRIPTIONS, SystemRole,
+} from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
-import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
+import { AddUserDialog, InviteResult } from './AddUserDialog';
+import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { useClientOptions } from '../../hooks/useClients';
 import { UserActivityList } from './ActivityFeed';
@@ -99,32 +102,14 @@ export const DirectoryPanel: React.FC = () => {
   });
 
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [username, setUsername] = useState('');
-  /**
-   * Whether the admin has taken the username over. Until they do, it follows the email address,
-   * which is the only identifier they already know — inventing a second one was a value that had
-   * to be remembered and communicated for no benefit, and the two drifted immediately
-   * ("r.sharma" against rahul.sharma@…). Typing in the box stops the derivation for good, so a
-   * deliberate username is never overwritten by a later correction to the email.
-   */
-  const [usernameEdited, setUsernameEdited] = useState(false);
-  const [email, setEmail] = useState('');
-  const [passwordCopied, setPasswordCopied] = useState(false);
-  /**
-   * The credential the server issued for a just-created account, held only in this component's
-   * state for as long as the confirmation is on screen.
-   *
-   * The password used to be minted in the browser with `crypto.getRandomValues` and typed into
-   * the form. That was a stopgap: the tab is not a trustworthy place to mint a credential, and
-   * the server could not tell a generated password from a weak one a tampered page had sent.
-   * The server now generates it and returns it once in the creation response, so there is
-   * nothing to generate, re-roll or submit here — only something to show and copy.
-   */
-  const [issuedCredential, setIssuedCredential] = useState<{ displayName: string; username: string; password: string } | null>(null);
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
-  const [selectedClientId, setSelectedClientId] = useState('');
+  /** What to tell the administrator once the account exists — see `InviteResult`. */
+  const [inviteResult, setInviteResult] = useState<{
+    displayName: string; email: string; emailed: boolean; link: string;
+  } | null>(null);
+  /*
+    The add-user form's own state moved into `AddUserDialog` with the form itself. What is left
+    here is the list: who exists, and what this panel does to them.
+  */
 
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [editFirstName, setEditFirstName] = useState('');
@@ -136,6 +121,9 @@ export const DirectoryPanel: React.FC = () => {
   const { data: clientOptions } = useClientOptions();
   const [newPassword, setNewPassword] = useState('');
   const [resetting, setResetting] = useState(false);
+  const [sendingLink, setSendingLink] = useState(false);
+  /** Typing a password for somebody else is still possible — just not the first thing offered. */
+  const [showManualReset, setShowManualReset] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -145,22 +133,8 @@ export const DirectoryPanel: React.FC = () => {
 
   useEffect(() => { void loadUsers(); void loadRoles(); }, []);
 
-  /**
-   * The email's local part, lowercased, with anything that is not a letter, digit, dot, dash or
-   * underscore folded to a dot. `MaxLength(100)` on the DTO is the only length rule, so the
-   * clamp here just keeps the preview honest rather than failing on save.
-   */
-  const usernameFromEmail = (addr: string): string => {
-    const local = addr.split('@')[0] ?? '';
-    return local.toLowerCase().replace(/[^a-z0-9._-]+/g, '.').replace(/^\.+|\.+$/g, '').slice(0, 100);
-  };
-
-  const openCreateModal = () => {
-    setUsername(''); setUsernameEdited(false); setEmail('');
-    setPasswordCopied(false);
-    setFirstName(''); setLastName(''); setSelectedRoleIds([]); setSelectedClientId('');
-    setShowCreateModal(true);
-  };
+  // The dialog mounts fresh each time it opens, so there is no stale form to clear first.
+  const openCreateModal = () => setShowCreateModal(true);
 
   /** Resolves an id from a bulk report to the person it belongs to — see the report markup. */
   const displayNameFor = (id: string): string => users.find((u) => u.id === id)?.displayName ?? 'Account no longer listed';
@@ -217,43 +191,6 @@ export const DirectoryPanel: React.FC = () => {
    */
   const roleIdsIncludeClientUser = (roleIds: string[]): boolean =>
     roleIds.some((id) => roles.find((r) => r.id === id)?.name === CLIENT_USER_ROLE_NAME);
-
-  const handleCreateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (roleIdsIncludeClientUser(selectedRoleIds) && !selectedClientId) {
-      setError('Pick which client this account belongs to — required whenever Client User is one of the roles.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      // No `password` in the body: omitting it is what asks the server to issue one, which it
-      // returns as `initialPassword` on this response and nowhere else, ever.
-      const created = await api.request<{ initialPassword?: string }>('/users', {
-        method: 'POST',
-        body: JSON.stringify({
-          username, email, firstName, lastName, roleIds: selectedRoleIds,
-          clientId: selectedClientId || undefined,
-        }),
-      });
-      setShowCreateModal(false);
-      if (created?.initialPassword) {
-        setPasswordCopied(false);
-        setIssuedCredential({ displayName: `${firstName} ${lastName}`, username, password: created.initialPassword });
-      } else {
-        // Should not happen while this form omits the password, but a silent success that
-        // leaves the admin with no credential to hand over would be worse than saying so.
-        setNotice(`${firstName} ${lastName} can now sign in as "${username}", but the server returned no initial password. Use "Reset password" on their account to issue one.`);
-      }
-      setUsername(''); setUsernameEdited(false); setEmail('');
-      setFirstName(''); setLastName(''); setSelectedRoleIds([]); setSelectedClientId('');
-      void loadUsers();
-    } catch (err: any) {
-      setError(`Failed to create user. ${userMessage(err)}`);
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const startEditUser = (user: UserProfile) => {
     setEditingUser(user);
@@ -361,8 +298,42 @@ export const DirectoryPanel: React.FC = () => {
       return next;
     });
 
+  /**
+   * Email them a link instead of inventing a password for them.
+   *
+   * Reports honestly when the message did not go: a screen that says "link sent" on a deployment
+   * with email switched off leaves a colleague waiting for something nobody posted. The link comes
+   * back in that case, so it can still be passed on — a link is safe to hand over in a way a
+   * password is not, since only its holder can spend it and only once.
+   */
+  const handleSendSetupLink = async () => {
+    if (!editingUser) return;
+    setSendingLink(true);
+    setError(null);
+    try {
+      const res = await api.request<{ emailed: boolean; link: string }>(
+        `/users/${editingUser.id}/send-setup-link`,
+        { method: 'POST', body: JSON.stringify({ reason: 'RESET' }) },
+      );
+      if (res?.emailed) {
+        setNotice(`A password link is on its way to ${editingUser.email}. It expires in 48 hours.`);
+      } else {
+        setInviteResult({
+          displayName: editingUser.displayName,
+          email: editingUser.email ?? '',
+          emailed: false,
+          link: res?.link ?? '',
+        });
+      }
+    } catch (err: any) {
+      setError(`Could not send the link. ${userMessage(err)}`);
+    } finally {
+      setSendingLink(false);
+    }
+  };
+
   const handleResetPassword = async () => {
-    if (!editingUser || newPassword.length < 8) return;
+    if (!editingUser || newPassword.length < 10) return;
     const ok = await confirm({
       title: `Reset the password for ${editingUser.displayName}?`,
       message: 'Their current password stops working straight away. They will need the new password to sign in, so make sure you can pass it on to them.',
@@ -403,21 +374,45 @@ export const DirectoryPanel: React.FC = () => {
   const editingSelf = editingUser ? isSelf(editingUser) : false;
   const isLocked = (u: UserProfile) => u.status === 'LOCKED' || (!!u.lockedUntil && new Date(u.lockedUntil) > new Date());
 
+  /** The two counts the header line shows — see the comment there for why the tiles went. */
+  const lockedCount = users.filter(isLocked).length;
+  const neverSignedIn = users.filter((u) => !u.lastLoginAt).length;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {confirmDialog}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
-        {/*
-          The real total now — `meta.total` from the server, not `filteredUsers.length`. A KPI
-          titled "Total Users" that actually meant "however many match the search box and status
-          filter right now" read as the size of the whole directory even while both were active;
-          "Active"/"Locked Out"/"Distinct Roles" beside it were never filtered the same way, so the
-          four tiles did not even agree with each other about what population they described.
-        */}
-        <Kpi icon={<UsersIcon size={20} />} tone="var(--accent-primary)" value={usersTotal} label="Total Users" />
-        <Kpi icon={<UserCheck size={20} />} tone="var(--status-active)" value={filteredUsers.filter((u) => u.status === 'ACTIVE').length} label="Active (shown)" />
-        <Kpi icon={<Lock size={20} />} tone="var(--danger)" value={users.filter(isLocked).length} label="Locked Out" />
-        <Kpi icon={<Shield size={20} />} tone="var(--accent)" value={new Set(users.flatMap((u) => u.roles.map((r) => r.name))).size} label="Distinct Roles" />
+      {/*
+        FOUR TILES BECAME ONE LINE.
+
+        "Total Users", "Active (shown)", "Locked Out" and "Distinct Roles" filled the top of the
+        screen above the actual work, and two of them were answering questions nobody asks: the
+        number of DISTINCT ROLES in use is a fact about the permission model, not about people,
+        and "Active (shown)" counted whatever the search box happened to be filtering to.
+
+        What is left is the two things that make somebody act — how many accounts there are, and
+        who is stuck — and the second one is a button, because a locked-out colleague is a task.
+      */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+        <span><strong style={{ color: 'var(--text-primary)' }}>{usersTotal}</strong> {usersTotal === 1 ? 'account' : 'accounts'}</span>
+        {lockedCount > 0 && (
+          <button
+            type="button"
+            onClick={() => { setFilterStatus('LOCKED'); setSearchText(''); }}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
+              background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)',
+              borderRadius: 'var(--radius-full)', padding: '4px 12px',
+              color: 'var(--danger)', fontSize: 'var(--text-xs)', fontWeight: 600,
+            }}
+          >
+            <Lock size={13} /> {lockedCount} locked out — show {lockedCount === 1 ? 'them' : 'these'}
+          </button>
+        )}
+        {neverSignedIn > 0 && (
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            {neverSignedIn} {neverSignedIn === 1 ? 'person has' : 'people have'} not signed in yet
+          </span>
+        )}
       </div>
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
@@ -590,7 +585,10 @@ export const DirectoryPanel: React.FC = () => {
                         </div>
                       </td>
                       <td style={{ padding: '14px 24px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Clock size={11} style={{ opacity: 0.6 }} /> {fmtRelative(u.lastLoginAt)}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Clock size={11} style={{ opacity: 0.6 }} />
+                          {/* "Never" on its own reads as a fault. It usually means the invite is
+                              still sitting in their inbox, which is a different thing to do about. */}
+                          {u.lastLoginAt ? fmtRelative(u.lastLoginAt) : <span style={{ color: 'var(--text-muted)' }}>Invited — not signed in yet</span>}</span>
                       </td>
                       <td style={{ padding: '14px 24px', textAlign: 'center' }}>
                         <button
@@ -606,7 +604,7 @@ export const DirectoryPanel: React.FC = () => {
                       <td style={{ padding: '14px 24px', textAlign: 'right' }}>
                         <button onClick={() => startEditUser(u)}
                           style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', color: 'var(--accent-secondary)', padding: '6px 12px', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 500 }}>
-                          Edit / Map
+                          Manage
                         </button>
                       </td>
                     </tr>
@@ -657,6 +655,36 @@ export const DirectoryPanel: React.FC = () => {
                 <div><label className="form-label">Phone Number</label><input type="text" className="form-input" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} /></div>
 
                 <div>
+                  {/*
+                    WHAT THIS PERSON CAN ACTUALLY DO, IN WORDS.
+
+                    The roles were chips — "Desk Operator", "Auditor" — and nothing anywhere on the
+                    screen said what either of them lets somebody see or change. The sentences were
+                    in the shared vocabulary the whole time (`ROLE_DESCRIPTIONS`); no screen had
+                    ever put them in front of the person deciding.
+                  */}
+                  {editingUser.roles.length > 0 && (
+                    <div style={{ marginBottom: '14px', padding: '12px 14px', borderRadius: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)' }}>
+                      <div style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                        What {editingUser.firstName} can do
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        {editingUser.roles.map((r) => (
+                          <li key={r.id} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            <strong style={{ color: 'var(--text-primary)' }}>{roleLabel(r.name)}</strong>
+                            {' — '}
+                            {ROLE_DESCRIPTIONS[r.name as SystemRole] ?? 'a custom role; see Roles & Permissions.'}
+                          </li>
+                        ))}
+                      </ul>
+                      {(editingUser.regions?.length ?? 0) > 0 && (
+                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '8px' }}>
+                          Only in {editingUser.regions!.map((r) => REGION_LABELS[r as Region] ?? r).join(', ')}.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <label className="form-label" style={{ marginBottom: '8px', display: 'block' }}>System Roles</label>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', background: 'var(--bg-secondary)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                     {roles.map((r) => {
@@ -732,21 +760,46 @@ export const DirectoryPanel: React.FC = () => {
                 </div>
               </form>
 
+              {/*
+                THE PASSWORD IS THEIRS TO CHOOSE, NOT YOURS TO INVENT.
+
+                This used to be a box an administrator typed a password into, with a note saying
+                "share it with them directly" — so the credential existed in a chat message, two
+                people knew it, and it was rarely changed. The link sends them somewhere to set
+                their own; typing one for them is still possible, one click further in, because a
+                deployment with email switched off still has to be able to get somebody back in.
+              */}
               <div style={{ marginTop: '20px', paddingTop: '18px', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                   <KeyRound size={15} style={{ color: 'var(--warning)' }} />
-                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Reset Password</span>
+                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Password</span>
                 </div>
                 <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '10px' }}>
-                  Sets a new password immediately — there is no email flow, so share it with {editingUser.displayName} directly.
+                  {editingUser.email
+                    ? <>Emails {editingUser.displayName} a link to choose a new password. It works once and expires in 48 hours.</>
+                    : <>{editingUser.displayName} has no email address on file, so there is nowhere to send a link. Add one above, or set a password by hand below.</>}
                 </p>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input type="text" className="form-input" placeholder="New password (min 8 characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ flex: 1 }} />
-                  <button type="button" onClick={handleResetPassword} disabled={resetting || newPassword.length < 8}
-                    className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
-                    {resetting ? 'Resetting…' : 'Reset'}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button type="button" onClick={handleSendSetupLink} disabled={sendingLink || !editingUser.email}
+                    className="btn btn-primary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <Mail size={14} /> {sendingLink ? 'Sending…' : 'Email a password link'}
                   </button>
+                  {!showManualReset && (
+                    <button type="button" onClick={() => setShowManualReset(true)}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--text-xs)', textDecoration: 'underline' }}>
+                      or set one by hand
+                    </button>
+                  )}
                 </div>
+                {showManualReset && (
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                    <input type="text" className="form-input" placeholder="New password (min 10 characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ flex: 1 }} />
+                    <button type="button" onClick={handleResetPassword} disabled={resetting || newPassword.length < 10}
+                      className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
+                      {resetting ? 'Resetting…' : 'Set it'}
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div style={{ marginTop: '20px', paddingTop: '18px', borderTop: '1px solid var(--border-color)' }}>
@@ -758,124 +811,24 @@ export const DirectoryPanel: React.FC = () => {
       </DetailDrawer>
 
       {showCreateModal && (
-        <Modal open onClose={() => setShowCreateModal(false)} title="Add User Profile" width="480px" asForm onSubmit={handleCreateUser}
-          footer={
-            <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
-              <button type="submit" disabled={submitting} style={{ flex: 1, background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>{submitting ? 'Creating…' : 'Create Profile'}</button>
-              <button type="button" onClick={() => setShowCreateModal(false)} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '10px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>Cancel</button>
-            </div>
-          }
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div>
-              <label className="form-label" htmlFor="new-user-email">Email Address</label>
-              <input id="new-user-email" type="email" className="form-input" value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  if (!usernameEdited) setUsername(usernameFromEmail(e.target.value));
-                }} required />
-            </div>
-            <div>
-              <label className="form-label" htmlFor="new-user-username">Username</label>
-              <input id="new-user-username" type="text" className="form-input" value={username}
-                onChange={(e) => { setUsernameEdited(true); setUsername(e.target.value); }} required />
-              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
-                {usernameEdited ? 'You are setting this yourself.' : 'Taken from the email address — change it only if you need something different.'}
-              </div>
-            </div>
-            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
-              The initial password is generated by the server when the account is created, and shown
-              to you once on the next screen. Nobody has to invent one, and it is never stored
-              anywhere it can be read back.
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
-              <div><label className="form-label">First Name</label><input type="text" className="form-input" value={firstName} onChange={(e) => setFirstName(e.target.value)} required /></div>
-              <div><label className="form-label">Last Name</label><input type="text" className="form-input" value={lastName} onChange={(e) => setLastName(e.target.value)} required /></div>
-            </div>
-            <div>
-              <label className="form-label">Assign Initial Roles</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', maxHeight: '100px', overflowY: 'auto', background: 'var(--bg-secondary)', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                {roles.map((r) => {
-                  const isChecked = selectedRoleIds.includes(r.id);
-                  return (
-                    <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={isChecked} onChange={() => setSelectedRoleIds(isChecked ? selectedRoleIds.filter((id) => id !== r.id) : [...selectedRoleIds, r.id])} />
-                      <span>{roleLabel(r.name)}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-            {(() => {
-              const needsClient = roleIdsIncludeClientUser(selectedRoleIds);
-              return (
-                <div>
-                  <label className="form-label" style={{ marginBottom: '4px', display: 'block' }}>
-                    Client{needsClient && <span style={{ color: 'var(--danger)' }}> *</span>}
-                  </label>
-                  <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                    Which bank or NBFC this account belongs to. Required whenever Client User is one
-                    of the roles above — that role cannot read anything at all until this is set.
-                  </p>
-                  <Select
-                    value={selectedClientId}
-                    onChange={setSelectedClientId}
-                    options={(clientOptions ?? []).map((c): SelectOption => ({ value: c.id, label: c.name }))}
-                    placeholder="No client — staff account"
-                    clearable
-                    error={needsClient && !selectedClientId}
-                  />
-                </div>
-              );
-            })()}
-          </div>
-        </Modal>
+        <AddUserDialog
+          roles={roles}
+          clients={clientOptions}
+          onClose={() => setShowCreateModal(false)}
+          onAdded={(summary) => {
+            setShowCreateModal(false);
+            setInviteResult(summary);
+            void loadUsers();
+          }}
+        />
       )}
 
-      {/* The one and only time this password is visible. Dismissing this modal discards it. */}
-      {issuedCredential && (
-        <Modal open onClose={() => setIssuedCredential(null)} title="Account created — copy the password now" width="460px"
-          footer={
-            <button type="button" onClick={() => setIssuedCredential(null)}
-              style={{ width: '100%', marginTop: '12px', background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>
-              I have copied it — close
-            </button>
-          }
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ fontSize: 'var(--text-sm)' }}>
-              {issuedCredential.displayName} can now sign in as <strong>{issuedCredential.username}</strong>.
-            </div>
-            <div>
-              <label className="form-label" htmlFor="issued-password">Initial password</label>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                {/* Readable, not masked: the whole purpose of this field is to be passed on. */}
-                <input id="issued-password" type="text" className="form-input" value={issuedCredential.password} readOnly
-                  onFocus={(e) => e.currentTarget.select()}
-                  style={{ flex: 1, fontFamily: 'var(--font-mono, monospace)' }} />
-                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}
-                  onClick={() => { navigator.clipboard?.writeText(issuedCredential.password).then(() => setPasswordCopied(true)).catch(() => setPasswordCopied(false)); }}>
-                  {passwordCopied ? 'Copied' : 'Copy'}
-                </button>
-              </div>
-            </div>
-            <AlertBanner type="error" message="Copy this now — it will not be shown again. The server does not keep a readable copy, so if it is lost the only way forward is a password reset from the account's own panel." />
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-              They will be asked to choose their own password the first time they sign in, and cannot
-              reach the rest of the application until they do.
-            </div>
-          </div>
-        </Modal>
+      {inviteResult && (
+        <InviteResult result={inviteResult} onClose={() => setInviteResult(null)} />
       )}
     </div>
   );
 };
 
-const Kpi: React.FC<{ icon: React.ReactNode; tone: string; value: React.ReactNode; label: string }> = ({ icon, tone, value, label }) => (
-  <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-    <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'var(--status-pending-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: tone }}>{icon}</div>
-    <div><div style={{ fontSize: 'var(--text-xl)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{value}</div><div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{label}</div></div>
-  </div>
-);
 
 export default DirectoryPanel;

@@ -15,7 +15,19 @@ import * as path from 'path';
  * refuses one. Comments are stripped first — the explanation above quotes the very colours it
  * bans, and a guard that matches its own reasoning is a guard that fails for the wrong reason.
  */
-const SOURCE = fs.readFileSync(path.join(__dirname, 'PublicRegistration.tsx'), 'utf8');
+/*
+  The page, and the shell it is drawn in.
+
+  `FORM_CSS` and the masthead moved into `registration/PublicShell.tsx` when staff gained a second
+  page reachable without signing in (the emailed "choose your password" link) and the choice was
+  between copying a company header or sharing one. These rules are about what a stranger's browser
+  renders, which is both files — so both are read here.
+*/
+const SOURCE = [
+  fs.readFileSync(path.join(__dirname, 'PublicRegistration.tsx'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, 'registration', 'PublicShell.tsx'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, 'registration', 'ConsentGate.tsx'), 'utf8'),
+].join('\n');
 
 /** The `.pub-reg-*` rules in the app stylesheet — the page's other half. */
 const PAGE_CSS = (() => {

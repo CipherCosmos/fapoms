@@ -256,7 +256,10 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           borderBottomWidth: 1,
           borderColor: t.colors.border,
         }}>
-          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel={tr('common.back')} />
+          {/* "close" (X), not "arrow-back" — this dismisses the thread entirely, matching the
+              same full-dismiss icon everywhere else in the app rather than a second meaning
+              for the same action. */}
+          <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('common.close')} />
           <View style={{
             width: 40, height: 40, borderRadius: 20,
             backgroundColor: t.colors.primarySoft,

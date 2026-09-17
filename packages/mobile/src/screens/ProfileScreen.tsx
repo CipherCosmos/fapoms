@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, TextInput, TextStyle, Modal, Alert, Dimensions, ScrollView, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
-import { ProfilePhoto } from '../components/ProfilePhoto';
+import { ProfilePhoto, ProfilePhotoHint } from '../components/ProfilePhoto';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
   AppText, Avatar, Badge, Button, Card, GroupedRow, GroupedSection, GroupedSwitch,
@@ -1014,6 +1014,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onCapturePhoto,
 }) => {
   const [changePasswordVisible, setChangePasswordVisible] = useState(false);
+  const [hasProfilePhoto, setHasProfilePhoto] = useState(false);
   const t = useTheme();
   const tr = useT();
   const language = useLanguage();
@@ -1218,12 +1219,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             * for the whole of their time on the roster.
             */}
           {assayerId && onCapturePhoto ? (
-            <ProfilePhoto
-              assayerId={assayerId}
-              name={assayerName || tr('profile.identity.avatarFallback')}
-              onCapture={onCapturePhoto}
-              size={72}
-            />
+            <View style={{ alignItems: 'center', gap: 4, width: 96 }}>
+              <ProfilePhoto
+                assayerId={assayerId}
+                name={assayerName || tr('profile.identity.avatarFallback')}
+                onCapture={onCapturePhoto}
+                onPhotoChange={setHasProfilePhoto}
+                size={72}
+              />
+              {/* Words, not just the camera-badge convention — this audience is not assumed to
+                  already know "badge on a photo means tap to change it." Wrapped within the
+                  column's own width rather than left to size the row, since the full add-photo
+                  copy runs longer than the 72px avatar it sits under. */}
+              <ProfilePhotoHint hasPhoto={hasProfilePhoto} style={{ textAlign: 'center' }} />
+            </View>
           ) : (
             <Avatar name={assayerName || tr('profile.identity.avatarFallback')} size={72} />
           )}

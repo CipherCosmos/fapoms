@@ -3,7 +3,7 @@ import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, Plus, Check, Tra
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, HARD_COPY_LOCATIONS,
   onboardingNextStep, standingAllowsPlanning, scanMimeType, isDrawableScan, identityDocumentFacts,
-  isValidPan, isValidAadhaar,
+  isValidPan, isValidAadhaar, storedScanFileName,
 } from '@fapoms/shared';
 
 import { ScanOrAttach } from '../../components/scanner/ScanOrAttach';
@@ -415,7 +415,10 @@ const Attachments: React.FC<{
         const type = scanMimeType(key) ?? undefined;
         const url = URL.createObjectURL(type ? new Blob([bytes], { type }) : bytes);
         made.push(url);
-        return { title: documentLabel, url, fileName: key.split('/').pop() || `scan-${i + 1}`, mimeType: type };
+        return {
+          title: documentLabel, url, mimeType: type,
+          fileName: storedScanFileName(documentLabel, key, filePaths.length > 1 ? i + 1 : undefined),
+        };
       }));
       shown.current = items;
       setPreview({ items, index });

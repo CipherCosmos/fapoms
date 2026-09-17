@@ -10,6 +10,8 @@ import { RegistrationApplicationService, documentsRequestedFor } from './registr
 import { __resetPincodeCache } from '../geo/pincode-lookup.helper';
 import { OpenWithoutInterviewDto } from './hr-applications.controller';
 import { runWithRequestContext } from '../../core/context/request-context';
+import { __resetKeyCacheForTests } from '../../infrastructure/security/field-encryption';
+import { CURRENT_CONSENT_VERSION, CURRENT_CONSENT_NOTICE } from '@fapoms/shared';
 
 /**
  * The self-registration application layer.
@@ -43,10 +45,21 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
         tokenExpiresAt: new Date(Date.now() + 3_600_000),
         tokenConsumedAt: null,
         employmentCategory: null,
-        consentAcceptedAt: null,
+        // A candidate who is filling the form in has, by definition, already agreed to the notice —
+        // the server refuses every write until they have. Tests about that gate build their own
+        // un-consented fixture; see "what a candidate agrees to, and when".
+        consentAcceptedAt: new Date(),
+        consentWithdrawnAt: null,
         organizationId: 'org-1',
       }
-        : overrides.application;
+        /*
+          A fixture that says nothing about consent is a candidate who agreed — that is the ordinary
+          state of an application now, and the server refuses every write until it is true. Tests
+          about the gate itself say `consentAcceptedAt: null` explicitly, and win this spread.
+        */
+        : overrides.application === null
+          ? null
+          : { consentAcceptedAt: new Date(), ...overrides.application };
 
   const cacheData: Record<string, any> = overrides.cache ?? {};
 
@@ -65,6 +78,7 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
    */
   const applicationDocuments = {
     findOne: jest.fn(async () => null),
+    remove: jest.fn(async (v: unknown) => v),
     create: jest.fn((v: Row) => ({ ...v })),
     save: jest.fn(async (v: Row) => ({ ...v, id: 'doc-1' })),
     find: jest.fn(async () => ([
@@ -86,8 +100,16 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
     getJson: jest.fn(async (k: string) => (k in cacheData ? cacheData[k] : null)),
     setJson: jest.fn(async (k: string, v: unknown) => { cacheData[k] = v; }),
   };
-  const settings = { getNumber: jest.fn(async (_k: string, fallback?: number) => fallback ?? 0) };
-  const storage = { saveFile: jest.fn(async () => 'uploads/scan.png') };
+  const settings = {
+    getNumber: jest.fn(async (_k: string, fallback?: number) => fallback ?? 0),
+    // The consent notice asks for the grievance officer; an unnamed one is a real state the
+    // notice handles in words, so the double returns nothing rather than a convenient name.
+    get: jest.fn(async () => ''),
+  };
+  const storage = {
+    saveFile: jest.fn(async () => 'uploads/scan.png'),
+    deleteFile: jest.fn(async () => undefined),
+  };
 
   /** Read only so the reviewer sees the number HR typed beside the one the candidate confirmed. */
   const interviews = { findOne: jest.fn(async () => ({ mobile: '9822014455' })) };
@@ -274,7 +296,7 @@ describe('pre-account OTP', () => {
     await expect(service.submit(RAW_TOKEN)).rejects.toBeInstanceOf(ForbiddenException);
 
     await expect(service.updateDraft(RAW_TOKEN, { fullName: 'X' })).resolves.toBeDefined();
-    await expect(service.acceptConsent(RAW_TOKEN, 'v1')).resolves.toBeDefined();
+    await expect(service.acceptConsent(RAW_TOKEN, CURRENT_CONSENT_VERSION)).resolves.toBeDefined();
     await expect(
       service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, {
         originalname: 'x.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 1,
@@ -1468,7 +1490,9 @@ describe('the desk filling in an application', () => {
   });
 
   it('cannot accept consent or submit on the candidate’s behalf — there is no such field', async () => {
-    const ctx = makeService({ application: draft() });
+    // Explicitly un-agreed: a desk-opened application has no candidate consent yet, and this test
+    // exists to prove the desk cannot supply it for them.
+    const ctx = makeService({ application: draft({ consentAcceptedAt: null }) });
     // Sent as keys the shape has no room for: `EDITABLE_DRAFT_FIELDS` does not list either, and
     // the loop only copies what it lists. The candidate's declaration stays the candidate's.
     const smuggled = {
@@ -1796,6 +1820,266 @@ describe('the review drawer can see why there was no interview', () => {
  * been approved and reached the roster days before HR saw it. Submit asks the same questions at
  * the one moment the answer can still change the outcome.
  */
+/**
+ * CONSENT COMES BEFORE COLLECTION, AND CAN BE TAKEN BACK.
+ *
+ * The tick-box used to sit on the last step of the form, beside Submit — by which point the name,
+ * PAN, Aadhaar, bank account and every scan had already been typed, uploaded and saved. Agreeing
+ * afterwards is not a decision about whether to hand any of it over, and there was no way at all to
+ * change your mind.
+ */
+describe('what a candidate agrees to, and when', () => {
+  const draft = (over: Record<string, unknown> = {}) => ({
+    id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH, organizationId: 'org-1',
+    tokenExpiresAt: new Date(Date.now() + 3_600_000), tokenConsumedAt: null,
+    employmentCategory: 'FREELANCER', consentAcceptedAt: null, consentWithdrawnAt: null,
+    ...over,
+  });
+
+  it('refuses every collection until the notice is accepted', async () => {
+    const ctx = makeService({ application: draft(), cache: verified() });
+
+    await expect(ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never))
+      .rejects.toThrow(/agree to it before filling anything in/);
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+      .rejects.toThrow(/agree to it before filling anything in/);
+    await expect(ctx.service.uploadDocument(RAW_TOKEN, 'AADHAAR_FRONT' as never, {
+      originalname: 'a.jpg', buffer: Buffer.from('x'), mimetype: 'image/jpeg', size: 1,
+    })).rejects.toThrow(/agree to it before filling anything in/);
+
+    expect(ctx.applications.save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ extendedProfile: expect.anything() }),
+    );
+  });
+
+  it('lets the same writes through once they have agreed', async () => {
+    const ctx = makeService({ application: draft({ consentAcceptedAt: new Date() }), cache: verified() });
+    await expect(ctx.service.updateDraft(RAW_TOKEN, { record: { ifscCode: 'SBIN0001234' } } as never))
+      .resolves.toBeDefined();
+  });
+
+  it('hands the form the notice to show, with somebody to complain to', async () => {
+    const ctx = makeService({ application: draft(), cache: verified() });
+    const view = await ctx.service.hydrate(RAW_TOKEN);
+    expect(view.consentNotice.version).toBe(CURRENT_CONSENT_VERSION);
+    expect(view.consentNotice.purposes.length).toBeGreaterThan(3);
+    expect(view.consentNotice.grievanceContact).toBeTruthy();
+  });
+
+  /** A row claiming consent to wording nobody can produce is worse than no row at all. */
+  it('refuses a version it never published', async () => {
+    const ctx = makeService({ application: draft(), cache: verified() });
+    await expect(ctx.service.acceptConsent(RAW_TOKEN, 'v1')).rejects.toThrow(/out of date/);
+  });
+
+  it('keeps the exact words that were accepted, beside the acceptance', async () => {
+    const ctx = makeService({ application: draft(), cache: verified() });
+    const saved = await ctx.service.acceptConsent(RAW_TOKEN, CURRENT_CONSENT_VERSION);
+    expect(saved.consentAcceptedAt).toBeInstanceOf(Date);
+    expect(saved.consentVersion).toBe(CURRENT_CONSENT_VERSION);
+    expect((saved.consentNotice as any).purposes).toHaveLength(CURRENT_CONSENT_NOTICE.purposes.length);
+    expect((saved.consentNotice as any).grievanceContact).toBeTruthy();
+  });
+
+  describe('withdrawing it', () => {
+    it('erases the answers and deletes the scans, not just a flag', async () => {
+      const ctx = makeService({
+        application: draft({
+          status: ApplicationStatus.PENDING_VALIDATION,
+          consentAcceptedAt: new Date(),
+          extendedProfile: { fields: { panNumber: 'enc:v1:whatever' } },
+        }),
+        cache: verified(),
+      });
+      ctx.applicationDocuments.find.mockResolvedValue([
+        { id: 'd1', applicationId: 'app-1', requirement: 'AADHAAR_FRONT', filePaths: ['k1', 'k2'] },
+      ] as never);
+
+      const saved = await ctx.service.withdrawConsent(RAW_TOKEN, 'Changed my mind');
+
+      expect(saved.status).toBe(ApplicationStatus.WITHDRAWN);
+      expect(saved.consentWithdrawnAt).toBeInstanceOf(Date);
+      expect(saved.extendedProfile).toBeNull();
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('k1');
+      expect(ctx.storage.deleteFile).toHaveBeenCalledWith('k2');
+      expect(ctx.applicationDocuments.remove).toHaveBeenCalled();
+    });
+
+    it('closes the form to anything further', async () => {
+      const ctx = makeService({
+        application: draft({ consentAcceptedAt: new Date(), consentWithdrawnAt: new Date() }),
+        cache: verified(),
+      });
+      await expect(ctx.service.updateDraft(RAW_TOKEN, { record: { ifscCode: 'SBIN0001234' } } as never))
+        .rejects.toThrow(/was withdrawn/);
+    });
+
+    it('cannot then be approved into a person', async () => {
+      const ctx = makeService({
+        application: draft({ status: ApplicationStatus.WITHDRAWN, consentWithdrawnAt: new Date() }),
+      });
+      await expect(ctx.service.approve('app-1', 'hr-checker', ['ADMIN']))
+        .rejects.toThrow(/withdrew their application/);
+    });
+
+    /** An approved candidate is an employee: this link cannot erase a roster record. */
+    it('refuses once the person has been taken on, and says where to write', async () => {
+      const ctx = makeService({
+        application: draft({ status: ApplicationStatus.APPROVED, consentAcceptedAt: new Date() }),
+        cache: verified(),
+      });
+      await expect(ctx.service.withdrawConsent(RAW_TOKEN))
+        .rejects.toThrow(/grievance officer/);
+    });
+
+    it('does nothing further if it was already withdrawn', async () => {
+      const ctx = makeService({
+        application: draft({ status: ApplicationStatus.WITHDRAWN, consentWithdrawnAt: new Date() }),
+        cache: verified(),
+      });
+      await ctx.service.withdrawConsent(RAW_TOKEN);
+      expect(ctx.storage.deleteFile).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * THE APPLICATION MUST NOT BE A PLAINTEXT COPY OF SOMEBODY'S IDENTITY.
+ *
+ * `assayers` has encrypted PAN, Aadhaar and bank account for a long time. The application — the
+ * same numbers, typed by the same person minutes earlier — kept them as plain text in a jsonb
+ * column, went on holding them after approval, and returned them whole to every HR screen. An
+ * audit found them sitting in the live database in the clear.
+ */
+describe('the identity numbers a candidate types', () => {
+  const originalKey = process.env.PII_ENCRYPTION_KEY;
+  beforeAll(() => { process.env.PII_ENCRYPTION_KEY = 'b'.repeat(64); __resetKeyCacheForTests(); });
+  afterAll(() => {
+    if (originalKey === undefined) delete process.env.PII_ENCRYPTION_KEY;
+    else process.env.PII_ENCRYPTION_KEY = originalKey;
+    __resetKeyCacheForTests();
+  });
+
+  const storedFields = (ctx: any) => {
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    return (saved.extendedProfile as any).fields as Record<string, string>;
+  };
+
+  it('never writes a PAN, Aadhaar or bank account to the row in the clear', async () => {
+    const ctx = makeService({ cache: verified() });
+    await ctx.service.updateDraft(RAW_TOKEN, {
+      record: {
+        panNumber: 'ABCDE1234F', aadhaarNumber: '234567890124',
+        bankAccountNumber: '50100123456789', ifscCode: 'SBIN0001234',
+      },
+    } as never);
+
+    const fields = storedFields(ctx);
+    for (const key of ['panNumber', 'aadhaarNumber', 'bankAccountNumber']) {
+      expect(fields[key].startsWith('enc:v1:')).toBe(true);
+    }
+    expect(JSON.stringify(fields)).not.toContain('ABCDE1234F');
+    expect(JSON.stringify(fields)).not.toContain('234567890124');
+    expect(JSON.stringify(fields)).not.toContain('50100123456789');
+    // The IFSC identifies a bank, not a person, and stays readable.
+    expect(fields.ifscCode).toBe('SBIN0001234');
+  });
+
+  it('gives the candidate their own numbers back, so a resumed form still shows them', async () => {
+    const ctx = makeService({ cache: verified() });
+    await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never);
+    ctx.application!.extendedProfile = { fields: storedFields(ctx) };
+
+    const view = await ctx.service.hydrate(RAW_TOKEN);
+    expect((view.application.extendedProfile as any).fields.panNumber).toBe('ABCDE1234F');
+  });
+
+  /**
+   * Found by probing the running system: the form saves as you type, and this response feeds the
+   * same boxes the candidate is typing into.
+   */
+  it('answers a draft save with the number, not the ciphertext that was stored', async () => {
+    const ctx = makeService({ cache: verified() });
+    const saved = await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never);
+
+    expect((saved.extendedProfile as any).fields.panNumber).toBe('ABCDE1234F');
+    // ...while what actually went to the database stayed sealed.
+    const stored = ctx.applications.save.mock.calls.at(-1)![0];
+    expect((stored.extendedProfile as any).fields.panNumber.startsWith('enc:v1:')).toBe(true);
+  });
+
+  it('shows HR the last four digits and never the number', async () => {
+    const ctx = makeService({ cache: verified() });
+    await ctx.service.updateDraft(RAW_TOKEN, {
+      record: { panNumber: 'ABCDE1234F', aadhaarNumber: '234567890124', bankAccountNumber: '50100123456789' },
+    } as never);
+    ctx.application!.extendedProfile = { fields: storedFields(ctx) };
+
+    const detail = await ctx.service.getApplication('app-1');
+    const text = JSON.stringify(detail.application);
+    expect(text).not.toContain('ABCDE1234F');
+    expect(text).not.toContain('234567890124');
+    expect(text).not.toContain('50100123456789');
+    expect((detail.application.extendedProfile as any).fields.panNumber).toMatch(/234F$/);
+    // Nor in the queue every HR screen opens with.
+    expect(JSON.stringify(await ctx.service.listApplications())).not.toContain('ABCDE1234F');
+  });
+
+  /**
+   * Once the record holds the number, the application has no use for it — and three approved
+   * applications were still holding theirs in the live database.
+   */
+  it('stops holding the numbers once the record has them', async () => {
+    const application = {
+      id: 'app-x', mobile: '9822014455', fullName: 'Full Payload', state: 'Maharashtra',
+      status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+      source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+      extendedProfile: { fields: { panNumber: 'ABCDE1234K', aadhaarNumber: '234567890124', bankAccountNumber: '123456789012', ifscCode: 'SBIN0001234' } },
+    };
+    const ctx = makeService({ application });
+    (ctx.assayerService as any).update = jest.fn(async () => ({}));
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    const saved = ctx.applications.save.mock.calls.at(-1)![0];
+    const fields = (saved.extendedProfile as any).fields;
+    expect(fields).not.toHaveProperty('panNumber');
+    expect(fields).not.toHaveProperty('aadhaarNumber');
+    expect(fields).not.toHaveProperty('bankAccountNumber');
+    // What is not an identity number stays: it is how the desk sees what was collected.
+    expect(fields.ifscCode).toBe('SBIN0001234');
+  });
+
+  /** If the record refused a number, this row is the only remaining copy — it must keep it. */
+  it('keeps a number the record refused, rather than losing it from both places', async () => {
+    const application = {
+      id: 'app-y', mobile: '9822014455', fullName: 'Refused Identity', state: 'Maharashtra',
+      status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+      source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+      extendedProfile: { fields: { panNumber: 'ABCDE1234K', bankAccountNumber: '123456789012' } },
+    };
+    const ctx = makeService({ application });
+    (ctx.assayerService as any).update = jest.fn(async (_id: string, dto: Record<string, unknown>) => {
+      if ('panNumber' in dto) throw new Error('That PAN is already on somebody else');
+      return {};
+    });
+
+    await ctx.service.approve('app-y', 'hr-checker', ['ADMIN']);
+
+    const fields = (ctx.applications.save.mock.calls.at(-1)![0].extendedProfile as any).fields;
+    expect(fields.panNumber).toBeDefined();
+    expect(fields).not.toHaveProperty('bankAccountNumber');   // that one landed
+  });
+
+  /** A screen that sent back what it was shown would replace a real number with its own mask. */
+  it('refuses to store the mask a screen displayed', async () => {
+    const ctx = makeService({ cache: verified() });
+    await expect(ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: '••••••234F' } } as never))
+      .rejects.toThrow(/masked copy/);
+  });
+});
+
 describe('what submit refuses that the roster sweep used to catch later', () => {
   /*
     The identifier checks compare FINGERPRINTS, which need the PII key: without it
@@ -1804,10 +2088,20 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
     roster sweep stays as the backstop rather than being deleted.
   */
   const originalKey = process.env.PII_ENCRYPTION_KEY;
-  beforeAll(() => { process.env.PII_ENCRYPTION_KEY = 'a'.repeat(64); });
+  /*
+    The key module resolves the key ONCE and caches it — including caching "no key". Applications
+    now seal their identity numbers as they are typed, so earlier tests in this file reach the key
+    module first and cache a null; without these resets, setting the variable here would have no
+    effect and the duplicate check would silently pass everything.
+  */
+  beforeAll(() => {
+    process.env.PII_ENCRYPTION_KEY = 'a'.repeat(64);
+    __resetKeyCacheForTests();
+  });
   afterAll(() => {
     if (originalKey === undefined) delete process.env.PII_ENCRYPTION_KEY;
     else process.env.PII_ENCRYPTION_KEY = originalKey;
+    __resetKeyCacheForTests();
   });
 
   const ready = (over: Record<string, unknown> = {}) => ({

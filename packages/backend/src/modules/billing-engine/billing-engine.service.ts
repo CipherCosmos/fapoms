@@ -1569,6 +1569,55 @@ export class BillingEngineService implements OnModuleInit {
       payable.updatedBy = userId;
       await m.save(payable);
 
+      // If this payable belongs to an assayer invoice, check if all active lines on that invoice are now PAID
+      if (fullyPaid && payable.assayerInvoiceId) {
+        const remainingUnpaid = await m.count(AssayerPayableEntity, {
+          where: {
+            assayerInvoiceId: payable.assayerInvoiceId,
+            isActive: true,
+            status: Not(AssayerPayableStatus.PAID),
+          },
+        });
+        if (remainingUnpaid === 0) {
+          const inv = await m.findOne(AssayerInvoiceEntity, {
+            where: { id: payable.assayerInvoiceId },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (inv && inv.status === AssayerInvoiceStatus.APPROVED) {
+            const invFromStatus = inv.status;
+            inv.status = AssayerInvoiceStatus.PAID;
+            inv.paidAt = new Date();
+            inv.paidBy = userId;
+            inv.updatedBy = userId;
+            await m.save(inv);
+
+            await this.history(userId, {
+              assayerId: inv.assayerId,
+              entityType: BillingEntityType.ASSAYER_INVOICE,
+              entityId: inv.id,
+              action: 'ASSAYER_INVOICE_PAID',
+              fromState: invFromStatus,
+              toState: AssayerInvoiceStatus.PAID,
+              newValue: { paidAt: inv.paidAt, paidBy: userId, totalAmount: Number(inv.totalAmount) },
+            }, m);
+
+            await this.auditService.recordEvent({
+              category: EventCategory.WORKFLOW,
+              eventType: 'ASSAYER_INVOICE_PAID',
+              entityType: 'ASSAYER_INVOICE',
+              entityId: inv.id,
+              previousState: invFromStatus,
+              newState: AssayerInvoiceStatus.PAID,
+              userId,
+              remarks: `All lines paid — assayer invoice ${inv.invoiceNumber} marked PAID`,
+              metadata: { invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, totalAmount: Number(inv.totalAmount) },
+            }, { manager: m });
+
+            emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
+          }
+        }
+      }
+
       // Computed on the transaction's own connection so it sees the `paidAmount` just written.
       const balance = (await this.assayerTotals(payable.assayerId, m)).outstanding;
 

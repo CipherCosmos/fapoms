@@ -8,6 +8,7 @@ import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
 import { AssayerPayableEntity } from './payable.entity';
+import { AssayerInvoiceEntity } from './assayer-invoice.entity';
 import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
@@ -21,7 +22,7 @@ import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { TypeOrmUnitOfWork } from '../../infrastructure/persistence/typeorm-unit-of-work';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus, EventCategory, OnboardingDocument, DocumentVerification } from '@fapoms/shared';
+import { BillingState, AssayerPayableStatus, AssayerInvoiceStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus, EventCategory, OnboardingDocument, DocumentVerification } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY } from '../../infrastructure/settings/settings.registry';
 
@@ -103,6 +104,7 @@ describe('BillingEngineService', () => {
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
     findAndCount: jest.fn(async () => [[], 0]),
+    count: jest.fn(async () => 0),
     createQueryBuilder: jest.fn(() => queryBuilderStub()),
     manager: { query: managerQuery },
   };
@@ -140,10 +142,18 @@ describe('BillingEngineService', () => {
       isActive: true,
     })),
   };
+  const assayerInvoiceRepo: any = {
+    create: jest.fn((d) => ({ ...d })),
+    save: jest.fn(async (d) => { const r = { id: d.id ?? `ainvoice-${saved.length + 1}`, ...d }; saved.push(r); return r; }),
+    find: jest.fn(async () => []),
+    findOne: jest.fn(async () => null),
+    count: jest.fn(async () => 0),
+  };
 
   const repoForEntity = (target: any): any => {
     if (target === BillingEntryEntity) return entryRepo;
     if (target === BillingInvoiceEntity) return invoiceRepo;
+    if (target === AssayerInvoiceEntity) return assayerInvoiceRepo;
     if (target === BillingPaymentEntity) return paymentRepo;
     if (target === AssayerPayableEntity) return payableRepo;
     if (target === BillingHistoryEntity) return historyRepo;
@@ -156,6 +166,7 @@ describe('BillingEngineService', () => {
 
   /** Which repository a row belongs to, inferred from its shape. Order matters. */
   const repoForRow = (row: any): any => {
+    if (row?.lineCount !== undefined || (typeof row?.invoiceNumber === 'string' && row.invoiceNumber.startsWith('AINV-'))) return assayerInvoiceRepo;
     if (row?.payableNumber !== undefined) return payableRepo;
     if (row?.invoiceNumber !== undefined) return invoiceRepo;
     if (row?.direction !== undefined) return paymentRepo;
@@ -200,6 +211,7 @@ describe('BillingEngineService', () => {
     }),
     query: jest.fn(async (sql: string, params?: any[]) => { txQueries.push(sql); return managerQuery(sql, params); }),
     insert: jest.fn(async (_target: any, rows: any[]) => { stagedOutbox.push(...rows); return { identifiers: rows.map((r) => ({ id: r.id })) }; }),
+    count: jest.fn(async (target: any, opts: any) => (repoForEntity(target).count ? repoForEntity(target).count(opts) : 0)),
   });
 
   const dataSource: any = {
@@ -681,6 +693,32 @@ describe('BillingEngineService', () => {
       payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
       await expect(service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT, amount: 1800.5 }, 'f'))
         .rejects.toThrow(BadRequestException);
+    });
+
+    it('atomically transitions parent AssayerInvoice to PAID when all lines are disbursed', async () => {
+      payableRepo.findOne.mockImplementation(async () =>
+        payable({ status: AssayerPayableStatus.APPROVED, assayerInvoiceId: 'ainv-1' }),
+      );
+      payableRepo.count.mockImplementation(async () => 0);
+      assayerInvoiceRepo.findOne.mockImplementation(async () => ({
+        id: 'ainv-1',
+        invoiceNumber: 'AINV-1',
+        assayerId: 'assayer-1',
+        status: AssayerInvoiceStatus.APPROVED,
+        totalAmount: 1800,
+      }));
+
+      await service.recordDisbursement(
+        { payableId: 'payable-1', paymentReference: 'UTR-100', method: PaymentMethod.NEFT },
+        'finance-1',
+      );
+
+      const ainvPaid = committed.find((r) => r.invoiceNumber === 'AINV-1');
+      expect(ainvPaid).toMatchObject({
+        status: AssayerInvoiceStatus.PAID,
+        paidBy: 'finance-1',
+      });
+      expect(committed.some((r) => r.action === 'ASSAYER_INVOICE_PAID')).toBe(true);
     });
   });
 

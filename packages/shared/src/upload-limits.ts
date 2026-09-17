@@ -187,6 +187,32 @@ export function scanFileName(
 }
 
 /**
+ * What an ALREADY-STORED scan is called when a screen offers it.
+ *
+ * Four screens used to take the last segment of the storage key, which worked only because keys
+ * repeated the uploader's own file name — the very thing that made a key a caption saying whose
+ * document it was. Keys are opaque now, so the same trick would show a reviewer
+ * `4f1c…-9ab2.pdf`, and the name has to come from what the document IS.
+ *
+ * Deliberately not `scanFileName`: that one names a scan being CREATED and can fall back to a
+ * timestamp of "now", which on a three-year-old file would be a lie.
+ */
+export function storedScanFileName(
+  documentLabel: string | null | undefined,
+  storageKey: string,
+  page?: number,
+): string {
+  const dot = storageKey.lastIndexOf('.');
+  const extension = dot > 0 ? storageKey.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+  const slug = (documentLabel ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'scan';
+  const base = page && page > 0 ? `${slug}-${page}` : slug;
+  return extension ? `${base}.${extension}` : base;
+}
+
+/**
  * Alias kept for callers written against the brief-lived rewrite of this file (2026-09-07,
  * restored the same day after it clobbered the feedback constants): same figure as
  * MAX_UPLOAD_MB, one rule.

@@ -8,6 +8,7 @@ import { NotificationEntity } from './notification.entity';
 import { DeviceTokenEntity } from './device-token.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { UserEntity } from '../user/user.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
 import { renderTemplate } from './notification-catalog';
@@ -64,6 +65,8 @@ export class NotificationDeliveryWorker {
     private readonly preferenceRepo: Repository<NotificationPreferenceEntity>,
     @InjectRepository(UserEntity)
     private readonly userRepo: Repository<UserEntity>,
+    @InjectRepository(AssayerEntity)
+    private readonly assayerRepo: Repository<AssayerEntity>,
     private readonly fcm: FcmProvider,
     private readonly email: EmailProvider,
     private readonly sweeper: NotificationSweeper,
@@ -238,44 +241,58 @@ export class NotificationDeliveryWorker {
     // never owed an email.
     if (notification.emailStatus !== NotificationStatus.PENDING) return;
 
-    if (!notification.userId) {
-      await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
-        'Email reaches internal users only; this recipient is a field assayer.');
-      return;
-    }
+    let recipientEmail: string | null = null;
 
-    // Same convention as push: absence of a preference row means opted in; only an explicit
-    // false suppresses.
-    const pref = await this.preferenceRepo.findOne({
-      where: { userId: notification.userId, category: notification.category },
-    });
-    if (pref && pref.email === false) {
-      await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
-        'Recipient has turned off email for this category.');
-      return;
-    }
+    if (notification.userId) {
+      // Same convention as push: absence of a preference row means opted in; only an explicit
+      // false suppresses.
+      const pref = await this.preferenceRepo.findOne({
+        where: { userId: notification.userId, category: notification.category },
+      });
+      if (pref && pref.email === false) {
+        await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+          'Recipient has turned off email for this category.');
+        return;
+      }
 
-    const user = await this.userRepo.findOne({
-      where: { id: notification.userId },
-      select: ['id', 'email', 'isActive', 'status'],
-    });
-    if (!user?.email) {
+      const user = await this.userRepo.findOne({
+        where: { id: notification.userId },
+        select: ['id', 'email', 'isActive', 'status'],
+      });
+      if (!user?.email) {
+        await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+          'Recipient has no email address on file.');
+        return;
+      }
+      /**
+       * Durably cut off, not merely locked out.
+       */
+      const CUT_OFF = ['SUSPENDED', 'DISABLED', 'ARCHIVED', 'INVITED'];
+      if (!user.isActive || CUT_OFF.includes(user.status)) {
+        await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+          `Recipient account is ${user.isActive ? user.status.toLowerCase() : 'deactivated'}.`);
+        return;
+      }
+      recipientEmail = user.email;
+    } else if (notification.assayerId) {
+      const assayer = await this.assayerRepo.findOne({
+        where: { id: notification.assayerId },
+        select: ['id', 'email', 'displayName', 'status'],
+      });
+      if (!assayer?.email) {
+        await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+          'Field assayer has no email address on file.');
+        return;
+      }
+      if (assayer.status === 'INACTIVE' || assayer.status === 'SUSPENDED') {
+        await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
+          `Field assayer account is ${assayer.status.toLowerCase()}.`);
+        return;
+      }
+      recipientEmail = assayer.email;
+    } else {
       await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
-        'Recipient has no email address on file.');
-      return;
-    }
-    /**
-     * Durably cut off, not merely locked out.
-     *
-     * Emailing a suspended or archived account leaks operational detail to someone deliberately
-     * removed. LOCKED is not that: it is the automatic fifteen-minute lockout five bad passwords
-     * produce, and an SLA escalation is if anything MORE useful to that person, who is a
-     * colleague having a bad morning rather than an ex-colleague.
-     */
-    const CUT_OFF = ['SUSPENDED', 'DISABLED', 'ARCHIVED', 'INVITED'];
-    if (!user.isActive || CUT_OFF.includes(user.status)) {
-      await this.settleEmail(notification, NotificationStatus.SUPPRESSED,
-        `Recipient account is ${user.isActive ? user.status.toLowerCase() : 'deactivated'}.`);
+        'Notification has no recipient user or assayer.');
       return;
     }
 
@@ -303,28 +320,12 @@ export class NotificationDeliveryWorker {
 
     /**
      * Claim the row here — as late as possible, immediately before the only irreversible step.
-     *
-     * The stranded-email sweep re-enqueues anything PENDING for five minutes, which a large
-     * fan-out or a throttling provider produces routinely, so two jobs can genuinely be in
-     * flight for one row. A conditional PENDING → SENT update means exactly one of them may
-     * send.
-     *
-     * Why *here* and not earlier: everything above is read-only and idempotent, and claiming
-     * before it turned an ordinary database blip into a lost email. A throw during the
-     * preference or user lookup would leave the row SENT, and the retry — the very machinery
-     * that exists for transient errors — would see a non-PENDING row and return without
-     * sending. Claiming late keeps the anti-duplicate guarantee (this is still the last thing
-     * before the send) while leaving the fragile reads outside it, where a throw simply leaves
-     * the row PENDING for the retry to pick up.
      */
     const claim = await this.notificationRepo
       .createQueryBuilder()
       .update(NotificationEntity)
       .set({
         emailStatus: NotificationStatus.SENT,
-        // The claim's own clock. `updated_at` is bumped by every write to the row — including
-        // the push leg's own sweep — so it cannot tell the abandoned-send sweep how long THIS
-        // send has been outstanding.
         emailedAt: new Date(),
       })
       .where('id = :id', { id: notification.id })
@@ -360,16 +361,26 @@ export class NotificationDeliveryWorker {
       badgeTone = 'gold';
     }
 
+    const kvTable = payload.invoiceNumber ? [
+      { label: 'Claim Reference', value: String(payload.invoiceNumber) },
+      { label: 'Included Audits', value: `${payload.count ?? payload.lineCount ?? 0} completed assignment(s)` },
+      ...(payload.subtotalBase !== undefined ? [{ label: 'Base Fees', value: `₹${Number(payload.subtotalBase).toLocaleString('en-IN')}` }] : []),
+      ...(payload.subtotalTravel !== undefined ? [{ label: 'Travel Expenses', value: `₹${Number(payload.subtotalTravel).toLocaleString('en-IN')}` }] : []),
+      ...(payload.tdsAmount !== undefined ? [{ label: 'TDS Deduction', value: `₹${Number(payload.tdsAmount).toLocaleString('en-IN')}` }] : []),
+      ...(payload.totalAmount !== undefined ? [{ label: 'Net Payable', value: `₹${Number(payload.totalAmount).toLocaleString('en-IN')}` }] : []),
+    ] : undefined;
+
     const result = await this.email.send({
-      to: user.email,
+      to: recipientEmail,
       subject,
       text: `${bodyText}${linkUrl ? `\n\nOpen in FAPOMS: ${linkUrl}` : ''}`,
       html: renderEmailHtml({
         title: subject,
         badge: { text: badgeText, tone: badgeTone },
         bodyLines: bodyText.split('\n').filter(Boolean),
+        kvTable,
         linkUrl,
-        linkLabel: 'Open in FAPOMS',
+        linkLabel: payload.invoiceNumber ? 'Review & Confirm Claim in App' : 'Open in FAPOMS',
       }),
     });
 

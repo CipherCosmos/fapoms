@@ -32,19 +32,27 @@ const INVOICE_TONE: Record<InvoiceStatus, string> = {
 // INVITED is waiting on the assayer (their queue, warning-toned like a pending payout);
 // SUBMITTED is waiting on ops — the action lane, accent-toned so it reads as "yours to do".
 const ASSAYER_INVOICE_TONE: Record<AssayerInvoiceStatus, string> = {
-  INVITED: 'var(--warning)',
-  SUBMITTED: 'var(--accent)',
-  APPROVED: 'var(--success)',
+  INVITED: 'var(--text-secondary)',
+  SUBMITTED: 'var(--warning)',
+  APPROVED: 'var(--accent)',
+  PAID: 'var(--success)',
   CANCELLED: 'var(--text-muted)',
+  SUPERSEDED: 'var(--text-muted)',
 };
 
 /**
- * Words for the assayer-invoice states. Local because the shared label layer does not know this
- * enum yet; when the mobile reveal screen ships these belong beside `payableStatusLabel` in
- * @fapoms/shared so both apps say the same thing.
+ * Words for the assayer-invoice states. Simple, intuitive labels that non-technical
+ * operators immediately understand.
  */
 export const assayerInvoiceStatusLabel = (s: AssayerInvoiceStatus): string =>
-  ({ INVITED: 'Invited', SUBMITTED: 'Submitted', APPROVED: 'Approved', CANCELLED: 'Cancelled' })[s] ?? s;
+  ({
+    INVITED: 'Waiting for Assayer',
+    SUBMITTED: 'Needs Approval',
+    APPROVED: 'Approved',
+    PAID: 'Paid',
+    CANCELLED: 'Cancelled',
+    SUPERSEDED: 'Revised',
+  })[s] ?? s;
 
 export const Pill: React.FC<{ tone: string; children: React.ReactNode; title?: string }> = ({ tone, children, title }) => (
   <span title={title} style={{
@@ -73,8 +81,53 @@ export const InvoiceStatusPill: React.FC<{ status: InvoiceStatus; partPaid?: boo
   </Pill>
 );
 
-export const AssayerInvoiceStatusPill: React.FC<{ status: AssayerInvoiceStatus; title?: string }> = ({ status, title }) => (
-  <Pill tone={ASSAYER_INVOICE_TONE[status] ?? 'var(--text-muted)'} title={title}>{assayerInvoiceStatusLabel(status)}</Pill>
+export const AssayerInvoiceStatusPill: React.FC<{ status: AssayerInvoiceStatus; title?: string }> = ({ status, title }) => {
+  const tone = ASSAYER_INVOICE_TONE[status] ?? 'var(--text-muted)';
+  return (
+    <Pill tone={tone} title={title}>
+      {status === AssayerInvoiceStatus.SUBMITTED && (
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-primary)', display: 'inline-block' }} />
+      )}
+      {status === AssayerInvoiceStatus.PAID && (
+        <span style={{ color: 'var(--success)', fontWeight: 700 }}>✓</span>
+      )}
+      {assayerInvoiceStatusLabel(status)}
+    </Pill>
+  );
+};
+
+export const MetricCard: React.FC<{
+  label: string;
+  value: string;
+  sub?: React.ReactNode;
+  icon?: React.ReactNode;
+  tone?: string;
+  highlight?: boolean;
+  onClick?: () => void;
+}> = ({ label, value, sub, icon, tone, highlight, onClick }) => (
+  <div
+    onClick={onClick}
+    style={{
+      background: highlight ? 'var(--status-pending-bg)' : 'var(--bg-secondary)',
+      border: `1px solid ${highlight ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+      borderRadius: 'var(--radius-md)',
+      padding: '12px 14px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4,
+      cursor: onClick ? 'pointer' : 'default',
+      transition: 'all 0.15s ease',
+    }}
+  >
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: tone ?? 'var(--text-muted)' }}>
+      <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      {icon && <span style={{ opacity: 0.85 }}>{icon}</span>}
+    </div>
+    <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-display, inherit)' }}>
+      {value}
+    </div>
+    {sub && <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{sub}</div>}
+  </div>
 );
 
 export const HoldPill: React.FC<{ reason?: string | null }> = ({ reason }) => (

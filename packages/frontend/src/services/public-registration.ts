@@ -1,4 +1,6 @@
-import { ApplicationStatus, EmploymentCategory, OnboardingDocument } from '@fapoms/shared';
+import {
+  ApplicationStatus, EmploymentCategory, OnboardingDocument, type ConsentNotice,
+} from '@fapoms/shared';
 import { AppError, fromNetwork, fromResponse } from './errors';
 import { fetchWithTimeout, DEFAULT_TIMEOUT_MS, LONG_TIMEOUT_MS } from './http';
 
@@ -39,6 +41,7 @@ export interface RegistrationApplication {
   employmentCategory: EmploymentCategory | null;
   consentAcceptedAt: string | null;
   consentVersion: string | null;
+  consentWithdrawnAt?: string | null;
   status: ApplicationStatus;
   reviewNotes: string | null;
   /**
@@ -62,6 +65,14 @@ export interface RegistrationHydrateResult {
   documents: RegistrationApplicationDocument[];
   documentsRequested: OnboardingDocument[];
   otpVerified?: boolean;
+  /**
+   * What this candidate must be shown, and agree to, before the form collects anything.
+   *
+   * Served by the API rather than written into this page: the wording is versioned, the version is
+   * stamped on the acceptance, and the grievance contact changes with whoever holds the post. A
+   * copy hard-coded here would drift out of step with what the row claims was agreed.
+   */
+  consentNotice: ConsentNotice & { grievanceContact: string };
 }
 
 export interface UpdateRegistrationDraftInput {
@@ -174,6 +185,17 @@ export function acceptRegistrationConsent(token: string, consentVersion: string)
   return call<RegistrationApplication>(`${basePath(token)}/consent`, {
     method: 'POST',
     body: JSON.stringify({ consentVersion }),
+  });
+}
+
+/**
+ * Taking it back — the same link, the same effort as giving it. The server erases the answers and
+ * deletes the scans; this just asks.
+ */
+export function withdrawRegistrationConsent(token: string, reason?: string): Promise<RegistrationApplication> {
+  return call<RegistrationApplication>(`${basePath(token)}/consent/withdraw`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
   });
 }
 

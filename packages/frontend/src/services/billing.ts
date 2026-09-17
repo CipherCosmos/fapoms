@@ -358,6 +358,10 @@ async function cancelAssayerInvoice(id: string, reason: string): Promise<Assayer
   return api.request<AssayerInvoiceSummary>(`/billing-engine/assayer-invoices/${id}/cancel`, { method: 'PATCH', body: JSON.stringify({ reason }) });
 }
 
+async function reviseAssayerInvoice(id: string, reason: string): Promise<AssayerInvoiceSummary> {
+  return api.request<AssayerInvoiceSummary>(`/billing-engine/assayer-invoices/${id}/revise`, { method: 'POST', body: JSON.stringify({ reason }) });
+}
+
 async function listInvoiceable(clientId?: string): Promise<{ clients: InvoiceableClient[]; total: number; truncated: boolean }> {
   return api.request<{ clients: InvoiceableClient[]; total: number; truncated: boolean }>(`/billing-engine/invoiceable${qs({ clientId })}`);
 }
@@ -443,6 +447,7 @@ export const billingApi = {
   getAssayerInvoice,
   approveAssayerInvoice,
   cancelAssayerInvoice,
+  reviseAssayerInvoice,
   listInvoiceable,
   listInvoices,
   getInvoice,

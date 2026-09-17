@@ -7,13 +7,14 @@ import { NotificationEntity } from './notification.entity';
 import { DeviceTokenEntity } from './device-token.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { UserEntity } from '../user/user.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { NotificationSettingsService } from './notification-settings.service';
 import { NotificationSweeper } from './notification.sweeper';
 
 /**
- * The email leg of delivery: staff-only, preference-gated, terminally bookkept.
+ * The email leg of delivery: preference-gated, terminally bookkept.
  *
  * The invariant under test throughout: `email_status` always ends somewhere explicable.
  * A row that never emailed says why (SUPPRESSED + reason), a failure says what happened
@@ -45,6 +46,7 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
   const tokenRepo = { find: jest.fn(), update: jest.fn() };
   const prefRepo = { findOne: jest.fn() };
   const userRepo = { findOne: jest.fn() };
+  const assayerRepo = { findOne: jest.fn() };
   const fcm = { sendMulticast: jest.fn() };
   const emailProvider = { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() };
   const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn(), requeueStrandedEmails: jest.fn() };
@@ -76,6 +78,7 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
     jest.clearAllMocks();
     emailProvider.isEnabled.mockReturnValue(true);
     prefRepo.findOne.mockResolvedValue(null);
+    assayerRepo.findOne.mockResolvedValue(null);
     userRepo.findOne.mockResolvedValue({ id: 'u-1', email: 'ops@example.in', isActive: true, status: 'ACTIVE' });
 
     const module: TestingModule = await Test.createTestingModule({
@@ -85,6 +88,7 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
         { provide: getRepositoryToken(DeviceTokenEntity), useValue: tokenRepo },
         { provide: getRepositoryToken(NotificationPreferenceEntity), useValue: prefRepo },
         { provide: getRepositoryToken(UserEntity), useValue: userRepo },
+        { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
         { provide: FcmProvider, useValue: fcm },
         { provide: EmailProvider, useValue: emailProvider },
         {
@@ -143,12 +147,21 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
     expect(emailProvider.send).not.toHaveBeenCalled();
   });
 
-  it('suppresses, with the reason, for an assayer recipient — email is a staff channel', async () => {
+  it('emails an assayer recipient when they have an email address on file', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow({ userId: null, assayerId: 'as-1' }));
+    assayerRepo.findOne.mockResolvedValue({ id: 'as-1', email: 'assayer@example.in', displayName: 'Raj Assayer', status: 'ACTIVE' });
+    emailProvider.send.mockResolvedValue({ success: true });
+    await worker.deliverEmail(job());
+    expect(emailProvider.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'assayer@example.in' }));
+  });
+
+  it('suppresses, with the reason, when an assayer recipient has no email on file', async () => {
+    notifRepo.findOne.mockResolvedValue(emailRow({ userId: null, assayerId: 'as-1' }));
+    assayerRepo.findOne.mockResolvedValue({ id: 'as-1', email: null, displayName: 'Raj Assayer', status: 'ACTIVE' });
     await worker.deliverEmail(job());
     expect(emailProvider.send).not.toHaveBeenCalled();
     expect(lastEmailStatus()).toBe(NotificationStatus.SUPPRESSED);
-    expect(lastReason()).toMatch(/field assayer/);
+    expect(lastReason()).toMatch(/Field assayer has no email address/);
   });
 
   it('honours an explicit email opt-out for the category', async () => {

@@ -286,15 +286,15 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
             style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}
             title={invoicingDark
               ? 'Assayer invoicing is not enabled on this deployment yet'
-              : 'One invoice invitation per assayer with unbilled work — the periodic (~15-day/monthly) billing round'}>
-            <Send size={13} /> {inviteAll.isPending ? 'Inviting…' : 'Ask assayers to invoice'}
+              : 'Send monthly bill statements to all assayers with completed unbilled work'}>
+            <Send size={13} /> {inviteAll.isPending ? 'Sending…' : 'Send Monthly Bills'}
           </button>
         )}
         <button onClick={() => setTdsOpen(true)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}
-          title="PAN-wise report of TDS withheld from field workers, downloadable as CSV">
-          <Percent size={13} /> TDS report
+          title="Download TDS tax report as CSV">
+          <Percent size={13} /> TDS Report
         </button>
-        <Link to="/billing/statement" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Assayer statements →</Link>
+        <Link to="/billing?tab=assayer-invoices" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Review Assayer Bills →</Link>
       </div>
 
       {/* Rollout gate: the backend answered "not enabled" to an invite. Deployment state, not an
@@ -329,7 +329,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
           <button className="btn btn-secondary" disabled={!payable.length || bankBusy} onClick={downloadBankFile}
             title="Download the selected approved, unpaid payouts as a NEFT bank-upload file (beneficiary, account, IFSC, amount)"
             style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <FileDown size={14} /> {bankBusy ? 'Preparing…' : 'Download bank file'}
+            <FileDown size={14} /> {bankBusy ? 'Preparing…' : 'Download Bank CMS Batch (NEFT)'}
           </button>
           <button className="btn btn-secondary" onClick={() => setSelected(new Set())}>Clear</button>
           {selectedRows.length > approvable.length + payable.length && (
@@ -418,7 +418,11 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                               return (
                                 <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 3, display: 'flex', gap: 5, alignItems: 'center', whiteSpace: 'nowrap' }}
                                   title="This payout rides an assayer invoice. While it is invited or submitted, per-payout Approve is refused — approve or cancel the invoice on the Assayer Invoices tab.">
-                                  {inv ? <>{inv.invoiceNumber} <AssayerInvoiceStatusPill status={inv.status} /></> : 'On assayer invoice'}
+                                  {inv ? (
+                                    <Link to={`/billing?tab=assayer-invoices`} style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                      {inv.invoiceNumber} <AssayerInvoiceStatusPill status={inv.status} />
+                                    </Link>
+                                  ) : 'On assayer invoice'}
                                 </div>
                               );
                             })()}

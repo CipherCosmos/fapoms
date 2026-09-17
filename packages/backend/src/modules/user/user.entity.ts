@@ -91,6 +91,26 @@ export class UserEntity extends BaseEntity {
   @Column({ name: 'must_change_password', type: 'boolean', default: false })
   mustChangePassword: boolean;
 
+  /**
+   * THE LINK THAT LETS SOMEBODY CHOOSE THEIR OWN PASSWORD.
+   *
+   * Only the hash is stored, the same discipline the candidate invite uses: a token readable in
+   * the database is a password readable in the database. Set when an account is created or when an
+   * administrator sends a reset; cleared the moment it is used, so a link works exactly once.
+   *
+   * This exists so that nobody ever types a password on somebody else's behalf — the old flow had
+   * an administrator inventing one and passing it on by WhatsApp.
+   */
+  @Column({ name: 'password_setup_token_hash', type: 'varchar', length: 64, nullable: true })
+  passwordSetupTokenHash: string | null;
+
+  @Column({ name: 'password_setup_expires_at', type: 'timestamptz', nullable: true })
+  passwordSetupExpiresAt: Date | null;
+
+  /** When the link was last sent, so the screen can say "sent 2 minutes ago" and rate-limit resends. */
+  @Column({ name: 'password_setup_sent_at', type: 'timestamptz', nullable: true })
+  passwordSetupSentAt: Date | null;
+
 
   @ManyToMany(() => RoleEntity)
   @JoinTable({

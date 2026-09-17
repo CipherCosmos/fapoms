@@ -575,11 +575,23 @@ export const ASSAYER_INVOICE_STATUS_MAP: Record<AssayerInvoiceStatus, StatusDesc
     icon: 'check-circle',
     description: 'Assayer invoice approved for payout',
   },
+  [AssayerInvoiceStatus.PAID]: {
+    label: 'Paid',
+    semantic: 'positive',
+    icon: 'check-circle',
+    description: 'Payout transaction confirmed and settled',
+  },
   [AssayerInvoiceStatus.CANCELLED]: {
     label: 'Cancelled',
     semantic: 'danger',
     icon: 'x-circle',
     description: 'Invoice cancelled; underlying lines returned to pool',
+  },
+  [AssayerInvoiceStatus.SUPERSEDED]: {
+    label: 'Superseded',
+    semantic: 'archived',
+    icon: 'history',
+    description: 'Replaced by a newer invoice; underlying lines moved to it',
   },
 };
 
@@ -907,6 +919,17 @@ export const APPLICATION_STATUS_MAP: Record<ApplicationStatus, StatusDescriptor>
     semantic: 'danger',
     icon: 'x-circle',
     description: 'HR declined this application',
+  },
+  /*
+    Distinct from Rejected on purpose: nobody judged this person. They withdrew their consent, so
+    processing stopped and what they had given us was erased. A register of people we turned down
+    should not quietly fill up with people who simply left.
+  */
+  [ApplicationStatus.WITHDRAWN]: {
+    label: 'Withdrawn',
+    semantic: 'neutral',
+    icon: 'minus-circle',
+    description: 'Withdrawn before a decision — by the candidate, or on their behalf; their details were erased',
   },
   [ApplicationStatus.APPROVED]: {
     label: 'Approved',

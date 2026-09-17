@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Image, Pressable } from 'react-native';
+import { View, Image, Pressable, StyleProp, TextStyle } from 'react-native';
 import { AppText, Avatar, Icon } from './ui/primitives';
 import { useTheme } from '../theme/ThemeProvider';
 import { useT } from '../i18n';
@@ -38,7 +38,11 @@ export const ProfilePhoto: React.FC<{
   /** Hands the captured file to the durable outbox, exactly as the checklist does. */
   onCapture: (requirement: string, documentLabel: string, fileName: string, fileUri: string) => Promise<void>;
   size?: number;
-}> = ({ assayerId, name, onCapture, size = 72 }) => {
+  /** Told every time the photo state changes (loaded, or just captured) — so a caller that wants
+   *  to show `ProfilePhotoHint` alongside this knows which wording applies, without this
+   *  component needing to render its own caption regardless of the layout it sits in. */
+  onPhotoChange?: (hasPhoto: boolean) => void;
+}> = ({ assayerId, name, onCapture, size = 72, onPhotoChange }) => {
   const t = useTheme();
   const tr = useT();
   const [uri, setUri] = useState<string | null>(null);
@@ -56,7 +60,8 @@ export const ProfilePhoto: React.FC<{
     if (!assayerId) return;
     const data = await MobileApiService.fetchAssayerPhoto(assayerId);
     setUri(data);
-  }, [assayerId]);
+    onPhotoChange?.(!!data);
+  }, [assayerId, onPhotoChange]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -77,6 +82,7 @@ export const ProfilePhoto: React.FC<{
        * after they had just replaced it, and the obvious response to that is to do it again.
        */
       setUri(page);
+      onPhotoChange?.(true);
     } finally {
       setBusy(false);
     }
@@ -100,8 +106,12 @@ export const ProfilePhoto: React.FC<{
         <Avatar name={name} size={size} />
       )}
 
-      {/* A camera badge over the corner, which is how every phone signals "this picture is
-          yours to change" — a labelled button underneath would say the same thing twice. */}
+      {/*
+        A camera badge over the corner — the icon-only phone convention for "this picture is
+        yours to change." Left as icon-only here since the caller renders `ProfilePhotoHint`
+        alongside it in words: this audience is not assumed to already know that convention, so
+        the badge is the tap target and the words are the actual explanation, not a duplicate.
+      */}
       {isDocumentScannerAvailable() && (
         <View
           style={{
@@ -120,10 +130,10 @@ export const ProfilePhoto: React.FC<{
 };
 
 /** The line under the avatar, so the tap target is discoverable without being a second button. */
-export const ProfilePhotoHint: React.FC<{ hasPhoto: boolean }> = ({ hasPhoto }) => {
+export const ProfilePhotoHint: React.FC<{ hasPhoto: boolean; style?: StyleProp<TextStyle> }> = ({ hasPhoto, style }) => {
   const tr = useT();
   return (
-    <AppText variant="caption" tone="muted">
+    <AppText variant="caption" tone="muted" style={style}>
       {tr(hasPhoto ? 'profile.photo.changeHint' : 'profile.photo.addHint')}
     </AppText>
   );

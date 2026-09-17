@@ -1,5 +1,5 @@
 import {
-  scanMimeType, isDrawableScan, isDrawableScanType, scanFileName,
+  scanMimeType, isDrawableScan, isDrawableScanType, scanFileName, storedScanFileName,
   SCAN_UPLOAD_IMAGE_ACCEPT, SCAN_UPLOAD_MIME_TYPES,
 } from './index';
 
@@ -88,5 +88,30 @@ describe('naming a scan', () => {
     expect(scanFileName(null, 'pdf', when)).toBe('Scan_2026-09-16_14-05-11.pdf');
     expect(scanFileName('', 'pdf', when)).toBe('Scan_2026-09-16_14-05-11.pdf');
     expect(scanFileName('!!!', 'pdf', when)).toBe('Scan_2026-09-16_14-05-11.pdf');
+  });
+});
+
+/**
+ * Screens used to name a stored scan from the last segment of its storage key — which only ever
+ * worked because keys repeated the uploader's file name, the very leak opaque keys closed.
+ */
+describe('naming a scan that is already filed', () => {
+  it('names it after the document, keeping the stored extension', () => {
+    expect(storedScanFileName('Aadhaar (front)', 'uploads/2026/09/4f1c9ab2-0000-4000-8000-000000000000.pdf'))
+      .toBe('aadhaar-front.pdf');
+  });
+
+  it('numbers the pages when a document has several', () => {
+    expect(storedScanFileName('PAN card', 'uploads/2026/09/abc.jpeg', 2)).toBe('pan-card-2.jpeg');
+  });
+
+  it('still gives a usable name when it knows neither the label nor the extension', () => {
+    expect(storedScanFileName(null, 'uploads/2026/09/abc')).toBe('scan');
+  });
+
+  /** An opaque key must not leak back out through the name a screen shows. */
+  it('never repeats the key itself', () => {
+    const key = 'uploads/2026/09/4f1c9ab2-0000-4000-8000-000000000000.pdf';
+    expect(storedScanFileName('Photograph', key)).not.toContain('4f1c9ab2');
   });
 });

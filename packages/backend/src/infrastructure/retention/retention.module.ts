@@ -4,6 +4,7 @@ import { Queue } from 'bull';
 import { RetentionService } from './retention.service';
 import { RetentionWorker } from './retention.worker';
 import { AuthModule } from '../../modules/auth/auth.module';
+import { StorageModule } from '../storage/storage.module';
 import { ensureRepeatableSchedules } from '../queue/repeatable-schedules';
 
 /**
@@ -34,7 +35,8 @@ import { ensureRepeatableSchedules } from '../queue/repeatable-schedules';
  * starting. See `ensureRepeatableSchedules`.
  */
 @Module({
-  imports: [BullModule.registerQueue({ name: 'retention' }), AuthModule],
+  // StorageModule: the candidate-application phases delete the scans themselves, not just the rows.
+  imports: [BullModule.registerQueue({ name: 'retention' }), AuthModule, StorageModule],
   providers: [RetentionService, RetentionWorker],
   exports: [RetentionService],
 })

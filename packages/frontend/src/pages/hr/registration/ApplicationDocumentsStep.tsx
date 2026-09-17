@@ -3,7 +3,7 @@ import { Paperclip } from 'lucide-react';
 import {
   ONBOARDING_DOCUMENT_LABELS, SCAN_UPLOAD_MIME_TYPES, DEFAULT_MAX_UPLOAD_MB,
   uploadSizeProblem, isDrawableScan,
-  type OnboardingDocument,
+  type OnboardingDocument, storedScanFileName,
 } from '@fapoms/shared';
 import { ScanOrAttach } from '../../../components/scanner/ScanOrAttach';
 import { api } from '../../../services/api';
@@ -105,7 +105,11 @@ const Scans: React.FC<{
     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
       {filePaths.map((key, i) => {
         const url = urls[i];
-        const name = key.split('/').pop() ?? 'file';
+        const name = storedScanFileName(
+          ONBOARDING_DOCUMENT_LABELS[requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? requirement,
+          key,
+          filePaths.length > 1 ? i + 1 : undefined,
+        );
         return (
           <a
             key={key}

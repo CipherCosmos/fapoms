@@ -944,6 +944,37 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     unit: 'days',
     applies: 'next-run',
   },
+  /*
+    The two knobs below govern PERSONAL DATA, not logs, so their descriptions say "deleted" rather
+    than "kept": what they control is a promise made to candidates in the consent notice, and an
+    administrator lengthening one is deciding to hold somebody's Aadhaar scan for longer.
+  */
+  {
+    key: 'retention.closedApplicationDays',
+    label: 'Delete rejected and withdrawn applications after',
+    description: 'How long a candidate application is kept once it has been rejected or withdrawn, after which their answers are erased and their uploaded scans are deleted. The consent notice promises candidates twelve months, so 365 is the default — changing this changes what you have told them in writing. 0 keeps them indefinitely, which is a decision to hold identity documents for people you turned down.',
+    group: 'retention',
+    type: 'number',
+    default: null,
+    envVar: 'CLOSED_APPLICATION_RETENTION_DAYS',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+    applies: 'next-run',
+  },
+  {
+    key: 'retention.abandonedApplicationDays',
+    label: 'Delete never-submitted applications after',
+    description: 'How long an unsubmitted registration form is kept after its invite link expires, after which anything typed into it is erased and any scans uploaded are deleted. Nobody applied, so there is nothing to keep — the default is 90 days. 0 keeps them indefinitely.',
+    group: 'retention',
+    type: 'number',
+    default: null,
+    envVar: 'ABANDONED_APPLICATION_RETENTION_DAYS',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+    applies: 'next-run',
+  },
   {
     key: 'retention.uiTelemetryDays',
     label: 'Keep UI activity telemetry for',

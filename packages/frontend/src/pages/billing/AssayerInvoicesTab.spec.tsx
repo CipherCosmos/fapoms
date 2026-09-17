@@ -30,6 +30,9 @@ jest.mock('../../services/billing', () => {
       getAssayerInvoice: jest.fn(),
       approveAssayerInvoice: jest.fn(),
       cancelAssayerInvoice: jest.fn(),
+      reviseAssayerInvoice: jest.fn(),
+      inviteAllAssayerInvoices: jest.fn(),
+      holdPayout: jest.fn(),
     },
   };
 });

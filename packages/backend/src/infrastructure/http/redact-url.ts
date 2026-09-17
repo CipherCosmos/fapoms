@@ -28,7 +28,9 @@ const SECRET_QUERY_KEYS = new Set([
 
 export function redactUrl(url: string | null | undefined): string {
   if (!url) return '';
-  let [path, query] = String(url).split(/\?(.*)/s, 2);
+  const parts = String(url).split(/\?(.*)/s, 2);
+  let path = parts[0];
+  const query = parts[1];
   for (const [pattern, replacement] of SECRET_PATH_SEGMENTS) {
     path = path.replace(pattern, replacement);
   }

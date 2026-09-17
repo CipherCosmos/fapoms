@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { StorageEngine } from './storage-engine.interface';
+import { objectKeyFor } from './object-key';
 
 @Injectable()
 export class LocalStorageService implements StorageEngine {
@@ -22,7 +23,11 @@ export class LocalStorageService implements StorageEngine {
   }
 
   async saveFile(fileName: string, content: Buffer | Readable): Promise<string> {
-    const safeFileName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+    /*
+      Same opaque key as the S3 engine, flattened: this driver keeps one directory, so the slashes
+      become dashes. The point is the same — the stored name must not repeat the uploader's.
+    */
+    const safeFileName = objectKeyFor(fileName).replace(/\//g, '-');
     const filePath = path.join(this.uploadDir, safeFileName);
     if (Buffer.isBuffer(content)) {
       await fs.promises.writeFile(filePath, content);

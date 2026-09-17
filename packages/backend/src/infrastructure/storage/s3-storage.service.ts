@@ -6,6 +6,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
   HeadObjectCommand,
   CreateBucketCommand,
   HeadBucketCommand,
@@ -21,6 +22,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { StorageEngine } from './storage-engine.interface';
+import { objectKeyFor } from './object-key';
 import {
   documentKey, newSeal, isSealed, ivOf, encryptBuffer, encryptingStream, decryptingStream, alignedRange,
 } from './document-cipher';
@@ -238,8 +240,9 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
     mimeType?: string,
     _contentLength?: number,
   ): Promise<string> {
-    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const key = `uploads/${Date.now()}-${safeFileName}`;
+    // Opaque on purpose — a key used to repeat the uploader's own file name, which is usually the
+    // person's name. See object-key.ts.
+    const key = objectKeyFor(fileName);
 
     /*
       Encrypted before it leaves this process — see document-cipher.ts for why the app does this
@@ -407,6 +410,31 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
   async deleteFile(key: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
     this.logger.log(`Deleted object: ${key}`);
+  }
+
+  /**
+   * One page of what is actually in the bucket — for the orphan audit, and nothing else.
+   *
+   * Paged rather than "give me everything": a bucket is unbounded, and the caller compares each
+   * page against the database instead of building one list of every object in memory.
+   */
+  async listObjects(cursor?: string): Promise<{
+    objects: Array<{ key: string; lastModified: Date | null; size: number }>;
+    cursor: string | null;
+  }> {
+    const res = await this.client.send(new ListObjectsV2Command({
+      Bucket: this.bucket,
+      ContinuationToken: cursor,
+      MaxKeys: 1000,
+    }));
+    return {
+      objects: (res.Contents ?? []).map((o) => ({
+        key: o.Key ?? '',
+        lastModified: o.LastModified ?? null,
+        size: o.Size ?? 0,
+      })).filter((o) => o.key !== ''),
+      cursor: res.IsTruncated ? (res.NextContinuationToken ?? null) : null,
+    };
   }
 
   /**

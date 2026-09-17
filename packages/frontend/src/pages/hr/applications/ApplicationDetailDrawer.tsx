@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApplicationStatus, ONBOARDING_DOCUMENT_LABELS, SCAN_UPLOAD_IMAGE_ACCEPT, scanMimeType,
-  type OnboardingDocument,
+  type OnboardingDocument, storedScanFileName,
 } from '@fapoms/shared';
 import { Eye, AlertTriangle, ShieldAlert, Check, Camera, Pencil } from 'lucide-react';
 
@@ -184,7 +184,11 @@ export const ApplicationDetailDrawer: React.FC<{
       const items: DocumentPreviewItem[] = [];
       for (let i = 0; i < doc.filePaths.length; i++) {
         const filePath = doc.filePaths[i];
-        const fileName = filePath.split('/').pop() ?? `${doc.requirement}-${i + 1}`;
+        const fileName = storedScanFileName(
+          ONBOARDING_DOCUMENT_LABELS[doc.requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? doc.requirement,
+          filePath,
+          doc.filePaths.length > 1 ? i + 1 : undefined,
+        );
         const blob = await api.request<Blob>(`/hr/applications/${id}/documents/${doc.requirement}/file/${i}`, { raw: true });
         // Same re-typing as everywhere else: the route sends no usable `Content-Type`, and the
         // viewer decides what to draw from the type it is handed.

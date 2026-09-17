@@ -137,3 +137,20 @@ describe('normaliseIdentityOnBlur', () => {
     expect([...PHONE_FIELD_KEYS].sort()).toEqual(['alternatePhone', 'emergencyContactPhone', 'phone']);
   });
 });
+
+/**
+ * Applications now hand staff screens the last four digits of a PAN, Aadhaar or account number.
+ * Telling a clerk that "••••234F" does not look like a PAN would be true and useless: the number is
+ * on file, and it is not theirs to retype.
+ */
+describe('a masked identifier on screen', () => {
+  it.each(['panNumber', 'aadhaarNumber'])('has nothing to complain about for %s', (key) => {
+    expect(identityFormatHint(key, '••••••234F')).toBeNull();
+    expect(identityFormatHint(key, '********9012')).toBeNull();
+  });
+
+  it('still catches a genuinely malformed number', () => {
+    expect(identityFormatHint('panNumber', 'ABCD1234F')).toMatch(/PAN looks like/);
+    expect(identityFormatHint('aadhaarNumber', '1234')).toMatch(/12 digits/);
+  });
+});

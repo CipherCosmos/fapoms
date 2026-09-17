@@ -103,6 +103,7 @@ const ViewMark = React.lazy(() => import('./pages/ViewMark').then((m) => ({ defa
  * app, no account and no session — see the early return in App below, the same pattern `/view-mark`
  * uses. Code-split so it stays out of the sign-in critical path.
  */
+const AccountSetup = React.lazy(() => import('./pages/AccountSetup').then((m) => ({ default: m.AccountSetup })));
 const PublicRegistration = React.lazy(() => import('./pages/PublicRegistration').then((m) => ({ default: m.PublicRegistration })));
 
 /**
@@ -291,6 +292,22 @@ export const App: React.FC = () => {
    * `location.pathname` instead, and is the only authorisation the page needs — it verifies itself
    * by calling `GET /public/registration/:token` with it.
    */
+  /*
+    The other page a stranger can open: the emailed "choose your password" link staff get when an
+    account is made for them. Same shape as the candidate link below — matched off the pathname
+    because it sits outside the authenticated router, and the token is the only authorisation.
+  */
+  const accountSetupMatch = /^\/account-setup\/([^/]+)\/?$/.exec(location.pathname);
+  if (accountSetupMatch) {
+    return (
+      <ErrorBoundary area="Account setup">
+        <Suspense fallback={<RouteFallback />}>
+          <AccountSetup token={decodeURIComponent(accountSetupMatch[1])} />
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
   const registerTokenMatch = /^\/register\/([^/]+)\/?$/.exec(location.pathname);
   if (registerTokenMatch) {
     return (
