@@ -56,6 +56,7 @@ describe('DocumentController — download-token region scope, and upload multer 
     null as any, // chunkedUploadService
     null as any, // fileScanner
     mockRegionGuard as any,
+    null as any, // dispatchJobs
   );
 
   const docWithRegion = (region: string | null) => ({
@@ -171,6 +172,7 @@ describe('DocumentController — download-token region scope, and upload multer 
       chunked,        // chunkedUploadService
       scanner,        // fileScanner
       { assertRegionAllowed: jest.fn(), assertRegionAllowedStaged: jest.fn() } as any,
+      null as any,    // dispatchJobs
     );
 
     beforeEach(() => {
@@ -228,7 +230,6 @@ describe('DocumentController — download-token region scope, and upload multer 
     it.each([
       ['uploadFile', MAX_UPLOAD_BYTES],
       ['mobileUploadBinary', MAX_UPLOAD_BYTES],
-      ['validateCustomerExcel', MAX_UPLOAD_BYTES],
       ['uploadExcelReport', MAX_UPLOAD_BYTES],
       ['uploadChunk', MAX_RESUMABLE_UPLOAD_BYTES],
     ])('%s caps multer fileSize at %d bytes', (methodName, expectedBytes) => {

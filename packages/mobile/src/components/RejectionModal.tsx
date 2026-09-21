@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { View, TextInput, TextStyle } from 'react-native';
+import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, ChipSelector, ModalSheet } from './ui/primitives';
+import { Button, ChipSelector, FieldLabel, Input, ModalSheet } from './ui/primitives';
 import { useT, type TranslationKey } from '../i18n';
 import {
   REJECTION_REASON_CATEGORIES,
@@ -84,24 +84,10 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
 
   const canSubmit = canSubmitRejectionReason(category, detail);
 
-  const inputStyle: TextStyle = {
-    backgroundColor: t.colors.bg,
-    borderRadius: t.radius.md,
-    borderWidth: 1.5,
-    borderColor: t.colors.border,
-    paddingHorizontal: t.space.lg,
-    paddingVertical: t.space.md,
-    minHeight: 72,
-    color: t.colors.text,
-    fontSize: 15,
-    fontWeight: '500',
-    textAlignVertical: 'top',
-  };
-
   return (
     <ModalSheet visible={visible} onClose={onCancel} title={tr('decline.title')} avoidKeyboard>
       <View style={{ gap: t.space.sm }}>
-        <AppText variant="overline" tone="faint">{tr('decline.reasonLabel')}</AppText>
+        <FieldLabel>{tr('decline.reasonLabel')}</FieldLabel>
         <ChipSelector
           options={REJECTION_REASON_CATEGORIES.map((c) => ({ key: c, label: tr(CATEGORY_LABEL_KEYS[c]) }))}
           value={category}
@@ -109,22 +95,23 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
         />
       </View>
 
-      <View style={{ gap: t.space.xs, marginTop: t.space.lg }}>
-        <AppText variant="overline" tone="faint">{tr('decline.detailsLabel')}</AppText>
-        <TextInput
-          style={inputStyle}
-          placeholder={tr('decline.reasonPlaceholder')}
-          placeholderTextColor={t.colors.textFaint}
-          multiline
-          maxLength={1000}
-          value={detail}
-          onChangeText={changeDetail}
-        />
-      </View>
+      <Input
+        label={tr('decline.detailsLabel')}
+        placeholder={tr('decline.reasonPlaceholder')}
+        multiline
+        maxLength={1000}
+        value={detail}
+        onChangeText={changeDetail}
+        style={{ marginTop: t.space.lg }}
+      />
 
       <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.lg }}>
-        <Button label={tr('decline.confirm')} variant="danger" icon="close" loading={submitting} disabled={submitting || !canSubmit} onPress={onConfirm} style={{ flex: 1 }} />
-        <Button label={tr('common.cancel')} variant="neutral" disabled={submitting} onPress={onCancel} style={{ flex: 1 }} />
+        <View style={{ flex: 1 }}>
+          <Button label={tr('decline.confirm')} variant="danger" icon="close" loading={submitting} disabled={submitting || !canSubmit} onPress={onConfirm} full />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Button label={tr('common.cancel')} variant="neutral" disabled={submitting} onPress={onCancel} full />
+        </View>
       </View>
     </ModalSheet>
   );

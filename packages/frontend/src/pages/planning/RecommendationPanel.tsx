@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { ProjectBranch } from './BranchListPanel';
 
@@ -49,7 +49,6 @@ export const RecommendationPanel: React.FC<{
    * independence rule in words; Advanced adds the raw numeric overrides back. No control is
    * removed by Simple — each one is still reachable one click away.
    */
-  advanced?: boolean;
   /**
    * Starts the everyday task from the empty state: opens the most urgent branch nobody is on.
    * The empty panel used to offer only a sentence of instruction, which is a hint, not an action.
@@ -67,9 +66,20 @@ export const RecommendationPanel: React.FC<{
   ignoreDateAvailability = false, onToggleIgnoreDateAvailability,
   ignoreClientPolicy = true, onToggleIgnoreClientPolicy,
   ignoreDistancePolicy = false, onToggleIgnoreDistancePolicy,
-  advanced = false, onNextUnassigned, nextBranchName,
+  onNextUnassigned, nextBranchName,
   onRefresh, onViewHistory,
 }) => {
+  /**
+   * Whether the coordinator has asked to override the independence rule.
+   *
+   * This used to be the page's global `advanced` prop, which meant the only route to a client
+   * COMPLIANCE override was a display-mode switch at the top of the screen — and the explainer
+   * below had to end by telling people to go and find it. It is local now, and reached from the
+   * sentence that explains why somebody is missing, which is where the question is actually
+   * asked. Default closed: the rule is the client's, and the ordinary job never touches it.
+   */
+  const [overrideOpen, setOverrideOpen] = useState(false);
+
   /**
    * The single "Nearby only" answer, derived from the two pieces of state that used to be two
    * controls. `showAllCandidates` (no limit) and a disabled max radius mean the same thing to the
@@ -255,8 +265,19 @@ export const RecommendationPanel: React.FC<{
                   in a box they had to fill in. Simple therefore states the rule as policy and
                   explains who it hides; Advanced keeps the full override, unchanged.
                 */}
-                {advanced ? (
+                {overrideOpen ? (
                   <>
+                    <button
+                      type="button"
+                      onClick={() => setOverrideOpen(false)}
+                      title="Put the independence rule back to the client's figure and hide these controls"
+                      style={{
+                        background: 'transparent', border: 'none', color: 'var(--text-muted)',
+                        cursor: 'pointer', padding: 0, fontSize: 'var(--text-3xs)', fontWeight: 600,
+                      }}
+                    >
+                      Done
+                    </button>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
                       title="Override the independence rule: hide people closer than this to the branch">
                       <input type="checkbox" checked={slaEnabled} onChange={(e) => onToggleSla(e.target.checked)} />
@@ -297,8 +318,21 @@ export const RecommendationPanel: React.FC<{
                       <div style={{ marginTop: '6px' }}>
                         People can also be missing because they are booked or on leave on the audit date (tick “Also show people who are busy that day”), because they are further away than the “Nearby only” limit, or because they lack a skill or certification the project requires — the latter is listed under the candidates.
                       </div>
-                      <div style={{ marginTop: '6px', color: 'var(--text-muted)' }}>
-                        Switch to <b>Advanced</b> at the top of the screen to change the minimum distance yourself.
+                      <div style={{ marginTop: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setOverrideOpen(true)}
+                          style={{
+                            background: 'transparent', border: '1px solid var(--border-color)',
+                            borderRadius: '4px', color: 'var(--accent)', cursor: 'pointer',
+                            padding: '4px 8px', fontSize: 'var(--text-3xs)', fontWeight: 700,
+                          }}
+                        >
+                          Change the minimum distance
+                        </button>
+                        <div style={{ marginTop: '4px', color: 'var(--text-muted)' }}>
+                          Only where the client's contract allows it — the figure is theirs, not ours.
+                        </div>
                       </div>
                     </div>
                   </details>

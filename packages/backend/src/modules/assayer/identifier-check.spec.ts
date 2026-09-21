@@ -7,6 +7,7 @@ import { RosterImportService } from './roster-import.service';
 import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
 import { DataIntegrityService } from './data-integrity.service';
+import { WorkforceBulkJobsService } from './workforce-bulk-jobs.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { LocationTrailService } from './location-trail.service';
 import { QualificationScoreService } from './qualification-score.service';
@@ -89,6 +90,7 @@ describe('GET /assayers/identifier-check', () => {
           { provide: QualificationScoreService, useValue: {} },
           { provide: RosterQueryService, useValue: {} },
           { provide: DataIntegrityService, useValue: dataIntegrity },
+          { provide: WorkforceBulkJobsService, useValue: {} },
           // The document-upload routes carry @UseInterceptors(FileScanInterceptor) at the class
           // level; Nest resolves it through DI when the module compiles even though this suite
           // never exercises those routes — same reason assayer.controller.spec.ts carries it.

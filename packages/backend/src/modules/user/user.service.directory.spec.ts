@@ -8,7 +8,7 @@ import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from '../../modules/notifications/email.service';
 
 /**
  * `findDirectory` — the "pick a colleague" list behind `GET /users/directory`.
@@ -35,7 +35,7 @@ describe('UserService — directory', () => {
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: CacheService, useValue: { del: jest.fn() } },
         // Staff invites go out by email; nothing in this suite sends one.
-        { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: true }) } },
+        { provide: EmailService, useValue: { queue: jest.fn().mockResolvedValue({ id: 'e1', status: 'QUEUED', to: 'x@example.in' }) } },
       ],
     }).compile();
     service = module.get<UserService>(UserService);

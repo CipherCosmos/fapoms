@@ -38,7 +38,7 @@ export class NotificationPreferenceEntity extends BaseEntity {
   push: boolean;
 
   /**
-   * Default true, like the other two channels.
+   * Default true, like every other channel.
    *
    * It was false, which quietly contradicted the model the rest of the pipeline is built on:
    * absence of an explicit `false` means opted in. The delivery worker sends when there is no
@@ -49,4 +49,12 @@ export class NotificationPreferenceEntity extends BaseEntity {
    */
   @Column({ type: 'boolean', default: true })
   email: boolean;
+
+  /**
+   * Texts to this recipient's mobile number, for the categories whose events an administrator has
+   * switched SMS on for. Default true for the reason `email` gives above: absence of an explicit
+   * `false` means opted in, and saving another switch must not create a row that mutes texts.
+   */
+  @Column({ type: 'boolean', default: true })
+  sms: boolean;
 }

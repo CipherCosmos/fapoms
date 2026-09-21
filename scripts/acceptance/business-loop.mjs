@@ -17,11 +17,13 @@
  *               client line), then approves and pays it.
  * consumes    : one project-branch per run, permanently — a completed audit closes its branch.
  * deletion    : none. Earlier runs are closed through the product, never deleted.
- * gate        : none of its own — it does not use _lib.mjs.
+ * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs
+ *               (postAndAwait), none of its gates.
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
 import { createRequire } from 'node:module';
+import { postAndAwait, JOB_STATUS, describeJobOutcome } from './_lib.mjs';
 // `pg` lives in the workspace, not beside this script.
 const require = createRequire(
   process.env.AC_REPO ? `${process.env.AC_REPO}/package.json`
@@ -58,6 +60,18 @@ const call = async (token, method, path, body) => {
   });
   return { status: res.status, body: await res.json().catch(() => null) };
 };
+
+/**
+ * Payout approve and pay answer 202 and a job id since 2026-09-17; the `{ done, refused }` body they
+ * used to answer with is the finished run's `result`. `postAndAwait` waits for that run, so every
+ * database read after one of these sees what the run did — read on the 202, the payable would still
+ * be PENDING because the worker had not reached it, and the refusal checks would pass unmeasured.
+ * A duties refusal is a per-row outcome, so it is in `result.refused`, not an HTTP status.
+ */
+const billingRun = (who, path, body) => postAndAwait(path, body, JOB_STATUS.billingBulk,
+  { token: who.token, api: API, send: (p, b) => call(who.token, 'POST', p, b) });
+/** Why a run refused its first payout — from the result, or the request-level refusal. */
+const refusalOf = (run) => String(run.result?.refused?.[0]?.reason ?? run.r.body?.message ?? '');
 
 /** Sign in, clearing a forced rotation. Tries the campaign password first so re-runs are no-ops. */
 const signIn = async (username, seedPw, changePath) => {
@@ -302,52 +316,58 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     `the client line totals up: ${taxable} + GST ${tax} - TDS ${cTds} = ${expectedEntTotal}, stored ${entTotal}`);
 
   // ── 9. segregation of duties ────────────────────────────────────────────────────────────────
-  const bookerApprove = await call(exec.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const bookerApprove = await billingRun(exec, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
   let [p2] = await q(`SELECT status FROM assayer_payables WHERE id=$1`, [pay.id]);
   // The refusal must be ABOUT separation of duties. A payable refused for missing bank details
   // would leave the same PENDING row and read as a pass, which is how this check nearly lied.
-  const bookerReason = (bookerApprove.body?.data?.refused?.[0]?.reason
-    ?? bookerApprove.body?.message ?? '').toString();
+  // It must also come from a run that FINISHED: a failed or unfinished run leaves the same PENDING
+  // row with no refusal to read, which is why `bookerApprove.result` is required, not assumed.
+  const bookerReason = refusalOf(bookerApprove);
   const sodRefusal = /approv|duti|booked|same (person|user)|segregation/i.test(bookerReason)
     && !/bank|ifsc|pan/i.test(bookerReason);
   record('SOD-01', p2.status === 'PENDING' && sodRefusal,
-    `whoever booked the work cannot approve its payout — refused as a duties conflict: "${bookerReason}"`);
+    `whoever booked the work cannot approve its payout — refused as a duties conflict: "${bookerReason}" `
+    + `(${describeJobOutcome(bookerApprove)})`);
 
-  const approve = await call(admin.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const approve = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
   [p2] = await q(`SELECT status, approved_by, destination_verified_at, destination_verified_source
                     FROM assayer_payables WHERE id=$1`, [pay.id]);
   record('SOD-02', p2.status === 'APPROVED',
-    `a different person can approve it (HTTP ${approve.status}, status ${p2.status})`);
+    `a different person can approve it (${describeJobOutcome(approve)}, status ${p2.status})`);
   record('FIN-01', p2.destination_verified_at === null ? p2.destination_verified_source === null : !!p2.destination_verified_source,
     `payout destination evidence is honest: verified_at=${p2.destination_verified_at ? 'set' : 'NULL'}, source=${p2.destination_verified_source ?? 'NULL'}`);
 
-  const approverPays = await call(admin.token, 'POST', '/billing-engine/payouts/pay',
+  const approverPays = await billingRun(admin, '/billing-engine/payouts/pay',
     { payableIds: [pay.id], paymentReference: PAY_REF, method: 'NEFT' });
   let [p3] = await q(`SELECT status FROM assayer_payables WHERE id=$1`, [pay.id]);
-  record('SOD-03', p3.status !== 'PAID',
-    `whoever approved cannot also pay (HTTP ${approverPays.status}, status still ${p3.status})`);
+  record('SOD-03', p3.status !== 'PAID' && !!approverPays.result,
+    `whoever approved cannot also pay (${describeJobOutcome(approverPays)}, status still ${p3.status}, `
+    + `refused: "${refusalOf(approverPays).slice(0, 90)}")`);
 
-  const paid = await call(admin2.token, 'POST', '/billing-engine/payouts/pay',
+  const paid = await billingRun(admin2, '/billing-engine/payouts/pay',
     { payableIds: [pay.id], paymentReference: PAY_REF, method: 'NEFT' });
   [p3] = await q(`SELECT status, paid_amount FROM assayer_payables WHERE id=$1`, [pay.id]);
   record('SOD-04', p3.status === 'PAID',
-    `a third person can pay it (HTTP ${paid.status}, status ${p3.status}, paid ${p3.paid_amount})`);
+    `a third person can pay it (${describeJobOutcome(paid)}, status ${p3.status}, paid ${p3.paid_amount})`);
 
   // ── 10. paying twice must not pay twice ─────────────────────────────────────────────────────
-  const dup = await call(admin2.token, 'POST', '/billing-engine/payouts/pay',
+  // The first pay run has FINISHED before this press (billingRun waits), so this is a genuine
+  // second instruction with its own job — not a press that joined the first run in flight
+  // (`deduplicated`), which would count one payment without testing anything.
+  const dup = await billingRun(admin2, '/billing-engine/payouts/pay',
     { payableIds: [pay.id], paymentReference: PAY_REF, method: 'NEFT' });
   const payments = await q(
     `SELECT count(*)::int c, COALESCE(sum(amount),0) total FROM billing_payments
       WHERE payment_reference=$1 AND is_active`, [PAY_REF]);
-  record('FIN-02', payments[0].c === 1,
-    `the same payment reference twice is one payment, not two (HTTP ${dup.status}, rows=${payments[0].c}, total=${payments[0].total})`);
+  record('FIN-02', payments[0].c === 1 && !!dup.result && dup.accepted?.deduplicated === false,
+    `the same payment reference twice is one payment, not two (${describeJobOutcome(dup)}, rows=${payments[0].c}, total=${payments[0].total})`);
 
-  const approveAgain = await call(admin.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const approveAgain = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
   const [{ c: approvals }] = await q(
     `SELECT count(*)::int c FROM audit_events
       WHERE entity_id=$1 AND event_type='PAYABLE_APPROVED' AND outcome='SUCCESS'`, [pay.id]);
-  record('FIN-03', approvals === 1,
-    `approving an already-paid payable does not re-approve it (HTTP ${approveAgain.status}, PAYABLE_APPROVED rows=${approvals})`);
+  record('FIN-03', approvals === 1 && !!approveAgain.result,
+    `approving an already-paid payable does not re-approve it (${describeJobOutcome(approveAgain)}, PAYABLE_APPROVED rows=${approvals})`);
 
   // Every refusal above must be in the trail as a refusal — a denied action that left no trace,
   // or worse left a success-shaped one, is how an audit log starts lying.

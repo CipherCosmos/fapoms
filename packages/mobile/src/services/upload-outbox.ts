@@ -2,6 +2,7 @@ import { readCache, writeCache } from './token-store';
 // Module-level translator, not a hook: this is a storage module, and `outboxTitle` is called
 // from a row that subscribes to language changes for itself.
 import { t } from '../i18n/i18n';
+import { isDueForAttempt, isPermanentRefusal, uploadRetryDelayMs } from './upload-retry-policy';
 
 /**
  * The on-device outbox of completed audit packets waiting to reach the desk.
@@ -32,7 +33,10 @@ export type OutboxStatus =
   | 'SENDING'
   /** The desk has durably accepted the packet. */
   | 'SENT'
-  /** The last attempt did not arrive. Kept so the assayer can retry it. */
+  /**
+   * The last attempt did not arrive. Kept so the assayer can retry it. Retried automatically after
+   * a backoff (`nextAttemptAt`) unless the server refused it outright (`needsAttention`).
+   */
   | 'FAILED';
 
 /**
@@ -82,6 +86,15 @@ export interface OutboxUpload {
   error?: string;
   /** The machine-readable companion to `error`, when the upload's response carried one. */
   code?: string;
+  /** Consecutive failed attempts since the last success or manual Retry. Drives the backoff. */
+  attempts?: number;
+  /** ISO time before which a drain leaves this FAILED packet alone. See upload-retry-policy.ts. */
+  nextAttemptAt?: string;
+  /**
+   * The server refused this packet in a way retrying cannot change (a 4xx verdict on the request).
+   * Still FAILED, still shown with its reason and a Retry, but never resent on its own.
+   */
+  needsAttention?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -334,7 +347,12 @@ async function mutate(id: string, changes: Partial<OutboxUpload>, save: boolean)
  * starting the whole packet again.
  */
 export async function retryUpload(id: string): Promise<void> {
-  await mutate(id, { status: 'PENDING', error: undefined }, true);
+  // A person pressing Retry is a fresh start: no backoff left over, no refusal remembered.
+  await mutate(
+    id,
+    { status: 'PENDING', error: undefined, attempts: 0, nextAttemptAt: undefined, needsAttention: undefined },
+    true,
+  );
 }
 
 /** Remove an entry — a delivered one the assayer is clearing, or one they choose to abandon. */
@@ -350,10 +368,12 @@ export async function dismissUpload(id: string): Promise<void> {
  * Send everything that is waiting, and keep whatever did not go.
  *
  * `upload` returns `{ success: true }` only when the desk has durably accepted the packet;
- * anything else leaves it FAILED and in the list for a retry. Both PENDING (never tried) and
- * FAILED (tried and dropped) are attempted, so a packet left failed on a bad connection is
- * resent on its own the next time the app comes forward or reconnects — the assayer does not
- * have to remember to press anything.
+ * anything else leaves it FAILED and in the list for a retry. PENDING (never tried, or Retry
+ * pressed) is always attempted. FAILED (tried and dropped) is resent on its own once its backoff
+ * has run out, so a packet left failed on a bad connection still goes the next time the app
+ * comes forward after that — the assayer does not have to remember to press anything — without
+ * every foreground hammering a dead connection. A packet the server REFUSED is never resent on
+ * its own: it stays FAILED with the server's reason until the assayer presses Retry.
  *
  * Guarded against re-entry: a foreground return, a reconnect and a manual retry can all fire at
  * once, and two concurrent drains would upload the same packet twice.
@@ -362,7 +382,7 @@ export async function processOutbox(
   upload: (
     entry: OutboxUpload,
     onProgress: (percent: number) => void,
-  ) => Promise<{ success: boolean; error?: string; code?: string }>,
+  ) => Promise<{ success: boolean; error?: string; code?: string; status?: number }>,
   opts: { onSent?: (entry: OutboxUpload) => void } = {},
 ): Promise<void> {
   if (processing) return;
@@ -373,17 +393,17 @@ export async function processOutbox(
     await persist();
     // Snapshot the ids to work through, so packets enqueued mid-drain wait for the next pass
     // rather than extending this one indefinitely.
-    const todo = initial.filter((u) => u.status === 'PENDING' || u.status === 'FAILED').map((u) => u.id);
+    const todo = initial.filter((u) => isDueForAttempt(u, Date.now())).map((u) => u.id);
 
     for (const id of todo) {
       const entry = (await load()).find((u) => u.id === id);
       // It may have been dismissed, sent by a previous pass, or already in flight — re-read
       // rather than trusting the snapshot.
-      if (!entry || (entry.status !== 'PENDING' && entry.status !== 'FAILED')) continue;
+      if (!entry || !isDueForAttempt(entry, Date.now())) continue;
 
       await mutate(id, { status: 'SENDING', error: undefined, code: undefined, progress: 0 }, true);
 
-      let result: { success: boolean; error?: string; code?: string };
+      let result: { success: boolean; error?: string; code?: string; status?: number };
       try {
         // Progress ticks update the UI but are not written to disk — persisting on every chunk
         // would rewrite the whole file dozens of times per packet, the exact cost the location
@@ -396,11 +416,28 @@ export async function processOutbox(
       }
 
       if (result.success) {
-        await mutate(id, { status: 'SENT', progress: 100, error: undefined, code: undefined }, true);
+        await mutate(
+          id,
+          { status: 'SENT', progress: 100, error: undefined, code: undefined, attempts: 0, nextAttemptAt: undefined, needsAttention: undefined },
+          true,
+        );
         const done = (await load()).find((u) => u.id === id);
         if (done) opts.onSent?.(done);
       } else {
-        await mutate(id, { status: 'FAILED', error: result.error || 'Upload failed', code: result.code }, true);
+        const attempts = (entry.attempts ?? 0) + 1;
+        const refused = isPermanentRefusal(result);
+        await mutate(
+          id,
+          {
+            status: 'FAILED',
+            error: result.error || 'Upload failed',
+            code: result.code,
+            attempts,
+            needsAttention: refused || undefined,
+            nextAttemptAt: refused ? undefined : new Date(Date.now() + uploadRetryDelayMs(attempts)).toISOString(),
+          },
+          true,
+        );
       }
     }
   } finally {

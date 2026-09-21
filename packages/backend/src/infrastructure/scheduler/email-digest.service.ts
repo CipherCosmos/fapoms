@@ -1,16 +1,18 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 // expandAudience: the addressing direction of the role hierarchy — a section aimed at a role
 // also reaches every role that implies it (DEVELOPER, for ADMIN and PRODUCT_SUPPORT), same
 // rule as notification fan-out (NotificationDispatchService.usersInRoles).
-import { formatRupees, BUSINESS_TODAY_SQL, expandAudience } from '@fapoms/shared';
+import {
+  formatRupees, BUSINESS_TODAY_SQL, BUSINESS_TIME_ZONE, businessTodayDateKey, escapeEmailHtml, expandAudience,
+} from '@fapoms/shared';
 
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
 import { FEEDBACK_TEAM_ROLE_NAMES } from '../../modules/feedback/feedback-roles';
-import { EmailProvider, appPublicUrl, renderEmailHtml } from '../notifications/email-provider';
-import { EmailTemplateRenderer } from '../notifications/email-template-renderer';
+import { appPublicUrl } from '../notifications/email-provider';
+import { EmailService } from '../../modules/notifications/email.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { UserEntity } from '../../modules/user/user.entity';
 import { usersHoldingPermission } from '../../modules/notifications/permission-audience';
@@ -31,6 +33,12 @@ import { usersHoldingPermission } from '../../modules/notifications/permission-a
  * measured failure mode here. One email per person per morning, sections merged across their
  * roles, and a person whose sections are all empty gets NOTHING — an inbox line that says
  * "nothing needs you" trains people to delete the one that says something does.
+ *
+ * It decides who gets what and hands each email to the one email pipeline
+ * (`EmailService.queue`, the `morning-digest` template). It does not send, render or retry: the
+ * wording is the template's (administrator-editable, with the registry's built-in fallback), and
+ * delivery, retries and "did it go" are the mail queue's, recorded in `outbound_emails` under
+ * `entityType: 'DIGEST'` and the business date.
  */
 
 interface DigestSection {
@@ -85,101 +93,109 @@ export class EmailDigestService {
     private readonly deskEscalation: DeskEscalationService,
     private readonly feedbackEscalation: FeedbackEscalationService,
     private readonly hrWorkforce: HrWorkforceService,
-    private readonly email: EmailProvider,
+    private readonly email: EmailService,
     private readonly settings: PlatformSettingsService,
-    @Optional() private readonly templateRenderer?: EmailTemplateRenderer,
   ) {}
 
-  async run(): Promise<{ sent: number; skipped: number }> {
+  /**
+   * Assembles today's brief and queues one email per recipient.
+   *
+   * The job runs with `attempts: 1` (scheduled and "run it now" alike), and that is still right
+   * now that it only queues: a retry re-runs the whole brief, and every person the first run had
+   * already queued would get a second copy. Queueing does not throw — a recipient whose email
+   * could not be queued is counted and logged, and the rest still go.
+   */
+  async run(): Promise<{ queued: number; notQueued: number }> {
     const enabled = await this.settings.get<boolean>('digest.enabled').catch(() => true);
     if (enabled === false) {
       this.logger.log('Morning digest is switched off in platform settings.');
-      return { sent: 0, skipped: 0 };
+      return { queued: 0, notQueued: 0 };
     }
+    // Checked here as well as by the mail queue: with no transport, assembling the brief and
+    // recording one failed email per recipient every morning would be work for nothing.
     if (!this.email.isEnabled()) {
       this.logger.log('Email is not configured; morning digest skipped.');
-      return { sent: 0, skipped: 0 };
+      return { queued: 0, notQueued: 0 };
     }
 
     const sections = await this.assembleSections();
     const populated = Object.entries(sections).filter(([, s]) => s !== null) as [string, DigestSection][];
     if (populated.length === 0) {
       this.logger.log('Morning digest: nothing needs attention today — no emails sent.');
-      return { sent: 0, skipped: 0 };
+      return { queued: 0, notQueued: 0 };
     }
 
     const recipients = await this.resolveRecipients(populated.map(([key]) => key));
+    const businessDate = businessTodayDateKey();
+    const briefDate = new Date().toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      timeZone: BUSINESS_TIME_ZONE,
+    });
 
-    let sent = 0;
-    let skipped = 0;
+    let queued = 0;
+    let notQueued = 0;
     for (const r of recipients) {
       const theirSections = populated.filter(([key]) => r.sectionKeys.has(key)).map(([, s]) => s);
       if (!theirSections.length) continue;
 
-      const subjectCounts = theirSections.map((s) => s.heading).join(' · ');
-      const text = theirSections
-        .map((s) => `${s.heading}\n${s.lines.map((l) => `  • ${l}`).join('\n')}\n  ${appPublicUrl()}${s.link}`)
-        .join('\n\n');
-
-      const digestSectionsHtml = theirSections
-        .map((s) => `
-          <div style="background:#ffffff; border:1px solid #E4E7EB; border-left:4px solid #ED6714; border-radius:6px; padding:16px 20px; margin-bottom:16px;">
-            <div style="font-size:15px; font-weight:700; color:#1E293B; margin-bottom:10px;">${s.heading}</div>
-            <ul style="margin:0 0 14px 0; padding-left:20px; font-size:14px; color:#4B5563; line-height:1.6;">
-              ${s.lines.map((l) => `<li>${l}</li>`).join('')}
-            </ul>
-            <a href="${appPublicUrl()}${s.link}" style="display:inline-block; font-size:13px; font-weight:600; color:#ED6714; text-decoration:none;">View in FAPOMS &rarr;</a>
-          </div>
-        `)
-        .join('');
-
-      let subject = `FAPOMS morning brief — ${subjectCounts}`;
-      let html = renderEmailHtml({
-        title: 'Operations Morning Brief',
-        bodyLines: theirSections.flatMap((s) => [s.heading, ...s.lines.map((l) => `• ${l}`)]),
-        linkUrl: `${appPublicUrl()}${theirSections[0].link}`,
-        linkLabel: 'Open Operations Desk',
-      });
-
-      if (this.templateRenderer) {
-        try {
-          const dateStr = new Date().toLocaleDateString('en-US', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-          });
-          const rendered = await this.templateRenderer.render('morning-digest', {
-            subjectCounts,
-            briefDate: dateStr,
-            digestSectionsHtml,
+      const receipt = await this.email.queue({
+        kind: 'MORNING_DIGEST',
+        to: r.email,
+        entityType: 'DIGEST',
+        entityId: businessDate,
+        requestedBy: null,
+        content: {
+          template: 'morning-digest',
+          data: {
+            subjectCounts: theirSections.map((s) => s.heading).join(' · '),
+            briefDate,
+            digestSectionsHtml: EmailDigestService.sectionsHtml(theirSections),
+            digestSectionsText: EmailDigestService.sectionsText(theirSections),
             portalUrl: `${appPublicUrl()}${theirSections[0].link}`,
             logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
             companyName: 'Sumeru Global',
-          });
-          subject = rendered.subject;
-          html = rendered.html;
-        } catch (err: any) {
-          this.logger.warn(`Template render failed for morning-digest: ${err.message}`);
-        }
-      }
-
-      const result = await this.email.send({
-        to: r.email,
-        subject,
-        text,
-        html,
+          },
+        },
       });
 
-      if (result.success) sent++;
-      else {
-        skipped++;
-        this.logger.warn(`Digest to ${r.email} failed: ${result.error}`);
+      if (receipt.status === 'NOT_QUEUED') {
+        notQueued++;
+        this.logger.warn(`Digest to ${r.email} could not be queued: ${receipt.error ?? 'no reason given'}`);
+      } else {
+        queued++;
       }
     }
 
-    this.logger.log(`Morning digest: ${sent} sent, ${skipped} failed, ${recipients.length} candidate recipient(s).`);
-    return { sent, skipped };
+    this.logger.log(`Morning digest: ${queued} queued, ${notQueued} not queued, ${recipients.length} candidate recipient(s).`);
+    return { queued, notQueued };
+  }
+
+  /** The same sections as plain lines, for the template's built-in fallback and the text part. */
+  private static sectionsText(sections: DigestSection[]): string {
+    return sections
+      .map((s) => [s.heading, ...s.lines.map((l) => `• ${l}`), `${appPublicUrl()}${s.link}`].join('\n'))
+      .join('\n');
+  }
+
+  /**
+   * The sections, as the template's one raw-HTML token. Everything inside is escaped here: a line
+   * can carry text people typed (a feedback title), and a raw token is inserted as-is.
+   */
+  private static sectionsHtml(sections: DigestSection[]): string {
+    return sections
+      .map((s) => `
+          <div style="background:#ffffff; border:1px solid #E4E7EB; border-left:4px solid #ED6714; border-radius:6px; padding:16px 20px; margin-bottom:16px;">
+            <div style="font-size:15px; font-weight:700; color:#1E293B; margin-bottom:10px;">${escapeEmailHtml(s.heading)}</div>
+            <ul style="margin:0 0 14px 0; padding-left:20px; font-size:14px; color:#4B5563; line-height:1.6;">
+              ${s.lines.map((l) => `<li>${escapeEmailHtml(l)}</li>`).join('')}
+            </ul>
+            <a href="${escapeEmailHtml(`${appPublicUrl()}${s.link}`)}" style="display:inline-block; font-size:13px; font-weight:600; color:#ED6714; text-decoration:none;">View in FAPOMS &rarr;</a>
+          </div>
+        `)
+      .join('');
   }
 
   // ---------------------------------------------------------------- sections

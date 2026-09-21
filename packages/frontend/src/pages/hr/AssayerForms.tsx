@@ -1,10 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
-import {
-  INDIAN_STATES, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason,
-  isValidIfsc, CRITICAL_ASSAYER_RECORD_FIELDS, matchIndianState, stateNameKey, pincodeFromAddress,
-  todayDateKey, EMERGENCY_CONTACT_RELATIONS as EMERGENCY_RELATION_NAMES,
-} from '@fapoms/shared';
+import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, isValidIfsc, CRITICAL_ASSAYER_RECORD_FIELDS, matchIndianState, stateNameKey, pincodeFromAddress, todayDateKey, EMERGENCY_CONTACT_RELATIONS as EMERGENCY_RELATION_NAMES, businessDateKey, ASSAYER_ENGAGEMENT_LABELS, ASSAYER_UNAVAILABLE_LABELS } from '@fapoms/shared';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { fetchStaffDirectory } from '../../services/staff-directory';
 import { Select } from '../../components/ui';
@@ -68,25 +64,23 @@ const DEPARTMENTS: { value: string; label: string }[] = [
  * reason and an engagement type in one cell. Labels match the record's Summary so a clerk does
  * not meet "Back-up" in one place and `BACK_UP` in the other.
  */
+/**
+ * Both dropdowns are generated from the shared vocabulary, so a new engagement type or
+ * unavailability reason appears here the day it is added rather than the day someone remembers
+ * this file. These were hand-written arrays that repeated the words a third time, and the
+ * unavailability list had silently fallen a value behind: `BGV_FAILED` existed in the enum and
+ * in the filters, and a clerk editing a record could not pick it.
+ *
+ * The leading blank option is the only thing local to a form — a filter has no "not recorded".
+ */
 const ENGAGEMENT_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: 'Not recorded' },
-  { value: AssayerEngagementType.REGULAR, label: 'Regular' },
-  { value: AssayerEngagementType.LOCAL, label: 'Local' },
-  { value: AssayerEngagementType.BACK_UP, label: 'Back-up' },
-  { value: AssayerEngagementType.AGENCY_AUDIT, label: 'Agency audits' },
-  { value: AssayerEngagementType.MYSTERY_AUDIT, label: 'Mystery audits' },
+  ...Object.entries(ASSAYER_ENGAGEMENT_LABELS).map(([value, label]) => ({ value, label })),
 ];
 
 const UNAVAILABLE_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: 'They are available' },
-  { value: AssayerUnavailableReason.REJECTED_BY_US, label: 'We rejected them' },
-  { value: AssayerUnavailableReason.NOT_INTERESTED, label: 'Not interested' },
-  // The spreadsheet's word for this is "Expired"; it means the person has died, and the form
-  // should not ask a clerk to pick a word that reads like a lapsed certificate.
-  { value: AssayerUnavailableReason.DECEASED, label: 'Deceased' },
-  { value: AssayerUnavailableReason.NO_WORK_IN_AREA, label: 'No work in their area' },
-  { value: AssayerUnavailableReason.MOVED_ABROAD, label: 'Moved out of India' },
-  { value: AssayerUnavailableReason.MOVED_TO_COMPANY, label: 'Now engaged through a company' },
+  ...Object.entries(ASSAYER_UNAVAILABLE_LABELS).map(([value, label]) => ({ value, label })),
 ];
 
 // 'Other' is appended here, not in the shared list: mobile treats it as a separate sentinel
@@ -627,7 +621,7 @@ const JOINING_MIN = '2000-01-01';
 const oneYearFromToday = (): string => {
   const d = new Date();
   d.setFullYear(d.getFullYear() + 1);
-  return d.toISOString().slice(0, 10);
+  return businessDateKey(d);
 };
 /** min/max for the two date boxes a clerk can otherwise walk into any century with a native picker. */
 const DATE_BOUNDS: Record<string, { min: string; max: string }> = {

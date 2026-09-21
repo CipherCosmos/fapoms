@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CoveragePlanEntity, CoveragePlanStatus } from './coverage-plan.entity';
@@ -9,6 +9,7 @@ import { ProjectQueryService } from '../project/project-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { PlanningService } from './planning.service';
 import { EventCategory, businessTodayDateKey, localDateKey } from '@fapoms/shared';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
 export interface PlanOverrideDto {
   branchId: string;
@@ -59,6 +60,52 @@ export interface PlanDeploymentResult {
   fullySkipped: boolean;
   /** The first and last workable date actually booked, so the UI can say "spans 12 days". */
   dateRange: { start: string; end: string } | null;
+  /**
+   * How many of `deployed` an EARLIER run of this same plan version had already booked, and this
+   * run therefore left alone. Zero on a first deploy. Non-zero when a run that died part-way is
+   * deployed again, which is exactly the case that used to double every offer it had made.
+   */
+  alreadyDeployedCount: number;
+}
+
+/**
+ * The key each branch's offer is written under when a plan version deploys.
+ *
+ * Deterministic in (plan, version, project branch) and nothing else — not the requester and not the
+ * campaign start date — so any later run of the same version, by anyone, recognises a branch an
+ * earlier run already booked. It travels to `AssignmentService.create` as `clientRequestId`, whose
+ * durable record (`assignment_idempotency_records`, unique on this column, written in the same
+ * transaction as the assignment) is what makes the answer survive a crash between two branches.
+ *
+ * `cplan:` + 36 + `:v` + version + `:` + 36 stays inside that column's 100 characters for any
+ * version below 10^13.
+ */
+export const deploymentRequestId = (planId: string, version: number, projectBranchId: string): string =>
+  `cplan:${planId}:v${version}:${projectBranchId}`;
+
+/**
+ * The deploy's response, shaped once.
+ *
+ * This was the synchronous route's body; it is now the job's result. Kept as one function so the
+ * screen reads the same fields whichever way the deploy ran.
+ */
+export function describeDeployment(result: PlanDeploymentResult) {
+  return {
+    message: result.fullySkipped
+      ? `Nothing could be deployed — ${result.skipped.length} allocation(s) were skipped.`
+      : `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}` +
+        (result.dateRange ? ` across ${result.dateRange.start} → ${result.dateRange.end}.` : '.'),
+    deployedCount: result.deployed.length,
+    skippedCount: result.skipped.length,
+    deployed: result.deployed,
+    skipped: result.skipped,
+    // A fully-skipped deploy is an explained outcome rather than a thrown error, and each branch
+    // carries its own workable date instead of one shared one.
+    skippedReasons: result.skippedReasons,
+    fullySkipped: result.fullySkipped,
+    dateRange: result.dateRange,
+    alreadyDeployedCount: result.alreadyDeployedCount,
+  };
 }
 
 const parseKey = (key: string): Date => new Date(`${key.slice(0, 10)}T00:00:00`);
@@ -76,6 +123,8 @@ const addDays = (key: string, days: number): string => {
 
 @Injectable()
 export class OperationsPlanningService {
+  private readonly logger = new Logger(OperationsPlanningService.name);
+
   constructor(
     @InjectRepository(CoveragePlanEntity)
     private readonly planRepository: Repository<CoveragePlanEntity>,
@@ -94,13 +143,20 @@ export class OperationsPlanningService {
   /**
    * Initializes or regenerates a new plan version with optional manual overrides.
    */
-  async createOrRegeneratePlan(projectId: string, overrides: PlanOverrideDto[] = [], userId?: string, justification?: string): Promise<CoveragePlanEntity> {
+  async createOrRegeneratePlan(
+    projectId: string,
+    overrides: PlanOverrideDto[] = [],
+    userId?: string,
+    justification?: string,
+    /** The engine's branch-by-branch progress, for the job that runs this. Advisory only. */
+    onProgress?: ProgressCallback,
+  ): Promise<CoveragePlanEntity> {
     let plan = await this.planRepository.findOne({
       where: { projectId },
       relations: ['versions'],
     });
 
-    const calculatedData = await this.planningEngine.generateCoveragePlan(projectId);
+    const calculatedData = await this.planningEngine.generateCoveragePlan(projectId, undefined, onProgress);
 
     // Apply manual overrides to the generated plan in memory.
     //
@@ -213,7 +269,10 @@ export class OperationsPlanningService {
     planId: string,
     userId: string,
     scheduledDateInput?: string,
+    /** Branch-by-branch progress, for the job that runs this. Advisory; never fails the deploy. */
+    onProgress?: ProgressCallback,
   ): Promise<PlanDeploymentResult> {
+    await onProgress?.(0, 1, 'Loading the approved plan');
     const plan = await this.planRepository.findOne({ where: { id: planId }, relations: ['versions'] });
     if (!plan) {
       throw new NotFoundException(`Coverage plan ${planId} not found.`);
@@ -316,7 +375,24 @@ export class OperationsPlanningService {
     }
 
     // Per-branch workable dates, resolved ONCE per branch and in bounded batches.
+    await onProgress?.(0, 1, 'Finding workable dates');
     const branchDates = await this.resolveWorkableDates(allocations.map((a) => a.branchId));
+
+    /**
+     * Branches an earlier run of THIS plan version already booked.
+     *
+     * A deploy that died part-way — a restart, an out-of-memory kill, the old request that the
+     * browser abandoned at 30 s while the server carried on — left the plan APPROVED with some of
+     * its offers made. Deploying it again walked every branch from the top, and `create` on a branch
+     * with a PENDING offer does not refuse: it reassigns that offer, with a fresh event and a fresh
+     * notification to the assayer. Those branches are now left exactly as the earlier run left
+     * them, reported as deployed, and their day counted against the assayer's capacity so the
+     * remaining branches spread around them rather than into them.
+     */
+    const requestIdOf = (alloc: { projectBranchId: string }) =>
+      deploymentRequestId(plan.id, plan.currentVersion, alloc.projectBranchId);
+    const earlierRuns = await this.findEarlierDeployments(allocations.map(requestIdOf));
+    let alreadyDeployedCount = 0;
 
     // Spread: walk allocations in plan order, giving each branch the first date that is
     // workable FOR THAT BRANCH and on which its assayer still has capacity.
@@ -347,7 +423,22 @@ export class OperationsPlanningService {
     // no one else's assignment ever used, which is why the third branch above was pushed two
     // holidays deep instead of one.
     const loadByAssayerDate = new Map<string, number>();
+    for (const earlier of earlierRuns.values()) {
+      if (!earlier.assayerId || !earlier.scheduledDate) continue;
+      const key = `${earlier.assayerId}|${earlier.scheduledDate}`;
+      loadByAssayerDate.set(key, (loadByAssayerDate.get(key) ?? 0) + 1);
+    }
+    let allocationIndex = 0;
     for (const alloc of allocations) {
+      await onProgress?.(allocationIndex++, allocations.length, 'Creating offers');
+      const requestId = requestIdOf(alloc);
+      const earlier = earlierRuns.get(requestId);
+      if (earlier) {
+        deployed.push({ branchId: alloc.branchId, assignmentId: earlier.assignmentId, scheduledDate: earlier.scheduledDate ?? '' });
+        alreadyDeployedCount++;
+        continue;
+      }
+
       const branchDate = branchDates.get(alloc.branchId);
       // Never earlier than the operator's start date, and never earlier than the first date the
       // branch itself can be worked.
@@ -373,6 +464,9 @@ export class OperationsPlanningService {
             assayerId: alloc.assayerId,
             proposedFee: alloc.fee,
             scheduledDate: candidate,
+            // The durable per-branch guard — see `deploymentRequestId`. The lookup above spares a
+            // re-run the work; this is what still holds if two runs reach one branch at once.
+            clientRequestId: requestId,
           }, userId);
           loadByAssayerDate.set(loadKey, (loadByAssayerDate.get(loadKey) ?? 0) + 1);
           placed = candidate;
@@ -381,6 +475,17 @@ export class OperationsPlanningService {
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           lastRejection = message;
+          if (message.startsWith('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST')) {
+            // Another run of this plan version booked this branch between our lookup and our
+            // write (a second worker replica). It is deployed — by that run — not refused.
+            const concurrent = (await this.findEarlierDeployments([requestId])).get(requestId);
+            if (concurrent) {
+              placed = concurrent.scheduledDate ?? candidate;
+              deployed.push({ branchId: alloc.branchId, assignmentId: concurrent.assignmentId, scheduledDate: placed });
+              alreadyDeployedCount++;
+            }
+            break;
+          }
           if (!message.startsWith('Holiday Conflict:')) break;
           candidate = this.nextWorkableDate(addDays(candidate, 1), branchDate?.blocked);
         }
@@ -396,7 +501,7 @@ export class OperationsPlanningService {
     }
 
     const skippedReasons = this.groupSkipReasons(skipped);
-    const bookedDates = deployed.map((d) => d.scheduledDate).sort();
+    const bookedDates = deployed.map((d) => d.scheduledDate).filter(Boolean).sort();
     const dateRange = bookedDates.length > 0
       ? { start: bookedDates[0], end: bookedDates[bookedDates.length - 1] }
       : null;
@@ -421,7 +526,7 @@ export class OperationsPlanningService {
         metadata: { projectId: plan.projectId, version: plan.currentVersion, skipped, skippedReasons },
       });
       // Status deliberately left APPROVED — the plan can be fixed and deployed again.
-      return { deployed, skipped, skippedReasons, fullySkipped: true, dateRange: null };
+      return { deployed, skipped, skippedReasons, fullySkipped: true, dateRange: null, alreadyDeployedCount };
     }
 
     const previousStatus = plan.status;
@@ -444,7 +549,7 @@ export class OperationsPlanningService {
 
     // Surfaced to the caller so ops sees exactly how many branches deployed vs were skipped and
     // why — instead of a bare "success" that hides a plan where half the branches failed to staff.
-    return { deployed, skipped, skippedReasons, fullySkipped: false, dateRange };
+    return { deployed, skipped, skippedReasons, fullySkipped: false, dateRange, alreadyDeployedCount };
   }
 
   /**
@@ -491,6 +596,48 @@ export class OperationsPlanningService {
     }
 
     return resolved;
+  }
+
+  /**
+   * The offers earlier runs wrote under these deployment keys, with where they landed.
+   *
+   * Read straight from the idempotency table `AssignmentService.create` writes in the same
+   * transaction as the assignment — the one record that says "this key produced that assignment"
+   * and cannot disagree with it. Joined to the assignment for the assayer and date, so capacity
+   * spreading sees the day as taken.
+   *
+   * A failed lookup is logged-and-empty rather than fatal: every create still carries its key, so
+   * `create`'s own durable check refuses a second booking even when this read could not tell us.
+   * What is lost is only the tidy "already deployed" count for that run.
+   */
+  private async findEarlierDeployments(
+    requestIds: string[],
+  ): Promise<Map<string, { assignmentId: string; assayerId: string | null; scheduledDate: string | null }>> {
+    const found = new Map<string, { assignmentId: string; assayerId: string | null; scheduledDate: string | null }>();
+    if (requestIds.length === 0) return found;
+    try {
+      const rows: Array<{ client_request_id: string; assignment_id: string; assayer_id: string | null; scheduled_date: string | null }> =
+        await this.planRepository.manager.query(
+          `SELECT r.client_request_id, r.assignment_id, a.assayer_id,
+                  to_char(a.scheduled_date, 'YYYY-MM-DD') AS scheduled_date
+             FROM assignment_idempotency_records r
+             JOIN assignments a ON a.id = r.assignment_id
+            WHERE r.client_request_id = ANY($1::varchar[])`,
+          [requestIds],
+        );
+      for (const row of rows ?? []) {
+        found.set(row.client_request_id, {
+          assignmentId: row.assignment_id,
+          assayerId: row.assayer_id,
+          scheduledDate: row.scheduled_date,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Could not read earlier deployments (${(err as Error).message}); relying on create's own idempotency check.`,
+      );
+    }
+    return found;
   }
 
   /** First date on/after `from` that is neither a Sunday nor known-blocked for the branch. */

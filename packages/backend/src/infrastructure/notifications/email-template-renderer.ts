@@ -6,7 +6,8 @@
  * logs non-sensitive telemetry, and cascades to deterministic fallback renderers on any error.
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { escapeEmailHtml } from '@fapoms/shared';
 import {
   EMAIL_TEMPLATE_REGISTRY,
   EmailTemplateDefinition,
@@ -14,6 +15,8 @@ import {
 } from './email-template-registry';
 import { EmailTemplateLoader, LoadedTemplate } from './email-template-loader';
 import { plainTextFor } from './html-to-text';
+import { MessageRecipientContext, MessageTokensService } from './message-tokens';
+import { appPublicUrl } from './email-provider';
 
 export interface RenderedEmailOutput {
   html: string;
@@ -28,21 +31,23 @@ export interface RenderedEmailOutput {
   };
 }
 
+/** What a `{{token}}` value becomes: the same escaper the shared email layout uses for its text. */
 export function escapeHtml(str: string): string {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return escapeEmailHtml(str);
 }
 
 @Injectable()
 export class EmailTemplateRenderer {
   private readonly logger = new Logger(EmailTemplateRenderer.name);
 
-  constructor(private readonly loader: EmailTemplateLoader) {}
+  constructor(
+    private readonly loader: EmailTemplateLoader,
+    /**
+     * Optional so the dozen specs that build a renderer with a loader alone keep working; without it
+     * the common values are simply absent, exactly as they were before they existed.
+     */
+    @Optional() private readonly tokens?: MessageTokensService,
+  ) {}
 
   /**
    * Safe token interpolation with explicit separation between escaped and raw HTML tokens.
@@ -90,11 +95,35 @@ export class EmailTemplateRenderer {
   /**
    * Renders an email template with the given payload, guaranteed to return valid HTML, text, and subject.
    */
-  async render(key: EmailTemplateKey, payload: Record<string, any>): Promise<RenderedEmailOutput> {
+  async render(
+    key: EmailTemplateKey,
+    callerPayload: Record<string, any>,
+    recipient: MessageRecipientContext = {},
+  ): Promise<RenderedEmailOutput> {
     const definition = EMAIL_TEMPLATE_REGISTRY[key];
     if (!definition) {
       throw new Error(`Unknown email template key: "${key}"`);
     }
+
+    /*
+      The values every message carries ({{name}}, {{companyName}}, {{time}}…), under the same names an
+      SMS uses, so an administrator learns one vocabulary rather than one per template. Anything the
+      sender passed wins: a template whose own `name` means somebody other than the recipient keeps it.
+
+      Who it is going to comes from the send itself (`EmailService` knows the address, and the caller
+      may name the person), falling back to the payload for the templates that already carried those
+      names themselves.
+    */
+    const common = (await this.tokens?.common({
+      name: recipient.name ?? callerPayload?.name,
+      email: recipient.email ?? callerPayload?.email,
+      phone: recipient.phone ?? callerPayload?.phone,
+    })) ?? {};
+    const payload = {
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      ...common,
+      ...callerPayload,
+    };
 
     let loaded: LoadedTemplate;
     try {

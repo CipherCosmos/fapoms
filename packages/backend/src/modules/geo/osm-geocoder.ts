@@ -1128,3 +1128,79 @@ export async function pincodePlace(
 
   return { state, district, city: town || district };
 }
+
+/**
+ * Whether the configured Nominatim is one we run ourselves.
+ *
+ * This is not a performance detail — it decides whether a feature may exist at all. The public
+ * server at nominatim.openstreetmap.org publishes a usage policy whose "unacceptable use" list
+ * names auto-complete search outright, so a type-ahead must never be pointed at it however
+ * politely it waits between calls. A self-hosted instance is ours to use as we like.
+ */
+export function nominatimIsSelfHosted(): boolean {
+  return NOMINATIM_IS_SELF_HOSTED;
+}
+
+/** One parsed Nominatim row. Deliberately close to the wire: the caller decides what it means. */
+export interface NominatimPlace {
+  displayName: string;
+  /**
+   * jsonv2's `category` (OSM's key) — 'place' and 'boundary' are real settlements and
+   * administrative areas; 'highway', 'landuse', 'shop' and the rest are roads and POIs that
+   * merely have the searched word in their name. The caller decides which it wants.
+   */
+  category: string;
+  /** jsonv2's `addresstype` — 'state' | 'state_district' | 'city' | 'town' | 'village' | … */
+  addressType: string;
+  address: Record<string, string>;
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Free-text place search against Nominatim — the one place this query is made.
+ *
+ * `nominatimSearch` above answers a different question: it takes a structured address apart and
+ * walks it best-piece-first to place ONE record as precisely as it can. This answers "what
+ * places match what the operator is typing", which wants several loosely-matched candidates and
+ * no verification ladder at all. Both go through `politely` and `getJson`, so they share the one
+ * rate limiter, the one User-Agent and the one test-network guard.
+ *
+ * A six-digit query is sent as `postalcode` rather than `q`: Nominatim matches a bare number
+ * against house numbers and reference tags otherwise, and an Indian PIN typed into a place field
+ * is never a house number.
+ */
+export async function nominatimPlaceSearch(query: string, limit = 8): Promise<NominatimPlace[]> {
+  const q = (query || '').trim();
+  if (!q) return [];
+
+  const params = new URLSearchParams({
+    format: 'jsonv2',
+    countrycodes: 'in',
+    limit: String(Math.max(1, Math.min(limit, 20))),
+    addressdetails: '1',
+  });
+  if (/^\d{6}$/.test(q)) params.set('postalcode', q);
+  else params.set('q', q);
+
+  const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
+    getJson(`${NOMINATIM_BASE_URL}/search?${params.toString()}`),
+  );
+  if (!Array.isArray(data)) return [];
+
+  const out: NominatimPlace[] = [];
+  for (const entry of data) {
+    const lat = Number(entry?.lat);
+    const lon = Number(entry?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    out.push({
+      displayName: String(entry?.display_name ?? ''),
+      category: String(entry?.category ?? entry?.class ?? ''),
+      addressType: String(entry?.addresstype ?? entry?.type ?? ''),
+      address: (entry?.address && typeof entry.address === 'object' ? entry.address : {}) as Record<string, string>,
+      lat,
+      lon,
+    });
+  }
+  return out;
+}

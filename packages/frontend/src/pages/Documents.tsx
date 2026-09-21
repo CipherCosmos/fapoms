@@ -10,6 +10,8 @@ import { AlertBanner, Select, useConfirm, PageHeader } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
+import { waitForQueuedJob, type EnqueuedJob } from '../services/queued-job';
+import { counted } from '../utils/plural';
 import { userMessage, AppError } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { uploadSizeProblem, SystemRole } from '@fapoms/shared';
@@ -35,6 +37,12 @@ const BRANCH_PAGE_SIZE = 25;
 
 /** Matches the global search box, so typing feels the same in both places. */
 const BRANCH_SEARCH_DEBOUNCE_MS = 200;
+
+/** What a batch dispatch reports once its job is done (`DispatchBatchResult` on the server). */
+export interface DispatchBatchResult {
+  dispatched: string[];
+  failed: Array<{ documentId: string; reason: string }>;
+}
 
 /**
  * Opens a document download.
@@ -173,6 +181,23 @@ export const Documents: React.FC = () => {
   const [overviewError, setOverviewError] = useState<unknown>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  /** Where a batch dispatch has got to while its job runs — the server's own stage and count. */
+  const [dispatchProgress, setDispatchProgress] = useState<string | null>(null);
+  /**
+   * A finished batch that did not send everything: what went, and each document that did not with
+   * the server's reason. Its own banner, so another action's error cannot inherit this list.
+   */
+  const [dispatchReport, setDispatchReport] = useState<{
+    text: string;
+    failures: Array<{ documentId: string; name: string; reason: string }>;
+  } | null>(null);
+  /** Stops a batch's poll when the page goes away; the batch itself carries on on the server. */
+  const pollSignal = useRef({ cancelled: false });
+  useEffect(() => {
+    const signal = { cancelled: false };
+    pollSignal.current = signal;
+    return () => { signal.cancelled = true; };
+  }, []);
 
   // Both lists in this payload — branches and documents — are pages of the same filtered query,
   // and only one of the two views is on screen at a time. So there is one search, one stage and
@@ -273,7 +298,7 @@ export const Documents: React.FC = () => {
    * call. Returns null for an id this page has not loaded a row for (a stale id from a socket
    * event, say), which just means the lookup below is skipped and the prompt starts blank.
    */
-  const projectBranchIdOf = useCallback((id: string): string | null => {
+  const loadedRowOf = useCallback((id: string): DocRow | null => {
     if (!overview) return null;
     const pools: DocRow[] = [
       ...(overview.documents || []),
@@ -281,8 +306,9 @@ export const Documents: React.FC = () => {
       ...(overview.blockingFieldWork || []),
       ...(overview.branches || []).flatMap((b) => Object.values(b.documentsByType || {}).flat()),
     ];
-    return pools.find((d) => d.id === id)?.projectBranchId ?? null;
+    return pools.find((d) => d.id === id) ?? null;
   }, [overview]);
+  const projectBranchIdOf = useCallback((id: string): string | null => loadedRowOf(id)?.projectBranchId ?? null, [loadedRowOf]);
 
   /** Releases one or many documents, then refreshes the console. */
   const handleDispatchMany = async (ids: string[]) => {
@@ -338,17 +364,55 @@ export const Documents: React.FC = () => {
     setBusyKey('batch-dispatch');
     setError(null);
     setSuccessMsg(null);
+    setDispatchReport(null);
+    // Names captured now: the refresh at the end can drop a sent document from the loaded rows.
+    const nameOf = (id: string) => {
+      const row = loadedRowOf(id);
+      return row ? `${row.fileName}${row.branchName ? ` (${row.branchName})` : ''}` : id;
+    };
+    const names = new Map(ids.map((id) => [id, nameOf(id)]));
     try {
-      const result = await api.request<any>('/documents/dispatch-batch', {
+      /**
+       * Accepted, then watched — not performed inside the request.
+       *
+       * Emailing a batch to a branch is a storage read and an SMTP send per document, and a day's
+       * batch outlived this client's 30-second timeout: the page said it failed while the server
+       * carried on, and pressing Send again emailed the branch a second copy. The server now answers
+       * with a job id at once, and this follows the job to its per-document result. A repeat press
+       * of the same batch is joined to the run already going (`deduplicated`), not sent again.
+       */
+      const { jobId, deduplicated } = await api.request<EnqueuedJob>('/documents/dispatch-batch', {
         method: 'POST',
         body: JSON.stringify({ documentIds: ids, branchEmail: branchEmail || undefined }),
       });
-      setSuccessMsg(result?.message || 'Documents dispatched.');
-      await loadOverview();
+      setDispatchProgress(
+        deduplicated
+          ? 'These documents are already being sent — following that run…'
+          : `Sending ${counted(ids.length, 'document')}…`,
+      );
+      const result = await waitForQueuedJob<DispatchBatchResult>(
+        `/documents/dispatch-batch/${encodeURIComponent(jobId)}`,
+        { onProgress: (p) => setDispatchProgress(`${p.stage}…`), signal: pollSignal.current },
+      );
+      const dispatched = result?.dispatched ?? [];
+      const failed = result?.failed ?? [];
+      const where = branchEmail ? ` to ${branchEmail}` : '';
+      if (failed.length === 0) {
+        setSuccessMsg(`Sent ${counted(dispatched.length, 'document')}${where}.`);
+      } else {
+        // Named per document, because "3 failed" leaves the desk guessing which packets are still here.
+        setDispatchReport({
+          text: `Sent ${dispatched.length} of ${counted(ids.length, 'document')}${where}. ${failed.length} did not go:`,
+          failures: failed.map((f) => ({ ...f, name: names.get(f.documentId) ?? f.documentId })),
+        });
+      }
     } catch (err) {
+      // A job that failed part-way may still have sent some documents; the refresh below shows which.
       setError(userMessage(err));
     } finally {
       setBusyKey(null);
+      setDispatchProgress(null);
+      await loadOverview();
     }
   };
 
@@ -438,6 +502,19 @@ export const Documents: React.FC = () => {
       />
 
       {error && <AlertBanner type="error" message={error} onClose={() => setError(null)} />}
+      {dispatchReport && (
+        <AlertBanner type="error" onClose={() => setDispatchReport(null)}>
+          {dispatchReport.text}
+          <ul data-testid="dispatch-failures" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {dispatchReport.failures.map((f) => <li key={f.documentId}>{f.name}: {f.reason}</li>)}
+          </ul>
+        </AlertBanner>
+      )}
+      {dispatchProgress && (
+        <div role="status" data-testid="dispatch-progress" style={{ padding: '6px 16px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary)' }}>
+          {dispatchProgress}
+        </div>
+      )}
       {successMsg && <AlertBanner type="success" message={successMsg} onClose={() => setSuccessMsg(null)} />}
 
       {overviewLoading && !overview ? (

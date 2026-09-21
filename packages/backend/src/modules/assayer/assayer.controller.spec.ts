@@ -8,6 +8,7 @@ import { RosterImportService } from './roster-import.service';
 import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
 import { DataIntegrityService } from './data-integrity.service';
+import { WorkforceBulkJobsService } from './workforce-bulk-jobs.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { LocationTrailService } from './location-trail.service';
 import { QualificationScoreService } from './qualification-score.service';
@@ -52,6 +53,7 @@ describe('AssayerController — getProfile', () => {
         // The identifier-check route's collaborator — these tests are about profile access and
         // never exercise it, but Nest still resolves every constructor dependency at compile time.
         { provide: DataIntegrityService, useValue: {} },
+        { provide: WorkforceBulkJobsService, useValue: {} },
         { provide: 'StorageEngine', useValue: {} },
         { provide: RegionGuardService, useValue: regionGuard },
         { provide: LocationTrailService, useValue: {} },

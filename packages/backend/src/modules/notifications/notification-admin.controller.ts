@@ -14,12 +14,15 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsArray, IsInt, IsEmail, Min, Max, IsObject } from 'class-validator';
+import { IsNotEmpty, MaxLength } from 'class-validator';
 import { SystemRole, NotificationChannel, NotificationPriority, NotificationCategory } from '@fapoms/shared';
+import { toE164IndianMobile } from '@fapoms/shared';
 
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RoleOnly } from '../auth/guards';
 import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
 import { NOTIFICATION_CATALOG } from './notification-catalog';
-import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
+import { appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from './email.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
@@ -40,6 +43,10 @@ import {
 } from '../../infrastructure/notifications/email-template-loader';
 import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
 import { plainTextFor } from '../../infrastructure/notifications/html-to-text';
+import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
+import { MessageTokensService, SAMPLE_RECIPIENT } from '../../infrastructure/notifications/message-tokens';
+import { SmsService } from './sms.service';
+import { SmsTemplateService, SmsTemplateView } from './sms-template.service';
 
 export class UpdateNotificationSettingRequestDto {
   @IsOptional() @IsBoolean()
@@ -165,6 +172,32 @@ export class TestEmailTemplateDto {
   payload?: Record<string, any>;
 }
 
+export class TestSmsRequestDto {
+  /** Any way an Indian mobile is typed; checked with the one phone rule in the handler. */
+  @IsString() @IsNotEmpty({ message: 'Give a mobile number to send the test text to.' })
+  to: string;
+}
+
+export class TestSmsTemplateDto {
+  /** Any way an Indian mobile is typed; checked with the one phone rule in the handler. */
+  @IsString() @IsNotEmpty({ message: 'Give a mobile number to send the test text to.' })
+  to: string;
+
+  /** Values to put in the text. Left out, the template's own example values are used. */
+  @IsOptional() @IsObject()
+  data?: Record<string, string>;
+}
+
+export class SaveSmsTemplateDto {
+  /** Left out = unchanged; empty or null = back to the standard wording. */
+  @IsOptional() @IsString() @MaxLength(2000)
+  text?: string | null;
+
+  /** Left out = unchanged; empty or null = cleared. */
+  @IsOptional() @IsString() @MaxLength(64)
+  dltTemplateId?: string | null;
+}
+
 /**
  * Super administrators only — reads and writes alike.
  */
@@ -179,12 +212,17 @@ const NOTIFICATION_ADMIN_READ_ROLES = [...NOTIFICATION_ADMIN_ROLES];
 export class NotificationAdminController {
   constructor(
     private readonly settings: NotificationSettingsService,
-    private readonly email: EmailProvider,
+    private readonly email: EmailService,
     @InjectQueue('sla-scanner') private readonly scannerQueue: Queue,
     private readonly audit: AuditService,
     private readonly platformSettings: PlatformSettingsService,
     private readonly templateLoader: EmailTemplateLoader,
     private readonly templateRenderer: EmailTemplateRenderer,
+    private readonly sms: SmsService,
+    private readonly smsProvider: SmsProvider,
+    private readonly smsTemplates: SmsTemplateService,
+    /** Only for previews: the values every message carries, so a preview shows what is really sent. */
+    private readonly tokens: MessageTokensService,
   ) {}
 
   /**
@@ -376,7 +414,9 @@ export class NotificationAdminController {
    * Sends a real email through the real provider.
    *
    * The only way to know a mail configuration works is to use it — a green "configured" badge
-   * proves the variables are set, not that Gmail accepts them.
+   * proves the variables are set, not that Gmail accepts them. Sent while the administrator waits
+   * (`EmailService.sendNow`), because the answer IS whether it went; still recorded in
+   * `outbound_emails` like every other email.
    */
   @Post('email/test')
   // Method-level override of the class @Roles(ADMIN) — see the 2026-09-05 amendment in the
@@ -399,29 +439,36 @@ export class NotificationAdminController {
       );
     }
     const who = req.user?.displayName ?? req.user?.username ?? 'an administrator';
-    const result = await this.email.send({
+    const result = await this.email.sendNow({
+      kind: 'TRANSPORT_TEST',
       to: dto.to,
-      subject: 'FAPOMS test email',
-      text: `This is a test email from FAPOMS, sent by ${who}.\n\nIf you are reading it, outbound email works.`,
-      html: renderEmailHtml({
-        title: 'Email Delivery Test',
-        bodyLines: [
-          `This test email was sent by ${who} to verify outbound email delivery for FAPOMS.`,
-          'If you received this message, outbound email delivery is working properly.',
-        ],
-        kvTable: [
-          { label: 'Initiated By', value: who },
-          { label: 'Timestamp (UTC)', value: new Date().toUTCString() },
-          { label: 'Transport Status', value: 'Active & Verified' },
-        ],
-        linkUrl: appPublicUrl(),
-        linkLabel: 'Open FAPOMS Portal',
-        securityNotice: 'This is an automated system verification test. No user action is required.',
-      }),
+      requestedBy: req.user?.id ?? null,
+      content: {
+        subject: 'FAPOMS test email',
+        text: `This is a test email from FAPOMS, sent by ${who}.\n\nIf you are reading it, outbound email works.`,
+        layout: {
+          title: 'Email Delivery Test',
+          bodyLines: [
+            `This test email was sent by ${who} to verify outbound email delivery for FAPOMS.`,
+            'If you received this message, outbound email delivery is working properly.',
+          ],
+          kvTable: [
+            { label: 'Initiated By', value: who },
+            { label: 'Timestamp (UTC)', value: new Date().toUTCString() },
+            { label: 'Transport Status', value: 'Active & Verified' },
+          ],
+          linkUrl: appPublicUrl(),
+          linkLabel: 'Open FAPOMS Portal',
+          securityNotice: 'This is an automated system verification test. No user action is required.',
+        },
+      },
     });
     // The provider's own words, not a generic failure: an SMTP rejection usually says exactly
-    // what is wrong with the credential.
-    return { success: result.success, data: result };
+    // what is wrong with the credential. `success`/`error` are the fields the settings screen reads.
+    return {
+      success: result.sent,
+      data: { success: result.sent, error: result.error, permanent: result.permanent, receipt: result.receipt },
+    };
   }
 
   /**
@@ -445,6 +492,9 @@ export class NotificationAdminController {
        * copy. Bull refuses a duplicate id while a job of that id is waiting or active; the
        * minute-stamped suffix lets a genuine re-run happen shortly afterwards without needing
        * the queue cleaned out by hand.
+       *
+       * `attempts: 1` for the same reason: the digest only queues its emails, and a retry would
+       * run the whole brief again and queue everyone a second copy.
        */
       const minute = new Date().toISOString().slice(0, 16).replace(/[:T-]/g, '');
       await this.scannerQueue.add('digest', {}, {
@@ -590,7 +640,15 @@ export class NotificationAdminController {
     const computedPublicUrl = host ? `${proto}://${host}` : appPublicUrl();
     const effectiveLogoUrl = `${computedPublicUrl}/sumeru-logo@2x.png`;
 
+    /*
+      The values every message carries, filled here too — otherwise a draft using {{name}} or
+      {{time}} previews as a blank where a real send fills it in, and the administrator takes a
+      working placeholder back out of the wording. Addressed to an obviously-sample recipient,
+      like the rest of a preview's sample data.
+    */
+    const common = await this.tokens.common(SAMPLE_RECIPIENT);
     const payload = {
+      ...common,
       ...def.sampleData,
       logoUrl: dto.payload?.logoUrl || effectiveLogoUrl,
       ...(dto.payload || {}),
@@ -599,7 +657,8 @@ export class NotificationAdminController {
     if (dto.html) {
       const validation = validateTemplateContract(def, dto.html, dto.subjectTemplate);
       try {
-        const renderedHtml = this.templateRenderer.interpolate(dto.html, payload, def);
+        let renderedHtml = this.templateRenderer.interpolate(dto.html, payload, def);
+        renderedHtml = renderedHtml.replace(/src=["']cid:sumeru-logo["']/gi, `src="${effectiveLogoUrl}"`);
         const subjectTpl = dto.subjectTemplate || def.defaultSubjectTemplate;
         const renderedSubject = this.templateRenderer.interpolate(subjectTpl, payload, def);
         const fallback = def.fallbackRenderer(payload);
@@ -623,8 +682,11 @@ export class NotificationAdminController {
       }
     }
 
-    const rendered = await this.templateRenderer.render(templateKey, payload);
-    return rendered;
+    const rendered = await this.templateRenderer.render(templateKey, payload, SAMPLE_RECIPIENT);
+    return {
+      ...rendered,
+      html: rendered.html ? rendered.html.replace(/src=["']cid:sumeru-logo["']/gi, `src="${effectiveLogoUrl}"`) : rendered.html,
+    };
   }
 
   @Post('email-templates/:key/draft')
@@ -830,14 +892,18 @@ export class NotificationAdminController {
     }
 
     const who = req.user?.displayName ?? req.user?.username ?? 'an administrator';
-    const result = await this.email.send({
+    // Composed above because a test of a DRAFT is template authoring — the draft is not what
+    // `EmailService` would render — but sent the one way everything is sent.
+    const result = await this.email.sendNow({
+      kind: 'TEMPLATE_TEST',
       to: dto.to,
-      subject: `[TEST] ${renderedSubject}`,
-      text: renderedText,
-      html: renderedHtml,
+      entityType: 'EMAIL_TEMPLATE',
+      entityId: templateKey,
+      requestedBy: req.user?.id ?? null,
+      content: { rendered: { subject: `[TEST] ${renderedSubject}`, text: renderedText, html: renderedHtml } },
     });
 
-    if (!result.success) {
+    if (!result.sent) {
       throw new BadRequestException(`Failed to send test email: ${result.error || 'Delivery failed'}`);
     }
 
@@ -858,5 +924,162 @@ export class NotificationAdminController {
     );
 
     return { message: `Test email successfully sent to ${dto.to}`, metadata };
+  }
+
+  // =========================================================================
+  // SMS — the twin of email/status, email/test and the email templates
+  // =========================================================================
+
+  /** Whether texts can actually leave, and how the gateway is configured — never the key. */
+  @Get('sms/status')
+  @ApiOperation({ summary: 'Is outbound SMS configured, by which provider, and under DLT' })
+  async smsStatus(): Promise<{ enabled: boolean; provider: string | null; senderId: string | null; dltEntityIdSet: boolean; hint: string | null }> {
+    // The provider's own resolved state, not a second reading of the settings: one resolver, one
+    // answer (the email status learned that the hard way — see `emailStatus`).
+    const state = this.smsProvider.describe();
+    const hint = !state.enabled
+      ? state.problem
+      : !state.dltEntityIdSet
+        ? 'No DLT Principal Entity ID is saved. Phone companies in India block business texts that are not registered on DLT — add it below once you have it.'
+        : null;
+    return { enabled: state.enabled, provider: state.provider, senderId: state.senderId, dltEntityIdSet: state.dltEntityIdSet, hint };
+  }
+
+  /**
+   * Sends a real text through the real gateway, while the developer waits.
+   *
+   * The twin of `testEmail`, under the same fence for the same reason: it spends real money sending
+   * to a real phone, and a configured-looking gateway proves nothing until a text arrives. Sent as
+   * the registered `transport-test` template, because under DLT a free-text test would be blocked.
+   */
+  @Post('sms/test')
+  // Developer-only transport plumbing, exactly as email/test — see the class comment.
+  @Roles(SystemRole.DEVELOPER)
+  @RequirePermissions('system:edit:platform')
+  @RoleOnly()
+  @ApiOperation({ summary: 'Send a test text through the configured SMS gateway' })
+  async testSms(@Body() dto: TestSmsRequestDto, @Req() req: any): Promise<{ success: boolean; data: any }> {
+    if (!this.sms.isEnabled()) {
+      throw new BadRequestException(
+        'SMS is not configured — set it up under Administration → Platform Settings → SMS delivery. It takes effect immediately.',
+      );
+    }
+    if (!toE164IndianMobile(dto.to)) {
+      throw new BadRequestException('Give an Indian mobile number (10 digits, starting 6–9) to send the test text to.');
+    }
+    /*
+      No values: the test wording has none, so that it is the simplest thing a DLT reviewer can
+      approve. Who pressed the button is recorded against the send in the ledger and the audit
+      trail, which is where it belongs — it was never something a stranger's handset needed.
+    */
+    const result = await this.sms.sendNow({
+      kind: 'TRANSPORT_TEST',
+      to: dto.to,
+      requestedBy: req.user?.id ?? null,
+      content: { template: 'transport-test', data: {} },
+    });
+    return {
+      success: result.sent,
+      data: { success: result.sent, error: result.error, permanent: result.permanent, receipt: result.receipt },
+    };
+  }
+
+  /** Every text the platform sends: its standard wording, the saved override, DLT form and cost. */
+  @Get('sms-templates')
+  @ApiOperation({ summary: 'List SMS templates with their wording, DLT form, DLT template id and segment count' })
+  async listSmsTemplates(): Promise<SmsTemplateView[]> {
+    return this.smsTemplates.describeAll();
+  }
+
+  /** Saves one text's wording and DLT template id — checked first, audited like the email template writes. */
+  @Put('sms-templates/:key')
+  @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RoleOnly()
+  @RequirePermissions('configuration:edit:platform')
+  @ApiOperation({ summary: 'Save the wording and DLT template id of one SMS template' })
+  async saveSmsTemplate(
+    @Param('key') key: string,
+    @Body() dto: SaveSmsTemplateDto,
+    @Req() req: any,
+  ): Promise<SmsTemplateView> {
+    const view = await this.smsTemplates.saveOverride(key, { text: dto.text, dltTemplateId: dto.dltTemplateId }, req.user?.id);
+    // Which fields changed, not their contents: the wording is the business's, but the audit trail
+    // is not where a template's text should be copied to.
+    await this.record(
+      'SMS_TEMPLATE_SAVED',
+      key,
+      req.user?.id,
+      `Saved SMS template "${key}".`,
+      { textChanged: dto.text !== undefined, dltTemplateIdChanged: dto.dltTemplateId !== undefined, dltTemplateIdSet: !!view.dltTemplateId },
+    );
+    return view;
+  }
+
+  /**
+   * Sends a test of ONE template to a phone — the SMS twin of `email-templates/:key/test`.
+   *
+   * `sms/test` proves the gateway works; this proves a particular text works, which is a different
+   * question and the one that actually goes wrong: the gateway is fine and this template's DLT
+   * Template ID is missing or registered against older wording, so every operator drops it. The
+   * only way to find that out is to send it.
+   *
+   * The wording sent is the wording SAVED for this template, not whatever is on screen — unlike
+   * email, where the draft travels in the request, an SMS is rendered from the stored template so
+   * the operator's registration matches. So the screen tells the administrator to save first.
+   *
+   * Under the same fence as `sms/test`, for the same reason: it spends real money on a real phone.
+   * The kind stays TRANSPORT_TEST — it is a test, and the outbound ledger's list of SMS kinds is a
+   * decision somebody makes on purpose (`messaging-single-path.spec.ts`), not a side effect of a
+   * button being added.
+   */
+  @Post('sms-templates/:key/test')
+  @Roles(SystemRole.DEVELOPER)
+  @RequirePermissions('system:edit:platform')
+  @RoleOnly()
+  @ApiOperation({ summary: 'Send a test of one SMS template to a mobile number' })
+  async testSmsTemplate(
+    @Param('key') key: string,
+    @Body() dto: TestSmsTemplateDto,
+    @Req() req: any,
+  ): Promise<{ success: boolean; data: any }> {
+    if (!this.sms.isEnabled()) {
+      throw new BadRequestException(
+        'SMS is not configured — set it up under Administration → Platform Settings → SMS delivery. It takes effect immediately.',
+      );
+    }
+    if (!toE164IndianMobile(dto.to)) {
+      throw new BadRequestException('Give an Indian mobile number (10 digits, starting 6–9) to send the test text to.');
+    }
+    // Also what rejects an unknown key, before anything is sent or audited.
+    const view = await this.smsTemplates.describe(key);
+    // The template's own example values, with anything the administrator typed over the top; a
+    // missing value would otherwise be refused by the renderer rather than delivered half-written.
+    const data: Record<string, string> = { ...view.sampleData };
+    for (const [token, value] of Object.entries(dto.data ?? {})) {
+      if (value === undefined || value === null || String(value).trim() === '') continue;
+      data[token] = String(value);
+    }
+
+    const result = await this.sms.sendNow({
+      kind: 'TRANSPORT_TEST',
+      to: dto.to,
+      requestedBy: req.user?.id ?? null,
+      content: { template: view.key, data },
+    });
+
+    const who = String(req.user?.displayName ?? req.user?.username ?? 'an administrator');
+    // Where it went and whether it arrived — never the wording, like every other write here.
+    await this.record(
+      'SMS_TEMPLATE_TEST_SENT',
+      view.key,
+      req.user?.id,
+      `Sent a test of SMS template "${view.key}" to "${dto.to}" by ${who}.`,
+      { to: dto.to, sent: result.sent },
+    );
+
+    return {
+      success: result.sent,
+      data: { success: result.sent, error: result.error, permanent: result.permanent, receipt: result.receipt },
+    };
   }
 }

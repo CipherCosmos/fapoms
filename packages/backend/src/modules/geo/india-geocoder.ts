@@ -54,9 +54,15 @@ function norm(s?: string | null): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
-/** Google Maps is the ONLY geocoder. Requires GOOGLE_MAPS_API_KEY with the
- * Geocoding API (+ billing) enabled. Returns null on any error (bad key,
- * quota, HTTP, no result) so geocoding never blocks an import with a wrong
+/** The FIRST geocoding tier, not the only one — see `geocodeIndiaRobust` below, which falls
+ * through to the self-hosted OSM tiers, India Post and the static centroids beneath it. This
+ * comment used to read "Google Maps is the ONLY geocoder", which contradicted the chain
+ * documented in this same file and made an unset key look like a broken geocoder rather than
+ * an absent optional tier. It is absent by choice: the owner decided (2026-09-19) to stay on
+ * self-hosted Nominatim, so in this deployment geocoding starts at tier 2.
+ *
+ * Requires GOOGLE_MAPS_API_KEY with the Geocoding API (+ billing) enabled. Returns null on any
+ * error (bad key, quota, HTTP, no result) so geocoding never blocks an import with a wrong
  * guess — callers must treat null as "unknown" rather than invent a point.
  *
  * Precision strategy:

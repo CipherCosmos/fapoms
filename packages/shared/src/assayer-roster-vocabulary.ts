@@ -150,6 +150,74 @@ export function standingAllowsPlanning(status: string | null | undefined): boole
 }
 
 /**
+ * The words for the three roster vocabularies above — written once, here, beside the values.
+ *
+ * These maps existed FOUR times and privately: `roster-filters.ts` and `AssayerRecord.tsx` each
+ * held `ENGAGEMENT_LABELS`/`UNAVAILABLE_LABELS`, `AssayerForms.tsx` held the same words again as
+ * `ENGAGEMENT_OPTIONS`/`UNAVAILABLE_OPTIONS`, and `AssayerVettingTab.tsx` held `STANDING_LABELS`.
+ * None were exported, so the filter that has to show the same words as the record it filters
+ * could not borrow them and copied them instead. They had already drifted, in five places:
+ *
+ *   REJECTED_BY_US     'We rejected them'             vs 'Rejected by us'
+ *   NO_WORK_IN_AREA    'No work in their area'        vs 'No work in area'
+ *   MOVED_ABROAD       'Moved out of India'           vs 'Moved abroad'
+ *   MOVED_TO_COMPANY   'Now engaged through a company' vs 'Moved to company'
+ *   BGV_FAILED         'Background verification failed' vs MISSING ENTIRELY
+ *
+ * The last is the worst kind: a clerk filtering on "Background verification failed" got a list
+ * whose records showed the raw `BGV_FAILED` back at them. The surviving wording is the roster's
+ * — full sentences that say what happened, not column names with the underscores taken out.
+ *
+ * `Record<Enum, string>` on every map on purpose: adding a value to one of these enums will not
+ * compile until somebody writes a word for it. `STANDING_LABELS` previously had seven entries
+ * for an eight-value enum and printed the literal `INACTIVE` at an HR clerk; a total Record is
+ * what makes that a build error rather than a screen.
+ */
+export const ASSAYER_ENGAGEMENT_LABELS: Record<AssayerEngagementType, string> = {
+  [AssayerEngagementType.REGULAR]: 'Regular',
+  [AssayerEngagementType.LOCAL]: 'Local',
+  [AssayerEngagementType.BACK_UP]: 'Back-up',
+  [AssayerEngagementType.AGENCY_AUDIT]: 'Agency audits',
+  [AssayerEngagementType.MYSTERY_AUDIT]: 'Mystery audits',
+};
+
+export const ASSAYER_UNAVAILABLE_LABELS: Record<AssayerUnavailableReason, string> = {
+  [AssayerUnavailableReason.REJECTED_BY_US]: 'We rejected them',
+  [AssayerUnavailableReason.NOT_INTERESTED]: 'Not interested',
+  // The spreadsheet's word for this is "Expired"; it means the person has died, and no screen
+  // should ask a clerk to pick a word that reads like a lapsed certificate.
+  [AssayerUnavailableReason.DECEASED]: 'Deceased',
+  [AssayerUnavailableReason.NO_WORK_IN_AREA]: 'No work in their area',
+  [AssayerUnavailableReason.MOVED_ABROAD]: 'Moved out of India',
+  [AssayerUnavailableReason.MOVED_TO_COMPANY]: 'Now engaged through a company',
+  [AssayerUnavailableReason.BGV_FAILED]: 'Background verification failed',
+};
+
+export const EMPANELMENT_STANDING_LABELS: Record<EmpanelmentStatus, string> = {
+  [EmpanelmentStatus.ACTIVE]: 'Active',
+  [EmpanelmentStatus.RECOMMENDED]: 'Recommended',
+  [EmpanelmentStatus.NOT_RECOMMENDED]: 'Not recommended',
+  [EmpanelmentStatus.DOCUMENTS_PENDING]: 'Documents pending',
+  [EmpanelmentStatus.REJECTED]: 'Rejected',
+  [EmpanelmentStatus.RESIGNED]: 'Resigned',
+  [EmpanelmentStatus.TERMINATED]: 'Terminated',
+  [EmpanelmentStatus.INACTIVE]: 'Empanelled before, dormant now',
+};
+
+/**
+ * Each map's reader. An unknown value returns itself rather than an empty cell, so a row written
+ * by a newer version of the API still shows a clerk something they can act on.
+ */
+export const assayerEngagementLabel = (v?: string | null): string =>
+  (v && ASSAYER_ENGAGEMENT_LABELS[v as AssayerEngagementType]) || v || '';
+
+export const assayerUnavailableLabel = (v?: string | null): string =>
+  (v && ASSAYER_UNAVAILABLE_LABELS[v as AssayerUnavailableReason]) || v || '';
+
+export const empanelmentStandingLabel = (v?: string | null): string =>
+  (v && EMPANELMENT_STANDING_LABELS[v as EmpanelmentStatus]) || v || '';
+
+/**
  * The onboarding paperwork the roster tracks, one column per item.
  *
  * Fifteen Yes/No columns in the spreadsheet — every one of them the same question about a

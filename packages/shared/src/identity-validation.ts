@@ -301,3 +301,233 @@ export function normalisePhone(value: unknown): string | null {
   else if (s.length === 11 && s.startsWith('0')) s = s.slice(1);
   return /^[6-9]\d{9}$/.test(s) ? s : null;
 }
+
+/**
+ * An Indian mobile number in E.164 (`+91XXXXXXXXXX`), or null — the shape an SMS gateway is
+ * handed.
+ *
+ * Deliberately `normalisePhone` plus a prefix, not a second reading of phone numbers: the SMS
+ * provider used to carry its own normaliser, which passed ANY run of digits through (a landline, a
+ * two-numbers-in-one-cell string glued together) and let the gateway bill for refusing it. What
+ * counts as a mobile is decided once, above.
+ */
+export function toE164IndianMobile(value: unknown): string | null {
+  const national = normalisePhone(value);
+  return national ? `+91${national}` : null;
+}
+
+// ── SMS wording under DLT ────────────────────────────────────────────────────────────────────
+//
+// Held here, beside the phone rule, because the server (which sends and saves templates) and the
+// settings screen (which previews and counts while an administrator types) must agree to the
+// character: a counter that disagrees with the gateway's bill, or a DLT form that differs by one
+// space from what the server sends, is a text the operators block.
+
+/** The `{{token}}` placeholder syntax every SMS template uses. */
+const SMS_TOKEN = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
+
+/** The distinct `{{token}}` names in a text, in order of first appearance. */
+export function smsTemplateTokens(text: string): string[] {
+  const seen: string[] = [];
+  for (const m of String(text ?? '').matchAll(SMS_TOKEN)) {
+    if (!seen.includes(m[1])) seen.push(m[1]);
+  }
+  return seen;
+}
+
+/** The text as it must be registered on the DLT portal: every `{{token}}` becomes `{#var#}`. */
+export function toDltForm(text: string): string {
+  return String(text ?? '').replace(SMS_TOKEN, '{#var#}');
+}
+
+/** Fills `{{token}}` placeholders from `data`; an absent value becomes empty. */
+/**
+ * The most characters one DLT variable (`{#var#}`) may carry. TRAI's DLT rule; an operator blocks a
+ * text whose filled-in variable is longer, so every value is fitted to it here — once, for every
+ * text — rather than each sender guessing its own limit.
+ */
+export const DLT_VARIABLE_MAX_LENGTH = 30;
+
+/** A value as one variable of a text: whitespace collapsed, and cut to fit with the cut marked. */
+export function fitSmsVariable(value: unknown, max = DLT_VARIABLE_MAX_LENGTH): string {
+  const flat = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+}
+
+export function fillSmsTemplate(text: string, data: Record<string, unknown>): string {
+  return String(text ?? '').replace(SMS_TOKEN, (_m, token: string) => {
+    const value = data?.[token];
+    return value === undefined || value === null ? '' : fitSmsVariable(value);
+  });
+}
+
+/**
+ * The values every message carries, under the same names in every email and every text.
+ *
+ * Each template used to name its own: the person was `fullName` in one email, `candidateName` in the
+ * next, and a text had no way to name the number it was going to. The platform fills these for every
+ * message, so an administrator can use the same placeholders in any wording. Anything a sender passes
+ * of its own — a code, a temporary password — wins over them.
+ */
+export const COMMON_MESSAGE_TOKENS = ['name', 'phone', 'email', 'companyName', 'portalUrl', 'time', 'date'] as const;
+
+export type CommonMessageToken = (typeof COMMON_MESSAGE_TOKENS)[number];
+
+/**
+ * What each one means, in the words the editing screens show.
+ *
+ * Here rather than in either screen: the email screen and the SMS screen both list these, and a list
+ * written twice is a list that disagrees with itself within a release.
+ */
+export const COMMON_MESSAGE_TOKEN_HELP: Record<CommonMessageToken, string> = {
+  name: 'Who the message is for — blank when the sender does not know a name',
+  phone: 'The mobile number it is going to (texts)',
+  email: 'The address it is going to (emails)',
+  companyName: 'Your firm\'s name, from Platform Settings → Company',
+  portalUrl: 'Where to open FAPOMS',
+  time: 'The time it was sent, e.g. 6:42 pm',
+  date: 'The date it was sent, e.g. 19 Sept 2026',
+};
+
+/**
+ * What each template's OWN placeholders mean — the other thirty.
+ *
+ * `COMMON_MESSAGE_TOKEN_HELP` above covers the seven every message carries. Each email template
+ * also declares its own (`email-template-registry.ts`: `requiredTokens` / `optionalTokens` /
+ * `rawTokens`), and those reached the editing screen as bare `{{otpCode}}` chips whose entire
+ * hover text was "Required token {{otpCode}} is present" — the name, restated. Somebody editing
+ * the wording of an email could see WHICH placeholders were expected and not what a single one
+ * of them would be replaced with.
+ *
+ * Written here, with the common seven, for the same reason they are: two screens list these, and
+ * a list written twice disagrees with itself within a release.
+ *
+ * Kept as a plain `Record<string, string>` rather than a total map over a union: the registry is
+ * the source of truth for WHICH tokens exist, it lives in the backend, and a template added
+ * there must not fail to compile the shared package. `emailTokenHelp()` below degrades to a
+ * useful sentence for anything not yet described.
+ */
+export const EMAIL_TEMPLATE_TOKEN_HELP: Record<string, string> = {
+  assayerCode: 'The appraiser code issued on approval, e.g. ASY-2026-0842',
+  branchName: 'The bank branch the paperwork is for, e.g. HDFC Bank — Fort Branch, Mumbai',
+  briefDate: 'The day the digest covers, written out, e.g. Wednesday, September 16, 2026',
+  candidateName: 'The candidate\'s name as they gave it on their application',
+  digestSectionsHtml: 'The whole body of the morning digest, already laid out. Place it once; do not try to style inside it',
+  digestSectionsText: 'The same digest body as plain text, for readers whose email shows no formatting',
+  displayName: 'The person\'s name as their record shows it',
+  documentType: 'What the attached paperwork is, e.g. Bullion Audit Schedule',
+  expiryHours: 'How many hours the link in this email keeps working, e.g. 72',
+  fileName: 'The name of the attached file, e.g. Audit_Packet_HDFC_Fort_2026-09-16.pdf',
+  fullName: 'The person\'s full name',
+  greeting: 'The opening line, e.g. "Hello Rajesh Kumar," — leave it out and write your own instead',
+  intro: 'The standard opening paragraph for this email — leave it out and write your own instead',
+  inviteUrl: 'The personal registration link. Every candidate gets a different one',
+  loginUrl: 'Where to sign in to FAPOMS',
+  logoUrl: 'Your company logo. Use it as an image source, not as text',
+  otpCode: 'The verification code the person has to type, e.g. 849201',
+  purpose: 'What the code is for, e.g. "sign in" — it reads inside a sentence',
+  remarks: 'Any note the desk added for this person',
+  reviewNotes: 'Why the application was not accepted, in the reviewer\'s own words',
+  roleName: 'The role the candidate is being invited for, e.g. Gold & Bullion Appraiser',
+  securityNotice: 'The standard caution for this email — keep it unless you have a reason not to',
+  setupUrl: 'The personal link for setting a password. Every person gets a different one',
+  status: 'Where the person now stands, e.g. Active Roster Ready',
+  subjectCounts: 'The headline counts for the subject line, e.g. 3 Overdue · 1 Approval',
+  supportEmail: 'The address a reader should write to for help',
+  temporaryPassword: 'The one-time password issued with app access. It is shown once and never again',
+  username: 'The sign-in name issued to this person, e.g. RAJESH.KUMAR',
+  validDays: 'How many days the temporary password works for, e.g. 7',
+  validMinutes: 'How many minutes the code works for, e.g. 5',
+};
+
+/**
+ * What a placeholder means, wherever it came from.
+ *
+ * Checks this template's own list, then the seven every message carries. An undescribed token
+ * still gets a true sentence rather than nothing — the screen has to say something, and "we fill
+ * this in when the email is sent" is both honest and the thing the reader needs to know.
+ */
+export function emailTokenHelp(token: string): string {
+  return EMAIL_TEMPLATE_TOKEN_HELP[token]
+    ?? COMMON_MESSAGE_TOKEN_HELP[token as CommonMessageToken]
+    ?? 'Filled in by the system when this email is sent';
+}
+
+/**
+ * What is wrong with edited SMS wording, as sentences — empty when it may be saved.
+ *
+ * Every required value must still be there (a code message without `{{code}}` delivers no code), and
+ * nothing else may be (a placeholder nobody fills in arrives as a blank the DLT template never had).
+ * The server refuses the save on these; the settings screen shows them while the administrator types.
+ */
+export function smsWordingProblems(
+  text: string,
+  requiredTokens: readonly string[],
+  /** Allowed on top of the common ones every message carries — this text's own optional values. */
+  optionalTokens: readonly string[] = [],
+): string[] {
+  const allowed = [...requiredTokens, ...optionalTokens, ...COMMON_MESSAGE_TOKENS];
+  const present = smsTemplateTokens(text);
+  const missing = requiredTokens.filter((t) => !present.includes(t));
+  const unknown = present.filter((t) => !allowed.includes(t as CommonMessageToken));
+  const list = (tokens: readonly string[]) => tokens.map((t) => `{{${t}}}`).join(', ');
+  const problems: string[] = [];
+  if (missing.length) {
+    problems.push(`The wording must still contain ${list(missing)} — the real value is filled in there when the text is sent.`);
+  }
+  if (unknown.length) {
+    problems.push(`${list(unknown)} cannot be filled in for this text. Use only ${list(allowed)}.`);
+  }
+  return problems;
+}
+
+/** A DLT template or entity id as the portal issues it: digits only (19 of them, in practice). */
+export const DLT_ID_PATTERN = /^\d{1,30}$/;
+
+/** A DLT sender header for transactional and service texts: exactly six letters. */
+export const DLT_SENDER_ID_PATTERN = /^[A-Za-z]{6}$/;
+
+export type SmsEncoding = 'GSM-7' | 'UCS-2';
+
+export interface SmsSegmentCount {
+  encoding: SmsEncoding;
+  /** What the gateway counts: GSM-7 septets (an extension character is two), or UTF-16 units. */
+  length: number;
+  /** How many SMS parts it goes out as — and is billed as. Zero for an empty text. */
+  segments: number;
+  /** How much fits in one part at this length: 160/153 for GSM-7, 70/67 for UCS-2. */
+  perSegment: number;
+}
+
+/** GSM 03.38 default alphabet (the escape character itself excluded). */
+const GSM7_BASIC = new Set(Array.from(
+  '@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà',
+));
+/** GSM 03.38 extension table: each costs an escape plus itself, two septets. */
+const GSM7_EXTENSION = new Set(Array.from('\f^{}\\[~]|€'));
+
+/**
+ * How a text is encoded and how many SMS parts it takes.
+ *
+ * One character outside the GSM-7 alphabet — a rupee sign, a curly quote pasted from a document,
+ * any Indian script — switches the WHOLE text to UCS-2, where a part holds 70 instead of 160, so
+ * the same sentence can cost three texts instead of one. A long text is split into parts that each
+ * lose room to the joining header: 153 (GSM-7) or 67 (UCS-2) per part once there is more than one.
+ */
+export function countSmsSegments(text: string): SmsSegmentCount {
+  const s = String(text ?? '');
+  let septets = 0;
+  let gsm = true;
+  for (const ch of s) {
+    if (GSM7_BASIC.has(ch)) septets += 1;
+    else if (GSM7_EXTENSION.has(ch)) septets += 2;
+    else { gsm = false; break; }
+  }
+  if (gsm) {
+    const segments = septets === 0 ? 0 : septets <= 160 ? 1 : Math.ceil(septets / 153);
+    return { encoding: 'GSM-7', length: septets, segments, perSegment: segments > 1 ? 153 : 160 };
+  }
+  const units = s.length;
+  const segments = units <= 70 ? 1 : Math.ceil(units / 67);
+  return { encoding: 'UCS-2', length: units, segments, perSegment: segments > 1 ? 67 : 70 };
+}

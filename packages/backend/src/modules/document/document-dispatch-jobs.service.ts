@@ -1,0 +1,92 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bull';
+import type { Job, Queue } from 'bull';
+import {
+  DOCUMENT_DISPATCH_JOB,
+  DOCUMENT_DISPATCH_QUEUE,
+  DISPATCH_BATCH_JOB_OPTIONS,
+  DispatchBatchJobData,
+  DispatchBatchResult,
+} from './document-dispatch-jobs.contract';
+import {
+  IN_FLIGHT_SCAN_LIMIT,
+  QueuedJobEnvelope,
+  QueuedJobStatus,
+  assertJobVisibleTo,
+  dedupeKeyFor,
+  describeJob,
+} from '../../infrastructure/queue/queued-job';
+import type { JobActor } from '../../infrastructure/queue/job-actor';
+
+export interface EnqueuedDispatchBatch {
+  jobId: string;
+  /** True when an identical batch by the same person was already queued or running. */
+  deduplicated: boolean;
+}
+
+/** Accepts a desk's batch dispatch for the worker and answers where it has got to. */
+@Injectable()
+export class DocumentDispatchJobsService {
+  private readonly logger = new Logger(DocumentDispatchJobsService.name);
+
+  constructor(@InjectQueue(DOCUMENT_DISPATCH_QUEUE) private readonly queue: Queue) {}
+
+  /**
+   * The ids are sorted into the fingerprint and the address is part of it, so pressing Send twice —
+   * or a page that retries a POST — joins the batch already going instead of emailing the branch a
+   * second copy. A different address is a different batch: it is a different delivery.
+   *
+   * The fingerprint is a courtesy, not the last line. Two presses that race past the in-flight scan
+   * both enqueue, but the queue has one processing loop, so the second batch runs after the first
+   * and `dispatchDocument` refuses every document the first already moved out of UPLOADED.
+   */
+  async enqueueBatch(
+    input: { documentIds: string[]; branchEmail?: string | null },
+    actor: JobActor,
+  ): Promise<EnqueuedDispatchBatch> {
+    const documentIds = [...new Set(input.documentIds)].sort();
+    const branchEmail = (input.branchEmail ?? '').trim() || null;
+    const params = { documentIds, branchEmail };
+    const data: DispatchBatchJobData = {
+      requestedBy: actor.userId,
+      ...params,
+      actor,
+      dedupeKey: dedupeKeyFor(DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH, actor.userId, params),
+    };
+
+    const inFlight = await this.findInFlight(data.dedupeKey);
+    if (inFlight) {
+      this.logger.log(`Joining in-flight dispatch batch ${inFlight.id} rather than sending it twice.`);
+      return { jobId: String(inFlight.id), deduplicated: true };
+    }
+    const job = await this.queue.add(DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH, data, DISPATCH_BATCH_JOB_OPTIONS);
+    this.logger.log(`Queued dispatch batch ${job.id}: ${documentIds.length} document(s).`);
+    return { jobId: String(job.id), deduplicated: false };
+  }
+
+  /**
+   * Readable only by whoever started the batch. Bull's job ids are a counter shared with the hourly
+   * auto-dispatch, so the name is checked too: an auto-dispatch job carries no requester and is
+   * nobody's to read, and nothing else on this queue answers as a batch.
+   */
+  async status(jobId: string, userId: string | undefined): Promise<QueuedJobStatus<DispatchBatchResult>> {
+    const job = assertJobVisibleTo(await this.queue.getJob(jobId), userId);
+    if (job.name !== DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH) assertJobVisibleTo(null, userId);
+    // The per-document outcome is the deliverable: ids and reasons, never file contents.
+    return describeJob<DispatchBatchResult>(job, { includeResult: true });
+  }
+
+  private async findInFlight(dedupeKey: string): Promise<Job | null> {
+    try {
+      const jobs = await this.queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
+      return jobs.find(
+        (j) =>
+          j?.name === DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH &&
+          (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
+      ) ?? null;
+    } catch (err) {
+      this.logger.warn(`Could not scan for an in-flight dispatch batch (${(err as Error).message}); queuing anyway.`);
+      return null;
+    }
+  }
+}

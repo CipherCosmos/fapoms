@@ -245,11 +245,24 @@ describe('ImportIssuesPanel', () => {
       openCount: 3,
     };
 
-    /** Lists the queue, and lets each resolve POST be decided by `resolve`. */
-    const serveWithResolves = (resolve: (id: string) => Promise<unknown>) => {
-      mockRequest.mockImplementation((url: string) => {
-        const m = url.match(/import-issues\/([^/]+)\/resolve$/);
-        return m ? resolve(m[1]) : Promise.resolve(group);
+    const BATCH_URL = '/assayers/roster/import-issues/resolve';
+    const batchCalls = () => mockRequest.mock.calls.filter(([url]) => url === BATCH_URL);
+    const perIdCalls = () => mockRequest.mock.calls.filter(([url]) => /import-issues\/[^/]+\/resolve$/.test(String(url)));
+
+    /**
+     * Lists the queue, and answers the batch route. `outcome` decides each id the way the server
+     * does — per id — or `refuse` fails the whole request, as a region refusal or a dropped
+     * connection does.
+     */
+    const serveBatch = (
+      opts: { outcome?: (id: string) => { resolved: boolean; reason?: string }; refuse?: Error } = {},
+    ) => {
+      mockRequest.mockImplementation((url: string, init?: { body?: string }) => {
+        if (url !== BATCH_URL) return Promise.resolve(group);
+        if (opts.refuse) return Promise.reject(opts.refuse);
+        const { ids } = JSON.parse(String(init?.body));
+        const decide = opts.outcome ?? (() => ({ resolved: true }));
+        return Promise.resolve({ results: ids.map((id: string) => ({ id, ...decide(id) })) });
       });
     };
 
@@ -263,33 +276,51 @@ describe('ImportIssuesPanel', () => {
       });
     };
 
-    it('attempts every cell even after one is refused, rather than stopping at the first', async () => {
-      serveWithResolves((id) => (id === 'i-1' ? Promise.reject(new Error('nope')) : Promise.resolve({})));
+    /**
+     * It sent one POST per cell, all at once — 68 requests for one unreadable word on 68 rows —
+     * while `POST …/import-issues/resolve` takes the whole group and answers per id.
+     */
+    it('closes the whole group in one request carrying every cell and the one decision', async () => {
+      serveBatch();
 
       await openTheDecideForm();
       fireEvent.click(screen.getByRole('button', { name: /Close 3 cells/ }));
 
-      // The old loop would have thrown on i-1 and never posted i-2 or i-3.
-      await waitFor(() => {
-        const posted = mockRequest.mock.calls.filter(([url]) => String(url).endsWith('/resolve'));
-        expect(posted).toHaveLength(3);
+      await waitFor(() => expect(batchCalls()).toHaveLength(1));
+      expect(JSON.parse(batchCalls()[0][1].body)).toEqual({
+        ids: ['i-1', 'i-2', 'i-3'], resolution: 'Availability note in the wrong column — ignore.',
       });
+      expect(perIdCalls()).toHaveLength(0);
     });
 
-    it('reports what closed and what did not, naming each cell that refused', async () => {
-      serveWithResolves((id) => (id === 'i-3' ? Promise.reject(new Error('Row already resolved.')) : Promise.resolve({})));
+    it('reports what closed and what did not, naming each cell the server would not close', async () => {
+      serveBatch({ outcome: (id) => (id === 'i-3' ? { resolved: false, reason: 'Already closed by somebody else.' } : { resolved: true }) });
 
       await openTheDecideForm();
       fireEvent.click(screen.getByRole('button', { name: /Close 3 cells/ }));
 
       await waitFor(() => expect(screen.getByText(/2 cells closed; 1 cell could not be/)).toBeInTheDocument());
-      expect(screen.getByText(/AS0003 —/)).toBeInTheDocument();
+      expect(screen.getByText(/AS0003 — Already closed by somebody else/)).toBeInTheDocument();
       // The reader must not re-run the two that worked.
       expect(screen.getByText(/do not need doing again/)).toBeInTheDocument();
     });
 
+    /**
+     * The route refuses the WHOLE request when any id is outside the caller's regions. Reporting
+     * that as a generic failure — or worse, as success — would leave the reader guessing which
+     * cells closed. None did, and the panel says so against each.
+     */
+    it('reports every cell as not closed when the server refuses the whole request', async () => {
+      serveBatch({ refuse: new Error('One of these is outside your regions.') });
+
+      await openTheDecideForm();
+      fireEvent.click(screen.getByRole('button', { name: /Close 3 cells/ }));
+
+      await waitFor(() => expect(screen.getByText(/0 cells closed; 3 cells could not be/)).toBeInTheDocument());
+    });
+
     it('refuses a blank account of what was decided, in the form rather than in a toast', async () => {
-      serveWithResolves(() => Promise.resolve({}));
+      serveBatch();
 
       renderPanel(<ImportIssuesPanel canManage />);
       await waitFor(() => expect(screen.getByText(/3 record problems to review/)).toBeInTheDocument());
@@ -298,19 +329,17 @@ describe('ImportIssuesPanel', () => {
 
       expect(screen.getByRole('alert')).toHaveTextContent(/Say what was decided/);
       // And nothing was posted — a blank close would put the guess back with no record of it.
-      expect(mockRequest.mock.calls.filter(([url]) => String(url).endsWith('/resolve'))).toHaveLength(0);
+      expect(batchCalls()).toHaveLength(0);
+      expect(perIdCalls()).toHaveLength(0);
     });
 
     it('says nothing about failures when every cell closed', async () => {
-      serveWithResolves(() => Promise.resolve({}));
+      serveBatch();
 
       await openTheDecideForm();
       fireEvent.click(screen.getByRole('button', { name: /Close 3 cells/ }));
 
-      await waitFor(() => {
-        const posted = mockRequest.mock.calls.filter(([url]) => String(url).endsWith('/resolve'));
-        expect(posted).toHaveLength(3);
-      });
+      await waitFor(() => expect(batchCalls()).toHaveLength(1));
       expect(screen.queryByText(/could not be/)).not.toBeInTheDocument();
     });
   });
@@ -372,9 +401,11 @@ describe('ImportIssuesPanel', () => {
       });
       fireEvent.click(screen.getByRole('button', { name: /Close 2 issues/ }));
 
+      // One batch request carrying both of this person's entries — and not the other person's.
       await waitFor(() => {
-        const posted = mockRequest.mock.calls.filter(([url]) => String(url).endsWith('/resolve'));
-        expect(posted).toHaveLength(2);
+        const posted = mockRequest.mock.calls.filter(([url]) => url === '/assayers/roster/import-issues/resolve');
+        expect(posted).toHaveLength(1);
+        expect(JSON.parse(posted[0][1].body).ids).toEqual(['i-1', 'i-2']);
       });
     });
 

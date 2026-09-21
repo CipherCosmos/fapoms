@@ -243,6 +243,14 @@ export const queryKeys = {
      */
     assayerInvoice: (id: string) => ['billing', 'assayerInvoice', id] as const,
     assayerStatement: (assayerId: string) => ['billing', 'assayerStatement', assayerId] as const,
+    /**
+     * Expense claims awaiting review. Filed under `billing` on purpose, not under a key of its
+     * own: approving a claim books a payout in the same transaction, so the claim count and
+     * every billing figure move together, and `ExpenseReview` already invalidates
+     * `queryKeys.billing.all` after a review. A separate namespace would have left the To-do
+     * queue's claim count stale for exactly as long as its `staleTime`.
+     */
+    pendingExpenses: () => ['billing', 'pendingExpenses'] as const,
     assignmentMoney: (assignmentId: string) => ['billing', 'assignmentMoney', assignmentId] as const,
     reconcilePreview: (since?: string) => ['billing', 'reconcilePreview', since ?? 'ALL'] as const,
   },

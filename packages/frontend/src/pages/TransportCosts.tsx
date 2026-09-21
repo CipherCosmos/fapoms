@@ -1,16 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit2, Archive, Calculator, Info, Star } from 'lucide-react';
-import {
-  TravelMode,
-  TRAVEL_MODE_ORDER,
-  travelModeLabel,
-  Region,
-  REGION_ORDER,
-  REGION_LABELS,
-  CANONICAL_STATE_NAMES,
-  formatRupees,
-} from '@fapoms/shared';
+import { TravelMode, TRAVEL_MODE_ORDER, travelModeLabel, Region, REGION_ORDER, REGION_LABELS, CANONICAL_STATE_NAMES, formatRupees, businessTodayDateKey } from '@fapoms/shared';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { Modal, AlertBanner, Select, useConfirm } from '../components/ui';
@@ -87,7 +78,7 @@ const emptyForm = {
   baseFare: '0',
   perKmRate: '',
   isPreferred: false,
-  effectiveFrom: new Date().toISOString().slice(0, 10),
+  effectiveFrom: businessTodayDateKey(),
   effectiveTo: '',
   notes: '',
 };

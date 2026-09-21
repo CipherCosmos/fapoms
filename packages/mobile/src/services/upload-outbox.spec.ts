@@ -33,6 +33,7 @@ import {
   __reviveStaleSendingForTests,
   OutboxUpload,
 } from './upload-outbox';
+import { UPLOAD_RETRY_CAP_MS } from './upload-retry-policy';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const tokenStore = require('./token-store') as { __store: Record<string, unknown> };
@@ -212,16 +213,82 @@ describe('processing', () => {
 
   /**
    * The whole point of a durable outbox: a packet left failed on a bad connection is retried on
-   * its own the next time the outbox drains — the assayer does not have to press anything.
+   * its own once its backoff has passed — the assayer does not have to press anything.
    */
-  it('auto-retries a previously failed packet on the next drain', async () => {
+  it('auto-retries a previously failed packet on a drain after its backoff', async () => {
     await enqueueUpload(packet('kollam'));
     await processOutbox(fail);
     expect((await getUploads())[0].status).toBe('FAILED');
 
-    await processOutbox(ok);
+    const later = Date.now() + UPLOAD_RETRY_CAP_MS + 1;
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      await processOutbox(ok);
+    } finally {
+      clock.mockRestore();
+    }
 
     expect((await getUploads())[0].status).toBe('SENT');
+  });
+
+  /**
+   * Every app foreground used to resend every failed packet at once: on a dead connection that is
+   * the same doomed multi-megabyte attempt, back to back, on the assayer's battery and data. A drain
+   * inside the backoff window leaves the packet alone — still FAILED, still visible.
+   */
+  it('leaves a failed packet alone on a drain inside its backoff, and backs off further each time', async () => {
+    await enqueueUpload(packet('kollam'));
+    await processOutbox(fail);
+    const first = (await getUploads())[0];
+    expect(first.attempts).toBe(1);
+    expect(new Date(first.nextAttemptAt!).getTime()).toBeGreaterThan(Date.now());
+
+    await processOutbox(ok); // a foreground return seconds later
+    expect(ok).not.toHaveBeenCalled();
+    expect((await getUploads())[0].status).toBe('FAILED');
+
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(new Date(first.nextAttemptAt!).getTime() + 1);
+    try {
+      await processOutbox(fail);
+    } finally {
+      clock.mockRestore();
+    }
+    const second = (await getUploads())[0];
+    expect(second.attempts).toBe(2);
+  });
+
+  /**
+   * A refusal is the server's verdict on the request (no longer accepting a return, over the size
+   * ceiling, not yours to write): resending cannot change it. The packet stays in the list as
+   * FAILED with the server's words, the way every failure is shown, but only Retry sends it again.
+   */
+  it('never resends a packet the server refused, but keeps it visible and lets Retry send it', async () => {
+    await enqueueUpload(packet('kollam'));
+    const refuse = jest.fn(async () => ({
+      success: false as const,
+      error: 'This assignment is no longer accepting a return.',
+      code: 'CONFLICT',
+    }));
+    await processOutbox(refuse);
+
+    const refused = (await getUploads())[0];
+    expect(refused).toMatchObject({ status: 'FAILED', needsAttention: true, error: 'This assignment is no longer accepting a return.' });
+
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 24 * 60 * 60_000);
+    try {
+      await processOutbox(ok);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(ok).not.toHaveBeenCalled();
+
+    await retryUpload(refused.id);
+    // Pressing Retry is the attention it needed: the queued packet must not still read as refused.
+    expect((await getUploads())[0]).toMatchObject({ status: 'PENDING', attempts: 0 });
+    expect((await getUploads())[0].needsAttention).toBeUndefined();
+    await processOutbox(ok);
+    expect((await getUploads())[0]).toMatchObject({ status: 'SENT' });
+    expect((await getUploads())[0].needsAttention).toBeUndefined();
   });
 
   it('does nothing when there is nothing to send', async () => {

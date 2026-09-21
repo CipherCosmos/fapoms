@@ -9,7 +9,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import { Job, Queue } from 'bull';
+import type { Job, JobOptions, Queue } from 'bull';
 
 import {
   PLANNING_JOB,
@@ -101,40 +101,57 @@ export class PlanningJobsService {
   }
 
   private async add<T extends QueuedJobEnvelope>(name: PlanningJobName, data: T): Promise<EnqueueResult> {
-    const inFlight = await this.findInFlight(name, data.dedupeKey);
-    if (inFlight) {
-      this.logger.log(`Joining in-flight ${name} job ${inFlight.id} rather than starting a duplicate.`);
-      return { jobId: String(inFlight.id), deduplicated: true };
-    }
+    return enqueueOnce(this.queue, name, data, PLANNING_JOB_OPTIONS, this.logger);
+  }
+}
 
-    const job = await this.queue.add(name, data, PLANNING_JOB_OPTIONS);
-    this.logger.log(`Enqueued ${name} job ${job.id}.`);
-    return { jobId: String(job.id), deduplicated: false };
+/**
+ * Adds a job unless an identical one from the same account is still queued or running.
+ *
+ * Shared by the read queue (`PlanningJobsService`) and the write queue (`PlanningWriteJobsService`)
+ * so the rule — join an unfinished duplicate, never a finished one, and never let the scan block the
+ * enqueue — is written once for planning rather than once per queue.
+ */
+export async function enqueueOnce<T extends QueuedJobEnvelope>(
+  queue: Queue,
+  name: string,
+  data: T,
+  options: JobOptions,
+  logger: Logger,
+): Promise<EnqueueResult> {
+  const inFlight = await findInFlight(queue, name, data.dedupeKey, logger);
+  if (inFlight) {
+    logger.log(`Joining in-flight ${name} job ${inFlight.id} rather than starting a duplicate.`);
+    return { jobId: String(inFlight.id), deduplicated: true };
   }
 
-  /**
-   * Finds an identical request that has not finished yet.
-   *
-   * Only unfinished states are considered. Matching a *completed* job would be worse than no
-   * deduplication at all: for the retention window every re-request would return the first run's
-   * answer, and an operator who reassigned a branch and pressed refresh would be told nothing
-   * had changed.
-   *
-   * A failure here is not allowed to block the enqueue. The scan is an optimisation — the worst
-   * consequence of skipping it is one redundant run — whereas refusing to accept the work
-   * because a list read failed would turn a Redis hiccup into an outage of the endpoint.
-   */
-  private async findInFlight(name: PlanningJobName, dedupeKey: string): Promise<Job | null> {
-    try {
-      const jobs = await this.queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
-      return (
-        jobs.find(
-          (j) => j?.name === name && (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
-        ) ?? null
-      );
-    } catch (err) {
-      this.logger.warn(`Could not scan for an in-flight ${name} job (${(err as Error).message}); enqueuing anyway.`);
-      return null;
-    }
+  const job = await queue.add(name, data, options);
+  logger.log(`Enqueued ${name} job ${job.id}.`);
+  return { jobId: String(job.id), deduplicated: false };
+}
+
+/**
+ * Finds an identical request that has not finished yet.
+ *
+ * Only unfinished states are considered. Matching a *completed* job would be worse than no
+ * deduplication at all: for the retention window every re-request would return the first run's
+ * answer, and an operator who reassigned a branch and pressed refresh would be told nothing
+ * had changed.
+ *
+ * A failure here is not allowed to block the enqueue. The scan is an optimisation — the worst
+ * consequence of skipping it is one redundant run — whereas refusing to accept the work
+ * because a list read failed would turn a Redis hiccup into an outage of the endpoint.
+ */
+async function findInFlight(queue: Queue, name: string, dedupeKey: string, logger: Logger): Promise<Job | null> {
+  try {
+    const jobs = await queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
+    return (
+      jobs.find(
+        (j) => j?.name === name && (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
+      ) ?? null
+    );
+  } catch (err) {
+    logger.warn(`Could not scan for an in-flight ${name} job (${(err as Error).message}); enqueuing anyway.`);
+    return null;
   }
 }

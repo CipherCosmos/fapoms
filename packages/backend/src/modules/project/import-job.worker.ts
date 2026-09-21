@@ -1,7 +1,12 @@
 /**
- * FAPOMS — the consumer for `import-jobs`.
+ * FAPOMS — the consumer for `import-jobs`, the branch-import queue.
  *
  * See `ImportJobService` for why spreadsheet imports were moved off the request path at all.
+ *
+ * The only `@Processor` on that queue, and it must stay so: Bull's loops belong to the queue and
+ * take a job of any name, so a second class (or a second handler here) would add a loop that runs
+ * branch imports side by side. Roster and customer-master imports have their own queues for exactly
+ * that reason — see `import.constants.ts`.
  */
 
 import { Processor, Process } from '@nestjs/bull';
@@ -36,7 +41,8 @@ export class ImportJobWorker {
    * still sees one request per second — this slot is not what keeps the deployment inside
    * Nominatim's limit, and an earlier version of this comment claimed it was. What one slot buys is
    * that a single import cannot run two copies of itself, and that a re-upload queues behind the
-   * first attempt instead of racing it into the same rows. Neither the slot nor `politely()` solves
+   * first attempt instead of racing it into the same rows — which holds only because this is the
+   * one handler on its queue (see the file header). Neither the slot nor `politely()` solves
    * the multi-replica case; see the note at the bottom of this file.
    */
   @Process({ name: BRANCH_IMPORT_JOB, concurrency: 1 })

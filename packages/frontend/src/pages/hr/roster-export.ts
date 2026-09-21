@@ -1,8 +1,8 @@
-import { assayerLifecycleLabel, employmentTypeLabel } from '@fapoms/shared';
+import { assayerLifecycleLabel, employmentTypeLabel, businessDateKey, assayerEngagementLabel, assayerUnavailableLabel } from '@fapoms/shared';
 
 import type { CsvCell } from '../../utils/csv';
 import {
-  ENGAGEMENT_LABELS, UNAVAILABLE_LABELS, PIN_QUALITY_LABELS, pinQuality,
+  PIN_QUALITY_LABELS, pinQuality,
   missingFields, payoutBlockers, tenureMonths,
   type RosterPerson,
 } from './roster-filters';
@@ -53,7 +53,7 @@ const onFile = (value: unknown): string => YES_NO(value != null && String(value)
 const isoDay = (value?: string | null): string => {
   if (!value) return '';
   const at = new Date(value);
-  return Number.isNaN(at.getTime()) ? '' : at.toISOString().slice(0, 10);
+  return Number.isNaN(at.getTime()) ? '' : businessDateKey(at);
 };
 
 const list = (values?: string[] | null): string => (values ?? []).filter(Boolean).join('; ');
@@ -120,14 +120,14 @@ export const ROSTER_EXPORT_COLUMNS: RosterExportColumn[] = [
     key: 'engagementType',
     label: 'How they are engaged',
     group: 'Their work with us',
-    value: (a) => (a.engagementType ? ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType : ''),
+    value: (a) => assayerEngagementLabel(a.engagementType),
   },
   { key: 'employmentType', label: 'Employment type', group: 'Their work with us', value: (a) => (a.employmentType ? employmentTypeLabel(a.employmentType) : '') },
   {
     key: 'unavailableReason',
     label: 'Why they are unavailable',
     group: 'Their work with us',
-    value: (a) => (a.unavailableReason ? UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason : ''),
+    value: (a) => assayerUnavailableLabel(a.unavailableReason),
   },
   { key: 'department', label: 'Department', group: 'Their work with us', value: (a) => a.department ?? '' },
   { key: 'hrOwnerName', label: 'HR owner', group: 'Their work with us', value: (a) => a.hrOwnerName ?? '' },

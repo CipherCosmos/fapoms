@@ -6,6 +6,7 @@ import { DataResetService } from './data-reset.service';
 import { DestructiveApprovalService } from './destructive-approval.service';
 import { FkGraphService } from './fk-graph.service';
 import { BackupOnDemandService } from './backup-on-demand.service';
+import { DataResetRuns } from './data-reset-runs';
 
 /**
  * The developer "clean the database" feature, plus the two-person rule that gates it
@@ -20,6 +21,6 @@ import { BackupOnDemandService } from './backup-on-demand.service';
 @Module({
   imports: [AuditModule, NotificationsModule],
   controllers: [DataResetController],
-  providers: [DataResetService, DestructiveApprovalService, FkGraphService, BackupOnDemandService],
+  providers: [DataResetService, DestructiveApprovalService, FkGraphService, BackupOnDemandService, DataResetRuns],
 })
 export class DataResetModule {}

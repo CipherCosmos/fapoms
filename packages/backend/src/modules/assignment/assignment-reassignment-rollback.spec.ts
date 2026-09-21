@@ -108,7 +108,13 @@ describe('AssignmentService.reassignAssignment — transactional integrity', () 
         }
       }),
     };
-    (service as any).assignmentRepository = { manager: { query: jest.fn(async () => []) } };
+    // `findOne` is the pre-transaction read that re-prices the job for the incoming assayer
+    // (see repriceForAssayer). Null here on purpose: these tests are about the transaction's
+    // integrity, not the fee, and a null skips the re-price without touching what they assert.
+    (service as any).assignmentRepository = {
+      manager: { query: jest.fn(async () => []) },
+      findOne: jest.fn(async () => null),
+    };
     (service as any).auditService = auditService;
     (service as any).assayerService = {
       findOne: jest.fn(async () => ({

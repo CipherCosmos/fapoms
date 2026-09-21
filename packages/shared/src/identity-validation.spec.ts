@@ -3,6 +3,10 @@ import {
   isValidPan, isValidIfsc, isValidAadhaar, isPlaceholderAadhaar, isValidGstin, isGstinOrPan,
   GSTIN_OR_PAN_REFUSAL,
   normalisePhone, verhoeffCheckDigit, gstinCheckDigit,
+  toE164IndianMobile, countSmsSegments, toDltForm, fillSmsTemplate, smsTemplateTokens, smsWordingProblems, DLT_ID_PATTERN,
+  COMMON_MESSAGE_TOKENS,
+  fitSmsVariable, DLT_VARIABLE_MAX_LENGTH,
+  DLT_SENDER_ID_PATTERN,
 } from './identity-validation';
 
 /**
@@ -383,5 +387,127 @@ describe('isGstinOrPan', () => {
     // whole of its value.
     expect(GSTIN_OR_PAN_REFUSAL).toContain('27AAPFU0939F1ZV');
     expect(GSTIN_OR_PAN_REFUSAL).toContain('ABCDE1234F');
+  });
+});
+
+/**
+ * The number an SMS gateway is handed. The provider used to keep its own normaliser that passed
+ * any run of digits through, so a landline or two numbers glued together went to the gateway and
+ * came back as a billed refusal. It is now the one phone rule above, plus the country prefix.
+ */
+describe('toE164IndianMobile', () => {
+  it('gives +91 and the ten national digits for every shape a mobile is typed in', () => {
+    for (const typed of ['9876543210', '+919876543210', '919876543210', '09876543210', '+91 98765-43210', 9876543210]) {
+      expect(toE164IndianMobile(typed)).toBe('+919876543210');
+    }
+  });
+
+  it('refuses what normalisePhone refuses, instead of passing digits through to the gateway', () => {
+    for (const junk of ['0712345678', '12345', '9404410787 / 9850042526', 'N.A', '', null, undefined]) {
+      expect(toE164IndianMobile(junk)).toBeNull();
+    }
+  });
+});
+
+/**
+ * What an SMS costs, counted the way the gateway bills it. A counter that says "1 part" for a text
+ * that goes out as three is how a one-time-code template quietly triples the SMS bill — usually
+ * because a single rupee sign or pasted curly quote switched the whole text to Unicode.
+ */
+describe('countSmsSegments', () => {
+  it('fits 160 plain characters in one part, and splits longer text into 153-character parts', () => {
+    expect(countSmsSegments('a'.repeat(160))).toEqual({ encoding: 'GSM-7', length: 160, segments: 1, perSegment: 160 });
+    expect(countSmsSegments('a'.repeat(161))).toEqual({ encoding: 'GSM-7', length: 161, segments: 2, perSegment: 153 });
+    expect(countSmsSegments('a'.repeat(306)).segments).toBe(2);
+    expect(countSmsSegments('a'.repeat(307)).segments).toBe(3);
+  });
+
+  it('counts an extension character such as € or { as two', () => {
+    expect(countSmsSegments('€{').length).toBe(4);
+    expect(countSmsSegments('a'.repeat(159) + '€')).toMatchObject({ encoding: 'GSM-7', length: 161, segments: 2 });
+  });
+
+  it('switches the whole text to Unicode for one character outside GSM-7, at 70 and then 67 per part', () => {
+    expect(countSmsSegments('Fee ₹500')).toMatchObject({ encoding: 'UCS-2', segments: 1, perSegment: 70 });
+    expect(countSmsSegments('₹'.repeat(70))).toMatchObject({ encoding: 'UCS-2', length: 70, segments: 1 });
+    expect(countSmsSegments('₹'.repeat(71))).toMatchObject({ encoding: 'UCS-2', segments: 2, perSegment: 67 });
+    expect(countSmsSegments('₹'.repeat(135)).segments).toBe(3);
+  });
+
+  it('counts an empty text as no parts', () => {
+    expect(countSmsSegments('').segments).toBe(0);
+  });
+});
+
+/** The server sends, and the settings screen previews, through these — so they must agree exactly. */
+describe('SMS template wording', () => {
+  const text = 'Your code is {{code}}. It expires in {{ validMinutes }} minutes. Code: {{code}}';
+
+  it('turns every placeholder into {#var#}, the form a DLT portal registers', () => {
+    expect(toDltForm(text)).toBe('Your code is {#var#}. It expires in {#var#} minutes. Code: {#var#}');
+  });
+
+  it('lists each placeholder once, in order', () => {
+    expect(smsTemplateTokens(text)).toEqual(['code', 'validMinutes']);
+  });
+
+  it('names a required value the wording lost, and a value it cannot fill', () => {
+    expect(smsWordingProblems('Code {{code}} for {{validMinutes}} min', ['code', 'validMinutes'])).toEqual([]);
+    expect(smsWordingProblems('Expires in {{validMinutes}} min', ['code', 'validMinutes'])).toEqual([
+      expect.stringContaining('must still contain {{code}}'),
+    ]);
+    expect(smsWordingProblems('{{code}} {{validMinutes}} {{fullName}}', ['code', 'validMinutes'])).toEqual([
+      expect.stringContaining('{{fullName}} cannot be filled in'),
+    ]);
+  });
+
+  /**
+   * The values every message carries are filled by the platform, not declared by the template, so
+   * wording may use them without the template naming them. Without this, an administrator putting
+   * {{name}} into a code message is told the wording is wrong when it is not — and the two editing
+   * screens would have to keep their own copies of the list to say otherwise.
+   */
+  it('accepts the placeholders every message carries, without the template declaring them', () => {
+    expect(smsWordingProblems('Hi {{name}}, {{code}} from {{companyName}} at {{time}} on {{date}}.', ['code'])).toEqual([]);
+    for (const token of COMMON_MESSAGE_TOKENS) {
+      expect(smsWordingProblems(`{{code}} {{${token}}}`, ['code'])).toEqual([]);
+    }
+    // And a placeholder on neither list is still refused, so this is an allowance and not an opening.
+    expect(smsWordingProblems('{{code}} {{whenever}}', ['code'])).toEqual([
+      expect.stringContaining('{{whenever}} cannot be filled in'),
+    ]);
+  });
+
+  it('takes a sender header as exactly six letters', () => {
+    expect(DLT_SENDER_ID_PATTERN.test('SUMERU')).toBe(true);
+    for (const junk of ['SUMER', 'SUMERU1', '123456', 'SU MER']) expect(DLT_SENDER_ID_PATTERN.test(junk)).toBe(false);
+  });
+
+  it('takes a DLT id as digits only', () => {
+    expect(DLT_ID_PATTERN.test('1107160000000012345')).toBe(true);
+    for (const junk of ['DLT-1', '1107 1600', '', 'abc']) expect(DLT_ID_PATTERN.test(junk)).toBe(false);
+  });
+
+  it('fills placeholders from data and leaves nothing of an absent one behind', () => {
+    expect(fillSmsTemplate(text, { code: '482910' })).toBe('Your code is 482910. It expires in  minutes. Code: 482910');
+  });
+});
+
+/**
+ * DLT caps each `{#var#}` at 30 characters, and an operator blocks a text whose value is longer. The
+ * notification worker and the SMS test used to cut values to their own limits (60/160 and 30); the one
+ * rule now lives where every text is filled in.
+ */
+describe('fitting values into an SMS template', () => {
+  it('cuts a value longer than a DLT variable allows, and marks the cut', () => {
+    const filled = fillSmsTemplate('Alert: {{title}}', { title: 'Assignment escalated to the regional head for Thrissur' });
+    const value = filled.slice('Alert: '.length);
+    expect(value.length).toBeLessThanOrEqual(DLT_VARIABLE_MAX_LENGTH);
+    expect(value.endsWith('…')).toBe(true);
+  });
+
+  it('leaves a value that fits untouched, apart from collapsing line breaks and runs of spaces', () => {
+    expect(fillSmsTemplate('Code {{code}}', { code: '482910' })).toBe('Code 482910');
+    expect(fitSmsVariable('Ramesh\n  Kulkarni')).toBe('Ramesh Kulkarni');
   });
 });

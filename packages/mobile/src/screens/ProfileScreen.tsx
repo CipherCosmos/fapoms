@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, TextInput, TextStyle, Modal, Alert, Dimensions, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Modal, Alert, Dimensions, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
 import { ProfilePhoto, ProfilePhotoHint } from '../components/ProfilePhoto';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
-  AppText, Avatar, Badge, Button, Card, GroupedRow, GroupedSection, GroupedSwitch,
-  Icon, IconName, Input, StatTile, Tag, Tappable,
+  AppText, Avatar, Badge, Button, Card, ChipSelector, FieldLabel, GroupedRow, GroupedSection, GroupedSwitch,
+  Icon, IconName, Input, MultiSelectField, SelectField, StatTile, Tag, Tappable,
 } from '../components/ui/primitives';
 import { SubScreen, useStackNav } from '../components/ui/SimpleStack';
 import { ChangePasswordScreen } from './ChangePasswordScreen';
@@ -321,71 +321,26 @@ const EditToggle: React.FC<{ editing: boolean; onToggle: () => void }> = ({ edit
 const StatePicker: React.FC<{ value: string; onChange: (v: string) => void; readOnly?: boolean }> = ({
   value, onChange, readOnly,
 }) => {
-  const t = useTheme();
   const tr = useT();
-  const [open, setOpen] = useState(false);
 
   if (readOnly) {
     return <Input label={tr('profile.fields.state')} value={value} onChangeText={() => {}} readOnly />;
   }
 
-  return (
-    <View style={{ gap: t.space.sm }}>
-      <AppText variant="overline" tone="faint">{tr('profile.fields.stateLabel')}</AppText>
-      <Tappable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={tr('profile.address.chooseStateAccessibility')}>
-        <View style={{
-          backgroundColor: t.colors.bg,
-          borderRadius: t.radius.md,
-          borderWidth: 1.5,
-          borderColor: t.colors.border,
-          paddingHorizontal: t.space.lg,
-          height: 50,
-          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-        }}>
-          <AppText variant="small" tone={value ? 'default' : 'faint'}>{value || tr('profile.address.chooseState')}</AppText>
-          <Icon name="chevron-down" size={14} color={t.colors.textFaint} />
-        </View>
-      </Tappable>
+  // A value on file that is not on the list stays visible as its own option rather than vanishing.
+  const options = value && !INDIAN_STATES.some((s) => s.value === value)
+    ? [...INDIAN_STATES, { value, label: value }]
+    : INDIAN_STATES;
 
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
-          <View style={{
-            backgroundColor: t.colors.surface,
-            borderTopLeftRadius: t.radius['2xl'], borderTopRightRadius: t.radius['2xl'],
-            maxHeight: '75%', paddingTop: t.space.lg,
-          }}>
-            <View style={{
-              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-              paddingHorizontal: t.space.lg, paddingBottom: t.space.md,
-            }}>
-              <AppText variant="h3">{tr('profile.fields.state')}</AppText>
-              <Tappable onPress={() => setOpen(false)} accessibilityRole="button" accessibilityLabel={tr('common.close')}>
-                <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>{tr('common.done')}</AppText>
-              </Tappable>
-            </View>
-            <ScrollView>
-              {INDIAN_STATES.map((s) => (
-                <Tappable
-                  key={s.value}
-                  onPress={() => { onChange(s.value); setOpen(false); }}
-                  accessibilityRole="button"
-                  accessibilityLabel={s.label}
-                >
-                  <View style={{
-                    paddingHorizontal: t.space.lg, paddingVertical: t.space.md,
-                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-                    borderBottomWidth: 1, borderBottomColor: t.colors.border,
-                  }}>
-                    <AppText variant="body" tone={s.value === value ? 'primary' : 'default'}>{s.label}</AppText>
-                    {s.value === value && <Icon name="checkmark-circle" size={16} color={t.colors.primary} />}
-                  </View>
-                </Tappable>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-    </View>
+  return (
+    <SelectField
+      label={tr('profile.fields.stateLabel')}
+      value={value}
+      options={options}
+      placeholder={tr('profile.address.chooseState')}
+      onChange={onChange}
+      closeLabel={tr('common.close')}
+    />
   );
 };
 
@@ -407,7 +362,6 @@ const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void
 }) => {
   const t = useTheme();
   const tr = useT();
-  const [open, setOpen] = useState(false);
   const parsed = useMemo(() => parsePreferredRegions(value), [value]);
   const summary = useMemo(
     () => [...parsed.selected.map((r) => REGION_LABELS[r]), ...parsed.legacy].join(', '),
@@ -423,24 +377,15 @@ const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void
 
   return (
     <View style={{ gap: t.space.sm }}>
-      <AppText variant="overline" tone="faint">{tr('profile.fields.preferredRegions').toUpperCase()}</AppText>
-      <Tappable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={tr('profile.address.chooseRegionsAccessibility')}>
-        <View style={{
-          backgroundColor: t.colors.bg,
-          borderRadius: t.radius.md,
-          borderWidth: 1.5,
-          borderColor: t.colors.border,
-          paddingHorizontal: t.space.lg,
-          minHeight: 50,
-          paddingVertical: t.space.sm,
-          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-        }}>
-          <AppText variant="small" tone={summary ? 'default' : 'faint'} style={{ flex: 1 }}>
-            {summary || tr('profile.address.chooseRegions')}
-          </AppText>
-          <Icon name="chevron-down" size={14} color={t.colors.textFaint} />
-        </View>
-      </Tappable>
+      <MultiSelectField
+        label={tr('profile.fields.preferredRegions')}
+        values={parsed.selected}
+        options={REGION_ORDER.map((r) => ({ value: r, label: REGION_LABELS[r] }))}
+        onToggle={(v) => toggle(v as Region)}
+        summary={summary || undefined}
+        placeholder={tr('profile.address.chooseRegions')}
+        closeLabel={tr('common.close')}
+      />
 
       {parsed.legacy.length > 0 && (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
@@ -454,43 +399,6 @@ const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void
           ))}
         </View>
       )}
-
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
-          <View style={{
-            backgroundColor: t.colors.surface,
-            borderTopLeftRadius: t.radius['2xl'], borderTopRightRadius: t.radius['2xl'],
-            maxHeight: '75%', paddingTop: t.space.lg,
-          }}>
-            <View style={{
-              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-              paddingHorizontal: t.space.lg, paddingBottom: t.space.md,
-            }}>
-              <AppText variant="h3">{tr('profile.fields.preferredRegions')}</AppText>
-              <Tappable onPress={() => setOpen(false)} accessibilityRole="button" accessibilityLabel={tr('common.close')}>
-                <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>{tr('common.done')}</AppText>
-              </Tappable>
-            </View>
-            <ScrollView>
-              {REGION_ORDER.map((r) => {
-                const checked = parsed.selected.includes(r);
-                return (
-                  <Tappable key={r} onPress={() => toggle(r)} accessibilityRole="button" accessibilityLabel={REGION_LABELS[r]}>
-                    <View style={{
-                      paddingHorizontal: t.space.lg, paddingVertical: t.space.md,
-                      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-                      borderBottomWidth: 1, borderBottomColor: t.colors.border,
-                    }}>
-                      <AppText variant="body" tone={checked ? 'primary' : 'default'}>{REGION_LABELS[r]}</AppText>
-                      {checked && <Icon name="checkmark-circle" size={16} color={t.colors.primary} />}
-                    </View>
-                  </Tappable>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
@@ -509,6 +417,9 @@ const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void
  * comment) - and an empty list is treated as a normal state, not an error: no suggestions are
  * offered, and typing a new value still works.
  */
+/** A suggestion can equal what was typed, so "add what I typed" needs a key no suggestion can have. */
+const ADD_TYPED = ' add-typed';
+
 const AttributeChipPicker: React.FC<{
   label: string;
   value: string;
@@ -520,7 +431,6 @@ const AttributeChipPicker: React.FC<{
   const t = useTheme();
   const tr = useT();
   const [query, setQuery] = useState('');
-  const [focus, setFocus] = useState(false);
   const items = useMemo(() => parseAttributeList(value), [value]);
   // Computed unconditionally, ahead of the `readOnly` early return below — a hook cannot be
   // called only on some renders, and this field's own lock status can change between them.
@@ -541,7 +451,7 @@ const AttributeChipPicker: React.FC<{
 
   return (
     <View style={{ gap: t.space.sm }}>
-      <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
+      <FieldLabel>{label}</FieldLabel>
 
       {items.length > 0 && (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
@@ -551,49 +461,25 @@ const AttributeChipPicker: React.FC<{
         </View>
       )}
 
-      <TextInput
+      <Input
         value={query}
         onChangeText={setQuery}
-        onFocus={() => setFocus(true)}
-        onBlur={() => setFocus(false)}
         onSubmitEditing={() => add(query)}
+        returnKeyType="done"
+        blurOnSubmit={false}
         placeholder={placeholder}
-        placeholderTextColor={t.colors.textFaint}
-        style={{
-          backgroundColor: t.colors.bg,
-          borderRadius: t.radius.md,
-          borderWidth: 1.5,
-          borderColor: focus ? t.colors.primary : t.colors.border,
-          paddingHorizontal: t.space.lg,
-          height: 44,
-          color: t.colors.text,
-          fontSize: 14,
-        } as TextStyle}
+        accessibilityLabel={label}
       />
 
       {trimmedQuery.length > 0 && (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
-          {suggestions.map((s) => (
-            <Tappable key={s} onPress={() => add(s)} accessibilityRole="button" accessibilityLabel={s}>
-              <View style={{
-                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
-                backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
-              }}>
-                <AppText variant="caption" tone="muted">{s}</AppText>
-              </View>
-            </Tappable>
-          ))}
-          {!alreadyAdded && (
-            <Tappable onPress={() => add(query)} accessibilityRole="button" accessibilityLabel={tr('profile.attributes.addNew', { name: trimmedQuery })}>
-              <View style={{
-                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
-                backgroundColor: t.colors.primarySoft, borderWidth: 1, borderColor: t.colors.primary,
-              }}>
-                <AppText variant="caption" tone="primary">{tr('profile.attributes.addNew', { name: trimmedQuery })}</AppText>
-              </View>
-            </Tappable>
-          )}
-        </View>
+        <ChipSelector
+          options={[
+            ...suggestions.map((s) => ({ key: s, label: s })),
+            ...(alreadyAdded ? [] : [{ key: ADD_TYPED, label: tr('profile.attributes.addNew', { name: trimmedQuery }), icon: 'add' }]),
+          ]}
+          value={null}
+          onChange={(key) => add(key === ADD_TYPED ? query : key)}
+        />
       )}
     </View>
   );
@@ -626,41 +512,20 @@ const EmergencyRelationPicker: React.FC<{ value: string; onChange: (v: string) =
 
   return (
     <View style={{ gap: t.space.sm }}>
-      <AppText variant="overline" tone="faint">{tr('profile.fields.relation').toUpperCase()}</AppText>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
-        {[...EMERGENCY_RELATIONS, EMERGENCY_RELATION_OTHER].map((option) => {
-          const active = selection.choice === option;
-          return (
-            <Tappable key={option} onPress={() => choose(option)} accessibilityRole="button" accessibilityLabel={option}>
-              <View style={{
-                paddingVertical: t.space.sm, paddingHorizontal: t.space.md, borderRadius: t.radius.pill,
-                backgroundColor: active ? t.colors.primarySoft : t.colors.surface,
-                borderWidth: 1, borderColor: active ? t.colors.primary : t.colors.border,
-              }}>
-                <AppText variant="caption" tone={active ? 'primary' : 'muted'}>{option}</AppText>
-              </View>
-            </Tappable>
-          );
-        })}
-      </View>
+      <FieldLabel>{tr('profile.fields.relation')}</FieldLabel>
+      <ChipSelector
+        options={[...EMERGENCY_RELATIONS, EMERGENCY_RELATION_OTHER].map((option) => ({ key: option, label: option }))}
+        value={selection.choice}
+        onChange={choose}
+      />
 
       {selection.choice === EMERGENCY_RELATION_OTHER && (
-        <TextInput
+        <Input
           value={selection.otherText}
           onChangeText={changeOtherText}
           placeholder={tr('profile.fields.relationOtherPlaceholder')}
-          placeholderTextColor={t.colors.textFaint}
           autoCapitalize="words"
-          style={{
-            backgroundColor: t.colors.bg,
-            borderRadius: t.radius.md,
-            borderWidth: 1.5,
-            borderColor: t.colors.border,
-            paddingHorizontal: t.space.lg,
-            height: 44,
-            color: t.colors.text,
-            fontSize: 14,
-          } as TextStyle}
+          accessibilityLabel={tr('profile.fields.relation')}
         />
       )}
     </View>
@@ -865,7 +730,7 @@ const AddressEditor: React.FC<{
   return (
     <View style={{ padding: t.space.lg, gap: t.space.lg }}>
       <Card level={1} style={{ gap: t.space.md }}>
-        <AppText variant="overline" tone="faint">{tr('profile.address.homeLocation')}</AppText>
+        <FieldLabel>{tr('profile.address.homeLocation')}</FieldLabel>
 
         {editing && (
           <Button

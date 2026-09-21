@@ -17,7 +17,6 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { RosterRecordsService } from './roster-records.service';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -61,7 +60,6 @@ describe('GET /assayers — the per-row document summary', () => {
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
-        { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
         { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
         { provide: CacheService, useValue: { del: jest.fn() } },
@@ -216,7 +214,6 @@ describe('preferredContactChannel is settable', () => {
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
-        { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
         { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
         { provide: CacheService, useValue: { del: jest.fn() } },

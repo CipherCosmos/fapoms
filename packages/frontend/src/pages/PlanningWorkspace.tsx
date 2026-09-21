@@ -28,12 +28,18 @@ import {
   getRecommendations,
   suggestAuditDate,
   optimizeRoute,
+  offerBranchesInBulk,
+  markBranchesUnableToCover,
 } from '../services/planning';
 import { WORK_TAB_STRIP_HEIGHT } from './work/workTabs';
 
 import { money } from '../utils/money';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 import { counted } from '../utils/plural';
+import { PLANNING_JOBS, DEFAULT_PLANNING_JOB, PLANNING_JOB_STORAGE_KEY, MAP_PANEL, feeReferenceLine, type PlanningJob } from './planning/vocabulary';
+
+/** Why the card's fee is not the fee. Shared with the candidate-detail modal. */
+export const NOTE_AUDIT_FEE = "The audit fee only. Travel is priced on top from the client's rate card, using the distance shown here — the total is confirmed before anything is sent.";
 
 /**
  * "Unable to cover" reasons, seeded from context rather than mined from real history (no
@@ -100,15 +106,6 @@ interface TransportOption {
  * Module-level so the `Layout ▾` button can name the current arrangement without duplicating
  * the list; previously the labels existed only inside the six buttons that rendered them.
  */
-const PLANNING_LAYOUTS: ReadonlyArray<readonly [string, string]> = [
-  ['default', 'Map + Drawer'],
-  ['two-col-branch-recom', 'Branch + Match'],
-  ['two-col-branch-map', 'Branch + Map'],
-  ['three-col', '3 Column'],
-  ['map-only', 'Map Only'],
-  ['day-plans', 'Day Plans'],
-];
-
 interface ProjectOption {
   id: string;
   name: string;
@@ -504,10 +501,14 @@ export const PlanningWorkspace: React.FC = () => {
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkScheduledDate, setBulkScheduledDate] = useState('');
   const [bulkFailures, setBulkFailures] = useState<Array<{ branchId: string; branchName: string; error: string }>>([]);
+  /**
+   * Where a bulk run on the server has got to ("Offering branches (37/120)"). Bulk offer and bulk
+   * unable-to-cover are jobs now, and a few hundred branches is minutes, not a moment.
+   */
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
   const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
   /** The total fee (base + travel) agreed on the call, as typed into the assign modal. */
   const [agreedFeeInput, setAgreedFeeInput] = useState('');
-  const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
   /**
@@ -524,9 +525,9 @@ export const PlanningWorkspace: React.FC = () => {
    * Sticky per operator: whoever works the phones differently should not have to re-tick it on
    * every call.
    */
-  // Anything that dispatches work to a real person on one click gets the shared confirm
-  // dialog — never window.confirm, which cannot say what is about to happen.
-  const { confirm, confirmDialog } = useConfirm();
+  // Kept for the host below. Nothing on this screen dispatches work on one click any more —
+  // both assign buttons open the form, and the form's own Confirm is the confirmation.
+  const { confirmDialog } = useConfirm();
   const [assignDirectly, setAssignDirectly] = useState<boolean>(
     () => localStorage.getItem('planning_assignDirectly') !== 'false',
   );
@@ -996,6 +997,15 @@ export const PlanningWorkspace: React.FC = () => {
    * which runs a reload immediately afterwards and would otherwise overwrite itself.
    */
   const [dayPlanError, setDayPlanError] = useState<string | null>(null);
+  /** The day-plan job's stage label while it runs. */
+  const [dayPlanProgress, setDayPlanProgress] = useState<string | null>(null);
+  /**
+   * The day-plan job this screen is following. A newer request (a project chip, a date change)
+   * stops following the older one, so a slow earlier plan cannot land after — and over — a newer one.
+   */
+  const dayPlanWatch = useRef<{ cancelled: boolean }>({ cancelled: false });
+  // Leaving the page stops following the job (it carries on, on the server).
+  useEffect(() => () => { dayPlanWatch.current.cancelled = true; }, []);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   // Day plans previously had no date picker at all — always locked to the backend's default
   // of "right now", with no way to ask "what would tomorrow's coverage look like". Defaults to
@@ -1093,9 +1103,13 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const loadDayPlans = async (projectIdsOverride?: string[]) => {
     if (!selectedProjectId) return;
+    dayPlanWatch.current.cancelled = true;
+    const watch = { cancelled: false };
+    dayPlanWatch.current = watch;
     setIsLoadingDayPlans(true);
     setDayPlanData(null);
     setDayPlanError(null);
+    setDayPlanProgress(null);
     try {
       // Reuses the exact "Min Radius Filter" control already on this page (slaEnabled/
       // slaRadius) instead of a separate day-plans-only control — one setting, consistent
@@ -1111,11 +1125,17 @@ export const PlanningWorkspace: React.FC = () => {
         targetDate: dayPlanTargetDate,
         projectIds: projectIdsForPlan,
         minDistanceKm: slaEnabled ? slaRadius : undefined,
-      });
+      }, { signal: watch, onProgress: (p) => { if (!watch.cancelled) setDayPlanProgress(p.stage); } });
+      if (watch.cancelled) return;
       setDayPlanData(data);
       if (data.clusters?.length > 0) setExpandedCluster(data.clusters[0].cluster.clusterId);
-    } catch (err) { setDayPlanError(userMessage(err)); }
-    finally { setIsLoadingDayPlans(false); }
+    } catch (err) { if (!watch.cancelled) setDayPlanError(userMessage(err)); }
+    finally {
+      if (!watch.cancelled) {
+        setIsLoadingDayPlans(false);
+        setDayPlanProgress(null);
+      }
+    }
   };
 
   /**
@@ -1257,52 +1277,55 @@ export const PlanningWorkspace: React.FC = () => {
 
     setBulkAssigning(true);
     setBulkFailures([]);
-    const failures: Array<{ branchId: string; branchName: string; error: string }> = [];
-    let succeeded = 0;
+    setBulkProgress(null);
+    const nameById = new Map(targets.map((pb) => [pb.id, pb.branch?.name || pb.id]));
+
+    /**
+     * One request for the whole selection, run on the server and polled.
+     *
+     * This was one `POST /assignments` per ticked branch from the browser, five at a time — up to 500
+     * requests against the 300-a-minute per-user limit, so a large selection had some offers refused
+     * with 429. The job offers each branch in turn and reports every one as offered or refused, with
+     * the refusal in its own words.
+     */
+    let outcome: Awaited<ReturnType<typeof offerBranchesInBulk>>;
+    try {
+      outcome = await offerBranchesInBulk({
+        projectBranchIds: targets.map((pb) => pb.id),
+        assayerId,
+        assayerName,
+        scheduledDate: bulkScheduledDate || undefined,
+        acceptOnBehalf: assignDirectly,
+        acceptanceReason: assignDirectly
+          ? `Agreed by phone — bulk-assigned to ${assayerName} from the planning queue.`
+          : undefined,
+      }, { onProgress: (p) => setBulkProgress(p.stage) });
+    } catch (err: any) {
+      // The run as a whole did not report back (it failed, or it is still going past the wait). The
+      // selection is left exactly as it was, because nothing here knows which branches it reached.
+      setBulkAssigning(false);
+      setBulkProgress(null);
+      setMessage({
+        type: 'error',
+        text: `The bulk offer did not report back: ${err?.message || 'unknown error'} Refresh the queue to see which branches it reached before trying again.`,
+      });
+      refreshBranches();
+      return;
+    }
+
+    const failures = outcome.failed.map((f) => ({
+      branchId: f.projectBranchId,
+      branchName: nameById.get(f.projectBranchId) || f.projectBranchId,
+      error: f.error || 'Failed',
+    }));
+    const succeeded = outcome.succeeded.length;
     // Counted separately from `succeeded`: with "assign directly" on, a branch can be created
     // successfully and still come back as a PENDING offer if the confirmation could not be
     // applied. Reporting all of them as confirmed would hide exactly that.
-    let confirmed = 0;
-
-    // Bounded-concurrency instead of one serial POST per branch: a 40-branch bulk offer was 40
-    // sequential round-trips. Five at a time keeps it fast without flooding the API, and each
-    // branch is an independent record so there is no cross-item ordering dependency.
-    const CONCURRENCY = 5;
-    for (let i = 0; i < targets.length; i += CONCURRENCY) {
-      const chunk = targets.slice(i, i + CONCURRENCY);
-      const chunkResults = await Promise.all(
-        chunk.map(async (pb) => {
-          try {
-            const created = await api.request<{ status?: string }>('/assignments', {
-              method: 'POST',
-              body: JSON.stringify({
-                projectBranchId: pb.id,
-                assayerId,
-                scheduledDate: bulkScheduledDate || undefined,
-                remarks: `Bulk-assigned to ${assayerName} from the planning queue`,
-                acceptOnBehalf: assignDirectly,
-                acceptanceReason: assignDirectly
-                  ? `Agreed by phone — bulk-assigned to ${assayerName} from the planning queue.`
-                  : undefined,
-              }),
-            });
-            return { ok: true as const, branchId: pb.id, branchName: pb.branch?.name || pb.id, confirmed: created?.status === 'ACCEPTED' };
-          } catch (err: any) {
-            return { ok: false as const, branchId: pb.id, branchName: pb.branch?.name || pb.id, error: err?.message || 'Failed' };
-          }
-        }),
-      );
-      for (const r of chunkResults) {
-        if (r.ok) {
-          succeeded += 1;
-          if (r.confirmed) confirmed += 1;
-        } else {
-          failures.push({ branchId: r.branchId, branchName: r.branchName, error: r.error || 'Failed' });
-        }
-      }
-    }
+    const confirmed = outcome.succeeded.filter((r) => r.status === 'ACCEPTED').length;
 
     setBulkAssigning(false);
+    setBulkProgress(null);
     setBulkFailures(failures);
     // Only the branches that actually went through are cleared, so the selection still holds
     // exactly what remains to be dealt with.
@@ -1331,35 +1354,53 @@ export const PlanningWorkspace: React.FC = () => {
     setUnableModal({ ids: [projectBranchId], label: branchName });
   };
 
-  /** Persist the "unable to cover" reason for one or many branches (from the modal). */
+  /**
+   * Persist the "unable to cover" reason for one or many branches (from the modal).
+   *
+   * One request for the whole selection, run on the server and polled. This used to fire one POST per
+   * branch all at once; past the per-user rate limit some were refused with 429 and the message named
+   * them without saying why. Every branch now comes back recorded or refused with its reason.
+   */
   const submitUnableToCover = async () => {
     if (!unableModal) return;
     const reason = unableReason.trim();
     if (!reason) return;
     setUnableSubmitting(true);
+    setBulkProgress(null);
     const nameById = new Map(branches.map((b) => [b.id, b.branch?.name || b.id]));
-    const outcomes = await Promise.all(
-      unableModal.ids.map(async (id) => {
-        try {
-          await api.request(`/projects/branches/${id}/unable-to-cover`, {
-            method: 'POST',
-            body: JSON.stringify({ reason }),
-          });
-          return { ok: true as const, id, name: nameById.get(id) || id };
-        } catch {
-          return { ok: false as const, id, name: nameById.get(id) || id };
-        }
-      }),
-    );
-    const failed = outcomes.filter((o) => !o.ok).map((o) => o.name);
-    const ok = outcomes.length - failed.length;
+
+    let outcome: Awaited<ReturnType<typeof markBranchesUnableToCover>>;
+    try {
+      outcome = await markBranchesUnableToCover(unableModal.ids, reason, {
+        onProgress: (p) => setBulkProgress(p.stage),
+        // Usually one branch or a handful: poll a little faster than the default so the modal
+        // does not sit for a second and a half on a job that took a tenth of that.
+        pollMs: 750,
+      });
+    } catch (err: any) {
+      setUnableSubmitting(false);
+      setBulkProgress(null);
+      // The modal stays open with the reason still typed, so the coordinator can try again.
+      setMessage({
+        type: 'error',
+        text: `Could not record ${unableModal.label} as unable to cover: ${err?.message || 'unknown error'} Refresh the queue to see what was recorded.`,
+      });
+      refreshBranches();
+      return;
+    }
+
+    const recorded = new Set(outcome.succeeded.map((o) => o.projectBranchId));
+    const failed = outcome.failed.map((f) => `${nameById.get(f.projectBranchId) || f.projectBranchId} (${f.error})`);
+    const ok = recorded.size;
+    const total = ok + outcome.failed.length;
     setUnableSubmitting(false);
+    setBulkProgress(null);
     // Only what was actually recorded is unticked. A branch the server refused stays selected so
     // the coordinator can simply try again, instead of hunting it back down in the queue.
     if (unableModal.ids.length > 1) {
       setBulkSelectedIds((prev) => {
         const next = new Set(prev);
-        for (const o of outcomes) if (o.ok) next.delete(o.id);
+        for (const id of recorded) next.delete(id);
         return next;
       });
     }
@@ -1368,7 +1409,7 @@ export const PlanningWorkspace: React.FC = () => {
     setMessage(
       failed.length === 0
         ? { type: 'success', text: `${ok} branch(es) recorded as unable to cover.` }
-        : { type: 'error', text: `${ok}/${outcomes.length} recorded. Failed: ${failed.join(', ')}` },
+        : { type: 'error', text: `${ok}/${total} recorded. Failed: ${failed.join('; ')}` },
     );
     refreshBranches();
   };
@@ -1400,44 +1441,61 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   /**
-   * Quotes the client's contracted fee and opens the assign modal. Named (rather than left
-   * as the card button's inline handler) so the candidate-detail modal can trigger the exact
-   * same flow without a second copy of the fee-quote logic.
+   * What this candidate would actually cost — from the server's calculator, never recomputed here.
+   *
+   * Lifted out of `handleCallAndAssign` because "Send to app" needs the same number and did not
+   * have it: its confirmation said the fee would be "recorded on our side at the quoted amount"
+   * without ever naming the amount, so the one control on this screen that commits money without
+   * a form was also the one that showed none. The card above shows `baseFee` alone, and the
+   * figure the server records is `baseComponent + travelFee` — on a distant branch those are not
+   * close.
+   *
+   * Returns null rather than throwing: a quote that cannot be fetched must not block the action
+   * (the server quotes it again regardless), but the operator has to be told they are committing
+   * without seeing it.
    */
-  const handleCallAndAssign = async (c: Candidate) => {
-    setSelectedCandidate(c);
-    setCommercialBaseFee(null);
-    setLoadingCommercial(true);
+  const fetchFeeQuote = async (c: Candidate): Promise<FeeQuote | null> => {
     try {
-      // Quoted by the server against the client's contracted rate card. This used to
-      // recompute the fee here from a hardcoded ₹8/km and a ₹1200 fallback, which meant the
-      // recommended fee shown to ops could differ from what the server actually stored on
-      // assign.
-      const quote = await api.request<FeeQuote>('/pricing/quote', {
+      return await api.request<FeeQuote>('/pricing/quote', {
         method: 'POST',
         body: JSON.stringify({
           assayerId: c.id,
           projectId: selectedProjectId || undefined,
           distanceKm: c.distanceKm || 0,
-          // The routed leg behind that distance, so the rate card times road modes by the
-          // real drive — the same input assignment creation hands the calculator, so the mode
-          // (and fee) quoted here is the one stored on assign. `roadSource` keeps the quote
-          // honest about an estimate.
           durationMinutes: c.durationMinutes && c.durationMinutes > 0 ? c.durationMinutes : undefined,
           roadSource: c.durationMinutes && c.durationMinutes > 0 ? (c.distanceSource ?? 'ESTIMATE') : undefined,
-          // The branch being covered — lets the transport rate card price the actual journey
-          // for its state instead of the generic per-km formula.
           branchId: branches.find((b) => b.id === selectedBranchId)?.branchId || undefined,
         }),
       });
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * Quotes the client's contracted fee and opens the assign modal. Named (rather than left
+   * as the card button's inline handler) so the candidate-detail modal can trigger the exact
+   * same flow without a second copy of the fee-quote logic.
+   */
+  const openAssignment = async (c: Candidate, agreedOnCall: boolean) => {
+    setSelectedCandidate(c);
+    setLoadingCommercial(true);
+    // The only thing the two buttons disagree about: whether somebody has already said yes.
+    // The money is typed in the same box either way.
+    setAssignDirectly(agreedOnCall);
+    try {
+      // Quoted by the server against the client's contracted rate card — `fetchFeeQuote` above
+      // is the single request both this and "Send to app" make. This used to recompute the fee
+      // here from a hardcoded ₹8/km and a ₹1200 fallback, which meant the recommended fee shown
+      // to ops could differ from what the server actually stored on assign.
+      const quote = await fetchFeeQuote(c);
+      if (!quote) throw new Error('quote unavailable');
       setFeeQuote(quote);
-      setCommercialBaseFee(Number(quote.baseFee));
       setAgreedFeeInput(String(Math.round(Number(quote.total))));
     } catch {
       // No silent second formula: if the quote fails, show what we know rather than inventing
       // a number that the server would then reject or override.
       setFeeQuote(null);
-      setCommercialBaseFee(null);
       setAgreedFeeInput('');
       setMessage({ type: 'error', text: 'Could not retrieve the contracted fee for this assayer. Enter the agreed fee manually.' });
     } finally {
@@ -1456,48 +1514,21 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   /**
-   * Books the assayer immediately with no fee recorded. Named for the same reason as
-   * `handleCallAndAssign` above — the candidate-detail modal calls it too.
+   * Send to app — the SAME form as Call & Assign, with nobody having agreed yet.
+   *
+   * It used to be a different mechanism entirely: a confirm dialog and a direct POST with no fee
+   * field at all, so the rate card's number became the recorded number with nobody typing it.
+   * That is not how this business prices work. The desk rings the assayer, they settle on a
+   * figure, and THAT figure is what the assignment must carry — the rate card is a reference the
+   * desk reads, not a decision the system makes.
+   *
+   * So there is one form now. Both buttons quote the rate card, pre-fill it as a starting point,
+   * and let the desk type what was actually agreed. They differ only in `assignDirectly`: after
+   * a call the assayer has already accepted, so the assignment goes straight to ACCEPTED; sent
+   * to the app it stays PENDING until they accept there. Price and acceptance are separate
+   * questions and are asked separately.
    */
-  const handleSendToAppNoFee = async (c: Candidate) => {
-    const selectedPb = branches.find(b => b.id === selectedBranchId);
-    if (!selectedPb) return;
-    /*
-      This button created a live assignment on a single click, with no fee and no confirmation
-      — the most consequential control on the card and the only one that asked nothing. Its old
-      name, "Direct App Invite", also described the mechanism rather than the outcome: it is not
-      an invitation to look, it books the person. The shared confirm dialog now names the
-      assayer, the branch and the fee consequence before anything is sent (never
-      window.confirm — that cannot show any of it).
-    */
-    const ok = await confirm({
-      title: 'Send this job to the assayer’s phone?',
-      message: `${c.displayName} will be assigned to ${selectedPb.branch?.name ?? 'this branch'} straight away and will see it in their app. No fee is agreed or recorded — use “Call & Assign” instead if a fee needs to be quoted.`,
-      confirmLabel: 'Send now',
-      // Truthful rather than reassuring: the assignment can be cancelled afterwards, but the
-      // notification on the assayer's phone cannot be recalled.
-      reversibleNote: 'The assignment can be cancelled afterwards, but the assayer will already have been notified.',
-    });
-    if (!ok) return;
-    try {
-      await api.request('/assignments', {
-        method: 'POST',
-        body: JSON.stringify({
-          projectBranchId: selectedPb.id,
-          assayerId: c.id,
-          // Says what the button says. Omitting the fee used to mean "quote it from the rate
-          // card", so this dispatched base + travel while the label, the tooltip and the
-          // confirmation all promised no fee was recorded.
-          noFee: true,
-          remarks: 'Dispatched directly via App Invitation',
-        }),
-      });
-      setMessage({ type: 'success', text: `App invitation dispatched directly to ${c.displayName}!` });
-      refreshBranches();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: userMessage(err) });
-    }
-  };
+  const handleSendToApp = (c: Candidate) => openAssignment(c, false);
 
   const handleConfirmAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1733,33 +1764,36 @@ export const PlanningWorkspace: React.FC = () => {
   const { total: totalCount, covered: confirmedCount, coveragePercentage: coveragePct } =
     coverageFromStatuses(branches.map(b => b.status));
 
-  const layoutMode = localStorage.getItem('planning_layout') || 'default';
-  const [layout, setLayout] = useState(layoutMode);
-  const setLayoutMode = (m: string) => { setLayout(m); localStorage.setItem('planning_layout', m); };
+  /**
+   * Which of the two jobs this screen does — see `planning/vocabulary.ts`.
+   *
+   * This replaces a Simple/Advanced toggle crossed with a six-item Layout menu. That gave
+   * eleven arrangements of one screen, and the default (Simple) pinned one of them and ignored
+   * the menu entirely — so the layout picker was dead controls for most people, while the map
+   * it picked between was unreachable for them. One of the six entries, "Day Plans", was not an
+   * arrangement at all but a separate job; it is a tab now, where somebody looking for it can
+   * find it.
+   */
+  const [job, setJob] = useState<PlanningJob>(
+    () => (localStorage.getItem(PLANNING_JOB_STORAGE_KEY) === 'day' ? 'day' : DEFAULT_PLANNING_JOB),
+  );
+  const setJobPersisted = (j: PlanningJob) => { setJob(j); localStorage.setItem(PLANNING_JOB_STORAGE_KEY, j); };
 
   /**
-   * Simple vs Advanced.
+   * The map is a panel you open, not an arrangement you choose.
    *
-   * On first load this screen offered roughly thirty-five controls, six layout buttons and no
-   * primary action — the only instruction was a sentence asking the coordinator to click
-   * something. Simple is the everyday shape of the job: the branch queue, the matches for the
-   * branch you are on, and one button that starts the work. Advanced is exactly what the screen
-   * has always been; nothing has been removed, only moved behind that switch. Persisted the same
-   * way the layout preference already is, so a coordinator who prefers Advanced keeps it.
+   * Four of the six old layouts existed only to decide whether the map was on screen and where.
+   * Worse, the per-candidate "Map" button reached the map by REWRITING the page's stored layout
+   * preference to `three-col` — a global setting mutated as a local toggle, so looking at one
+   * candidate's position silently changed how the page opened next time. That button now sets
+   * this, which is what it always meant.
    */
-  const [viewMode, setViewMode] = useState<'simple' | 'advanced'>(
-    () => (localStorage.getItem('planning_viewMode') === 'advanced' ? 'advanced' : 'simple'),
+  const [showMap, setShowMap] = useState<boolean>(
+    () => localStorage.getItem(MAP_PANEL.storageKey) === 'true',
   );
-  const setViewModePersisted = (m: 'simple' | 'advanced') => { setViewMode(m); localStorage.setItem('planning_viewMode', m); };
-  const advanced = viewMode === 'advanced';
-  /**
-   * Simple mode always uses the queue + matches pairing, whatever layout Advanced was left on.
-   * The stored layout is untouched, so switching back to Advanced restores the arrangement the
-   * coordinator had chosen rather than resetting it.
-   */
-  const effectiveLayout = advanced ? layout : 'two-col-branch-recom';
-  /** Whether the six-way layout picker is open (Advanced only — one `Layout ▾` button now). */
-  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const setShowMapPersisted = (v: boolean) => { setShowMap(v); localStorage.setItem(MAP_PANEL.storageKey, String(v)); };
+  /** Open the map because the user asked to look at something on it. */
+  const revealMap = () => { if (!showMap) setShowMapPersisted(true); };
 
   /**
    * The one obvious starting point.
@@ -2224,8 +2258,18 @@ export const PlanningWorkspace: React.FC = () => {
                     figure is the platform-wide default rather than a rate anyone agreed to.
                     Said out loud rather than shown as an ordinary fee, the same way an estimated
                     distance is labelled rather than presented as a measured one. */}
-                <span title={c.usedFallbackBaseFee ? 'No priced rate on file for this assayer — this is the platform-wide default, not a contracted figure.' : undefined}>
-                  Base: {c.baseFee != null ? `₹${c.baseFee}` : '—'}{c.usedFallbackBaseFee ? ' (platform default)' : ''}
+                {/*
+                  "Base: ₹1500" read as the fee. It is not: the figure recorded on assignment is
+                  the audit fee PLUS travel, and travel scales with the distance in the same row.
+                  Naming it "Audit fee" and saying "+ travel" costs nothing and stops the card
+                  implying a total it does not have — the real total is quoted on the action,
+                  where one request answers for one candidate instead of every candidate listed.
+                */}
+                <span title={c.usedFallbackBaseFee
+                  ? `No priced rate on file for this assayer — this is the platform-wide default, not a contracted figure. ${NOTE_AUDIT_FEE}`
+                  : NOTE_AUDIT_FEE}>
+                  Audit fee: {c.baseFee != null ? `₹${c.baseFee}` : '—'}{c.usedFallbackBaseFee ? ' (platform default)' : ''}
+                  {c.baseFee != null && <span style={{ opacity: 0.65 }}> + travel</span>}
                 </span>
               </div>
 
@@ -2265,17 +2309,13 @@ export const PlanningWorkspace: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                 <button onClick={() => {
                   setSelectedCandidateForMap(selectedCandidateForMap?.id === c.id ? null : c);
-                  if (layout.startsWith('two-col')) {
-                    setLayoutMode('three-col');
-                  }
+                  revealMap();
                 }}
                   className="btn btn-secondary" style={{ padding: '6px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: selectedCandidateForMap?.id === c.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--text-primary)' }}>
                   <Eye size={12} /> Map
                 </button>
                 <button onClick={async () => {
-                  if (layout.startsWith('two-col')) {
-                    setLayoutMode('three-col');
-                  }
+                  revealMap();
                   setSelectedCandidateForMap(c);
                   await handleOptimizeRoute(c);
                 }} disabled={isOptimizing}
@@ -2290,7 +2330,7 @@ export const PlanningWorkspace: React.FC = () => {
 
               {/* Row 2 Actions: Call & Assign vs Send to app */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                <button onClick={() => handleCallAndAssign(c)}
+                <button onClick={() => openAssignment(c, true)}
                   className="btn btn-primary" style={{ padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Phone size={12} /> Call & Assign
                 </button>
@@ -2316,11 +2356,11 @@ export const PlanningWorkspace: React.FC = () => {
                   style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)' }}
                 />
 
-                <button onClick={() => handleSendToAppNoFee(c)}
+                <button onClick={() => handleSendToApp(c)}
                   className="btn btn-secondary"
-                  title="Assigns this assayer immediately and shows the job in their app. No fee is agreed or recorded — use “Call & Assign” when a fee has to be quoted."
+                  title="Assigns this assayer immediately and shows the job in their app. The fee is quoted and held on our side — the assayer sees it first on their monthly bill. Use “Call & Assign” when you have agreed a different number on the phone."
                   style={{ padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                  <Smartphone size={12} /> Send to app (no fee)
+                  <Smartphone size={12} /> Send to app
                 </button>
               </div>
 
@@ -2530,21 +2570,24 @@ export const PlanningWorkspace: React.FC = () => {
           matches and one assign action; everything else is still here, one click away, and the
           choice is remembered.
         */}
-        <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-primary)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-hair)' }}>
-          {([['simple', 'Simple'], ['advanced', 'Advanced']] as const).map(([mode, label]) => (
+        <div role="tablist" aria-label="What are you planning" style={{ display: 'flex', gap: '2px', background: 'var(--bg-primary)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-hair)' }}>
+          {PLANNING_JOBS.map(({ key, label, hint }) => (
             <button
-              key={mode}
+              key={key}
               type="button"
-              onClick={() => setViewModePersisted(mode)}
-              aria-pressed={viewMode === mode}
-              title={mode === 'simple'
-                ? 'Branch queue, the best matches, and one assign action'
-                : 'Every filter, map layer and layout this screen offers'}
+              role="tab"
+              onClick={() => {
+                setJobPersisted(key);
+                // The day view needs its plans; the old layout menu loaded them when picked.
+                if (key === 'day' && selectedProjectId && !dayPlanData) void loadDayPlans();
+              }}
+              aria-selected={job === key}
+              title={hint}
               style={{
-                background: viewMode === mode ? 'var(--accent)' : 'transparent',
-                color: viewMode === mode ? 'var(--on-accent)' : 'var(--text-muted)',
+                background: job === key ? 'var(--accent)' : 'transparent',
+                color: job === key ? 'var(--on-accent)' : 'var(--text-muted)',
                 border: 'none', borderRadius: '3px', cursor: 'pointer',
-                padding: '3px 9px', fontSize: 'var(--text-3xs)', fontWeight: viewMode === mode ? 700 : 500,
+                padding: '3px 9px', fontSize: 'var(--text-3xs)', fontWeight: job === key ? 700 : 500,
               }}
             >
               {label}
@@ -2552,13 +2595,14 @@ export const PlanningWorkspace: React.FC = () => {
           ))}
         </div>
 
-        {/* Everything below is Advanced-only. Nothing is removed — Simple simply does not draw
-            the controls the everyday task never touches. */}
-        {advanced && s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'All States' }, ...statesList.map(s => ({ value: s, label: s }))])}
-        {advanced && s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
-        {advanced && s(priorityFilter, setPriorityFilter, [{ value: 'ALL', label: 'All Priorities' }, { value: 'LOW', label: 'Low' }, { value: 'MEDIUM', label: 'Medium' }, { value: 'HIGH', label: 'High' }, { value: 'CRITICAL', label: 'Critical' }])}
-        {advanced && s(zoneFilter, setZoneFilter, [{ value: 'ALL', label: 'All Zones' }, ...zones.map(z => ({ value: z.id, label: z.name }))])}
-        {advanced && (
+        {/* The filters. These were Advanced-only, so the default user — which was everyone who
+            never found the mode switch — could not narrow the queue by state, status, priority
+            or zone: the four questions a planner actually asks of it. */}
+        {s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'All States' }, ...statesList.map(s => ({ value: s, label: s }))])}
+        {s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
+        {s(priorityFilter, setPriorityFilter, [{ value: 'ALL', label: 'All Priorities' }, { value: 'LOW', label: 'Low' }, { value: 'MEDIUM', label: 'Medium' }, { value: 'HIGH', label: 'High' }, { value: 'CRITICAL', label: 'Critical' }])}
+        {s(zoneFilter, setZoneFilter, [{ value: 'ALL', label: 'All Zones' }, ...zones.map(z => ({ value: z.id, label: z.name }))])}
+        {(
           <input
             type="text"
             placeholder="Filter city..."
@@ -2567,7 +2611,7 @@ export const PlanningWorkspace: React.FC = () => {
             style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-2xs)' }}
           />
         )}
-        {advanced && (
+        {(
           <input
             type="text"
             placeholder="Filter district..."
@@ -2593,57 +2637,32 @@ export const PlanningWorkspace: React.FC = () => {
         })()}
 
         {/*
-          Six always-visible layout buttons were six competing answers to a question the
-          coordinator had not asked. In Advanced they live behind one `Layout ▾` menu that names
-          the arrangement currently in use; all six remain, and the choice is persisted exactly
-          as before. Simple pins the queue + matches arrangement and shows no picker at all.
+          The map, as a panel you open — not an arrangement you choose.
+
+          Four of the six layout entries existed only to decide whether the map was on screen and
+          where. That is why a default user never saw it: Simple pinned the one arrangement with
+          no map in it, and the picker that could have shown them a map was drawn only in
+          Advanced. Worse, the per-candidate "Map" button reached it by REWRITING the stored
+          layout preference to `three-col` — a page-wide setting mutated as a local toggle, so
+          glancing at one candidate's position silently changed how the page opened next time.
         */}
-        {advanced && (
-          <div style={{ marginLeft: 'auto', position: 'relative' }}>
-            <button
-              type="button"
-              onClick={() => setLayoutMenuOpen(o => !o)}
-              aria-expanded={layoutMenuOpen}
-              aria-haspopup="menu"
-              title="Choose how the queue, map and match panel are arranged"
-              style={{
-                background: 'transparent', border: '1px solid var(--border-hair)', borderRadius: '4px',
-                color: 'var(--text-secondary)', cursor: 'pointer', padding: '3px 9px', fontSize: 'var(--text-3xs)',
-                fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
-              }}
-            >
-              <Layers size={11} /> Layout: {PLANNING_LAYOUTS.find(([k]) => k === layout)?.[1] ?? 'Map + Drawer'} ▾
-            </button>
-            {layoutMenuOpen && (
-              <div role="menu" style={{
-                position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 60,
-                background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-md)', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-                display: 'flex', flexDirection: 'column', minWidth: '170px', overflow: 'hidden',
-              }}>
-                {PLANNING_LAYOUTS.map(([k, lbl]) => (
-                  <button
-                    key={k}
-                    role="menuitemradio"
-                    aria-checked={layout === k}
-                    onClick={() => {
-                      setLayoutMode(k);
-                      setLayoutMenuOpen(false);
-                      if (k === 'day-plans' && selectedProjectId && !dayPlanData) void loadDayPlans();
-                    }}
-                    style={{
-                      background: layout === k ? 'rgba(216,174,71,0.2)' : 'transparent',
-                      border: 'none', textAlign: 'left', cursor: 'pointer', padding: '6px 10px',
-                      fontSize: 'var(--text-2xs)', color: layout === k ? 'var(--text-primary)' : 'var(--text-secondary)',
-                      fontWeight: layout === k ? 700 : 500,
-                    }}
-                  >
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+        {job === 'branch' && (
+          <button
+            type="button"
+            onClick={() => setShowMapPersisted(!showMap)}
+            aria-pressed={showMap}
+            title={showMap ? MAP_PANEL.hideHint : MAP_PANEL.showHint}
+            style={{
+              marginLeft: 'auto',
+              background: showMap ? 'var(--accent)' : 'transparent',
+              border: '1px solid var(--border-hair)', borderRadius: '4px',
+              color: showMap ? 'var(--on-accent)' : 'var(--text-secondary)',
+              cursor: 'pointer', padding: '3px 9px', fontSize: 'var(--text-3xs)',
+              fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
+            }}
+          >
+            <Layers size={11} /> {MAP_PANEL.label}
+          </button>
         )}
       </div>
 
@@ -2703,7 +2722,7 @@ export const PlanningWorkspace: React.FC = () => {
               ? `${assignDirectly ? 'Confirm the selected branches for' : 'Offer the selected branches to'} ${selectedCandidate.displayName}`
               : 'Pick an assayer from the candidate list first'}>
             {bulkAssigning
-              ? (assignDirectly ? 'Assigning…' : 'Offering…')
+              ? `${assignDirectly ? 'Assigning…' : 'Offering…'}${bulkProgress ? ` ${bulkProgress}` : ''}`
               : selectedCandidate
                 ? `${assignDirectly ? 'Assign all to' : 'Offer all to'} ${selectedCandidate.displayName}`
                 : 'Pick an assayer to offer to'}
@@ -2747,9 +2766,17 @@ export const PlanningWorkspace: React.FC = () => {
       )}
 
       {/* ── Layout: 2-Column (Branch Queue + Assayer Recommendations Panel) ── */}
-      {effectiveLayout === 'two-col-branch-recom' && (
+      {/*
+        Staffing a branch: the queue on the left, the candidates for whichever branch you are on
+        to the right, and the map between them when you ask for it.
+
+        This replaces FIVE arrangements of these same three panels — `two-col-branch-recom`,
+        `two-col-branch-map`, `default`, `three-col` and `map-only`. They differed only in which
+        of the three were drawn and in what order, and the Simple default pinned the one with no
+        map, so the choice was invisible to most people and irrelevant to the rest.
+      */}
+      {job === 'branch' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
-          {/* Column 1: Branch Queue */}
           <BranchListPanel
             branches={filteredBranches}
             loading={isLoadingQueue}
@@ -2764,252 +2791,71 @@ export const PlanningWorkspace: React.FC = () => {
             width={340}
           />
 
-          {/* Column 2: Assayer Recommendations & Match Details */}
+          {/* The map, when asked for. Same component and same props the old map layouts passed. */}
+          {showMap && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+              <InteractivePlanningMap fillContainer
+                branches={mapBranches}
+                selectedBranchId={selectedBranchId}
+                onSelectBranch={setSelectedBranchId}
+                routePoints={routePoints}
+                selectedAssayerFromParent={selectedCandidateForMap}
+                slaEnabled={slaEnabled}
+                slaRadius={slaRadius}
+                rankedCandidates={displayCandidates}
+                excludedCandidates={excludedCandidates}
+                searchRadiusKm={searchRadiusKm}
+                onSearchRadiusChange={setSearchRadiusKm}
+                travelRates={travelRates}
+              />
+            </div>
+          )}
+
           <RecommendationPanel
             onViewHistory={setHistoryBranchId}
             selectedPb={selectedPb}
             renderCandidatesList={renderCandidatesList}
             flex
             showAllCandidates={showAllCandidates}
-              onToggleShowAll={setShowAllCandidates}
-              slaEnabled={slaEnabled}
-              onToggleSla={setSlaEnabled}
-              slaRadius={slaRadius}
-              onSlaRadiusChange={setSlaRadius}
-              maxRadiusEnabled={maxRadiusEnabled}
-              onToggleMaxRadius={setMaxRadiusEnabled}
-              maxRadius={maxRadius}
-              onMaxRadiusChange={setMaxRadius}
-              planDate={scheduledAuditDate}
-              onPlanDateChange={pinPlanDate}
-              ignoreDateAvailability={ignoreDateAvailability}
-              ignoreClientPolicy={ignoreClientPolicy}
-              onToggleIgnoreClientPolicy={setIgnoreClientPolicy}
-              ignoreDistancePolicy={ignoreDistancePolicy}
-              onToggleIgnoreDistancePolicy={setIgnoreDistancePolicy}
-              onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-              advanced={advanced}
-            onNextUnassigned={handleNextUnassigned}
-            nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
-            onRefresh={refreshCandidates}
-          />
-        </div>
-      )}
-
-      {/* ── Layout: 2-Column (Branch Queue + Interactive Map) ── */}
-      {(effectiveLayout === 'two-col-branch-map' || (effectiveLayout as any) === 'two-col') && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
-          {/* Column 1: Branch Queue */}
-          <BranchListPanel
-            branches={filteredBranches}
-            loading={isLoadingQueue}
-            failure={queueFailure}
-            selectedBranchId={selectedBranchId}
-            onSelectBranch={setSelectedBranchId}
-            searchTerm={searchTerm}
-            onSearchTermChange={setSearchTerm}
-            bulkSelectedIds={bulkSelectedIds}
-            onToggleBulkSelect={toggleBulkSelect}
-            onToggleBulkSelectAll={toggleBulkSelectAll}
-            width={340}
-          />
-
-          {/* Column 2: Interactive Planning Map */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-            <InteractivePlanningMap fillContainer
-              branches={mapBranches}
-              selectedBranchId={selectedBranchId}
-              onSelectBranch={setSelectedBranchId}
-              routePoints={routePoints}
-              selectedAssayerFromParent={selectedCandidateForMap}
-              slaEnabled={slaEnabled}
-              slaRadius={slaRadius}
-              rankedCandidates={displayCandidates}
-              excludedCandidates={excludedCandidates}
-              searchRadiusKm={searchRadiusKm}
-              onSearchRadiusChange={setSearchRadiusKm}
-            travelRates={travelRates}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ── Layout: Default (Branch queue + Map + Assayer Match Drawer) ── */}
-      {effectiveLayout === 'default' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '8px', padding: '8px', overflow: 'hidden' }}>
-          <BranchListPanel
-            branches={filteredBranches}
-            loading={isLoadingQueue}
-            failure={queueFailure}
-            selectedBranchId={selectedBranchId}
-            onSelectBranch={setSelectedBranchId}
-            searchTerm={searchTerm}
-            onSearchTermChange={setSearchTerm}
-            bulkSelectedIds={bulkSelectedIds}
-            onToggleBulkSelect={toggleBulkSelect}
-            onToggleBulkSelectAll={toggleBulkSelectAll}
-            width={280}
-          />
-
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
-            <InteractivePlanningMap fillContainer
-              branches={mapBranches}
-              selectedBranchId={selectedBranchId}
-              onSelectBranch={setSelectedBranchId}
-              routePoints={routePoints}
-              selectedAssayerFromParent={selectedCandidateForMap}
-              slaEnabled={slaEnabled}
-              slaRadius={slaRadius}
-              rankedCandidates={displayCandidates}
-              excludedCandidates={excludedCandidates}
-              searchRadiusKm={searchRadiusKm}
-              onSearchRadiusChange={setSearchRadiusKm}
-            travelRates={travelRates}
-            />
-            <div ref={drawerRef} style={{
-              position: 'absolute', bottom: 0, left: 0, right: 0,
-              maxHeight: selectedBranchId ? '280px' : '0px', overflow: 'hidden',
-              transition: 'max-height 0.3s ease, opacity 0.2s ease', opacity: selectedBranchId ? 1 : 0, zIndex: 20,
-              background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
-            }}>
-              {selectedPb && (
-                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  <RecommendationPanel
-                    onViewHistory={setHistoryBranchId}
-                    selectedPb={selectedPb}
-                    renderCandidatesList={renderCandidatesList}
-                    flex
-                    horizontal
-                    showAllCandidates={showAllCandidates}
-                    onToggleShowAll={setShowAllCandidates}
-                    slaEnabled={slaEnabled}
-                    onToggleSla={setSlaEnabled}
-                    slaRadius={slaRadius}
-                    onSlaRadiusChange={setSlaRadius}
-              maxRadiusEnabled={maxRadiusEnabled}
-              onToggleMaxRadius={setMaxRadiusEnabled}
-              maxRadius={maxRadius}
-              onMaxRadiusChange={setMaxRadius}
-              planDate={scheduledAuditDate}
-              onPlanDateChange={pinPlanDate}
-              ignoreDateAvailability={ignoreDateAvailability}
-              ignoreClientPolicy={ignoreClientPolicy}
-              onToggleIgnoreClientPolicy={setIgnoreClientPolicy}
-              ignoreDistancePolicy={ignoreDistancePolicy}
-              onToggleIgnoreDistancePolicy={setIgnoreDistancePolicy}
-              onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-                    advanced={advanced}
-            onNextUnassigned={handleNextUnassigned}
-            nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
-            onRefresh={refreshCandidates}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Layout: 3-Column (Branch list + Map + Match Detail panel) ── */}
-      {effectiveLayout === 'three-col' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
-          {/* Column 1: Branch Queue Panel */}
-          <BranchListPanel
-            branches={filteredBranches}
-            loading={isLoadingQueue}
-            failure={queueFailure}
-            selectedBranchId={selectedBranchId}
-            onSelectBranch={setSelectedBranchId}
-            searchTerm={searchTerm}
-            onSearchTermChange={setSearchTerm}
-            bulkSelectedIds={bulkSelectedIds}
-            onToggleBulkSelect={toggleBulkSelect}
-            onToggleBulkSelectAll={toggleBulkSelectAll}
-            width={320}
-          />
-
-          {/* Column 2: Center Interactive GIS Map */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-            <InteractivePlanningMap fillContainer
-              branches={mapBranches}
-              selectedBranchId={selectedBranchId}
-              onSelectBranch={setSelectedBranchId}
-              routePoints={routePoints}
-              selectedAssayerFromParent={selectedCandidateForMap}
-              slaEnabled={slaEnabled}
-              slaRadius={slaRadius}
-              rankedCandidates={displayCandidates}
-              excludedCandidates={excludedCandidates}
-              searchRadiusKm={searchRadiusKm}
-              onSearchRadiusChange={setSearchRadiusKm}
-            travelRates={travelRates}
-            />
-          </div>
-
-          {/* Column 3: Right Match Inspector Panel */}
-          <RecommendationPanel
-            onViewHistory={setHistoryBranchId}
-            selectedPb={selectedPb}
-            renderCandidatesList={renderCandidatesList}
-            width={380}
-            showAllCandidates={showAllCandidates}
             onToggleShowAll={setShowAllCandidates}
             slaEnabled={slaEnabled}
             onToggleSla={setSlaEnabled}
             slaRadius={slaRadius}
             onSlaRadiusChange={setSlaRadius}
-              maxRadiusEnabled={maxRadiusEnabled}
-              onToggleMaxRadius={setMaxRadiusEnabled}
-              maxRadius={maxRadius}
-              onMaxRadiusChange={setMaxRadius}
-              planDate={scheduledAuditDate}
-              onPlanDateChange={pinPlanDate}
-              ignoreDateAvailability={ignoreDateAvailability}
-              ignoreClientPolicy={ignoreClientPolicy}
-              onToggleIgnoreClientPolicy={setIgnoreClientPolicy}
-              ignoreDistancePolicy={ignoreDistancePolicy}
-              onToggleIgnoreDistancePolicy={setIgnoreDistancePolicy}
-              onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-            advanced={advanced}
+            maxRadiusEnabled={maxRadiusEnabled}
+            onToggleMaxRadius={setMaxRadiusEnabled}
+            maxRadius={maxRadius}
+            onMaxRadiusChange={setMaxRadius}
+            planDate={scheduledAuditDate}
+            onPlanDateChange={pinPlanDate}
+            ignoreDateAvailability={ignoreDateAvailability}
+            ignoreClientPolicy={ignoreClientPolicy}
+            onToggleIgnoreClientPolicy={setIgnoreClientPolicy}
+            ignoreDistancePolicy={ignoreDistancePolicy}
+            onToggleIgnoreDistancePolicy={setIgnoreDistancePolicy}
+            onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
             onNextUnassigned={handleNextUnassigned}
             nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
             onRefresh={refreshCandidates}
           />
         </div>
       )}
-
-      {/* ── Layout: Map Only ── */}
-      {effectiveLayout === 'map-only' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 0 32px' }}>
-          <InteractivePlanningMap fillContainer
-            branches={mapBranches}
-            selectedBranchId={selectedBranchId}
-            onSelectBranch={setSelectedBranchId}
-            routePoints={routePoints}
-            selectedAssayerFromParent={selectedCandidateForMap}
-            slaEnabled={slaEnabled}
-            slaRadius={slaRadius}
-            rankedCandidates={displayCandidates}
-            excludedCandidates={excludedCandidates}
-            searchRadiusKm={searchRadiusKm}
-            onSearchRadiusChange={setSearchRadiusKm}
-            travelRates={travelRates}
-          />
-        </div>
-      )}
-
       {/* ── Confirm Assignment Modal (fee settled on the call, recorded here) ── */}
       {showAssignModal && selectedCandidate && selectedPb && (
         <Modal open onClose={() => setShowAssignModal(false)}
-          title="Confirm Assignment"
+          /*
+            One form for both buttons. The title names the job it does — record the fee — and
+            the submit below names where the assignment then goes, which is the only thing the
+            two entry points still disagree about.
+          */
+          title="Assign — record the agreed fee"
           width="580px" asForm
           onSubmit={handleConfirmAssignment}
           footer={
           <>
             <button type="button" onClick={() => setShowAssignModal(false)} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Check size={14} /> Confirm Commitment
+              {assignDirectly ? <><Check size={14} /> Assign now</> : <><Send size={14} /> Send to app</>}
             </button>
           </>
         }>            {/* Assayer Summary */}
@@ -3068,29 +2914,34 @@ export const PlanningWorkspace: React.FC = () => {
               </div>
             </div>
 
-            {/* Fee inputs */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <DollarSign size={11} /> Base Fee
-                </label>
-                <div style={{ padding: '10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: loadingCommercial ? 'var(--text-muted)' : 'var(--warning)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
-                  {loadingCommercial ? 'Loading...' : commercialBaseFee != null ? `₹${commercialBaseFee.toLocaleString()}` : selectedCandidate.baseFee != null ? `₹${selectedCandidate.baseFee.toLocaleString()}` : 'Not set'}
-                </div>
-              </div>
+            {/* Fee inputs — ONE fee. The base/travel split is kept internally on the
+                assignment (see assignment-money.ts: the base holds at this assayer's own rate
+                and travel takes the difference), because the desk agrees a single number on a
+                call and should be asked for exactly that. */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {/*
-                  The whole fee — base plus travel — because that is the figure settled on the
-                  call and stored on the assignment. The rate-card base sits read-only beside
-                  this, so the desk can see how much of the total is the journey.
+                  The one number the desk agreed on the call. It is stored whole on the
+                  assignment; billing carves it into base and travel from this assayer's own
+                  audit fee, which is a fact about the person rather than anything to re-enter
+                  here.
                 */}
                 <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <TrendingUp size={11} /> Total fee (base + travel)
+                  <TrendingUp size={11} /> Agreed fee
                 </label>
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>₹</span>
                   <input type="number" value={agreedFeeInput} onChange={e => setAgreedFeeInput(e.target.value)} required
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-base)', boxSizing: 'border-box' }} />
+                </div>
+                {/*
+                  The rate card, as a reading — not as the answer.
+                  Every fee here is settled by a person on a call and typed into the box above;
+                  this line is what they compare against. It used to live in a confirm dialog on
+                  a different button, which is how the two paths came to disagree at all.
+                */}
+                <div style={{ marginTop: '6px', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  {loadingCommercial ? 'Reading the rate card…' : feeReferenceLine(feeQuote)}
                 </div>
               </div>
               {/*
@@ -3195,12 +3046,15 @@ export const PlanningWorkspace: React.FC = () => {
         candidate={detailCandidate}
         branchName={selectedPb?.branch?.name}
         clientId={selectedProjectClientId ?? undefined}
-        onCallAndAssign={(cand) => { setShowAssayerDetailModal(false); void handleCallAndAssign(cand); }}
-        onSendToApp={(cand) => { setShowAssayerDetailModal(false); void handleSendToAppNoFee(cand); }}
+        onCallAndAssign={(cand) => { setShowAssayerDetailModal(false); void openAssignment(cand, true); }}
+        onSendToApp={(cand) => { setShowAssayerDetailModal(false); void handleSendToApp(cand); }}
       />
 
       {/* ── Layout: Day Plans (Multi-Branch Cluster View) ── */}
-      {effectiveLayout === 'day-plans' && (
+
+
+
+      {job === 'day' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 32px 32px', overflowY: 'auto' }}>
           {/* Header & Refresh */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 8px', flexWrap: 'wrap', gap: '10px' }}>
@@ -3279,6 +3133,9 @@ export const PlanningWorkspace: React.FC = () => {
             <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
               <div className="loading-spinner" style={{ width: '30px', height: '30px', border: '3px solid var(--border-color)', borderTop: '3px solid var(--accent-primary)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
               Analyzing branch clusters, calculating routes & scoring assayers...
+              {dayPlanProgress && (
+                <div data-testid="day-plan-progress" style={{ marginTop: '6px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{dayPlanProgress}</div>
+              )}
             </div>
           )}
 
@@ -3712,7 +3569,7 @@ export const PlanningWorkspace: React.FC = () => {
               <button onClick={() => setUnableModal(null)} disabled={unableSubmitting} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 14px' }}>Cancel</button>
               <button onClick={submitUnableToCover} disabled={!unableReason.trim() || unableSubmitting}
                 className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 14px', color: 'var(--danger)', opacity: !unableReason.trim() || unableSubmitting ? 0.6 : 1 }}>
-                {unableSubmitting ? 'Recording…' : 'Confirm'}
+                {unableSubmitting ? `Recording…${bulkProgress ? ` ${bulkProgress}` : ''}` : 'Confirm'}
               </button>
             </div>
           </div>

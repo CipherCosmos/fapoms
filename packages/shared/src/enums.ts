@@ -586,6 +586,11 @@ export enum NotificationChannel {
   IN_APP = 'IN_APP',
   PUSH = 'PUSH',
   EMAIL = 'EMAIL',
+  /**
+   * A text to the recipient's mobile number. No shipped catalog event carries it: every event
+   * starts with SMS off, and an administrator switches it on per event (Notification Rules).
+   */
+  SMS = 'SMS',
 }
 
 /** Drives ordering and, later, whether a push may bypass quiet hours. */

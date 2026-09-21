@@ -48,6 +48,8 @@ describe('the billing read surface admits one set of roles', () => {
       'the preview of a reconcile, which is an ADMIN/OPERATIONS write — an auditor has nothing to preview',
     "@Get('jobs/:jobId')":
       'polls a billing-engine job, and the only thing that creates one is POST /reconcile, which the auditor cannot call',
+    "@Get('bulk-jobs/:jobId')":
+      'polls an approve, pay or invite-all run; those are started only on DISBURSEMENT_ROLES / BILLING_ROLES, which the auditor is not in, and a run is readable only by whoever started it',
     "@Get('assayers/:assayerId/invoice-invitation')":
       "part of the assayer's own invoicing-consent flow, paired with ASSAYER on the same decorator",
   };

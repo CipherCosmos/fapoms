@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { DESTRUCTIVE_APPROVAL_TTL_HOURS } from '@fapoms/shared';
 import { Modal, useToast, AlertBanner } from '../../../components/ui';
@@ -7,6 +7,7 @@ import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
 import { useCurrentUserId } from '../../../hooks/useCurrentRoles';
 import { WipeDomain, domainRowCount } from './DangerZoneSection';
+import { runApprovedWipe, WipeResult } from './wipe-run';
 
 /** Mirrors DATA_RESET_CONFIRMATION_PHRASE in data-reset.controller.ts — server-side is the real
  *  check; this only lets the button disable itself before a request is even sent. */
@@ -58,7 +59,9 @@ export const DataResetModal: React.FC<{
   /** Called after a request is successfully filed (request mode). */
   onRequested?: () => void;
   onWiped: () => void;
-}> = ({ mode, domains, initialSelectedKeys, requestId, onClose, onRequested, onWiped }) => {
+  /** Called when a wipe ends without a result (refused, failed, or unseen), so the page re-reads the request's status. */
+  onWipeUnfinished?: () => void;
+}> = ({ mode, domains, initialSelectedKeys, requestId, onClose, onRequested, onWiped, onWipeUnfinished }) => {
   const { toast } = useToast();
   const currentUserId = useCurrentUserId();
   const isExecute = mode === 'execute';
@@ -69,8 +72,20 @@ export const DataResetModal: React.FC<{
   const [billingConfirmed, setBillingConfirmed] = useState(false);
   const [takeBackupFirst, setTakeBackupFirst] = useState(false);
   const [confirmText, setConfirmText] = useState('');
-  const [submitting, setSubmitting] = useState<'idle' | 'requesting' | 'backing-up' | 'wiping'>('idle');
-  const [result, setResult] = useState<{ removed: Record<string, number>; backup: any } | null>(null);
+  const [submitting, setSubmitting] = useState<'idle' | 'requesting' | 'running'>('idle');
+  /** The server's own words for what the running wipe is doing ("Taking a backup first", "Wiping"). */
+  const [stage, setStage] = useState('');
+  const [result, setResult] = useState<WipeResult | null>(null);
+  /** Set when this screen could not learn how the wipe ended — shown in place, and the button stays off. */
+  const [outcomeUnknown, setOutcomeUnknown] = useState<string | null>(null);
+  /** Stops the watcher when the modal closes; the wipe itself carries on on the server either way. */
+  const watch = useRef({ cancelled: false });
+  useEffect(() => {
+    // Re-armed on mount, not only initialised: StrictMode's mount-unmount-mount would otherwise
+    // leave it cancelled before the first wipe is ever started.
+    watch.current.cancelled = false;
+    return () => { watch.current.cancelled = true; };
+  }, []);
 
   const [userSearch, setUserSearch] = useState('');
   const [keepUserIds, setKeepUserIds] = useState<string[]>(currentUserId ? [currentUserId] : []);
@@ -177,7 +192,7 @@ export const DataResetModal: React.FC<{
     !hasUnresolvedImplied;
 
   const canRequest = selectionOk && submitting === 'idle';
-  const canSubmit = selectionOk && billingOk && confirmTextOk && submitting === 'idle';
+  const canSubmit = selectionOk && billingOk && confirmTextOk && submitting === 'idle' && !outcomeUnknown;
 
   /** Request mode's submit: file the request; an admin decides on /admin/approvals. */
   const requestApproval = async () => {
@@ -195,35 +210,46 @@ export const DataResetModal: React.FC<{
     }
   };
 
+  /**
+   * Starts the approved wipe and watches it to the end. The server answers at once and runs the
+   * backup and the wipe outside the request (a single request used to outlast the browser's patience
+   * and report "failed" while the wipe went on) — see wipe-run.ts for how each ending is told apart.
+   */
   const submit = async () => {
-    setSubmitting(takeBackupFirst ? 'backing-up' : 'wiping');
-    try {
-      const res = await api.request<{ removed: Record<string, number>; backup: any }>(
-        '/admin/data-reset/execute',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            // The approved request's id — the backend refuses an execute without one, and
-            // matches its frozen domains against domainKeys.
-            requestId,
-            domainKeys: selectedKeys,
-            keepUserIds,
-            billingConfirmed: includesBilling ? billingConfirmed : undefined,
-            takeBackupFirst,
-            confirmationPhrase: confirmText,
-          }),
-          // A backup + a multi-table wipe on a database with real volume can run well past the
-          // default request timeout — same reasoning as the file-upload/report-export flows.
-          timeoutMs: 180_000,
-        },
-      );
-      setResult(res as any);
-      toast('success', 'Data wiped.');
-    } catch (err: any) {
-      toast({ type: 'error', title: 'Wipe failed — nothing further was attempted', message: userMessage(err) });
-    } finally {
-      setSubmitting('idle');
+    setSubmitting('running');
+    setStage(takeBackupFirst ? 'Taking a backup first' : 'Wiping');
+    const outcome = await runApprovedWipe(
+      {
+        // The approved request's id — the backend refuses an execute without one, and
+        // matches its frozen domains against domainKeys.
+        requestId,
+        domainKeys: selectedKeys,
+        keepUserIds,
+        billingConfirmed: includesBilling ? billingConfirmed : undefined,
+        takeBackupFirst,
+        confirmationPhrase: confirmText,
+      },
+      { onStage: setStage, signal: watch.current },
+    );
+    if (watch.current.cancelled) return;
+    setSubmitting('idle');
+
+    switch (outcome.kind) {
+      case 'done':
+        setResult(outcome.result);
+        toast('success', 'Data wiped.');
+        return;
+      case 'refused':
+        toast({ type: 'error', title: 'The wipe was not started', message: outcome.message });
+        break;
+      case 'failed':
+        toast({ type: 'error', title: 'The wipe did not complete', message: outcome.message });
+        break;
+      case 'unknown':
+        setOutcomeUnknown(outcome.message);
+        break;
     }
+    onWipeUnfinished?.();
   };
 
   if (result) {
@@ -478,8 +504,14 @@ export const DataResetModal: React.FC<{
           </div>
         )}
 
+        {outcomeUnknown && (
+          <AlertBanner type="error">{outcomeUnknown}</AlertBanner>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '4px' }}>
-          <button className="btn btn-secondary" onClick={onClose} disabled={submitting !== 'idle'}>Cancel</button>
+          <button className="btn btn-secondary" onClick={onClose} disabled={submitting !== 'idle'}>
+            {outcomeUnknown ? 'Close' : 'Cancel'}
+          </button>
           {isExecute ? (
             <button
               className="btn btn-primary"
@@ -487,9 +519,8 @@ export const DataResetModal: React.FC<{
               onClick={submit}
               style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px' }}
             >
-              {submitting === 'backing-up' && <><Loader2 size={13} className="spin" /> Taking a backup first…</>}
-              {submitting === 'wiping' && <><Loader2 size={13} className="spin" /> Wiping…</>}
-              {submitting === 'idle' && 'Wipe now'}
+              {submitting === 'running' && <><Loader2 size={13} className="spin" /> {stage}…</>}
+              {submitting !== 'running' && 'Wipe now'}
             </button>
           ) : (
             <button

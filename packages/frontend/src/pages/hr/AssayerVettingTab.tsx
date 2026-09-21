@@ -4,6 +4,7 @@ import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, HARD_COPY_LOCATIONS,
   onboardingNextStep, standingAllowsPlanning, scanMimeType, isDrawableScan, identityDocumentFacts,
   isValidPan, isValidAadhaar, storedScanFileName,
+  EMPANELMENT_STANDING_LABELS,
 } from '@fapoms/shared';
 
 import { ScanOrAttach } from '../../components/scanner/ScanOrAttach';
@@ -142,22 +143,17 @@ const CIBIL_LABELS: Record<string, string> = {
   [CibilBand.NOT_CHECKED]: 'Not checked', [CibilBand.CHECK_FAILED]: 'Check failed',
 };
 
-export const STANDING_LABELS: Record<string, string> = {
-  [EmpanelmentStatus.ACTIVE]: 'Active',
-  [EmpanelmentStatus.RECOMMENDED]: 'Recommended',
-  [EmpanelmentStatus.NOT_RECOMMENDED]: 'Not recommended',
-  [EmpanelmentStatus.DOCUMENTS_PENDING]: 'Documents pending',
-  [EmpanelmentStatus.REJECTED]: 'Rejected',
-  [EmpanelmentStatus.RESIGNED]: 'Resigned',
-  [EmpanelmentStatus.TERMINATED]: 'Terminated',
-  /*
-    The eighth value. This map had seven entries for an eight-value enum, and every render site
-    reads `STANDING_LABELS[status] ?? status` — so the one standing nobody had written a word for
-    printed the literal `INACTIVE` at an HR clerk. `assayer.service.ts` writes it, so the row was
-    always reachable; there simply are none today.
-  */
-  [EmpanelmentStatus.INACTIVE]: 'Empanelled before, dormant now',
-};
+/**
+ * The words for an empanelment standing, from `@fapoms/shared` — re-exported under the name the
+ * three screens here already import, so this file stays their door while the vocabulary itself
+ * lives beside the enum.
+ *
+ * It used to be written out here, and `roster-filters.ts` wrote the same eight words again as
+ * `EMPANELMENT_STANDING_LABELS` because this module cannot be imported from a plain logic file
+ * (it pulls in `services/socket.ts`, whose `import.meta.env` the logic specs' Jest config
+ * cannot parse). Moving the words to shared removes the reason for the second copy.
+ */
+export const STANDING_LABELS: Record<string, string> = EMPANELMENT_STANDING_LABELS;
 
 /**
  * A standing that is somebody's decision not to send this person.

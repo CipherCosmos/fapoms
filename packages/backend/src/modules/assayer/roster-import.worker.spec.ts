@@ -50,8 +50,31 @@ describe('RosterImportWorker', () => {
     expect(options.overwrite).toBe(false);
   });
 
-  it('never runs as a rehearsal', async () => {
-    await worker.runRosterImport(job({}));
+  /**
+   * The rehearsal left the upload request for this queue, so the worker now runs both — and the
+   * one direction that must never go wrong is a real import quietly becoming a rehearsal (the
+   * operator confirms, nothing lands) or, worse, a rehearsal becoming a real import.
+   */
+  it('rehearses when the queued job asks for a rehearsal', async () => {
+    await worker.runRosterImport(job({ dryRun: true }));
+
+    const [, , options] = importAssayerSheet.mock.calls[0];
+    expect(options.dryRun).toBe(true);
+  });
+
+  it('runs a real import when the queued job does not ask for a rehearsal', async () => {
+    await worker.runRosterImport(job({ dryRun: false }));
+
+    const [, , options] = importAssayerSheet.mock.calls[0];
+    expect(options.dryRun).toBe(false);
+  });
+
+  /** Jobs queued before rehearsals were queued carry no flag, and every one of them was real. */
+  it('runs a job that predates the rehearsal flag as the real import it was', async () => {
+    const legacyJob = job({});
+    delete (legacyJob.data as any).dryRun;
+
+    await worker.runRosterImport(legacyJob);
 
     const [, , options] = importAssayerSheet.mock.calls[0];
     expect(options.dryRun).toBe(false);

@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { registrationStepProblems, type RegistrationFormValues } from '@fapoms/shared';
 
 /**
  * THE CODE BOX THE CANDIDATE COULD NOT SEE.
@@ -175,7 +176,12 @@ describe('the form asks the questions the server will ask later', () => {
   const SHELL = SOURCE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
   it('will not let a step pass with no date of birth', () => {
-    expect(SHELL).toMatch(/if \(!f\.dateOfBirth\.trim\(\)\) errs\.dateOfBirth =/);
+    // The step rules are shared with the phone app's registration; the page must use them, not its own.
+    expect(SHELL).toMatch(/registrationStepProblems\(step, f\)/);
+    const f = Object.fromEntries(
+      ['fullName', 'email', 'dateOfBirth'].map((k) => [k, k === 'fullName' ? 'Ramesh Kumar Sharma' : '']),
+    ) as unknown as RegistrationFormValues;
+    expect(registrationStepProblems(1, f).dateOfBirth).toEqual({ code: 'required' });
   });
 
   it('judges the date with the shared rule rather than a second opinion of its own', () => {

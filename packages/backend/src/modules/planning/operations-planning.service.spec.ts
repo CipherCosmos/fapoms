@@ -1,12 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { OperationsPlanningService } from './operations-planning.service';
+import { OperationsPlanningService, deploymentRequestId } from './operations-planning.service';
 import { CoveragePlanningEngine } from './coverage-planning.engine';
 import { AssignmentService } from '../assignment/assignment.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { CoveragePlanEntity, CoveragePlanStatus } from './coverage-plan.entity';
 import { CoveragePlanVersionEntity } from './coverage-plan-version.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { AuditService } from '../../core/audit/audit.service';
 import { PlanningService } from './planning.service';
 
@@ -17,6 +17,9 @@ describe('OperationsPlanningService', () => {
     findOne: jest.fn(),
     create: jest.fn(),
     save: jest.fn((arg) => Promise.resolve({ id: 'cp-1', ...arg })),
+    // The earlier-deployment lookup (`assignment_idempotency_records`). Empty by default: a first
+    // deploy, which is what every test above this file's idempotency block is about.
+    manager: { query: jest.fn().mockResolvedValue([]) },
   };
 
   const mockVersionRepository = {
@@ -62,6 +65,7 @@ describe('OperationsPlanningService', () => {
 
     service = module.get<OperationsPlanningService>(OperationsPlanningService);
     jest.clearAllMocks();
+    mockPlanRepository.manager.query.mockReset().mockResolvedValue([]);
     mockPlanningService.suggestAuditDate.mockResolvedValue({ date: '2026-01-05', skipped: [] });
   });
 
@@ -333,5 +337,111 @@ describe('OperationsPlanningService', () => {
     expect(result.deployed).toHaveLength(2);
     const dates = result.deployed.map((d) => d.scheduledDate);
     expect(new Set(dates).size).toBe(2);
+  });
+  /**
+   * A deploy is safe to run again.
+   *
+   * The old synchronous deploy was abandoned by the browser at 30 s while the server carried on, and
+   * a worker can die part-way too. Either way the plan is left APPROVED with some offers made, and the
+   * next Deploy walked every branch from the top — `create` on a branch with a PENDING offer does not
+   * refuse, it reassigns it with a fresh event and notification. These pin that a re-run leaves the
+   * earlier run's branches alone, and that the key it writes under is what makes that knowable.
+   */
+  describe('running the same plan version again', () => {
+    const approvedTwoBranchPlan = () => {
+      mockPlanRepository.findOne.mockResolvedValue({
+        id: 'cp-1',
+        projectId: 'p-1',
+        status: CoveragePlanStatus.APPROVED,
+        currentVersion: 3,
+        versions: [{
+          versionNumber: 3,
+          planData: {
+            clusters: [
+              { id: 'c-1', assignedAssayerId: 'as-1', branchIds: ['b-1'], estimatedTotalFee: 900, branchCount: 1 },
+              { id: 'c-2', assignedAssayerId: 'as-1', branchIds: ['b-2'], estimatedTotalFee: 900, branchCount: 1 },
+            ],
+          },
+        }],
+      });
+      mockProjectQueryService.findProjectBranches.mockResolvedValue([
+        { id: 'pb-1', branchId: 'b-1' },
+        { id: 'pb-2', branchId: 'b-2' },
+      ]);
+    };
+
+    it('leaves a branch an earlier run booked alone, counts it as deployed, and spreads the rest around its day', async () => {
+      approvedTwoBranchPlan();
+      const earlierKey = deploymentRequestId('cp-1', 3, 'pb-1');
+      mockPlanRepository.manager.query.mockResolvedValue([
+        { client_request_id: earlierKey, assignment_id: 'asg-earlier', assayer_id: 'as-1', scheduled_date: '2026-01-05' },
+      ]);
+      mockAssignmentService.create.mockReset().mockResolvedValue({ id: 'asg-new' });
+
+      const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+
+      // Only the branch nobody had booked is written — and not onto the day the earlier run gave as-1.
+      expect(mockAssignmentService.create).toHaveBeenCalledTimes(1);
+      expect(mockAssignmentService.create.mock.calls[0][0]).toMatchObject({ projectBranchId: 'pb-2', scheduledDate: '2026-01-06' });
+      expect(result.deployed).toEqual([
+        { branchId: 'b-1', assignmentId: 'asg-earlier', scheduledDate: '2026-01-05' },
+        { branchId: 'b-2', assignmentId: 'asg-new', scheduledDate: '2026-01-06' },
+      ]);
+      expect(result.alreadyDeployedCount).toBe(1);
+      expect(mockPlanRepository.manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('assignment_idempotency_records'),
+        [[earlierKey, deploymentRequestId('cp-1', 3, 'pb-2')]],
+      );
+    });
+
+    /**
+     * The durable half. The lookup spares a re-run the work; the key on each create is what still
+     * refuses a second booking when two runs reach one branch at once, or the lookup could not run.
+     */
+    it('writes every offer under a key fixed by plan, version and branch — not by who deploys or from when', async () => {
+      approvedTwoBranchPlan();
+      mockAssignmentService.create.mockReset().mockResolvedValue({ id: 'asg-x' });
+
+      await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+      const firstKeys = mockAssignmentService.create.mock.calls.map((c: any[]) => c[0].clientRequestId);
+      mockAssignmentService.create.mockClear();
+      // The first run left nothing behind in this mock world (no idempotency rows), so the plan is
+      // put back to APPROVED: this asserts the key, not the lookup.
+      approvedTwoBranchPlan();
+      await service.executeApprovedPlan('cp-1', 'u-2', '2026-02-10');
+      const secondKeys = mockAssignmentService.create.mock.calls.map((c: any[]) => c[0].clientRequestId);
+
+      expect(firstKeys).toEqual(['cplan:cp-1:v3:pb-1', 'cplan:cp-1:v3:pb-2']);
+      expect(secondKeys).toEqual(firstKeys);
+      expect(firstKeys.every((k: string) => k.length <= 100)).toBe(true);
+    });
+
+    it('reports a branch a concurrent run booked first as deployed by that run, not as refused', async () => {
+      approvedTwoBranchPlan();
+      const key = deploymentRequestId('cp-1', 3, 'pb-1');
+      mockPlanRepository.manager.query
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ client_request_id: key, assignment_id: 'asg-rival', assayer_id: 'as-1', scheduled_date: '2026-01-05' }]);
+      mockAssignmentService.create.mockReset()
+        .mockRejectedValueOnce(new ConflictException('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used.'))
+        .mockResolvedValue({ id: 'asg-2' });
+
+      const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+
+      expect(result.skipped).toEqual([]);
+      expect(result.deployed[0]).toEqual({ branchId: 'b-1', assignmentId: 'asg-rival', scheduledDate: '2026-01-05' });
+      expect(result.alreadyDeployedCount).toBe(1);
+    });
+
+    it('reports branch-by-branch progress to the job running it', async () => {
+      approvedTwoBranchPlan();
+      mockAssignmentService.create.mockReset().mockResolvedValue({ id: 'asg-x' });
+      const onProgress = jest.fn();
+
+      await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05', onProgress);
+
+      expect(onProgress).toHaveBeenCalledWith(0, 2, 'Creating offers');
+      expect(onProgress).toHaveBeenCalledWith(1, 2, 'Creating offers');
+    });
   });
 });

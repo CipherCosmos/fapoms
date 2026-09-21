@@ -37,11 +37,14 @@ describe('Email Template Engine & Security Contracts', () => {
     'application-rejected',
     'branch-audit-paperwork',
     'morning-digest',
+    'account-setup-link',
+    'password-reset-link',
+    'mfa-code',
   ];
 
   describe('1. Registry Contract Definitions', () => {
-    it('registers all 7 production templates', () => {
-      expect(Object.keys(EMAIL_TEMPLATE_REGISTRY)).toHaveLength(7);
+    it('registers all 10 production templates', () => {
+      expect(Object.keys(EMAIL_TEMPLATE_REGISTRY)).toHaveLength(10);
       for (const key of allKeys) {
         expect(EMAIL_TEMPLATE_REGISTRY[key]).toBeDefined();
         expect(EMAIL_TEMPLATE_REGISTRY[key].key).toBe(key);
@@ -69,11 +72,31 @@ describe('Email Template Engine & Security Contracts', () => {
         'application-approved',
         'application-rejected',
         'branch-audit-paperwork',
+        'account-setup-link',
+        'password-reset-link',
+        'mfa-code',
       ];
       for (const key of sensitiveKeys) {
         const def = EMAIL_TEMPLATE_REGISTRY[key];
         expect(def.allowRawHtmlTokens).toBe(false);
         expect(def.rawTokens || []).toHaveLength(0);
+      }
+    });
+
+    /**
+     * If the administrator's template cannot be loaded, the brief falls back to the registry. That
+     * fallback used to ignore the sections and send a generic "please review items" email — the one
+     * failure that empties exactly the email whose whole purpose is its contents.
+     */
+    it('morning-digest\'s built-in fallback still carries every heading, item and link', () => {
+      const def = EMAIL_TEMPLATE_REGISTRY['morning-digest'];
+      const out = def.fallbackRenderer({
+        ...def.sampleData,
+        digestSectionsText: 'Desk SLA Breaches (1)\n• Fort Branch report overdue\nhttps://fapoms.example/desk',
+      });
+      for (const part of ['Desk SLA Breaches (1)', 'Fort Branch report overdue', 'https://fapoms.example/desk']) {
+        expect(out.text).toContain(part);
+        expect(out.html).toContain(part);
       }
     });
 
@@ -88,7 +111,7 @@ describe('Email Template Engine & Security Contracts', () => {
     const loader = new EmailTemplateLoader();
     const templatesDir = loader.getTemplatesDir();
 
-    it('templates directory exists and contains all 7 html files', () => {
+    it('templates directory exists and contains all 10 html files', () => {
       expect(fs.existsSync(templatesDir)).toBe(true);
       for (const key of allKeys) {
         const filePath = path.join(templatesDir, `${key}.html`);
@@ -277,6 +300,88 @@ describe('Email Template Engine & Security Contracts', () => {
       expect(rendered.metadata.isFallback).toBe(true);
       expect(rendered.text).toBeDefined();
       expect(rendered.subject).toBeDefined();
+    });
+  });
+
+  /**
+   * Wording that used to be written a second time at the feature call sites.
+   *
+   * Each call site built its own `renderEmailHtml` copy and then asked the renderer for the
+   * template, so the sentence a recipient read depended on which copy won. The call sites now pass
+   * data and nothing else, which makes these the only copies — and a sentence a call site used to
+   * add (a resend's "any earlier link has stopped working", HR's note when asking for more) must
+   * reach the recipient from here, through the built-in fallback AND the shipped HTML.
+   */
+  describe('7. Occasion-specific wording lives in the registry', () => {
+    const loader = new EmailTemplateLoader();
+    const renderer = new EmailTemplateRenderer(loader);
+    const RESEND = 'Here is a fresh link to complete your Appraiser registration. Any earlier link has stopped working.';
+    const invite = (intro?: string) => ({
+      fullName: 'Ramesh Kulkarni',
+      inviteUrl: 'https://fapoms.example/register/abc123',
+      logoUrl: 'https://fapoms.example/sumeru-logo@2x.png',
+      companyName: 'Sumeru Global',
+      ...(intro ? { intro } : {}),
+    });
+
+    it("the invite's fallback says what this link is for, in both halves", () => {
+      const fb = EMAIL_TEMPLATE_REGISTRY['registration-invite'].fallbackRenderer(invite(RESEND));
+      expect(fb.text).toContain('Any earlier link has stopped working.');
+      expect(fb.html).toContain('Any earlier link has stopped working.');
+    });
+
+    it('the invite falls back to the first-invitation sentence when no occasion is given', () => {
+      const fb = EMAIL_TEMPLATE_REGISTRY['registration-invite'].fallbackRenderer(invite());
+      expect(fb.text).toContain('no app required');
+    });
+
+    it("the shipped invite HTML carries the occasion too, including HR's note on its own line", async () => {
+      const rendered = await renderer.render('registration-invite', invite(
+        'HR needs something more before your application can proceed: Attach the shop entity proof.'
+          + '\n\nUse the link below to continue where you left off.',
+      ));
+      expect(rendered.metadata.source).toBe('filesystem');
+      expect(rendered.html).toContain('Attach the shop entity proof.');
+      expect(rendered.text).toContain('Attach the shop entity proof.');
+    });
+
+    it('the shipped approval HTML greets the person by name', async () => {
+      const def = EMAIL_TEMPLATE_REGISTRY['application-approved'];
+      const rendered = await renderer.render('application-approved', {
+        ...def.sampleData, candidateName: 'Ramesh Kulkarni', fullName: 'Ramesh Kulkarni',
+      });
+      expect(rendered.metadata.source).toBe('filesystem');
+      expect(rendered.html).toContain('Hello Ramesh Kulkarni,');
+    });
+
+    it('the staff password link says which of its two jobs it is doing, with the username and expiry', () => {
+      const data = {
+        displayName: 'Priya', username: 'priya.nair', setupUrl: 'https://fapoms.example/account-setup/t0k',
+        expiryHours: '72', logoUrl: 'https://fapoms.example/sumeru-logo@2x.png',
+      };
+      const setup = EMAIL_TEMPLATE_REGISTRY['account-setup-link'].fallbackRenderer(data);
+      const reset = EMAIL_TEMPLATE_REGISTRY['password-reset-link'].fallbackRenderer(data);
+
+      expect(setup.subject).toBe('Set up your FAPOMS account');
+      expect(setup.text).toContain('An account has been created for you on FAPOMS.');
+      expect(setup.html).toContain('Your username is priya.nair.');
+      expect(reset.subject).toBe('Reset your FAPOMS password');
+      expect(reset.text).toContain('A password reset was requested for your FAPOMS account.');
+      for (const fb of [setup, reset]) {
+        expect(fb.text).toContain('https://fapoms.example/account-setup/t0k');
+        expect(fb.text).toContain('expires in 72 hours');
+      }
+    });
+
+    it('the second-factor code says what it is for and when it expires', () => {
+      const fb = EMAIL_TEMPLATE_REGISTRY['mfa-code'].fallbackRenderer({
+        otpCode: '402913', validMinutes: '5', purpose: 'confirm your second factor', logoUrl: 'x',
+      });
+      expect(fb.text).toBe(
+        'Your FAPOMS verification code is 402913. It expires in 5 minutes. '
+        + 'Use it to confirm your second factor. If you did not request this, ignore this message.',
+      );
+      expect(fb.html).toContain('402913');
     });
   });
 });

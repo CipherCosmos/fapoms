@@ -82,6 +82,26 @@ export interface RouteResult {
   distanceKm: number;
   durationMinutes: number;
   source: RouteSource;
+  /**
+   * The drawn road line, `[lat, lng]` pairs, present only when the caller asked for it.
+   *
+   * It exists so the planning map has somewhere to get road geometry OTHER than a second
+   * router. It used to fetch `https://router.project-osrm.org` straight from the browser: a
+   * second routing implementation with its own profile mapping, no cache, no physics check,
+   * and — after this deployment declared India data residency — assayers' home coordinates
+   * leaving the country to a third party on every hover. One router now answers both
+   * questions, so a distance and the line drawn for it can never disagree.
+   *
+   * Absent on an ESTIMATE: a straight line is the caller's to draw and label, and handing one
+   * back here would let it be mistaken for a road.
+   */
+  geometry?: Array<[number, number]>;
+}
+
+/** What a caller wants beyond the numbers. */
+export interface RouteOptions {
+  /** Ask OSRM for the full road line. Costs a bigger response, so it is opt-in. */
+  withGeometry?: boolean;
 }
 
 export interface DestinationCoords {
@@ -104,6 +124,7 @@ export interface RoutingProvider {
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
     mode?: RoutingMode,
+    opts?: RouteOptions,
   ): Promise<RouteResult>;
 
   calculateDistances(
@@ -237,7 +258,10 @@ export class PostGISRoutingProvider implements RoutingProvider {
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
     mode?: RoutingMode,
+    _opts?: RouteOptions,
   ): Promise<RouteResult> {
+    // No geometry, deliberately: this provider only ever produces an ESTIMATE, and a straight
+    // line handed back as `geometry` is exactly the promotion `RouteResult.geometry` forbids.
     return estimateRoute(origin, destination, mode);
   }
 
@@ -382,20 +406,23 @@ export class OSRMRoutingProvider implements RoutingProvider {
    * one-way systems make A→B and B→A different roads, and `/table` returns both anyway. The
    * `v1` is the key schema, not the data; bump it if the value shape changes.
    */
-  private cacheKey(profile: string, originKey: string, destKey: string): string {
-    return `geo:route:v1:${profile}:${originKey}>${destKey}`;
+  private cacheKey(profile: string, originKey: string, destKey: string, withGeometry = false): string {
+    // Geometry answers live in their own namespace. Sharing one key would either serve a
+    // line-less hit to a caller that asked for the line, or store the whole polyline against
+    // every distance lookup the planner makes — one of which is wrong and the other expensive.
+    return `geo:route:v1${withGeometry ? 'g' : ''}:${profile}:${originKey}>${destKey}`;
   }
 
-  private async readCached(profile: string, originKey: string, destKey: string): Promise<RouteResult | null> {
+  private async readCached(profile: string, originKey: string, destKey: string, withGeometry = false): Promise<RouteResult | null> {
     if (!this.cache) return null;
-    const hit = await this.cache.getJson<RouteResult>(this.cacheKey(profile, originKey, destKey));
+    const hit = await this.cache.getJson<RouteResult>(this.cacheKey(profile, originKey, destKey, withGeometry));
     // Only OSRM answers are ever written, but a defensive read costs nothing.
     return hit && hit.source === 'OSRM' ? hit : null;
   }
 
-  private async writeCached(profile: string, originKey: string, destKey: string, result: RouteResult): Promise<void> {
+  private async writeCached(profile: string, originKey: string, destKey: string, result: RouteResult, withGeometry = false): Promise<void> {
     if (!this.cache || result.source !== 'OSRM') return;
-    await this.cache.setJson(this.cacheKey(profile, originKey, destKey), result, this.cacheTtlSeconds);
+    await this.cache.setJson(this.cacheKey(profile, originKey, destKey, withGeometry), result, this.cacheTtlSeconds);
   }
 
   /**
@@ -485,12 +512,14 @@ export class OSRMRoutingProvider implements RoutingProvider {
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
     mode?: RoutingMode,
+    opts?: RouteOptions,
   ): Promise<RouteResult> {
     const profile = this.osrmProfile(mode);
+    const withGeometry = opts?.withGeometry === true;
     const originKey = coordKey(origin.latitude, origin.longitude);
     const destKey = coordKey(destination.latitude, destination.longitude);
 
-    const cached = await this.readCached(profile, originKey, destKey);
+    const cached = await this.readCached(profile, originKey, destKey, withGeometry);
     if (cached) {
       this.stats.cacheHits += 1;
       return cached;
@@ -505,11 +534,22 @@ export class OSRMRoutingProvider implements RoutingProvider {
       const url =
         `${this.baseUrl}/route/v1/${profile}/` +
         `${coordUrl(origin.latitude, origin.longitude)};${coordUrl(destination.latitude, destination.longitude)}` +
-        `?overview=false`;
+        `?overview=${withGeometry ? 'full&geometries=geojson' : 'false'}`;
       const data = await this.fetchJson(url);
       const route = data?.code === 'Ok' ? data.routes?.[0] : null;
       if (route && Number.isFinite(route.distance) && Number.isFinite(route.duration)) {
         const result = OSRMRoutingProvider.fromOsrm(route.distance, route.duration);
+        if (withGeometry) {
+          // GeoJSON is [lng, lat]; every map in this app draws [lat, lng]. Flipped once, here,
+          // rather than at each caller — a silently transposed pair puts Pune in Kazakhstan.
+          const coords = route.geometry?.coordinates;
+          if (Array.isArray(coords)) {
+            result.geometry = coords
+              .filter((c: unknown): c is [number, number] =>
+                Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]))
+              .map(([lng, lat]) => [lat, lng] as [number, number]);
+          }
+        }
         // Physics check — same reasoning as the /table guard: a "road" shorter than the
         // straight line means the router snapped one end somewhere else entirely. Never trust
         // it, never cache it; the estimate is honest about being an estimate.
@@ -531,7 +571,7 @@ export class OSRMRoutingProvider implements RoutingProvider {
           );
           return fallback();
         }
-        await this.writeCached(profile, originKey, destKey, result);
+        await this.writeCached(profile, originKey, destKey, result, withGeometry);
         return result;
       }
       // OSRM answered but had no usable route (e.g. a point it cannot snap to a road) — it is
@@ -821,8 +861,9 @@ export class RoutingService {
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
     mode?: RoutingMode,
+    opts?: RouteOptions,
   ): Promise<RouteResult> {
-    return this.activeProvider.calculateRoute(origin, destination, mode);
+    return this.activeProvider.calculateRoute(origin, destination, mode, opts);
   }
 
   async calculateDistances(

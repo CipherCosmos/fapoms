@@ -1,109 +1,197 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { DLT_SENDER_ID_PATTERN, toE164IndianMobile } from '@fapoms/shared';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
+import type { SmsMessage, SmsSendResult, SmsSendSettings, SmsTransport } from './sms/sms-transport';
+import { PinnacleTransport } from './sms/pinnacle.transport';
+
+export { SMS_SEND_TIMEOUT_MS } from './sms/sms-transport';
 
 /**
- * Outbound SMS, delivered alongside email when HR issues app access in bulk.
+ * Outbound SMS: whichever gateway is configured, held ready — the SMS twin of `EmailProvider`.
  *
- * Email alone was not enough for this rollout: 540 of 548 active assayers never had a password
- * set, and a field auditor standing inside a bank vault has no reliable way to check an inbox
- * mid-shift. A phone number is the contact detail this workforce actually has on them, so the
- * temporary password goes out by SMS too.
+ * The vendor is not chosen yet, so the vendor is an adapter (`sms/sms-transport.ts`) and this is only
+ * the holder: it resolves the configuration, builds the adapter it names, and applies the rules every
+ * vendor shares. Configuration resolves the way everything else does — **saved settings first,
+ * environment second**:
  *
- * Unlike `EmailProvider`, this is not a Platform Settings screen — there is exactly one vendor
- * wired up (MSG91, India-first transactional SMS; every phone number on this platform is
- * Indian), so there is no transport for an operator to choose between. Configuration is three
- * plain environment variables, read once at boot.
+ *   Administration → Platform Settings → SMS delivery   the primary place; takes effect immediately
+ *                                       via `reconfigure()`, the key stored encrypted.
+ *   SMS_PROVIDER_API_KEY + SMS_SENDER_ID (+ SMS_ROUTE, SMS_DLT_ENTITY_ID)
+ *                                       the fallback a deployment configured before the screen
+ *                                       existed keeps working on.
  *
- * Degradation follows the same house rule as `EmailProvider` when SMTP is unset: warn once,
- * stay disabled, and answer every send with `false` instead of throwing. SMS being unconfigured
- * must never break the action that wanted to send one — bulk app-access issuance still delivers
- * by email when this returns false.
+ * DLT (India's TRAI regime) is part of the rules, not a vendor extra: once a Principal Entity id is
+ * configured, a text without its content template id is refused here — the operators would block it
+ * anyway, after the gateway had billed for trying.
+ *
+ * Unconfigured follows the house degradation pattern: say so once per (re)configuration, stay
+ * disabled, and answer every send with a failure result instead of throwing. SMS being unconfigured
+ * must never break the action that wanted to send one.
  */
+
+export type SmsProviderName = 'NONE' | 'PINNACLE';
+
+/** What the settings screen shows about SMS — never the key. */
+export interface SmsProviderState {
+  enabled: boolean;
+  /** The gateway chosen (even if something it needs is missing), or null when none is. */
+  provider: Exclude<SmsProviderName, 'NONE'> | null;
+  senderId: string | null;
+  dltEntityIdSet: boolean;
+  /** Why it is not sending, in words an administrator can act on; null when it is. */
+  problem: string | null;
+}
+
+export const SMS_SETTINGS_PLACE = 'Administration → Platform Settings → SMS delivery';
+
 @Injectable()
 export class SmsProvider implements OnModuleInit {
   private readonly logger = new Logger(SmsProvider.name);
-  private apiKey: string | undefined;
-  private senderId: string | undefined;
-  private route = '4';
+  private transport: SmsTransport | null = null;
+  private sendSettings: SmsSendSettings | null = null;
+  private state: SmsProviderState = {
+    enabled: false, provider: null, senderId: null, dltEntityIdSet: false,
+    problem: `SMS is not set up. Set it up under ${SMS_SETTINGS_PLACE}.`,
+  };
 
-  onModuleInit(): void {
-    this.apiKey = process.env.SMS_PROVIDER_API_KEY?.trim() || undefined;
-    this.senderId = process.env.SMS_SENDER_ID?.trim() || undefined;
-    // MSG91's own default route for a transactional (as opposed to promotional) message.
-    this.route = process.env.SMS_ROUTE?.trim() || '4';
+  constructor(
+    /** Optional, as in `EmailProvider`: without the settings module it reads the environment alone. */
+    @Optional() private readonly settings?: PlatformSettingsService,
+  ) {}
 
-    if (!this.isConfigured()) {
-      // One line at boot, not one per send: a credential-issuance run can touch hundreds of
-      // people in a batch, and repeating this warning for each of them would drown the log
-      // without telling an operator anything the first line didn't already say.
-      this.logger.warn(
-        'SMS is not configured (need SMS_PROVIDER_API_KEY and SMS_SENDER_ID) — SMS delivery is ' +
-          'disabled. Credentials issued to assayers will go out by email only until MSG91 is set up.',
-      );
+  async onModuleInit(): Promise<void> {
+    await this.reconfigure();
+    // A settings screen that accepts a new key and keeps sending with the old one until a restart
+    // is a settings screen that lies.
+    this.settings?.onChange('sms.', () => this.reconfigure());
+  }
+
+  /** (Re)build the gateway from whatever configuration is in force right now. */
+  async reconfigure(): Promise<void> {
+    const cfg = await this.resolveConfig();
+    const senderId = cfg.senderId?.trim() || null;
+    const dltEntityId = cfg.dltEntityId?.trim() || null;
+    const base = { senderId, dltEntityIdSet: !!dltEntityId };
+
+    this.transport = null;
+    this.sendSettings = null;
+
+    if (cfg.provider === 'NONE') {
+      const problem = cfg.explicitlyOff
+        ? `SMS is switched off in ${SMS_SETTINGS_PLACE}.`
+        : `SMS is not set up. Set it up under ${SMS_SETTINGS_PLACE}.`;
+      this.state = { ...base, enabled: false, provider: null, problem };
+      // One line per configuration, never one per send: a credential run can touch hundreds of people.
+      if (cfg.explicitlyOff) this.logger.log('SMS is switched off in platform settings — no text will be sent.');
+      else this.logger.warn('SMS is not configured — SMS delivery is disabled. One-time codes and credentials go by email only until it is.');
+      return;
     }
+
+    const key = cfg.pinnacleApiKey;
+    const problem = !key
+      ? 'Pinnacle is chosen but its API key is missing.'
+      : !senderId
+        ? 'The sender header is missing — enter the 6-letter header approved on your DLT portal.'
+        : !DLT_SENDER_ID_PATTERN.test(senderId)
+          ? `The sender header "${senderId}" is not 6 letters — enter it exactly as approved on your DLT portal.`
+          : null;
+    if (problem) {
+      this.state = { ...base, enabled: false, provider: 'PINNACLE', problem };
+      this.logger.warn(`SMS is disabled: ${problem}`);
+      return;
+    }
+
+    this.transport = new PinnacleTransport({ apiKey: key as string });
+    this.sendSettings = { senderId: (senderId as string).toUpperCase(), dltEntityId };
+    this.state = { ...base, senderId: this.sendSettings.senderId, enabled: true, provider: 'PINNACLE', problem: null };
+    this.logger.log(`SMS enabled via ${this.transport.name} as ${this.sendSettings.senderId}${dltEntityId ? ' under DLT' : ''}.`);
   }
 
   isEnabled(): boolean {
-    return this.isConfigured();
+    return this.transport !== null;
   }
 
-  private isConfigured(): boolean {
-    return !!this.apiKey && !!this.senderId;
+  /** The configuration in force, as the settings screen needs it. */
+  describe(): SmsProviderState {
+    return { ...this.state };
   }
 
   /**
-   * Best-effort send: never throws.
+   * One send through the configured gateway. Never throws.
    *
-   * A rejected number, a network blip, a non-2xx from MSG91 — all of it is caught here and
-   * turned into `false`, the same way `EmailProvider.send` turns a bounced SMTP call into a
-   * result rather than an exception. The caller (bulk app-access issuance) treats a failed SMS
-   * exactly like a failed email: one channel among possibly two, not a reason to abort the rest
-   * of the batch.
+   * Refusals that no retry can fix — no gateway, not a mobile, no DLT template id under DLT — come
+   * back `permanent`, so the worker settles them instead of spending its attempts on them.
    */
-  async send(toPhoneE164OrIndian: string, message: string): Promise<boolean> {
-    if (!this.isConfigured()) return false;
+  async send(message: SmsMessage): Promise<SmsSendResult> {
+    const transport = this.transport;
+    const settings = this.sendSettings;
+    if (!transport || !settings) {
+      return { success: false, error: 'SMS is not configured.', permanent: true };
+    }
 
-    const to = this.normalizePhone(toPhoneE164OrIndian);
-    if (!to) return false;
+    const to = toE164IndianMobile(message.to);
+    if (!to) return { success: false, error: 'That is not an Indian mobile number a text can be sent to.', permanent: true };
+
+    if (settings.dltEntityId && !message.dltTemplateId?.trim()) {
+      return {
+        success: false,
+        error: 'This text has no DLT template id; add it under SMS templates in Platform Settings.',
+        permanent: true,
+      };
+    }
 
     try {
-      const res = await fetch('https://api.msg91.com/api/v2/sendsms', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // MSG91 authenticates the whole request off this header, never a query parameter —
-          // keeping the key out of anything that ends up in an access log.
-          authkey: this.apiKey as string,
-        },
-        body: JSON.stringify({
-          sender: this.senderId,
-          route: this.route,
-          country: '91',
-          sms: [{ message, to: [to] }],
-        }),
-      });
-
-      if (!res.ok) {
-        this.logger.warn(`MSG91 SMS send failed with HTTP ${res.status}.`);
-        return false;
-      }
-      return true;
+      return await transport.send({ ...message, to, dltTemplateId: message.dltTemplateId?.trim() || null }, settings);
     } catch (err: any) {
-      this.logger.warn(`MSG91 SMS send failed: ${err?.message ?? 'network error'}.`);
-      return false;
+      // An adapter is written not to throw; this is the belt to that promise, and it names no text.
+      this.logger.warn(`${transport.name} SMS send failed unexpectedly: ${err?.message ?? 'unknown error'}.`);
+      return { success: false, error: 'The SMS gateway could not be reached.' };
     }
   }
 
-  /**
-   * The roster holds Indian numbers in several shapes (bare 10-digit, a leading 0, a leading
-   * 91, occasionally a `+`); MSG91's API wants bare digits with the country code and nothing
-   * else.
-   */
-  private normalizePhone(raw: string): string | null {
-    const digits = (raw ?? '').replace(/\D/g, '');
-    if (!digits) return null;
-    if (digits.length === 10) return `91${digits}`;
-    if (digits.length === 11 && digits.startsWith('0')) return `91${digits.slice(1)}`;
-    if (digits.length === 12 && digits.startsWith('91')) return digits;
-    return digits;
+  /** Saved settings first, environment second; the environment alone without the settings module. */
+  private async resolveConfig(): Promise<{
+    provider: SmsProviderName;
+    explicitlyOff: boolean;
+    pinnacleApiKey?: string | null;
+    senderId?: string | null;
+    dltEntityId?: string | null;
+  }> {
+    if (!this.settings) {
+      const pinnacleKey = process.env.SMS_PINNACLE_API_KEY?.trim() || null;
+      return {
+        provider: (process.env.SMS_PROVIDER?.trim().toUpperCase() as SmsProviderName | undefined)
+          ?? (pinnacleKey ? 'PINNACLE' : 'NONE'),
+        explicitlyOff: false,
+        pinnacleApiKey: pinnacleKey,
+        senderId: process.env.SMS_SENDER_ID ?? null,
+        dltEntityId: process.env.SMS_DLT_ENTITY_ID ?? null,
+      };
+    }
+
+    const v = await this.settings
+      .getMany(['sms.provider', 'sms.pinnacle.apiKey', 'sms.senderId', 'sms.dltEntityId'])
+      .catch(() => ({} as Record<string, any>));
+    const chosen = await this.settings.getWithSource<string>('sms.provider').catch(() => null);
+
+    /**
+     * "Off" means off — but only when somebody chose it. The same provenance rule as
+     * `EmailProvider`: an untouched default defers to a key a pre-settings deployment left in the
+     * environment, while an administrator's saved "Off" is never overruled by it.
+     */
+    // Case-folded: the value can arrive from a hand-edited environment file as well as the screen.
+    const named = String(v['sms.provider'] ?? '').trim().toUpperCase();
+    let provider: SmsProviderName = named === 'PINNACLE' ? 'PINNACLE' : 'NONE';
+    const explicitlyOff = provider === 'NONE' && chosen?.source === 'saved';
+    // A deployment that names only its key in the environment still switches SMS on.
+    if (provider === 'NONE' && !explicitlyOff && v['sms.pinnacle.apiKey']) provider = 'PINNACLE';
+
+    return {
+      provider,
+      explicitlyOff,
+      pinnacleApiKey: v['sms.pinnacle.apiKey'] ? String(v['sms.pinnacle.apiKey']) : null,
+      senderId: v['sms.senderId'] != null ? String(v['sms.senderId']) : null,
+      dltEntityId: v['sms.dltEntityId'] != null ? String(v['sms.dltEntityId']) : null,
+    };
   }
 }

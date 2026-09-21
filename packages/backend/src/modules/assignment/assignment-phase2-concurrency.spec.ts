@@ -54,7 +54,6 @@ import { AssayerRemarkEntity } from '../assayer/assayer-remark.entity';
 import { AssayerActivityEntity } from '../assayer/assayer-activity.entity';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { RosterRecordsService } from '../assayer/roster-records.service';
 import { BranchService } from '../branch/branch.service';
 import { BranchEntity } from '../branch/branch.entity';
@@ -1003,7 +1002,6 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
           { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
           { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn(), executeCommand: jest.fn() } },
           { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
-          { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
           { provide: RosterRecordsService, useValue: {} },
           { provide: CacheService, useValue: { del: jest.fn() } },
           { provide: DocumentService, useValue: {} },

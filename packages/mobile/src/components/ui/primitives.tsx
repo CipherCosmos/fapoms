@@ -462,24 +462,96 @@ export const IconButton: React.FC<{
   );
 };
 
-// ─────────────────────────────────────────────────────────── Text input
+// ─────────────────────────────────────────────────────────── Form fields
+
+type FieldSize = 'sm' | 'md' | 'lg';
+const FIELD_HEIGHT: Record<FieldSize, number> = { sm: 44, md: 52, lg: 56 };
 
 /**
- * The themed text field ten different screens and modals used to hand-roll on their own —
- * `LoginScreen`, `ChangePasswordScreen`, `SelfRegistrationScreen`'s `LabeledInput`,
- * `ProfileScreen`'s `FieldInput`, and half a dozen modal forms each kept an independent copy of
- * the same field, including independently rediscovering the same Android focus bug below.
+ * The fill and resting edge every field shares.
  *
- * Focus is signalled by border colour ONLY — never by adding shadow/elevation. Toggling
- * elevation/shadow on an input's wrapper the instant it gains focus recreates the native view
- * under Fabric (always on in Expo Go), which drops the just-granted IME focus — verified on the
- * emulator, `dumpsys input_method` showed `mServedView=null` after every tap while a focus glow
- * was present. A plain border-colour prop update on the same view does not have this problem.
+ * A field with no edge at all read as a dark blob with no clear place to tap, and each modal had
+ * drawn its own box in a different fill, radius and weight — five looks for one control. The fill
+ * is translucent in dark mode so a field reads the same on the page ground and inside a card.
+ */
+function useFieldColors() {
+  const t = useTheme();
+  const dark = t.mode === 'dark';
+  return {
+    fill: dark ? 'rgba(255,255,255,0.035)' : t.colors.surface,
+    edge: dark ? 'rgba(255,255,255,0.13)' : 'rgba(15,27,45,0.16)',
+  };
+}
+
+/** The browser draws its own focus outline inside ours; the ring below is the only one wanted. */
+const NO_WEB_OUTLINE = (Platform.OS === 'web' ? { outlineStyle: 'none', outlineWidth: 0 } : {}) as TextStyle;
+
+/** The question above a field — sentence case and readable, identical on every form. */
+export const FieldLabel: React.FC<{ children: React.ReactNode; style?: StyleProp<TextStyle> }> = ({ children, style }) => (
+  <AppText variant="small" tone="muted" style={[{ fontWeight: '600' }, style]}>{children}</AppText>
+);
+
+/**
+ * Label, box, and the line under it — shared by `Input` and `SelectField` so they cannot drift.
+ *
+ * Focus is signalled by COLOUR ONLY: the ring is a permanent 3pt border that is transparent until
+ * focused. Adding shadow/elevation (or changing a border's width) on focus recreates the native
+ * view under Fabric and drops the keyboard focus it was just given — verified on the emulator,
+ * `dumpsys input_method` showed `mServedView=null` after every tap while a focus glow was present.
+ */
+const FieldShell: React.FC<{
+  label?: string;
+  labelAccessory?: React.ReactNode;
+  hint?: string;
+  error?: string;
+  focused: boolean;
+  multiline?: boolean;
+  size: FieldSize;
+  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}> = ({ label, labelAccessory, hint, error, focused, multiline, size, style, children }) => {
+  const t = useTheme();
+  const { fill, edge } = useFieldColors();
+  const ring = focused ? (error ? t.colors.dangerSoft : t.colors.primarySoft) : 'transparent';
+  const border = error ? t.colors.danger : focused ? t.colors.primary : edge;
+
+  return (
+    <View style={[{ gap: t.space.sm }, style]}>
+      {label ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <FieldLabel>{label}</FieldLabel>
+          {labelAccessory}
+        </View>
+      ) : null}
+      <View style={{ borderWidth: 3, borderColor: ring, borderRadius: t.radius.md + 3, margin: -3 }}>
+        <View style={{
+          flexDirection: 'row', alignItems: multiline ? 'flex-start' : 'center', gap: t.space.md,
+          backgroundColor: fill, borderRadius: t.radius.md, borderWidth: 1, borderColor: border,
+          paddingHorizontal: size === 'sm' ? t.space.md : t.space.lg,
+          paddingVertical: multiline ? (size === 'sm' ? 9 : t.space.md) : 0,
+          minHeight: multiline && size !== 'sm' ? 108 : FIELD_HEIGHT[size],
+        }}>
+          {children}
+        </View>
+      </View>
+      {error ? (
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6 }}>
+          <Icon name="alert-circle" size={15} color={t.colors.danger} style={{ marginTop: 1 }} />
+          <AppText variant="small" tone="danger" style={{ flex: 1, fontWeight: '600' }}>{error}</AppText>
+        </View>
+      ) : hint ? (
+        <AppText variant="caption" tone="muted">{hint}</AppText>
+      ) : null}
+    </View>
+  );
+};
+
+/**
+ * The one text field. Every screen and modal uses it — they used to hand-roll their own, and ended
+ * up with five different boxes and five copies of the focus bug note above.
  */
 export const Input: React.FC<{
-  /** Rendered upper-cased, same as `GroupedSection`'s title — pass it in whatever case reads
-   *  best in translation files (most are stored pre-capitalised; this makes the ones that aren't,
-   *  like ProfileScreen's field labels, match without every call site remembering to transform). */
+  /** Shown as written, in sentence case — store labels that way in the catalogue. */
   label?: string;
   value: string;
   onChangeText?: (v: string) => void;
@@ -487,6 +559,8 @@ export const Input: React.FC<{
   onFocus?: () => void;
   placeholder?: string;
   icon?: IconName;
+  /** Fixed text before the value that is never part of it — e.g. `+91` on a phone number. */
+  prefix?: string;
   /** e.g. a show/hide-password toggle, rendered after the field. */
   rightAccessory?: React.ReactNode;
   hint?: string;
@@ -496,12 +570,15 @@ export const Input: React.FC<{
   autoCapitalize?: 'none' | 'characters' | 'words' | 'sentences';
   autoCorrect?: boolean;
   multiline?: boolean;
+  /** For a multiline field that grows as it is typed into, up to this height. */
+  maxHeight?: number;
   maxLength?: number;
   returnKeyType?: 'done' | 'go' | 'next' | 'search' | 'send';
   blurOnSubmit?: boolean;
   onSubmitEditing?: () => void;
-  /** 'lg' matches LoginScreen's 56pt fields; 'md' (default) matches every other form in the app. */
-  size?: 'md' | 'lg';
+  selectTextOnFocus?: boolean;
+  /** 'lg' for a sign-in screen, 'sm' for a message composer; 'md' for every form. */
+  size?: FieldSize;
   /** A flat, non-editable display in place of the field — the value is HR-maintained. */
   readOnly?: boolean;
   /** Same flat display as `readOnly`, plus a lock icon and the (already-translated) reason. */
@@ -510,98 +587,197 @@ export const Input: React.FC<{
   style?: StyleProp<ViewStyle>;
   inputRef?: React.RefObject<TextInput>;
 }> = ({
-  label, value, onChangeText, onBlur, onFocus, placeholder, icon, rightAccessory, hint, error,
+  label, value, onChangeText, onBlur, onFocus, placeholder, icon, prefix, rightAccessory, hint, error,
   secureTextEntry, keyboardType = 'default', autoCapitalize = 'sentences', autoCorrect = true,
-  multiline, maxLength, returnKeyType, blurOnSubmit, onSubmitEditing, size = 'md',
-  readOnly, lockedReason, accessibilityLabel, style, inputRef,
+  multiline, maxHeight, maxLength, returnKeyType, blurOnSubmit, onSubmitEditing, selectTextOnFocus,
+  size = 'md', readOnly, lockedReason, accessibilityLabel, style, inputRef,
 }) => {
   const t = useTheme();
+  const { edge } = useFieldColors();
   const [focused, setFocused] = React.useState(false);
-  const height = size === 'lg' ? 56 : 50;
 
   if (readOnly || lockedReason) {
     return (
       <View style={[{ gap: t.space.sm }, style]}>
         {label ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-            <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
-            {lockedReason && <Icon name="lock-closed" size={11} color={t.colors.textFaint} />}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <FieldLabel>{label}</FieldLabel>
+            {lockedReason && <Icon name="lock-closed" size={12} color={t.colors.textFaint} />}
           </View>
         ) : null}
         <View style={{
-          backgroundColor: t.colors.surfaceAlt, borderRadius: t.radius.md,
-          paddingHorizontal: t.space.lg, paddingVertical: t.space.md,
+          minHeight: FIELD_HEIGHT[size], justifyContent: 'center',
+          backgroundColor: t.colors.surfacePress, borderRadius: t.radius.md,
+          paddingHorizontal: t.space.lg, paddingVertical: t.space.sm,
         }}>
-          <AppText variant="small" tone={value ? 'default' : 'faint'}>{value || placeholder || '—'}</AppText>
+          <AppText variant="body" tone={value ? 'default' : 'faint'} style={{ fontSize: 16 }}>{value || placeholder || '—'}</AppText>
         </View>
-        {lockedReason ? <AppText variant="caption" tone="faint">{lockedReason}</AppText> : null}
+        {lockedReason ? <AppText variant="caption" tone="muted">{lockedReason}</AppText> : null}
       </View>
     );
   }
 
+  const fontSize = size === 'sm' ? 15 : 16;
+
   return (
-    <View style={[{ gap: t.space.sm }, style]}>
-      {label ? <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText> : null}
-      <View
-        style={{
-          flexDirection: 'row', alignItems: multiline ? 'flex-start' : 'center', gap: t.space.md,
-          backgroundColor: t.colors.surfaceAlt, borderRadius: t.radius.lg,
-          /*
-           * Resting state is a flat filled pill — no border at all. A field permanently
-           * outlined in a visible stroke, sitting inside a card that's ALSO outlined, is the
-           * single most "HTML form circa 2012" cue in the old version of this component. The
-           * border now exists only to answer a question ("is this focused / did this fail") —
-           * transparent otherwise, so it costs nothing when there's nothing to say.
-           */
-          borderWidth: 1.5,
-          borderColor: error ? t.colors.danger : focused ? t.colors.primary : 'transparent',
-          paddingHorizontal: t.space.lg,
-          paddingVertical: multiline ? t.space.md : 0,
-          minHeight: multiline ? 90 : height,
-        }}
-      >
-        {icon && (
-          <Icon
-            name={icon}
-            size={18}
-            color={focused ? t.colors.primary : t.colors.textFaint}
-            style={multiline ? { marginTop: 2 } : undefined}
-          />
-        )}
-        <TextInput
-          ref={inputRef}
-          value={value}
-          onChangeText={onChangeText}
-          onFocus={() => { setFocused(true); onFocus?.(); }}
-          onBlur={() => { setFocused(false); onBlur?.(); }}
-          placeholder={placeholder}
-          placeholderTextColor={t.colors.textFaint}
-          secureTextEntry={secureTextEntry}
-          keyboardType={keyboardType}
-          autoCapitalize={autoCapitalize}
-          autoCorrect={autoCorrect}
-          multiline={multiline}
-          maxLength={maxLength}
-          returnKeyType={returnKeyType}
-          blurOnSubmit={blurOnSubmit}
-          onSubmitEditing={onSubmitEditing}
-          accessibilityLabel={accessibilityLabel ?? label}
-          textAlignVertical={multiline ? 'top' : 'center'}
-          style={{
-            flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600',
-            paddingVertical: multiline ? 10 : 0,
-          }}
+    <FieldShell label={label} hint={hint} error={error} focused={focused} multiline={multiline} size={size} style={style}>
+      {icon && (
+        <Icon
+          name={icon}
+          size={19}
+          color={focused ? t.colors.primary : t.colors.textFaint}
+          style={multiline ? { marginTop: 2 } : undefined}
         />
-        {rightAccessory}
-      </View>
-      {error ? (
-        <AppText variant="caption" tone="danger">{error}</AppText>
-      ) : hint ? (
-        <AppText variant="caption" tone="faint">{hint}</AppText>
+      )}
+      {prefix ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+          <AppText variant="body" tone="muted" style={{ fontSize, fontWeight: '600' }}>{prefix}</AppText>
+          <View style={{ width: 1, height: 22, backgroundColor: edge }} />
+        </View>
       ) : null}
+      <TextInput
+        ref={inputRef}
+        value={value}
+        onChangeText={onChangeText}
+        onFocus={() => { setFocused(true); onFocus?.(); }}
+        onBlur={() => { setFocused(false); onBlur?.(); }}
+        placeholder={placeholder}
+        placeholderTextColor={t.colors.textFaint}
+        secureTextEntry={secureTextEntry}
+        keyboardType={keyboardType}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
+        multiline={multiline}
+        maxLength={maxLength}
+        returnKeyType={returnKeyType}
+        blurOnSubmit={blurOnSubmit}
+        onSubmitEditing={onSubmitEditing}
+        selectTextOnFocus={selectTextOnFocus}
+        accessibilityLabel={accessibilityLabel ?? label}
+        textAlignVertical={multiline ? 'top' : 'center'}
+        style={[
+          { flex: 1, color: t.colors.text, fontSize, fontWeight: '500', paddingVertical: 0 },
+          // The whole box is the target, not just the line of text inside it.
+          multiline
+            ? { minHeight: size === 'sm' ? 24 : 82, maxHeight, lineHeight: 22 }
+            : { height: FIELD_HEIGHT[size] - 2 },
+          NO_WEB_OUTLINE,
+        ]}
+      />
+      {rightAccessory}
+    </FieldShell>
+  );
+};
+
+export interface SelectOption { value: string; label: string }
+
+interface SelectFieldBase {
+  label?: string;
+  options: SelectOption[];
+  placeholder: string;
+  hint?: string;
+  error?: string;
+  /** Pre-translated label for the sheet's close button. */
+  closeLabel?: string;
+  style?: StyleProp<ViewStyle>;
+}
+
+/** The closed field and the sheet of options behind it — shared by single and multiple choice. */
+const OptionPicker: React.FC<SelectFieldBase & {
+  display: string | null;
+  isSelected: (value: string) => boolean;
+  onPick: (value: string) => void;
+  closeOnPick: boolean;
+}> = ({ label, options, placeholder, hint, error, closeLabel, style, display, isSelected, onPick, closeOnPick }) => {
+  const t = useTheme();
+  const [open, setOpen] = React.useState(false);
+
+  return (
+    <View style={style}>
+      <Tappable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={label ?? placeholder} scaleTo={0.99}>
+        <FieldShell label={label} hint={hint} error={error} focused={open} size="md">
+          <AppText
+            variant="body"
+            tone={display ? 'default' : 'faint'}
+            numberOfLines={1}
+            style={{ flex: 1, fontSize: 16, fontWeight: '500' }}
+          >
+            {display || placeholder}
+          </AppText>
+          <Icon name="chevron-down" size={18} color={open ? t.colors.primary : t.colors.textFaint} />
+        </FieldShell>
+      </Tappable>
+
+      <ModalSheet visible={open} onClose={() => setOpen(false)} title={label ?? placeholder} variant="sheet" closeLabel={closeLabel}>
+        <ScrollView contentContainerStyle={{ paddingHorizontal: t.space.lg, paddingBottom: t.space['2xl'], gap: 2 }}>
+          {options.map((o) => {
+            const selected = isSelected(o.value);
+            return (
+              <Tappable
+                key={o.value}
+                onPress={() => { haptics.select(); onPick(o.value); if (closeOnPick) setOpen(false); }}
+                accessibilityRole="button"
+                accessibilityLabel={o.label}
+                accessibilityState={{ selected }}
+                scaleTo={0.99}
+              >
+                <View style={{
+                  minHeight: 52, paddingHorizontal: t.space.lg, borderRadius: t.radius.md,
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.md,
+                  backgroundColor: selected ? t.colors.primarySoft : 'transparent',
+                }}>
+                  <AppText variant="body" tone={selected ? 'primary' : 'default'} style={{ flex: 1, fontSize: 16, fontWeight: '600' }}>
+                    {o.label}
+                  </AppText>
+                  <Icon
+                    name={selected ? 'checkmark-circle' : closeOnPick ? 'ellipse-outline' : 'square-outline'}
+                    size={22}
+                    color={selected ? t.colors.primary : t.colors.textFaint}
+                  />
+                </View>
+              </Tappable>
+            );
+          })}
+        </ScrollView>
+      </ModalSheet>
     </View>
   );
 };
+
+/**
+ * A field that opens a list to choose one answer from — state, years of experience, relationship.
+ *
+ * A list instead of typing wherever the system already knows every right answer: "Karnatka" or
+ * "TN" typed into a state box looks fine at the draft and is refused later, when it can no longer
+ * be fixed. Drawn by the same shell as `Input`, so a form of both looks like one form.
+ */
+export const SelectField: React.FC<SelectFieldBase & { value: string; onChange: (value: string) => void }> = ({
+  value, onChange, ...rest
+}) => (
+  <OptionPicker
+    {...rest}
+    display={rest.options.find((o) => o.value === value)?.label ?? null}
+    isSelected={(v) => v === value}
+    onPick={onChange}
+    closeOnPick
+  />
+);
+
+/** The same field for several answers; the sheet stays open while they are ticked. */
+export const MultiSelectField: React.FC<SelectFieldBase & {
+  values: string[];
+  onToggle: (value: string) => void;
+  /** What the closed field reads, when it should say more than the ticked labels. */
+  summary?: string;
+}> = ({ values, onToggle, summary, ...rest }) => (
+  <OptionPicker
+    {...rest}
+    display={summary ?? (rest.options.filter((o) => values.includes(o.value)).map((o) => o.label).join(', ') || null)}
+    isSelected={(v) => values.includes(v)}
+    onPick={onToggle}
+    closeOnPick={false}
+  />
+);
 
 // ─────────────────────────────────────────────────────────── Badges & chips
 
@@ -761,6 +937,7 @@ export const ChipSelector: React.FC<{
   style?: StyleProp<ViewStyle>;
 }> = ({ options, value, onChange, shape = 'pill', style }) => {
   const t = useTheme();
+  const { fill, edge } = useFieldColors();
   const selected = Array.isArray(value) ? value : value != null ? [value] : [];
 
   return (
@@ -775,15 +952,16 @@ export const ChipSelector: React.FC<{
             accessibilityState={{ selected: active }}
             accessibilityLabel={o.label}
           >
+            {/* Same fill and edge as a field, so a row of chips reads as part of the form around it. */}
             <View style={{
               flexDirection: 'row', alignItems: 'center', gap: 6,
-              paddingVertical: t.space.sm, paddingHorizontal: t.space.md,
+              minHeight: 44, paddingHorizontal: t.space.lg,
               borderRadius: shape === 'pill' ? t.radius.pill : t.radius.md,
-              backgroundColor: active ? t.colors.primarySoft : t.colors.surfaceAlt,
-              borderWidth: 1.5, borderColor: active ? t.colors.primary : t.colors.border,
+              backgroundColor: active ? t.colors.primarySoft : fill,
+              borderWidth: 1.5, borderColor: active ? t.colors.primary : edge,
             }}>
-              {o.icon && <Icon name={o.icon} size={14} color={active ? t.colors.primary : t.colors.textFaint} />}
-              <AppText variant="small" tone={active ? 'primary' : 'muted'}>{o.label}</AppText>
+              {o.icon && <Icon name={o.icon} size={16} color={active ? t.colors.primary : t.colors.textMuted} />}
+              <AppText variant="body" tone={active ? 'primary' : 'default'} style={{ fontWeight: '600' }}>{o.label}</AppText>
             </View>
           </Tappable>
         );

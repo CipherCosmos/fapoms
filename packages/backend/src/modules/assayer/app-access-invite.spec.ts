@@ -16,8 +16,12 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { NotificationService } from '../notifications/notification.service';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
+import { SmsService } from '../notifications/sms.service';
+import { SMS_TEMPLATE_REGISTRY } from '../../infrastructure/notifications/sms-template-registry';
+import { EmailService } from '../notifications/email.service';
+import { EMAIL_TEMPLATE_REGISTRY } from '../../infrastructure/notifications/email-template-registry';
+import { EmailTemplateLoader } from '../../infrastructure/notifications/email-template-loader';
+import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
 
@@ -73,8 +77,6 @@ describe('AssayerService.issueAppAccess', () => {
         { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
-        { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
-        { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
         { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
         { provide: CacheService, useValue: cache },
@@ -199,6 +201,15 @@ describe('AssayerService.issueAppAccess', () => {
     const b = await service.issueAppAccess(ASSAYER_ID, ACTOR);
     expect(a.temporaryPassword).not.toBe(b.temporaryPassword);
   });
+
+  /**
+   * This harness wires no EmailService. The bulk run must refuse before minting anything rather
+   * than issue credentials it has no way to deliver.
+   */
+  it('refuses a bulk credential run when email is not wired in, issuing nothing', async () => {
+    await expect(service.bulkIssueAppAccess([ASSAYER_ID], ACTOR)).rejects.toThrow(/email queue is not wired/i);
+    expect(assayers.update).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -207,10 +218,15 @@ describe('AssayerService.issueAppAccess', () => {
  * was never built to reach.
  */
 describe('AssayerService.bulkIssueAppAccess', () => {
+  // Every issued credential is a real bcrypt hash at cost 12 (~0.3 s alone). Under the full suite's
+  // parallel load three of them outlived Jest's default 5 s, so the limit is set for what the code
+  // actually does rather than lowering the cost the production path uses.
+  jest.setTimeout(30_000);
+
   let service: AssayerService;
   let assayers: any;
   let audit: any;
-  let email: any;
+  let emails: any;
   let sms: any;
   let people: Map<string, any>;
 
@@ -229,8 +245,16 @@ describe('AssayerService.bulkIssueAppAccess', () => {
   beforeEach(async () => {
     people = new Map();
     audit = { recordEvent: jest.fn().mockResolvedValue({ id: 'ev-1' }), recordEventSafe: jest.fn() };
-    email = { send: jest.fn().mockResolvedValue({ success: true }) };
-    sms = { send: jest.fn().mockResolvedValue(true) };
+    let queued = 0;
+    emails = {
+      queue: jest.fn(async (req: any) => ({ id: `email-${++queued}`, status: 'QUEUED', to: req.to })),
+      sendNow: jest.fn(),
+    };
+    let texted = 0;
+    sms = {
+      queue: jest.fn(async (req: any) => ({ id: `sms-${++texted}`, channel: 'SMS', status: 'QUEUED', to: req.to })),
+      sendNow: jest.fn(),
+    };
 
     assayers = {
       // Keyed on the id in the `where` clause, unlike the single-person suite above, since a
@@ -242,6 +266,11 @@ describe('AssayerService.bulkIssueAppAccess', () => {
       manager: { query: jest.fn().mockResolvedValue([]) },
     };
 
+    service = await build({ withSms: true });
+  });
+
+  /** The harness, with or without the SMS service wired in (it is `@Optional()` on the service). */
+  const build = async ({ withSms }: { withSms: boolean }): Promise<AssayerService> => {
     const mod = await Test.createTestingModule({
       providers: [
         AssayerService,
@@ -255,15 +284,15 @@ describe('AssayerService.bulkIssueAppAccess', () => {
         { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
-        { provide: EmailProvider, useValue: email },
-        { provide: SmsProvider, useValue: sms },
+        ...(withSms ? [{ provide: SmsService, useValue: sms }] : []),
+        { provide: EmailService, useValue: emails },
         { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
         { provide: CacheService, useValue: { del: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
-    service = mod.get(AssayerService);
-  });
+    return mod.get(AssayerService);
+  };
 
   it('rejects a batch over 500 before touching a single record', async () => {
     const ids = Array.from({ length: 501 }, (_, i) => `id-${i}`);
@@ -314,14 +343,32 @@ describe('AssayerService.bulkIssueAppAccess', () => {
     expect(channelsOf('both')).toEqual(['EMAIL', 'SMS']);
     expect(channelsOf('email-only')).toEqual(['EMAIL']);
     expect(channelsOf('phone-only')).toEqual(['SMS']);
-    expect(email.send).toHaveBeenCalledTimes(2);
-    expect(sms.send).toHaveBeenCalledTimes(2);
+    // Queued, not sent inside the loop — the SMTP round trip per person is what made a 540-person
+    // run take half an hour, and a gateway round trip per person would be the same again.
+    expect(emails.queue).toHaveBeenCalledTimes(2);
+    expect(emails.sendNow).not.toHaveBeenCalled();
+    expect(sms.queue).toHaveBeenCalledTimes(2);
+    expect(sms.sendNow).not.toHaveBeenCalled();
+    expect(out.succeeded.find((s) => s.id === 'both')?.emailId).toMatch(/^email-/);
+    expect(out.succeeded.find((s) => s.id === 'both')?.smsId).toMatch(/^sms-/);
+    expect(out.succeeded.find((s) => s.id === 'email-only')?.smsId).toBeUndefined();
+  });
+
+  it('reports progress per person, for the screen watching the background run', async () => {
+    people.set('p1', person('p1'));
+    people.set('p2', person('p2'));
+    const progress = jest.fn();
+
+    await service.bulkIssueAppAccess(['p1', 'p2'], ACTOR, progress);
+
+    expect(progress).toHaveBeenCalledWith(0, 2, expect.any(String));
+    expect(progress).toHaveBeenLastCalledWith(2, 2, expect.any(String));
   });
 
   it('reports an empty channel list, not a failure, when every delivery attempt fails', async () => {
     people.set('p1', person('p1'));
-    email.send.mockResolvedValue({ success: false });
-    sms.send.mockResolvedValue(false);
+    emails.queue.mockResolvedValue({ id: null, status: 'NOT_QUEUED', to: 'person@example.com', error: 'x' });
+    sms.queue.mockResolvedValue({ id: null, channel: 'SMS', status: 'NOT_QUEUED', to: '9000000000', error: 'x' });
 
     const out = await service.bulkIssueAppAccess(['p1'], ACTOR);
 
@@ -333,15 +380,21 @@ describe('AssayerService.bulkIssueAppAccess', () => {
 
   /**
    * The one that matters most: the temporary password reaches exactly two places (the email
-   * body and the SMS body) and nowhere else — not the method's return value, not the summary
-   * audit row, and not any Logger call, however this run happens to fail or succeed.
+   * request and the SMS request, both as template data) and nowhere else — not the method's return
+   * value, not the summary audit row, and not any Logger call, however this run happens to fail or
+   * succeed.
    */
-  it('never puts the plaintext password anywhere but the two delivery calls', async () => {
+  it('never puts the plaintext password anywhere but the two delivery calls (both queues encrypt it)', async () => {
     people.set('p1', person('p1', { email: 'p1@example.com', phone: '9999999999' }));
     let captured: string | undefined;
-    email.send.mockImplementation(async (payload: any) => {
-      captured = payload.text.match(/temporary password is (\S+)\./)?.[1];
-      return { success: true };
+    let texted: string | undefined;
+    emails.queue.mockImplementation(async (payload: any) => {
+      captured = payload.content?.data?.temporaryPassword;
+      return { id: 'email-1', status: 'QUEUED', to: payload.to };
+    });
+    sms.queue.mockImplementation(async (payload: any) => {
+      texted = payload.content?.data?.temporaryPassword;
+      return { id: 'sms-1', channel: 'SMS', status: 'QUEUED', to: payload.to };
     });
 
     const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -352,6 +405,8 @@ describe('AssayerService.bulkIssueAppAccess', () => {
     const out = await service.bulkIssueAppAccess(['p1'], ACTOR);
 
     expect(captured).toBeTruthy();
+    // One credential, the same one down both channels.
+    expect(texted).toBe(captured);
     expect(JSON.stringify(out)).not.toContain(captured);
     expect(JSON.stringify(audit.recordEventSafe.mock.calls)).not.toContain(captured);
     for (const spy of [warnSpy, logSpy, errorSpy, debugSpy]) {
@@ -372,7 +427,156 @@ describe('AssayerService.bulkIssueAppAccess', () => {
       .find((e: any) => e.eventType === 'BULK_APP_ACCESS_ISSUED');
     expect(summary).toMatchObject({
       userId: ACTOR,
-      metadata: expect.objectContaining({ requested: 2, succeeded: 1, skipped: 1, failed: 0 }),
+      metadata: expect.objectContaining({ requested: 2, succeeded: 1, skipped: 1, failed: 0, emailsQueued: 1, smsQueued: 1 }),
+    });
+  });
+
+  /**
+   * The text goes on the outbound ledger like the email: queued, against the person who ran the
+   * batch (the receipt is readable only by them), as the registered DLT template — a text that is
+   * not a registered template is refused by the operator, so there is no free-text body to build.
+   */
+  it('queues each credential text as the registered template, against the batch runner, and reports its receipt', async () => {
+    people.set('p1', person('p1', { email: null, phone: '9822014455' }));
+
+    const out = await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    expect(sms.queue).toHaveBeenCalledTimes(1);
+    const [request] = sms.queue.mock.calls[0];
+    expect(request).toEqual({
+      kind: 'APP_ACCESS_CREDENTIALS', to: '9822014455', entityType: 'ASSAYER', entityId: 'p1', requestedBy: ACTOR,
+      // Their name, so the registered wording may address them by it.
+      recipientName: 'Person p1',
+      content: {
+        template: 'app-credentials',
+        data: { username: 'AS-p1', temporaryPassword: expect.stringMatching(/^[a-z]+(-[a-z]+)+\d$/), validDays: '7' },
+      },
+    });
+    // Everything the registered wording needs, and nothing it does not.
+    expect(Object.keys(request.content.data).sort()).toEqual([...SMS_TEMPLATE_REGISTRY['app-credentials'].requiredTokens].sort());
+    expect(out.succeeded).toEqual([{ id: 'p1', channels: ['SMS'], smsId: 'sms-1' }]);
+  });
+
+  /**
+   * The SMS service is `@Optional()` (specs build this service positionally). Without it the run
+   * still issues and emails every credential — only the SMS leg is refused, and `channels` shows it.
+   */
+  it('refuses only the SMS leg, not the run, when the SMS service is not wired in', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const withoutSms = await build({ withSms: false });
+    people.set('both', person('both', { email: 'a@x.com', phone: '9999999999' }));
+    people.set('phone-only', person('phone-only', { email: null, phone: '8888888888' }));
+
+    const out = await withoutSms.bulkIssueAppAccess(['both', 'phone-only'], ACTOR);
+
+    expect(out.succeeded).toEqual([
+      { id: 'both', channels: ['EMAIL'], emailId: 'email-1' },
+      { id: 'phone-only', channels: [] },
+    ]);
+    expect(out.failed).toEqual([]);
+    expect(assayers.update).toHaveBeenCalledTimes(2);
+    expect(sms.queue).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/SMS queue is not wired/i));
+    warn.mockRestore();
+  });
+
+  /**
+   * A text that could not even be queued is not reported as sent: no `SMS` channel and no receipt,
+   * so HR's "texts queued" count and the watched receipts both leave this person out.
+   */
+  it('reports no SMS channel and no receipt for a text that was not queued', async () => {
+    people.set('p1', person('p1', { email: 'p1@example.com', phone: '9822014455' }));
+    sms.queue.mockResolvedValueOnce({ id: null, channel: 'SMS', status: 'NOT_QUEUED', to: '9822014455', error: 'x' });
+
+    const out = await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    expect(out.succeeded).toEqual([{ id: 'p1', channels: ['EMAIL'], emailId: 'email-1' }]);
+  });
+
+  /**
+   * The receipt is readable only by the person who asked for it (`OutboundMessageService.receiptFor`),
+   * so an email queued without a requester is one the HR screen that ran the batch gets 404 for.
+   */
+  it('queues each credential email against the person who ran the batch and the assayer it is for', async () => {
+    people.set('p1', person('p1', { email: 'p1@example.com' }));
+
+    await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    expect(emails.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'APP_ACCESS_CREDENTIALS', to: 'p1@example.com', entityType: 'ASSAYER', entityId: 'p1', requestedBy: ACTOR,
+      content: {
+        template: 'app-credentials',
+        data: expect.objectContaining({ displayName: 'Person p1', username: 'AS-p1', validDays: '7' }),
+      },
+    }));
+  });
+
+  /**
+   * The wording is the template's now, so this renders what the service asked for the two ways it
+   * can go out — the shipped HTML (with its derived text) and the built-in fallback — rather than
+   * trusting a copy of the letter written into the service.
+   */
+  it('puts the credential in both parts of the email, so a mail client showing only the HTML still shows it', async () => {
+    people.set('p1', person('p1', { phone: null }));
+
+    await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    const [queued] = emails.queue.mock.calls[0];
+    const password = queued.content.data.temporaryPassword;
+    expect(password).toMatch(/^[a-z]+(-[a-z]+)+\d$/);
+
+    const shipped = await new EmailTemplateRenderer(new EmailTemplateLoader()).render('app-credentials', queued.content.data);
+    const builtIn = EMAIL_TEMPLATE_REGISTRY['app-credentials'].fallbackRenderer(queued.content.data);
+    expect(shipped.metadata.source).toBe('filesystem');
+    for (const message of [shipped, builtIn]) {
+      expect(message.text).toContain(password);
+      expect(message.html).toContain(password);
+      expect(message.html).toContain('AS-p1');
+    }
+  });
+
+  /** The roster's other bulk action, run by the same background worker. */
+  describe('bulkNotify', () => {
+    const notify = (ids: string[], sendEmail: boolean, progress?: jest.Mock) =>
+      service.bulkNotify(ids, ' Holiday ', ' Closed Monday ', sendEmail, ACTOR, progress);
+
+    it('queues the email rather than sending it inside the loop, against the person who ran it', async () => {
+      people.set('p1', person('p1', { email: 'p1@example.com' }));
+
+      const out = await notify(['p1'], true);
+
+      expect(emails.sendNow).not.toHaveBeenCalled();
+      expect(emails.queue).toHaveBeenCalledTimes(1);
+      expect(emails.queue).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'ROSTER_MESSAGE', to: 'p1@example.com',
+        // The desk wrote every word, so it goes out as the branded layout, not a template.
+        content: {
+          subject: 'Holiday', text: 'Closed Monday',
+          layout: expect.objectContaining({ title: 'Holiday', bodyLines: ['Closed Monday'] }),
+        },
+        entityType: 'ASSAYER', entityId: 'p1', requestedBy: ACTOR,
+      }));
+      expect(out.succeeded).toEqual([{ id: 'p1', channels: ['IN_APP', 'EMAIL'], emailId: 'email-1' }]);
+    });
+
+    it('emails nobody when the operator did not ask for email', async () => {
+      people.set('p1', person('p1'));
+
+      const out = await notify(['p1'], false);
+
+      expect(emails.queue).not.toHaveBeenCalled();
+      expect(emails.sendNow).not.toHaveBeenCalled();
+      expect(out.succeeded).toEqual([{ id: 'p1', channels: ['IN_APP'] }]);
+    });
+
+    it('reports progress per person, for the screen watching the background run', async () => {
+      people.set('p1', person('p1'));
+      people.set('p2', person('p2'));
+      const progress = jest.fn();
+
+      await notify(['p1', 'p2'], true, progress);
+
+      expect(progress.mock.calls.map((c) => [c[0], c[1]])).toEqual([[0, 2], [1, 2], [2, 2]]);
     });
   });
 });

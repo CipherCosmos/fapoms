@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { CheckCircle2, Ban, Receipt, Send, GitBranch, AlertCircle, ChevronRight } from 'lucide-react';
 import { AssayerInvoiceStatus, type AssayerInvoiceInvitation, type AssayerPayableStatus } from '@fapoms/shared';
-import { DetailDrawer, Pagination, Select, useConfirm, useToast } from '../../components/ui';
+import { DetailDrawer, Modal, Pagination, Select, useConfirm, useToast } from '../../components/ui';
 import {
   useAssayerInvoices,
   useAssayerInvoice,
@@ -11,12 +11,17 @@ import {
   useInviteAllAssayerInvoices,
   useHoldPayout,
 } from '../../hooks/useBilling';
-import { BILLING_PAGE_SIZE } from '../../services/billing';
+import { BILLING_PAGE_SIZE, billingApi } from '../../services/billing';
+import type { AssayerInvoiceInviteAllResult } from '../../services/billing';
 import { userMessage } from '../../services/errors';
+import { QueuedJobTimeout } from '../../services/queued-job';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { moneyTotal as money, moneyExact } from '../../utils/money';
 import { Card, Empty, AssayerInvoiceStatusPill, PayoutStatusPill, assayerInvoiceStatusLabel, fmtDate, inputStyle, th, td, tdNum } from './shared';
+// The one summary of a bulk invite round, shared with the pay screen rather than re-written:
+// it is the component that tells 'failed' apart from 'skipped', which is the whole point.
+import { InviteOutcomeSummary } from './PayoutsTab';
 
 /**
  * Assayer Invoices — the claim and approval loop, from the desk's side.
@@ -52,6 +57,16 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
 
   const invoices = useAssayerInvoices({ status: filter === 'ALL' ? undefined : filter, page, limit: BILLING_PAGE_SIZE });
   const inviteAll = useInviteAllAssayerInvoices();
+  /**
+   * The round is ACCEPTED by the server and runs on its queue — about 1,200 assayers, which inside
+   * the request outlived this client's 30 s, said "failed", and invited a second time on the next
+   * press. While it runs this holds the server's stage line ("Inviting assayers (340/1200)…"), and
+   * non-null keeps the button disabled until the round answers.
+   */
+  const [roundProgress, setRoundProgress] = useState<string | null>(null);
+  /** The finished round's per-assayer outcomes, shown once in a modal. See `handleGenerateCycle`. */
+  const [roundOutcome, setRoundOutcome] = useState<AssayerInvoiceInviteAllResult | null>(null);
+  const roundBusy = inviteAll.isPending || roundProgress !== null;
   const total = invoices.data?.total ?? 0;
 
   /**
@@ -66,30 +81,48 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
 
   const changeFilter = (f: AssayerInvoiceFilter) => { onFilter(f); setPage(1); };
 
+  /**
+   * The cadence gesture: one bill per assayer with eligible unbilled work, across the whole book.
+   *
+   * The outcome is shown as a summary, not as a toast line, and that is a correctness fix rather
+   * than a cosmetic one. The toast said "N skipped (already billed or no new work)" using
+   * `res.skipped` — and the round's per-assayer outcomes include `failed`, an infrastructure
+   * error on ONE assayer that the round deliberately does not let abort the other forty. Folded
+   * into "skipped" it read as a business decision about their work, so nobody went back for
+   * them and those assayers were simply never billed. `InviteOutcomeSummary` lists them by name,
+   * in the danger tone, apart from the ones the round chose to skip.
+   */
   const handleGenerateCycle = async () => {
     const ok = await confirm({
-      title: 'Send Monthly Bills to All Assayers?',
+      title: 'Send bills to every assayer with unbilled work?',
       message: (
         <>
-          This creates monthly bill statements for <strong>every assayer</strong> with completed audit work and sends them to their mobile app and email for review.
+          Every assayer with completed work that no bill has reached gets <strong>one</strong> bill
+          covering all of it, on their phone and by email, and sees those amounts for the first time.
+          They confirm, and approving the confirmed bill approves their payouts.
           <br /><br />
-          Assayers can review and confirm their earnings before payouts are approved.
+          Assayers who already hold an open bill are skipped, so running this again is safe.
         </>
       ),
-      confirmLabel: 'Send Bills to Assayers',
+      confirmLabel: 'Send bills',
       reversible: true,
-      reversibleNote: 'Bills can be reviewed, edited, or cancelled before payment.',
+      reversibleNote: 'Each bill can be cancelled individually before it is approved, which releases its lines again.',
       tone: 'normal',
     });
     if (!ok) return;
+    setRoundProgress('Starting the round…');
     try {
-      const res = await inviteAll.mutateAsync();
-      const parts = [`${res.invited} assayer(s) received monthly bills`];
-      if (res.skipped) parts.push(`${res.skipped} skipped (already billed or no new work)`);
-      toast({ type: 'success', title: 'Monthly bills sent', message: parts.join(' · ') });
+      const started = await inviteAll.mutateAsync();
+      setRoundOutcome(await billingApi.followBulkJob<AssayerInvoiceInviteAllResult>(started, {
+        onProgress: (p) => setRoundProgress(`${p.stage}…`),
+      }));
       void invoices.refetch();
     } catch (e) {
-      toast({ type: 'error', title: 'Could not send monthly bills', message: userMessage(e) });
+      // Still going after the give-up time is not a failure: the round carries on on the server.
+      if (e instanceof QueuedJobTimeout) toast({ type: 'info', title: 'Still sending bills', message: e.message });
+      else toast({ type: 'error', title: 'Could not send the bills', message: userMessage(e) });
+    } finally {
+      setRoundProgress(null);
     }
   };
 
@@ -125,7 +158,7 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
               >
                 <span>{f === 'ALL' ? 'All' : assayerInvoiceStatusLabel(f)}</span>
                 <span style={{
-                  fontSize: '10px',
+                  fontSize: 'var(--text-3xs)',
                   padding: '1px 6px',
                   borderRadius: 10,
                   background: isSelected ? 'var(--accent-primary)' : 'var(--bg-tertiary)',
@@ -144,15 +177,22 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
           {canAct && (
             <button
               onClick={handleGenerateCycle}
-              disabled={inviteAll.isPending}
+              disabled={roundBusy}
               className="btn btn-primary"
               style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)', padding: '6px 14px' }}
             >
-              <Send size={13} /> {inviteAll.isPending ? 'Sending…' : 'Send Monthly Bills'}
+              <Send size={13} /> {roundBusy ? 'Sending…' : 'Send bills'}
             </button>
           )}
         </div>
       </div>
+
+      {/* The queued round, in the server's own words. It carries on if this page is closed. */}
+      {roundProgress && (
+        <div role="status" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '8px 12px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+          {roundProgress}
+        </div>
+      )}
 
       {loadFailed(invoices) ? (
         <LoadFailure loads={[{ label: 'assayer invoices', query: invoices }]} />
@@ -162,25 +202,25 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
             <Receipt size={28} style={{ color: 'var(--text-muted)', opacity: 0.6 }} />
             <div style={{ textAlign: 'center', maxWidth: 460 }}>
               {filter === 'ALL'
-                ? 'No assayer invoices yet. Invite assayers from Payouts; submitted invoices appear here for approval.'
+                ? 'No assayer bills yet. Send them with the button above; once an assayer confirms one, it comes back here for your approval.'
                 : filter === AssayerInvoiceStatus.SUBMITTED
-                  ? 'Nothing waiting for approval. Invite assayers from Payouts; submitted invoices appear here for approval.'
-                  : 'No bills found under this filter.'}
+                  ? 'Nothing confirmed and waiting for your approval right now.'
+                  : 'No bills at this stage.'}
             </div>
             {canAct && filter === 'ALL' && (
               <button
                 onClick={handleGenerateCycle}
-                disabled={inviteAll.isPending}
+                disabled={roundBusy}
                 className="btn btn-secondary"
                 style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)', marginTop: 6 }}
               >
-                <Send size={13} /> Send Monthly Bills
+                <Send size={13} /> Send bills
               </button>
             )}
           </div>
         </Empty>
       ) : (
-        <Card title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Receipt size={14} /> Assayer Bills</span>}>
+        <Card title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Receipt size={14} /> Assayer bills</span>}>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
@@ -231,6 +271,18 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
       )}
 
       {openId && <AssayerInvoiceDrawer invoiceId={openId} onClose={() => setOpenId(null)} canAct={canAct} />}
+
+      {roundOutcome && (
+        <Modal open onClose={() => setRoundOutcome(null)} title={<><Send size={18} /> The round finished</>} width="560px"
+          footer={<button type="button" onClick={() => setRoundOutcome(null)} className="btn btn-primary">Close</button>}>
+          <InviteOutcomeSummary
+            result={roundOutcome}
+            // The list on screen names who it can; an id stands in for an assayer on another page.
+            nameOf={(assayerId) => rows.find((r) => r.assayerId === assayerId)?.assayerName ?? `assayer ${assayerId.slice(0, 8)}…`}
+          />
+        </Modal>
+      )}
+
       {confirmDialog}
     </div>
   );
@@ -267,10 +319,10 @@ const ClaimLifecycleStepper: React.FC<{ invoice: AssayerInvoiceInvitation }> = (
   }
 
   const steps = [
-    { label: 'Bill Sent', date: invoice.invitedAt, done: isInvited, active: invoice.status === AssayerInvoiceStatus.INVITED },
-    { label: 'Assayer Agreed', date: invoice.submittedAt, done: isSubmitted, active: invoice.status === AssayerInvoiceStatus.SUBMITTED, badge: invoice.confirmedVersion ? `v${invoice.confirmedVersion}` : undefined },
-    { label: 'Office Approved', date: invoice.approvedAt, done: isApproved, active: invoice.status === AssayerInvoiceStatus.APPROVED },
-    { label: 'Bank Paid', date: invoice.paidAt, done: isPaid, active: isPaid },
+    { label: 'Bill sent', date: invoice.invitedAt, done: isInvited, active: invoice.status === AssayerInvoiceStatus.INVITED },
+    { label: 'Assayer agreed', date: invoice.submittedAt, done: isSubmitted, active: invoice.status === AssayerInvoiceStatus.SUBMITTED, badge: invoice.confirmedVersion ? `v${invoice.confirmedVersion}` : undefined },
+    { label: 'You approved', date: invoice.approvedAt, done: isApproved, active: invoice.status === AssayerInvoiceStatus.APPROVED },
+    { label: 'Bank paid', date: invoice.paidAt, done: isPaid, active: isPaid },
   ];
 
   return (
@@ -279,7 +331,7 @@ const ClaimLifecycleStepper: React.FC<{ invoice: AssayerInvoiceInvitation }> = (
         <div key={s.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{
-              width: 18, height: 18, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700,
+              width: 18, height: 18, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--text-3xs)', fontWeight: 700,
               background: s.done ? (s.active ? 'var(--accent-primary)' : 'var(--status-active-bg)') : 'var(--bg-secondary)',
               color: s.done ? (s.active ? '#fff' : 'var(--success)') : 'var(--text-muted)',
               border: `1px solid ${s.done ? (s.active ? 'var(--accent-primary)' : 'var(--success)') : 'var(--border-color)'}`,
@@ -290,9 +342,9 @@ const ClaimLifecycleStepper: React.FC<{ invoice: AssayerInvoiceInvitation }> = (
               {s.label}
             </span>
           </div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', paddingLeft: 24 }}>
+          <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', paddingLeft: 24 }}>
             {fmtDate(s.date)}
-            {s.badge && <span style={{ marginLeft: 4, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3, fontSize: '9px' }}>{s.badge}</span>}
+            {s.badge && <span style={{ marginLeft: 4, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3, fontSize: 'var(--text-3xs)' }}>{s.badge}</span>}
           </div>
         </div>
       ))}
@@ -457,19 +509,19 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
         {/* 4 Financial Stat Cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
           <div style={{ padding: '10px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Audit Fees</div>
+            <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Audit Fees</div>
             <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)', marginTop: 2 }}>{moneyExact(invoice.subtotalBase)}</div>
           </div>
           <div style={{ padding: '10px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Travel & Expenses</div>
+            <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Travel & Expenses</div>
             <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)', marginTop: 2 }}>{moneyExact(invoice.subtotalTravel)}</div>
           </div>
           <div style={{ padding: '10px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>TDS Deduction</div>
+            <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>TDS Deduction</div>
             <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--danger)', marginTop: 2 }}>−{moneyExact(invoice.tdsAmount)}</div>
           </div>
           <div style={{ padding: '10px 12px', background: 'var(--status-pending-bg)', border: '1px solid var(--accent-primary)', borderRadius: 'var(--radius-sm)' }}>
-            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--accent-primary)', fontWeight: 700 }}>Amount to Pay</div>
+            <div style={{ fontSize: 'var(--text-3xs)', textTransform: 'uppercase', color: 'var(--accent-primary)', fontWeight: 700 }}>Amount to Pay</div>
             <div style={{ fontSize: 'var(--text-md)', fontWeight: 800, color: 'var(--text-primary)', marginTop: 2 }}>{moneyExact(invoice.totalAmount)}</div>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { FileText, Plus } from 'lucide-react';
-import { InvoiceStatus, invoiceStatusLabel } from '@fapoms/shared';
+import { FileText, Plus, Receipt } from 'lucide-react';
+import { InvoiceStatus } from '@fapoms/shared';
 import { Pagination } from '../../components/ui';
 import { useInvoiceable, useBillingInvoices } from '../../hooks/useBilling';
 import { BILLING_PAGE_SIZE } from '../../services/billing';
@@ -8,14 +8,21 @@ import type { InvoiceableClient } from '../../services/billing';
 import { moneyTotal as money } from '../../utils/money';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
-import { Card, Empty, InvoiceStatusPill, HoldPill, fmtDate, th, td, tdNum } from './shared';
+import { Card, Empty, InvoiceStatusPill, HoldPill, fmtDate, th, td, tdNum, tableScrollStyle } from './shared';
+import { INVOICE_STATE_CHIP } from './vocabulary';
 import { CreateInvoiceModal } from './CreateInvoiceModal';
 import { InvoiceDetailDrawer } from './InvoiceDetailDrawer';
 
 /**
- * Invoices — left: completed work not yet invoiced, by client, with a Create button per client;
- * right: the invoice list. An invoice is a set of completed assignments for one client:
- * Draft → Sent → Paid.
+ * Bill clients — left: completed work nobody has invoiced yet, by client, with a Create button
+ * per client; right: the invoices themselves. An invoice is a set of completed assignments for
+ * one client, and it goes draft → sent → paid.
+ *
+ * The step that gets forgotten is SENDING. A draft is owed by nobody: it does not appear in
+ * "Owed by clients", it is not overdue, and the client cannot pay it. The live book had fourteen
+ * of them, ₹27,648, while the overview reported ₹0 outstanding and neither screen mentioned the
+ * other. The filter chips carry counts now, and a draft says "Draft, not sent" rather than
+ * "Draft", because the missing half of that word is the whole problem.
  */
 export type InvoiceFilter = 'ALL' | InvoiceStatus;
 
@@ -32,7 +39,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) minmax(0, 2fr)', gap: 14, alignItems: 'start' }}>
-      <Card title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><FileText size={14} /> Ready to invoice</span>}>
+      <Card title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><FileText size={14} /> Work waiting to be invoiced</span>}>
         {/* Failure before emptiness. "Nothing to invoice" is a statement about revenue nobody has
             billed yet; drawn over a refused or paused load it quietly stops the money going out. */}
         {loadFailed(invoiceable) ? (
@@ -46,7 +53,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
               share, or open that client from the Overview to see all of theirs.
             </div>
           )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 'calc(100vh - 290px)', overflowY: 'auto' }}>
             {clients.map((c) => {
               const held = c.lines.filter((l) => l.onHold);
               return (
@@ -73,7 +80,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
       </Card>
 
       <Card
-        title="Invoices"
+        title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Receipt size={14} /> Client invoices ({total})</span>}
         actions={
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {(['ALL', InvoiceStatus.DRAFT, InvoiceStatus.ISSUED, InvoiceStatus.PAID, InvoiceStatus.CANCELLED] as InvoiceFilter[]).map((f) => (
@@ -81,16 +88,18 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
                 padding: '4px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
                 background: filter === f ? 'var(--status-pending-bg)' : 'transparent', color: filter === f ? 'var(--text-primary)' : 'var(--text-secondary)',
                 border: `1px solid ${filter === f ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-              }}>{f === 'ALL' ? 'All' : invoiceStatusLabel(f)}</button>
+              }}>{f === 'ALL' ? 'All' : INVOICE_STATE_CHIP[f]}</button>
             ))}
           </div>
         }
       >
         {loadFailed(invoices) ? (
           <LoadFailure loads={[{ label: 'invoices', query: invoices }]} />
-        ) : invoices.isLoading ? <Empty>Loading invoices…</Empty> : rows.length === 0 ? <Empty>No invoices yet.</Empty> : (
+        ) : invoices.isLoading ? <Empty>Loading invoices…</Empty> : rows.length === 0 ? (
+          <Empty>{filter === InvoiceStatus.DRAFT ? 'No drafts waiting to be sent.' : 'No client invoices yet. Invoice a client from the list on the left.'}</Empty>
+        ) : (
           <>
-            <div style={{ overflowX: 'auto' }}>
+            <div style={tableScrollStyle}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>
                   <th style={th}>Invoice</th><th style={th}>Client</th><th style={th}>Status</th><th style={th}>Issued</th><th style={th}>Due</th>

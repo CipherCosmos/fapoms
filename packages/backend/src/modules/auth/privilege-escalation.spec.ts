@@ -20,7 +20,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { Region } from '@fapoms/shared';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from '../../modules/notifications/email.service';
 
 describe('Privilege Escalation & Scope Protection (Invariants 4 & 7)', () => {
   let service: UserService;
@@ -62,7 +62,7 @@ describe('Privilege Escalation & Scope Protection (Invariants 4 & 7)', () => {
         { provide: DomainEventPublisher, useValue: mockEvents },
         { provide: CacheService, useValue: mockCache },
         // Staff invites go out by email; nothing in this suite sends one.
-        { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: true }) } },
+        { provide: EmailService, useValue: { queue: jest.fn().mockResolvedValue({ id: 'e1', status: 'QUEUED', to: 'x@example.in' }) } },
       ],
     }).compile();
 

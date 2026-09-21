@@ -9,7 +9,7 @@ import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from '../notifications/email.service';
 import { UserStatus } from '@fapoms/shared';
 
 /**
@@ -25,7 +25,7 @@ describe('the link that lets somebody set their own password', () => {
   let service: UserService;
   let saved: Partial<UserEntity>[];
   let stored: Partial<UserEntity>;
-  const email = { send: jest.fn().mockResolvedValue({ success: true }) };
+  const emails = { queue: jest.fn().mockResolvedValue({ id: 'e1', status: 'QUEUED', to: 'priya@example.in' }) };
 
   const audit = { recordEvent: jest.fn(), recordEventSafe: jest.fn() };
 
@@ -58,7 +58,7 @@ describe('the link that lets somebody set their own password', () => {
         { provide: AuditService, useValue: audit },
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: CacheService, useValue: { del: jest.fn().mockResolvedValue(undefined) } },
-        { provide: EmailProvider, useValue: email },
+        { provide: EmailService, useValue: emails },
       ],
     }).compile();
     service = module.get(UserService);
@@ -83,13 +83,33 @@ describe('the link that lets somebody set their own password', () => {
     expect(JSON.stringify(audit.recordEventSafe.mock.calls)).not.toContain(tokenFrom(link));
   });
 
-  it('emails the person, and says whether the message actually went', async () => {
+  it('queues the email rather than sending it inside the request, and hands back its receipt to watch', async () => {
     const result = await mint();
-    expect(email.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'priya@example.in' }));
-    expect(result.emailed).toBe(true);
+    expect(emails.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'ACCOUNT_SETUP_LINK', to: 'priya@example.in', requestedBy: 'admin-1', entityType: 'USER', entityId: 'u1',
+      content: {
+        template: 'account-setup-link',
+        data: expect.objectContaining({
+          displayName: 'Priya', username: 'priya', setupUrl: result.link, expiryHours: expect.stringMatching(/^\d+$/),
+        }),
+      },
+    }));
+    expect(result.emailDelivery).toEqual({ id: 'e1', status: 'QUEUED', to: 'priya@example.in' });
 
-    email.send.mockResolvedValueOnce({ success: false });
-    expect((await mint()).emailed).toBe(false);
+    // A queue that could not take it is reported as such, with the link still handed back.
+    emails.queue.mockResolvedValueOnce({ id: null, status: 'NOT_QUEUED', to: 'priya@example.in', error: 'x' });
+    const failed = await mint();
+    expect(failed.emailDelivery.status).toBe('NOT_QUEUED');
+    expect(failed.link).toMatch(/\/account-setup\/[0-9a-f]{64}$/);
+  });
+
+  /** Two templates, so an administrator editing the reset email cannot change the welcome one. */
+  it('sends a reset as the reset template, not the new-account one', async () => {
+    const { link } = await service.sendPasswordSetupLink('u1', 'admin-1', 'RESET');
+    expect(emails.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'ACCOUNT_SETUP_LINK',
+      content: { template: 'password-reset-link', data: expect.objectContaining({ setupUrl: link }) },
+    }));
   });
 
   it('refuses to mint a link for somebody with no address to send it to', async () => {

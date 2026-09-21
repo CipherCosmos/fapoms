@@ -14,7 +14,19 @@
  * quoting the approved request's id alongside the same confirmation phrase as ever.
  */
 
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsArray, IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
 import { SystemRole } from '@fapoms/shared';
@@ -23,6 +35,7 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RoleOnly, RequirePer
 import { DataResetService } from './data-reset.service';
 import { BackupOnDemandService } from './backup-on-demand.service';
 import { DestructiveApprovalService } from './destructive-approval.service';
+import { DataResetRuns } from './data-reset-runs';
 
 /**
  * Typed exactly so a fat-fingered or scripted request can't slip past the intent-to-delete step.
@@ -84,6 +97,7 @@ export class DataResetController {
     private readonly dataReset: DataResetService,
     private readonly backup: BackupOnDemandService,
     private readonly approvals: DestructiveApprovalService,
+    private readonly runs: DataResetRuns,
   ) {}
 
   @Get('domains')
@@ -162,14 +176,23 @@ export class DataResetController {
 
   // ── Execution ───────────────────────────────────────────────────────────
 
+  /**
+   * Accepted, then run: answers 202 with a job id at once, and the wipe carries on in this process
+   * (data-reset-runs.ts says why not a queue). Before, a backup plus a wipe on a large database ran
+   * past the browser's 180 s patience, so the screen reported "failed" while the wipe continued.
+   *
+   * The work itself is unchanged: backup first when asked (a failed backup throws and the wipe
+   * never starts), then the wipe with the approval consumed inside its transaction.
+   */
   @Post('execute')
-  @ApiOperation({ summary: 'Wipe the selected domains, consuming an approved request' })
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Start wiping the selected domains, consuming an approved request; poll runs/:jobId for the outcome' })
   async execute(@Body() dto: ExecuteDataResetDto, @Req() req: any) {
     if (dto.confirmationPhrase !== DATA_RESET_CONFIRMATION_PHRASE) {
-      return {
-        success: false,
-        error: `Confirmation text did not match. Type exactly "${DATA_RESET_CONFIRMATION_PHRASE}".`,
-      };
+      // A 400, no longer a `{ success: false }` body: under a 202 that body would read as "accepted".
+      throw new BadRequestException(
+        `Confirmation text did not match. Type exactly "${DATA_RESET_CONFIRMATION_PHRASE}".`,
+      );
     }
 
     // The frontend's own "keep me" checkbox is UX only — never trusted as the actual guarantee.
@@ -177,30 +200,42 @@ export class DataResetController {
     // structurally impossible rather than merely discouraged.
     const keepUserIds = [...new Set([...(dto.keepUserIds ?? []), req.user.id])];
 
-    // A fresh preview, re-run server-side, so a confirm click that raced ahead of what was
-    // actually looked at (a conflict introduced by another change in between) is caught here
-    // rather than silently executed — DataResetService.execute() re-derives this itself and
-    // throws a 409 with the same shape preview() would have returned.
-    let backup = null as Awaited<ReturnType<BackupOnDemandService['createDump']>> | null;
-    if (dto.takeBackupFirst) {
-      // On failure this throws and the wipe never starts — see BackupOnDemandService.createDump.
-      backup = await this.backup.createDump();
-    }
+    return this.runs.start(
+      { requestId: dto.requestId, requestedBy: req.user.id },
+      dto.takeBackupFirst ? 'Taking a backup first' : 'Wiping',
+      async (setStage) => {
+        // A fresh preview, re-run server-side, so a confirm click that raced ahead of what was
+        // actually looked at (a conflict introduced by another change in between) is caught here
+        // rather than silently executed — DataResetService.execute() re-derives this itself and
+        // throws a 409 with the same shape preview() would have returned.
+        let backup = null as Awaited<ReturnType<BackupOnDemandService['createDump']>> | null;
+        if (dto.takeBackupFirst) {
+          // On failure this throws and the wipe never starts — see BackupOnDemandService.createDump.
+          backup = await this.backup.createDump();
+          setStage('Wiping');
+        }
 
-    const result = await this.dataReset.execute({
-      domainKeys: dto.domainKeys,
-      keepUserIds,
-      billingConfirmed: dto.billingConfirmed,
-      actorUserId: req.user.id,
-      backup,
-      requestId: dto.requestId,
-      // Runs as the first statement inside the wipe's transaction: executor must be the
-      // requester, the selection must match the approval exactly, and the APPROVED row is
-      // atomically consumed — or the whole thing throws before a single row is deleted.
-      consumeApproval: (manager) =>
-        this.approvals.assertExecutableAndConsume(dto.requestId, req.user.id, dto.domainKeys, manager),
-    });
+        return await this.dataReset.execute({
+          domainKeys: dto.domainKeys,
+          keepUserIds,
+          billingConfirmed: dto.billingConfirmed,
+          actorUserId: req.user.id,
+          backup,
+          requestId: dto.requestId,
+          // Runs as the first statement inside the wipe's transaction: executor must be the
+          // requester, the selection must match the approval exactly, and the APPROVED row is
+          // atomically consumed — or the whole thing throws before a single row is deleted.
+          consumeApproval: (manager) =>
+            this.approvals.assertExecutableAndConsume(dto.requestId, req.user.id, dto.domainKeys, manager),
+        });
+      },
+    );
+  }
 
-    return result;
+  /** The outcome of a wipe started above. Only its starter can read it; anyone else gets a 404. */
+  @Get('runs/:jobId')
+  @ApiOperation({ summary: 'Poll a wipe you started: running, done (with what was removed), or failed (with why)' })
+  async run(@Param('jobId', new ParseUUIDPipe()) jobId: string, @Req() req: any) {
+    return this.runs.describe(jobId, req.user?.id);
   }
 }

@@ -24,9 +24,10 @@ import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
-import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
+import { appPublicUrl } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from '../notifications/email.service';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
-import { EventCategory, UserStatus, SystemRole, Region, isRegion } from '@fapoms/shared';
+import { EventCategory, UserStatus, SystemRole, Region, isRegion, type OutboundMessageReceipt } from '@fapoms/shared';
 
 export interface CreateUserDto {
   username: string;
@@ -82,7 +83,7 @@ export class UserService {
     // principal cache synchronously on a password change — see resetPassword/changePassword.
     private readonly cache: CacheService,
     /* Staff invites are emailed, not typed out and passed on — see `sendPasswordSetupLink`. */
-    private readonly emailProvider: EmailProvider,
+    private readonly emails: EmailService,
   ) {}
 
   /**
@@ -517,47 +518,46 @@ export class UserService {
   }
 
   /**
-   * Mint a link and email it. Returns whether it actually went out.
+   * Mint a link and queue the email that carries it. Returns the email's receipt, not a claim.
    *
-   * The caller must not assume it did: `EmailProvider.send` answers `{ success: false }` when the
-   * transport is off rather than throwing, and a screen that says "invite sent" on a deployment
-   * with email disabled leaves a colleague waiting for a message nobody posted. When it fails, the
-   * link is returned so the administrator can pass it on themselves — a link is safe to hand over
-   * in a way a password is not, because only its holder can spend it and only once.
+   * The caller must not assume it went: a screen that says "invite sent" on a deployment with email
+   * disabled leaves a colleague waiting for a message nobody posted. The send used to happen inside
+   * this request (2.8 s measured); now the receipt comes back at once and the screen watches it
+   * reach SENT or FAILED. The link is returned either way so the administrator can pass it on
+   * themselves if it fails — a link is safe to hand over in a way a password is not, because only
+   * its holder can spend it and only once.
    */
   async sendPasswordSetupLink(id: string, actorId: string, reason: 'NEW_ACCOUNT' | 'RESET'): Promise<{
-    emailed: boolean;
+    emailDelivery: OutboundMessageReceipt;
     email: string | null;
     link: string;
     expiresAt: Date;
   }> {
     const { user, rawToken, expiresAt } = await this.mintPasswordSetupToken(id, actorId, reason);
     const link = `${appPublicUrl()}/account-setup/${rawToken}`;
-    const greeting = `Hello ${user.firstName || user.displayName},`;
-    const intro = reason === 'NEW_ACCOUNT'
-      ? 'An account has been created for you on FAPOMS. Choose a password to finish setting it up.'
-      : 'A password reset was requested for your FAPOMS account. Choose a new password below.';
 
-    const result = await this.emailProvider.send({
+    // The two occasions are two templates, so an administrator editing the reset email cannot
+    // change what a brand-new colleague is sent.
+    const emailDelivery = await this.emails.queue({
+      kind: 'ACCOUNT_SETUP_LINK',
+      entityType: 'USER',
+      entityId: user.id,
+      requestedBy: actorId,
       to: user.email!,
-      subject: reason === 'NEW_ACCOUNT' ? 'Set up your FAPOMS account' : 'Reset your FAPOMS password',
-      text: `${greeting}\n\n${intro}\n\n${link}\n\nThe link works once and expires in ${UserService.SETUP_TOKEN_HOURS} hours.`,
-      html: renderEmailHtml({
-        title: reason === 'NEW_ACCOUNT' ? 'Set up your account' : 'Reset your password',
-        bodyLines: [
-          greeting,
-          intro,
-          `Your username is ${user.username}.`,
-          `This link works once and expires in ${UserService.SETUP_TOKEN_HOURS} hours.`,
-        ],
-        linkUrl: link,
-        linkLabel: reason === 'NEW_ACCOUNT' ? 'Choose my password' : 'Set a new password',
-        securityNotice: 'If you were not expecting this, ignore it and tell your administrator — '
-          + 'nothing changes until somebody uses the link.',
-      }),
+      content: {
+        template: reason === 'NEW_ACCOUNT' ? 'account-setup-link' : 'password-reset-link',
+        data: {
+          displayName: user.firstName || user.displayName,
+          username: user.username,
+          setupUrl: link,
+          expiryHours: String(UserService.SETUP_TOKEN_HOURS),
+          logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+          companyName: 'Sumeru Global',
+        },
+      },
     });
 
-    return { emailed: Boolean(result?.success), email: user.email, link, expiresAt };
+    return { emailDelivery, email: user.email, link, expiresAt };
   }
 
   /**

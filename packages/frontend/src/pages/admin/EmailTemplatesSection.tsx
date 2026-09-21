@@ -18,9 +18,12 @@ import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useToast, Modal, useConfirm } from '../../components/ui';
 import { SectionCard, Pill } from '../../components/ui/settings';
-import { SkeletonList } from '../../components/ui/Loading';
+// The picker/detail shape this screen invented, now shared with the text-message studio.
+import { TemplateStudioHeader, TemplatePicker, TemplateDetailBar, CommonTokenChips } from './TemplateStudio';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
+import { sourceBadge, sourceOption, sourceHint, TEMPLATE_SOURCE_ORDER, EDITOR_USED, RESTORE_ORIGINAL, PUBLISH_SAFETY_NET, PUBLISH_CHECKS, PREVIEW_NOTE, contentSizeNote } from './email-template-vocabulary';
+import { emailTokenHelp } from '@fapoms/shared';
 
 // -----------------------------------------------------------------------------
 // Pre-Generated AI Prompts Catalog (Embedded for 1-Click Copy)
@@ -463,10 +466,29 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
   const [selectedKey, setSelectedKey] = useState<string>('otp-verification');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [editorMode, setEditorMode] = useState<'visual' | 'code'>('visual');
-  const [visualState, setVisualState] = useState<Record<string, VisualTemplateData>>(() => ({ ...VISUAL_DEFAULTS }));
+  /*
+    EMPTY until a template is opened, and that is the whole point.
+
+    This started as `{ ...VISUAL_DEFAULTS }`, which looked like a convenience and was in fact a
+    silent off-switch for the restore below: that restore only runs when the open template has no
+    fields yet, and every shipped template already had them. So an email an administrator had
+    written in the form reopened showing the BUILT-IN wording, and the first keystroke compiled
+    those built-in fields over the top of what they had written and published. Nothing warned,
+    because from the screen's point of view nothing had been replaced.
+
+    Read the fields through `visualFields` below, never from here, so a template that has not been
+    opened yet still shows its design rather than empty boxes.
+  */
+  const [visualState, setVisualState] = useState<Record<string, VisualTemplateData>>({});
   const [editorSubject, setEditorSubject] = useState<string>('');
   const [editorHtml, setEditorHtml] = useState<string>('');
   const [isDirty, setIsDirty] = useState<boolean>(false);
+
+  /**
+   * What the form shows for the template that is open: the fields restored from the email itself
+   * when the form wrote it, and the built-in design when it did not.
+   */
+  const visualFields: VisualTemplateData | undefined = visualState[selectedKey] ?? VISUAL_DEFAULTS[selectedKey];
   const [loadedKey, setLoadedKey] = useState<string>('otp-verification');
 
   // Preview & Viewport State
@@ -685,7 +707,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
 
   // Handle Visual Content Field Changes (Auto-compiles to 100% compliant HTML)
   const handleVisualFieldChange = (field: keyof VisualTemplateData, value: string) => {
-    const currentVisual = visualState[selectedKey] || VISUAL_DEFAULTS[selectedKey] || {
+    const currentVisual = visualFields || {
       subject: '',
       headline: '',
       greeting: '',
@@ -712,7 +734,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
 
   // 1-Click Brand Theme Preset Selection
   const handleSelectThemePreset = (preset: BrandThemePreset) => {
-    const currentVisual = visualState[selectedKey] || VISUAL_DEFAULTS[selectedKey] || {
+    const currentVisual = visualFields || {
       subject: '',
       headline: '',
       greeting: '',
@@ -1040,9 +1062,10 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
   const handleResetToFactoryDefault = async () => {
     if (!detail) return;
     const ok = await confirm({
-      title: `Reset "${detail.definition.name}" to Factory Default?`,
-      message: 'This will immediately switch live email delivery back to the official Sumeru Global filesystem template shipped on disk, guaranteeing 100% contract compliance and stability. Any unverified custom overrides will be safely archived in version history.',
-      confirmLabel: 'Revert to Factory Default',
+      title: `Send the original design for "${detail.definition.name}"?`,
+      message: 'Live email goes back to the design that shipped with the product. Your edited '
+        + 'version is kept in the version history and can be published again whenever you want.',
+      confirmLabel: RESTORE_ORIGINAL.action,
       tone: 'normal',
     });
     if (!ok) return;
@@ -1071,7 +1094,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
           isDirty: false,
         };
       }
-      toast('success', `"${detail.definition.name}" restored to Factory Default and activated for live delivery.`);
+      toast('success', `"${detail.definition.name}" is now sending the original design.`);
       void queryClient.invalidateQueries({ queryKey: ['notification-admin', 'email-templates'] });
     } catch (err) {
       toast('error', `Failed to reset to factory default: ${userMessage(err)}`);
@@ -1234,20 +1257,12 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
       {confirmDialog}
 
       {/* ── Top Header & Template Selection Card ──────────────────────────── */}
-      <div className="glass-card" style={{ padding: '20px 22px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', marginBottom: '16px' }}>
-          <div>
-            <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <LayoutTemplate size={20} style={{ color: 'var(--flame-500, #ED6714)' }} />
-              Transactional Email Design Studio
-            </div>
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Design, preview, and configure live Sumeru Global emails. Edit directly, test live inboxes, or redesign with AI.
-            </div>
-          </div>
-
-          {/* Quick AI & Test Action Buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <TemplateStudioHeader
+        icon={<LayoutTemplate size={20} />}
+        title="Transactional Email Design Studio"
+        description="Design, preview, and configure live Sumeru Global emails. Edit directly, test live inboxes, or redesign with AI."
+        actions={(
+          <>
             <button
               type="button"
               className="btn btn-secondary"
@@ -1277,9 +1292,9 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                 Versions ({detail.storedSettings.versions.length})
               </button>
             )}
-          </div>
-        </div>
-
+          </>
+        )}
+      >
         {/* Category Filters */}
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '14px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
           <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, marginRight: '4px' }}>
@@ -1307,140 +1322,82 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
         </div>
 
         {/* Template Selector Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '10px' }}>
-          {templatesListQuery.isLoading ? (
-            <SkeletonList rows={3} height={50} />
-          ) : (
-            filteredTemplates.map((tpl) => {
-              const isSelected = tpl.key === selectedKey;
-              const source = tpl.activeState.source;
-              const hasDraft = tpl.settings.hasDraft;
-
-              return (
-                <div
-                  key={tpl.key}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleSelectTemplate(tpl.key)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSelectTemplate(tpl.key); }}
-                  style={{
-                    padding: '12px 14px',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    background: isSelected ? 'rgba(237,103,20,0.08)' : 'var(--bg-secondary)',
-                    border: isSelected ? '1.5px solid var(--flame-500, #ED6714)' : '1px solid var(--border-color)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
-                      <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: isSelected ? 'var(--flame-700, #B8460D)' : 'var(--text-primary)' }}>
-                        {tpl.name}
-                      </span>
-                      <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, padding: '2px 5px', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-muted)' }}>
-                        {tpl.category}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.4 }}>
-                      {tpl.description}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', fontSize: 'var(--text-3xs)', paddingTop: '6px', borderTop: '1px solid var(--border-hair, rgba(0,0,0,0.05))' }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span
-                        style={{
-                          width: '6px',
-                          height: '6px',
-                          borderRadius: '50%',
-                          background: source === 'platform' ? 'var(--success)' : source === 'filesystem' ? 'var(--accent)' : 'var(--warning)',
-                        }}
-                      />
-                      <span style={{ color: 'var(--text-secondary)' }}>
-                        {source === 'platform' ? `Platform v${tpl.activeState.version}` : source === 'filesystem' ? 'Disk Template' : 'Fallback'}
-                      </span>
-                    </span>
-                    {hasDraft && (
-                      <span style={{ background: '#FFF7ED', color: '#C2410C', padding: '1px 5px', borderRadius: '4px', fontWeight: 600, fontSize: 'var(--text-3xs)' }}>
-                        Draft
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
+        <TemplatePicker
+          label="Email templates to choose from"
+          loading={templatesListQuery.isLoading}
+          selectedKey={selectedKey}
+          onSelect={handleSelectTemplate}
+          items={filteredTemplates.map((tpl) => {
+            const source = tpl.activeState.source;
+            return {
+              key: tpl.key,
+              name: tpl.name,
+              description: tpl.description,
+              badge: tpl.category,
+              status: {
+                tone: source === 'platform' ? 'success' : source === 'filesystem' ? 'accent' : 'warning',
+                label: sourceBadge(source, tpl.activeState.version),
+              },
+              flag: tpl.settings.hasDraft
+                ? (
+                  <span style={{ background: '#FFF7ED', color: '#C2410C', padding: '1px 5px', borderRadius: '4px', fontWeight: 600, fontSize: 'var(--text-3xs)' }}>
+                    Draft
+                  </span>
+                )
+                : undefined,
+            };
+          })}
+        />
+      </TemplateStudioHeader>
 
       {/* ── Active Template Control Bar ───────────────────────────────────── */}
       {detail && (
-        <div className="glass-card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(237,103,20,0.1)', color: 'var(--flame-500, #ED6714)' }}>
-              <Mail size={18} />
-            </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {detail.definition.name}
-                </span>
-                <span style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
-                  ({detail.definition.key})
-                </span>
-                {isFactoryDefaultActive ? (
-                  <span
-                    style={{
-                      background: 'rgba(16,185,129,0.12)',
-                      color: 'var(--success)',
-                      border: '1px solid rgba(16,185,129,0.3)',
-                      padding: '3px 9px',
-                      borderRadius: '5px',
-                      fontSize: 'var(--text-2xs)',
-                      fontWeight: 700,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                    }}
-                  >
-                    <ShieldCheck size={13} />
-                    Factory Default Active (100% Guaranteed Stable)
-                  </span>
-                ) : (
-                  <span
-                    style={{
-                      background: 'rgba(245,158,11,0.12)',
-                      color: 'var(--warning)',
-                      border: '1px solid rgba(245,158,11,0.3)',
-                      padding: '3px 9px',
-                      borderRadius: '5px',
-                      fontSize: 'var(--text-2xs)',
-                      fontWeight: 700,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                    }}
-                  >
-                    <AlertTriangle size={13} />
-                    Custom Override Active (Fallback Protected)
-                  </span>
-                )}
-              </div>
-              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Default subject: "{detail.definition.defaultSubjectTemplate}"
-              </div>
-            </div>
-          </div>
-
-          {/* Source Preference Switcher & Reset Button */}
-          {canEdit && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <TemplateDetailBar
+          icon={<Mail size={18} />}
+          name={detail.definition.name}
+          itemKey={detail.definition.key}
+          footnote={`Default subject: "${detail.definition.defaultSubjectTemplate}"`}
+          pills={isFactoryDefaultActive ? (
+            <span
+              style={{
+                background: 'rgba(16,185,129,0.12)',
+                color: 'var(--success)',
+                border: '1px solid rgba(16,185,129,0.3)',
+                padding: '3px 9px',
+                borderRadius: '5px',
+                fontSize: 'var(--text-2xs)',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+              }}
+            >
+              <ShieldCheck size={13} />
+              Sending the original design
+            </span>
+          ) : (
+            <span
+              style={{
+                background: 'rgba(245,158,11,0.12)',
+                color: 'var(--warning)',
+                border: '1px solid rgba(245,158,11,0.3)',
+                padding: '3px 9px',
+                borderRadius: '5px',
+                fontSize: 'var(--text-2xs)',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+              }}
+            >
+              <AlertTriangle size={13} />
+              Sending your edited version
+            </span>
+          )}
+          actions={canEdit && (
+            <>
               <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
-                Source Preference:
+                Send which version:
               </span>
               <select
                 value={detail.storedSettings?.sourcePreference || 'platform'}
@@ -1456,15 +1413,15 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   cursor: 'pointer',
                 }}
               >
-                <option value="platform">Platform Override (Custom)</option>
-                <option value="filesystem">Filesystem Disk Template (Factory Default)</option>
-                <option value="fallback">Built-in Fallback</option>
+                {TEMPLATE_SOURCE_ORDER.map((src) => (
+                  <option key={src} value={src} title={sourceHint(src)}>{sourceOption(src)}</option>
+                ))}
               </select>
 
               <button
                 type="button"
                 className="btn btn-secondary"
-                title="Immediately revert live email delivery to authentic Sumeru Global factory default"
+                title={RESTORE_ORIGINAL.hint}
                 onClick={handleResetToFactoryDefault}
                 style={{
                   display: 'flex',
@@ -1478,11 +1435,11 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                 }}
               >
                 <Shield size={13} />
-                Reset to Factory Default
+                {RESTORE_ORIGINAL.action}
               </button>
-            </div>
+            </>
           )}
-        </div>
+        />
       )}
 
       {/* ── Two-Column Main Workspace: Editor & Live Preview ──────────────── */}
@@ -1566,7 +1523,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   </label>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px' }}>
                     {BRAND_THEME_PRESETS.map((preset) => {
-                      const currentPrimary = visualState[selectedKey]?.primaryColor || '#ED6714';
+                      const currentPrimary = visualFields?.primaryColor || '#ED6714';
                       const isActive = currentPrimary.toLowerCase() === preset.primary.toLowerCase();
                       return (
                         <button
@@ -1622,7 +1579,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <input
                         type="color"
-                        value={visualState[selectedKey]?.primaryColor ?? '#ED6714'}
+                        value={visualFields?.primaryColor ?? '#ED6714'}
                         disabled={!canEdit}
                         onChange={(e) => handleVisualFieldChange('primaryColor', e.target.value)}
                         style={{
@@ -1637,7 +1594,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       />
                       <input
                         type="text"
-                        value={visualState[selectedKey]?.primaryColor ?? '#ED6714'}
+                        value={visualFields?.primaryColor ?? '#ED6714'}
                         disabled={!canEdit}
                         placeholder="#ED6714"
                         onChange={(e) => handleVisualFieldChange('primaryColor', e.target.value)}
@@ -1662,7 +1619,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <input
                         type="color"
-                        value={visualState[selectedKey]?.accentBg ?? '#FFF7ED'}
+                        value={visualFields?.accentBg ?? '#FFF7ED'}
                         disabled={!canEdit}
                         onChange={(e) => handleVisualFieldChange('accentBg', e.target.value)}
                         style={{
@@ -1677,7 +1634,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       />
                       <input
                         type="text"
-                        value={visualState[selectedKey]?.accentBg ?? '#FFF7ED'}
+                        value={visualFields?.accentBg ?? '#FFF7ED'}
                         disabled={!canEdit}
                         placeholder="#FFF7ED"
                         onChange={(e) => handleVisualFieldChange('accentBg', e.target.value)}
@@ -1707,7 +1664,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       { id: 'accent-line', label: 'Accent Line', desc: 'Minimalist 5px top bar & centered logo' },
                       { id: 'framed-card', label: 'Framed Card', desc: 'Light accent box with official notice pill' },
                     ].map((hStyle) => {
-                      const isSelected = (visualState[selectedKey]?.headerStyle || 'gradient-banner') === hStyle.id;
+                      const isSelected = (visualFields?.headerStyle || 'gradient-banner') === hStyle.id;
                       return (
                         <button
                           key={hStyle.id}
@@ -1771,7 +1728,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                         }}
                       >
                         <img
-                          src={visualState[selectedKey]?.logoUrl || '/sumeru-logo@2x.png'}
+                          src={visualFields?.logoUrl || '/sumeru-logo@2x.png'}
                           alt="Logo Preview"
                           onError={(e) => {
                             (e.currentTarget as HTMLElement).style.display = 'none';
@@ -1784,7 +1741,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       </div>
                       <input
                         type="text"
-                        value={visualState[selectedKey]?.logoUrl ?? '/sumeru-logo@2x.png'}
+                        value={visualFields?.logoUrl ?? '/sumeru-logo@2x.png'}
                         disabled={!canEdit}
                         placeholder="/sumeru-logo@2x.png"
                         onChange={(e) => handleVisualFieldChange('logoUrl', e.target.value)}
@@ -1807,7 +1764,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                     </label>
                     <input
                       type="text"
-                      value={visualState[selectedKey]?.companyName ?? 'Sumeru Global'}
+                      value={visualFields?.companyName ?? 'Sumeru Global'}
                       disabled={!canEdit}
                       placeholder="Sumeru Global"
                       onChange={(e) => handleVisualFieldChange('companyName', e.target.value)}
@@ -1858,7 +1815,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   </label>
                   <input
                     type="text"
-                    value={visualState[selectedKey]?.subject ?? editorSubject}
+                    value={visualFields?.subject ?? editorSubject}
                     disabled={!canEdit}
                     placeholder="Subject line..."
                     onChange={(e) => handleVisualFieldChange('subject', e.target.value)}
@@ -1882,7 +1839,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   </label>
                   <input
                     type="text"
-                    value={visualState[selectedKey]?.headline ?? ''}
+                    value={visualFields?.headline ?? ''}
                     disabled={!canEdit}
                     placeholder="e.g. Verification Code"
                     onChange={(e) => handleVisualFieldChange('headline', e.target.value)}
@@ -1906,7 +1863,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   </label>
                   <input
                     type="text"
-                    value={visualState[selectedKey]?.greeting ?? ''}
+                    value={visualFields?.greeting ?? ''}
                     disabled={!canEdit}
                     placeholder="e.g. Dear Candidate,"
                     onChange={(e) => handleVisualFieldChange('greeting', e.target.value)}
@@ -1930,7 +1887,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   </label>
                   <textarea
                     rows={4}
-                    value={visualState[selectedKey]?.leadMessage ?? ''}
+                    value={visualFields?.leadMessage ?? ''}
                     disabled={!canEdit}
                     placeholder="Body instructions..."
                     onChange={(e) => handleVisualFieldChange('leadMessage', e.target.value)}
@@ -1973,7 +1930,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                     </label>
                     <input
                       type="text"
-                      value={visualState[selectedKey]?.buttonLabel ?? ''}
+                      value={visualFields?.buttonLabel ?? ''}
                       disabled={!canEdit}
                       placeholder="e.g. Complete Registration"
                       onChange={(e) => handleVisualFieldChange('buttonLabel', e.target.value)}
@@ -1998,7 +1955,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   </label>
                   <input
                     type="text"
-                    value={visualState[selectedKey]?.footerNotice ?? ''}
+                    value={visualFields?.footerNotice ?? ''}
                     disabled={!canEdit}
                     placeholder="Security and support contact note..."
                     onChange={(e) => handleVisualFieldChange('footerNotice', e.target.value)}
@@ -2137,7 +2094,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       <button
                         key={tok}
                         type="button"
-                        title={present ? `Required token {{${tok}}} is present` : `Missing required token {{${tok}}}`}
+                        title={`${emailTokenHelp(tok)}\n\nRequired — ${present ? 'it is in your wording.' : 'it is MISSING from your wording.'}`}
                         onClick={() => insertToken(tok)}
                         style={{
                           display: 'inline-flex',
@@ -2165,7 +2122,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                     <button
                       key={tok}
                       type="button"
-                      title={`Optional token {{${tok}}}`}
+                      title={`${emailTokenHelp(tok)}\n\nOptional — leave it out if you would rather write the words yourself.`}
                       onClick={() => insertToken(tok)}
                       style={{
                         display: 'inline-flex',
@@ -2210,6 +2167,18 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       &#123;&#123;&#123;{tok}&#125;&#125;&#125;
                     </button>
                   ))}
+                </div>
+
+                {/*
+                  The values the platform fills for every message, on both channels. Listed here as
+                  well as on the SMS screen from one shared component, so what an administrator
+                  learns writing an email still holds when they write a text.
+                */}
+                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-color)' }}>
+                  <CommonTokenChips
+                    onInsert={(token) => insertToken(token)}
+                    overriddenBy={[...requiredTokens, ...optionalTokens]}
+                  />
                 </div>
               </div>
 
@@ -2570,7 +2539,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <span style={{ color: simulatorClientTheme === 'dark' ? '#94A3B8' : '#6B7280', width: '55px', fontWeight: 600 }}>From:</span>
                   <span style={{ color: simulatorClientTheme === 'dark' ? '#F8FAFC' : '#111827', fontWeight: 600 }}>
-                    {visualState[selectedKey]?.companyName || 'Sumeru Global'} Operations &lt;notifications@sumeruglobal.com&gt;
+                    {visualFields?.companyName || 'Sumeru Global'} Operations &lt;notifications@sumeruglobal.com&gt;
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -2614,7 +2583,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
                       <ShieldCheck size={14} />
-                      Viewing Certified Factory Baseline (Disk Template)
+                      This is the original design, not your edits
                     </div>
                     <button
                       type="button"
@@ -2667,8 +2636,10 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       (() => {
                         const raw = previewTarget === 'baseline' ? (baselinePreviewHtml || previewHtml) : previewHtml;
                         if (!raw) return '';
-                        // Guarantee all localhost:5173 or relative logo references resolve to the active browser origin
-                        return raw.replaceAll('http://localhost:5173', window.location.origin);
+                        // Guarantee all localhost:5173, cid:sumeru-logo, or relative logo references resolve to the active browser origin
+                        return raw
+                          .replaceAll('http://localhost:5173', window.location.origin)
+                          .replaceAll('cid:sumeru-logo', `${window.location.origin}/sumeru-logo@2x.png`);
                       })()
                     }
                     style={{
@@ -2690,7 +2661,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
 
             {/* Sample Data Viewer & Tweak Button */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', paddingTop: '4px' }}>
-              <span>Preview rendered using Sumeru authentic sample dataset</span>
+              <span>{PREVIEW_NOTE}</span>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -3029,11 +3000,11 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       <AlertTriangle size={16} style={{ color: 'var(--danger)' }} />
                     )}
                     <div>
-                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Token Contract Completeness</div>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{PUBLISH_CHECKS.required.title}</div>
                       <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                         {missingRequiredTokens.length === 0
-                          ? `All ${requiredTokens.length} required tokens present in template`
-                          : `Missing: ${missingRequiredTokens.join(', ')}`}
+                          ? PUBLISH_CHECKS.required.ok(requiredTokens.length)
+                          : PUBLISH_CHECKS.required.bad(missingRequiredTokens)}
                       </div>
                     </div>
                   </div>
@@ -3067,8 +3038,8 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                       <AlertTriangle size={16} style={{ color: 'var(--danger)' }} />
                     )}
                     <div>
-                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Token Scope Whitelist</div>
-                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>0 unauthorized or hallucinated variables detected</div>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{PUBLISH_CHECKS.unknown.title}</div>
+                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{PUBLISH_CHECKS.unknown.ok}</div>
                     </div>
                   </div>
                   <span style={{
@@ -3097,8 +3068,8 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <CheckCircle2 size={16} style={{ color: 'var(--success)' }} />
                     <div>
-                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Live Payload Simulation Test</div>
-                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Sample data interpolated without runtime exceptions</div>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{PUBLISH_CHECKS.renders.title}</div>
+                      <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{PUBLISH_CHECKS.renders.ok}</div>
                     </div>
                   </div>
                   <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--success)', background: 'rgba(16,185,129,0.1)', padding: '2px 8px', borderRadius: '4px' }}>
@@ -3121,8 +3092,15 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
               </div>
               <div style={{ color: 'var(--text-secondary)', lineHeight: 1.5, fontSize: 'var(--text-2xs)' }}>
                 <div>&bull; <strong>Subject Template:</strong> "{editorSubject}"</div>
-                <div>&bull; <strong>Source Mode:</strong> {editorMode === 'visual' ? 'Visual No-Code Form (Auto-Compiled)' : 'AI & HTML Studio'}</div>
-                <div>&bull; <strong>Content Size:</strong> {editorHtml.length} characters ({editorHtml.split('\n').length} lines)</div>
+                <div>&bull; <strong>Edited with:</strong> {editorMode === 'visual' ? EDITOR_USED.visual : EDITOR_USED.code}</div>
+                {(() => {
+                  const size = contentSizeNote(editorHtml);
+                  return (
+                    <div style={{ color: size.tone === 'bad' ? 'var(--danger)' : size.tone === 'warn' ? 'var(--warning)' : undefined }}>
+                      &bull; <strong>Size:</strong> {size.text}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -3136,7 +3114,7 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
               padding: '8px 12px',
               lineHeight: 1.4,
             }}>
-              🛡️ <strong>Zero-Downtime Guarantee:</strong> Even after publishing, FAPOMS maintains an automated fallback cascade. If a custom template encounters a runtime error, the engine instantly serves the certified Factory Default Baseline with zero dropped emails.
+              🛡️ {PUBLISH_SAFETY_NET}
             </div>
 
             {/* Mandatory Confirmation Checkbox */}

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Modal, View, TextInput } from 'react-native';
+import { Modal, View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Icon, IconButton, Tappable } from './ui/primitives';
+import { AppText, Button, FieldLabel, Icon, IconButton, Input, Tappable } from './ui/primitives';
 import {
   ASSIGNMENT_ISSUE_CATEGORIES,
   assignmentIssueCategoryLabel,
@@ -102,7 +102,7 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
           </View>
 
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">{tr('issue.problemLabel')}</AppText>
+            <FieldLabel>{tr('issue.problemLabel')}</FieldLabel>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
               {ASSIGNMENT_ISSUE_CATEGORIES.map((c) => {
                 const active = category === c;
@@ -136,35 +136,14 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
             </View>
           </View>
 
-          <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">{tr('issue.detailsLabel')}</AppText>
-            <View
-              style={{
-                backgroundColor: t.colors.surface,
-                borderRadius: t.radius.md,
-                borderWidth: 1,
-                borderColor: t.colors.border,
-                paddingHorizontal: t.space.md,
-              }}
-            >
-              <TextInput
-                value={note}
-                onChangeText={setNote}
-                placeholder={tr('issue.detailsPlaceholder')}
-                placeholderTextColor={t.colors.textFaint}
-                multiline
-                numberOfLines={3}
-                maxLength={1000}
-                style={{
-                  color: t.colors.text,
-                  paddingVertical: t.space.md,
-                  minHeight: 72,
-                  textAlignVertical: 'top',
-                  ...(t.type.body as object),
-                }}
-              />
-            </View>
-          </View>
+          <Input
+            label={tr('issue.detailsLabel')}
+            value={note}
+            onChangeText={setNote}
+            placeholder={tr('issue.detailsPlaceholder')}
+            multiline
+            maxLength={1000}
+          />
 
           <Button
             label={busy ? tr('issue.sending') : tr('issue.send')}

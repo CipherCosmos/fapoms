@@ -773,6 +773,23 @@ export class RegionGuardService {
    * and report the skips as ordinary per-row outcomes — a cross-region refusal indistinguishable
    * from "somebody else got there first". Asked once, whole, like `assertPayablesInScope`.
    */
+  /**
+   * `assertAssayerInScope` for a whole selection, in one query.
+   *
+   * The bulk routes called the single-id check once per id — 500 sequential round trips before a
+   * batch was even accepted. Same verdict per id (a missing row is judged exactly as the single
+   * check judges it), same refuse-the-whole-batch behaviour, one statement.
+   */
+  async assertAssayersInScope(assayerIds: string[], scope?: Partial<GlobalScope>): Promise<void> {
+    if (!assayerIds?.length || !scope?.regions?.length) return;
+    const rows: { id: string; region: string | null }[] = await this.dataSource.query(
+      `SELECT id, region FROM assayers WHERE id = ANY($1)`,
+      [assayerIds],
+    );
+    const regionById = new Map(rows.map((r) => [r.id, r.region]));
+    for (const id of assayerIds) this.assertRegionAllowed(regionById.get(id) as any, scope);
+  }
+
   async assertImportIssuesInScope(issueIds: string[], scope?: Partial<GlobalScope>): Promise<void> {
     if (!issueIds?.length || !scope?.regions?.length) return;
     const rows = await this.dataSource.query(

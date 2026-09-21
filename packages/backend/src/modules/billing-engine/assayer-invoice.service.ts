@@ -19,16 +19,8 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { round2, MONEY_EPSILON } from './assignment-money';
-import {
-  AssayerInvoiceStatus,
-  AssayerPayableStatus,
-  BillingEntityType,
-  EventCategory,
-  AssayerInvoiceInvitation,
-  AssayerInvoiceLine,
-  AssayerInvoiceSummary,
-  AssayerInvoiceInviteOutcome,
-} from '@fapoms/shared';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
+import { AssayerInvoiceStatus, AssayerPayableStatus, BillingEntityType, EventCategory, AssayerInvoiceInvitation, AssayerInvoiceLine, AssayerInvoiceSummary, AssayerInvoiceInviteOutcome, businessDateKey } from '@fapoms/shared';
 
 /**
  * The assayer-invoice lifecycle: invite → submit → approve (and cancel).
@@ -82,11 +74,14 @@ export class AssayerInvoiceService {
   }
 
   /**
-   * The rollout gate. `billing.assayerInvoicingEnabled` ships default-false so this whole
-   * feature deploys dark: migrate, verify, then flip the flag. A read failure (the key not in
-   * the registry yet — it lands with the coordinator's settings change) counts as OFF, because
-   * a feature gate that fails open is not a gate. 404 rather than 403: while the feature is
-   * off, these routes do not exist.
+   * The gate. `billing.assayerInvoicingEnabled` now ships default-TRUE: the invoicing round is
+   * the payment flow, not a preview of one, and this comment used to say the opposite — it
+   * described the dark rollout the flag was born for, long after the default had been flipped.
+   *
+   * The gate itself is unchanged and still earns its place: an estate whose field app predates
+   * the invoicing round can switch it off. A read failure counts as OFF, because a feature gate
+   * that fails open is not a gate. 404 rather than 403: where the feature is off, these routes
+   * do not exist.
    */
   async assertEnabled(): Promise<void> {
     const enabled = await this.settings
@@ -240,8 +235,13 @@ export class AssayerInvoiceService {
    * `scope` narrows the round to the caller's regions (matched on the assayer's own home
    * region, the same column `assertAssayerInScope` reads): a region desk's "invite everyone"
    * must mean everyone THEY can see, not everyone nationwide.
+   *
+   * Runs in `BillingBulkJobsWorker`, not in the request: at ~1,200 assayers, each a transaction and
+   * a notification, it ran far past the web client's 30 s (see `billing-bulk-jobs.contract.ts`).
+   * The target set is still computed HERE, when the run starts, under the scope captured when it
+   * was requested; `onProgress` is told after every assayer.
    */
-  async inviteAll(actorId: string, scope?: Partial<GlobalScope>): Promise<{
+  async inviteAll(actorId: string, scope?: Partial<GlobalScope>, onProgress?: ProgressCallback): Promise<{
     outcomes: AssayerInvoiceInviteOutcome[];
     invited: number;
     skipped: number;
@@ -261,7 +261,7 @@ export class AssayerInvoiceService {
     const outcomes: AssayerInvoiceInviteOutcome[] = [];
     // Sequential, like resolveIssues: one transaction per assayer, bounded by how many assayers
     // have unbilled work, and nothing to win from hammering the same tables in parallel.
-    for (const r of rows) {
+    for (const [index, r] of rows.entries()) {
       const assayerId = r.assayer_id;
       try {
         const inv = await this.invite(assayerId, actorId);
@@ -280,6 +280,7 @@ export class AssayerInvoiceService {
           outcomes.push({ assayerId, outcome: 'failed', error: (err as Error).message });
         }
       }
+      await onProgress?.(index + 1, rows.length, 'Inviting assayers');
     }
     return {
       outcomes,
@@ -309,9 +310,16 @@ export class AssayerInvoiceService {
 
     const invoice = await this.invoiceRepository.findOne({
       where: { assayerId, status: In([AssayerInvoiceStatus.INVITED, AssayerInvoiceStatus.SUBMITTED]) },
+      order: { createdAt: 'DESC' },
     });
     if (!invoice) return null;
-    return { ...this.toSummary(invoice), lines: await this.linesOf(invoice.id) };
+    const labels = await this.assayerLabels([invoice.assayerId]);
+    return {
+      ...this.toSummary(invoice),
+      assayerName: labels.get(invoice.assayerId)?.name ?? null,
+      assayerCode: labels.get(invoice.assayerId)?.code ?? null,
+      lines: await this.linesOf(invoice.id),
+    };
   }
 
   /**
@@ -552,6 +560,16 @@ export class AssayerInvoiceService {
       if (inv.status === AssayerInvoiceStatus.APPROVED) {
         throw new ConflictException(
           `${inv.invoiceNumber} is approved — its lines are approved payouts now. Void the payouts individually instead.`,
+        );
+      }
+      if (inv.status === AssayerInvoiceStatus.PAID) {
+        throw new ConflictException(
+          `${inv.invoiceNumber} is already paid — its disbursements are settled in bank transfers. It cannot be cancelled.`,
+        );
+      }
+      if (inv.status === AssayerInvoiceStatus.SUPERSEDED) {
+        throw new ConflictException(
+          `${inv.invoiceNumber} has been superseded by a corrected revision. Cancel or approve the active revision instead.`,
         );
       }
 
@@ -866,7 +884,7 @@ export class AssayerInvoiceService {
       // "Sat Sep 05", which the frontend's `new Date(...)` then re-parsed to the year 2001.
       serviceDate: r.completion_date
         ? (r.completion_date instanceof Date
-            ? r.completion_date.toISOString().slice(0, 10)
+            ? businessDateKey(r.completion_date)
             : String(r.completion_date).slice(0, 10))
         : null,
       expenseCategory: r.expense_category ?? null,

@@ -617,12 +617,26 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
     const { aLat, aLng, bLat, bLng, serverRoad } = selectedAssayerForRouting;
 
-    // Map travel mode to OSRM profile
-    const osrmProfile = travelMode === 'walking' ? 'foot' : travelMode === 'two-wheeler' ? 'cycling' : 'driving';
+    /**
+     * ONE router, and it is the server's.
+     *
+     * This used to `fetch('https://router.project-osrm.org/...')` straight from the browser — a
+     * second routing implementation beside `RoutingService`, with its own profile mapping, no
+     * cache, no physics check on the answer, and assayers' home coordinates leaving the country
+     * to a third party on every hover, which this deployment's declared India data residency
+     * does not permit. It also had to second-guess what came back (the "avg speed > 2x" check
+     * below), because the public demo server ignores the profile it is asked for.
+     *
+     * `POST /geo/route` answers from the same provider that priced the job, so the line drawn
+     * and the distance quoted can no longer disagree, and it says whether the answer is a real
+     * road (`source: 'OSRM'`) or an estimate.
+     *
+     * The profile is NOT mapped here. `routingModeForTravelMode` on the server owns that —
+     * notably that a two-wheeler routes as a car, not a bicycle.
+     */
+    const routingMode = travelMode === 'walking' ? 'walking' : 'driving';
     const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
     const modeSpeed = modeSpeeds[travelMode] || 40;
-
-    const url = `https://router.project-osrm.org/route/v1/${osrmProfile}/${aLng},${aLat};${bLng},${bLat}?overview=full&geometries=geojson`;
 
     /**
      * No road figure from the browser. This used to copy the straight line into
@@ -644,33 +658,41 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       setRoadGeometry([[aLat, aLng], [bLat, bLng]]);
     };
 
-    fetch(url)
-      .then(res => res.json())
-      .then(data => {
-        if (data.code === 'Ok' && data.routes?.[0]) {
-          const route = data.routes[0];
-          const roadKm = route.distance / 1000;
-          const roadMin = route.duration / 60;
-          // Validate OSRM result against mode: if avg speed > 2x mode speed, result is unrealistic (OSRM fallback)
-          const avgSpeed = roadKm / (roadMin / 60);
-          if (avgSpeed > modeSpeed * 2) {
-            fallBackHonestly();
-          } else {
-            setRoadDistanceKm(roadKm);
-            setRoadDurationMinutes(roadMin);
-          }
-          if (route.geometry?.coordinates) {
-            const coords = route.geometry.coordinates.map((pt: any) => [pt[1], pt[0]] as L.LatLngExpression);
-            setRoadGeometry(coords);
-          }
-        } else {
+    let cancelled = false;
+    api.request<{ distanceKm: number; durationMinutes: number; source: 'OSRM' | 'ESTIMATE'; geometry?: [number, number][] }>(
+      '/geo/route',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          origin: { latitude: aLat, longitude: aLng },
+          destination: { latitude: bLat, longitude: bLng },
+          mode: routingMode,
+        }),
+      },
+    )
+      .then((route) => {
+        if (cancelled) return;
+        // An ESTIMATE is a straight line the server declined to dress up as a road. Show it the
+        // way the panel already shows one, rather than labelling it "Road distance".
+        if (route.source !== 'OSRM') { fallBackHonestly(); return; }
+        const roadKm = route.distanceKm;
+        const roadMin = route.durationMinutes;
+        // Kept: a road answer implying an impossible speed for this mode is still not shown as
+        // one. The server checks physics against the straight line; this checks it against how
+        // the person is actually travelling, which the server's profile cannot know.
+        const avgSpeed = roadMin > 0 ? roadKm / (roadMin / 60) : 0;
+        if (avgSpeed > modeSpeed * 2) {
           fallBackHonestly();
+        } else {
+          setRoadDistanceKm(roadKm);
+          setRoadDurationMinutes(roadMin);
+        }
+        if (route.geometry?.length) {
+          setRoadGeometry(route.geometry.map((pt) => [pt[0], pt[1]] as L.LatLngExpression));
         }
       })
-      .catch(err => {
-        console.error("OSRM Route fetch error", err);
-        fallBackHonestly();
-      });
+      .catch(() => { if (!cancelled) fallBackHonestly(); });
+    return () => { cancelled = true; };
   }, [selectedAssayerForRouting, travelMode]);
 
   // Resize Leaflet container whenever map visibility or container layout changes

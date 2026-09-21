@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, ScrollView, TextInput, Image, Linking, Platform, ActivityIndicator } from 'react-native';
+import { View, ScrollView, Image, Linking, ActivityIndicator } from 'react-native';
 import { MobileApiService } from '../services/api.service';
 import { enqueueAndRun, processActionQueue } from '../services/action-queue';
 import { actionDispatchers } from '../services/action-dispatchers';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Badge, Button, Card, Icon, IconButton, Tappable } from './ui/primitives';
+import { AppText, Badge, Button, Card, Icon, IconButton, Input, Tappable } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
 import { useT, t as translate, serverErrorText } from '../i18n';
 import type { QueryMessage, ValidationQuery } from '../types/mobile-app';
@@ -335,26 +335,14 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: t.space.sm }}>
             <IconButton icon="attach" onPress={attach} accessibilityLabel={tr('queries.attachFile')} />
             <IconButton icon="scan" onPress={onScan} accessibilityLabel={tr('queries.scanDocument')} />
-            <TextInput
+            <Input
+              size="sm"
               value={draft}
               onChangeText={setDraft}
               placeholder={tr('queries.replyPlaceholder')}
-              placeholderTextColor={t.colors.textFaint}
               multiline
-              style={{
-                flex: 1,
-                maxHeight: 120,
-                minHeight: 42,
-                paddingHorizontal: t.space.md,
-                paddingTop: Platform.OS === 'ios' ? 11 : 8,
-                paddingBottom: 8,
-                borderRadius: t.radius.lg,
-                backgroundColor: t.colors.bg,
-                borderWidth: 1,
-                borderColor: t.colors.border,
-                color: t.colors.text,
-                fontSize: 15,
-              }}
+              maxHeight={120}
+              style={{ flex: 1 }}
             />
             <Tappable onPress={send} disabled={sending || (!draft.trim() && pending.length === 0)} accessibilityRole="button" accessibilityLabel={sending ? tr('queries.sending') : tr('queries.sendReply')}>
               <View

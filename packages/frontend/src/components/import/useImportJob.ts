@@ -159,9 +159,30 @@ export function useImportJob<TReport = ImportReport>() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelled = useRef(false);
 
+  /**
+   * Whoever is awaiting `run` for the current upload.
+   *
+   * `start` hands back control as soon as the server has answered the upload, which is right for a
+   * page that only shows the panel. A caller that has to act on the OUTCOME — the roster page asks
+   * for a rehearsal, and may only offer the real import once the rehearsal's answer is in — needs
+   * the end of the lifetime instead. Every place the phase becomes final settles this.
+   */
+  const settle = useRef<((phase: ImportPhase<TReport>) => void) | null>(null);
+
+  /** Move to a final phase, and tell anyone awaiting `run`. */
+  const finish = useCallback((phase: ImportPhase<TReport>) => {
+    setState(phase);
+    const resolve = settle.current;
+    settle.current = null;
+    resolve?.(phase);
+  }, []);
+
   useEffect(() => () => {
     cancelled.current = true;
     if (timer.current) clearTimeout(timer.current);
+    // Nobody is watching any more; an awaiting caller must not hang on a job it cannot see.
+    settle.current?.({ phase: 'idle' });
+    settle.current = null;
   }, []);
 
   const poll = useCallback(async (fileName: string, statusUrl: string, jobId: string, startedAt: number) => {
@@ -173,11 +194,11 @@ export function useImportJob<TReport = ImportReport>() {
       if (cancelled.current) return;
 
       if (status.state === 'completed' && status.result) {
-        setState({ phase: 'done', fileName, report: status.result });
+        finish({ phase: 'done', fileName, report: status.result });
         return;
       }
       if (status.state === 'failed') {
-        setState({
+        finish({
           phase: 'error',
           fileName,
           error: status.error ?? 'The import failed without recording a reason.',
@@ -185,7 +206,7 @@ export function useImportJob<TReport = ImportReport>() {
         return;
       }
       if (Date.now() - startedAt > MAX_POLL_MS) {
-        setState({
+        finish({
           phase: 'error',
           fileName,
           error:
@@ -212,12 +233,12 @@ export function useImportJob<TReport = ImportReport>() {
        * The hour cap above is what eventually ends it.
        */
       if (Date.now() - startedAt > MAX_POLL_MS) {
-        setState({ phase: 'error', fileName, error: userMessage(err) });
+        finish({ phase: 'error', fileName, error: userMessage(err) });
         return;
       }
       timer.current = setTimeout(() => void poll(fileName, statusUrl, jobId, startedAt), POLL_MS);
     }
-  }, []);
+  }, [finish]);
 
   /**
    * Upload a file and follow it to the end.
@@ -253,23 +274,38 @@ export function useImportJob<TReport = ImportReport>() {
         return;
       }
 
-      setState({ phase: 'done', fileName: file.name, report: res as TReport });
+      finish({ phase: 'done', fileName: file.name, report: res as TReport });
     } catch (err) {
-      setState({ phase: 'error', fileName: file.name, error: userMessage(err) });
+      finish({ phase: 'error', fileName: file.name, error: userMessage(err) });
     }
-  }, [poll]);
+  }, [poll, finish]);
+
+  /**
+   * Upload a file, follow it to the end, and resolve with how it ended.
+   *
+   * Resolves with the `done` or `error` phase the panel is also showing — never rejects, because
+   * every failure is already a phase with a sentence in it — or with `idle` if the import was
+   * dismissed or the page left before it finished. Starting another upload settles the previous
+   * wait as `idle` too, since its outcome will now never be shown.
+   */
+  const run = useCallback((url: string, file: File, extraFields?: Record<string, string>) =>
+    new Promise<ImportPhase<TReport>>((resolve) => {
+      settle.current?.({ phase: 'idle' });
+      settle.current = resolve;
+      void start(url, file, extraFields);
+    }), [start]);
 
   /** Dismiss the result panel and stop any poll still in flight. */
   const reset = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
     cancelled.current = true;
-    setState({ phase: 'idle' });
-  }, []);
+    finish({ phase: 'idle' });
+  }, [finish]);
 
   /** True while the operator should not be starting a second import of the same thing. */
   const busy = state.phase === 'uploading' || state.phase === 'running';
 
-  return { state, start, reset, busy };
+  return { state, start, run, reset, busy };
 }
 
 /**

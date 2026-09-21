@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Bell, CheckCheck, RefreshCw, Wrench, ShieldCheck, FileText, MapPinned, Users, Wallet, MessageSquare,
-  Settings2, Smartphone, MonitorSmartphone, Mail,
+  Settings2, Smartphone, MonitorSmartphone, Mail, MessageSquareText,
 } from 'lucide-react';
 import { api, WebNotification, NotificationCategory, NotificationPreference } from '../services/api';
 import { userMessage } from '../services/errors';
@@ -345,21 +345,39 @@ const chipStyle = (active: boolean): React.CSSProperties => ({
   color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
 });
 
-/** One row per category, three channel toggles each. Absence of a saved row means everything is on. */
+/**
+ * A preference row with every channel decided. `sms` is optional on the wire (an older server omits
+ * it) and reads as on — the same "absence means opted in" rule the backend applies.
+ */
+type PreferenceRow = NotificationPreference & { sms: boolean };
+type PreferenceKey = 'inApp' | 'push' | 'email' | 'sms';
+
+/** The channel columns, in order. SMS reaches only events an administrator has switched it on for. */
+const PREFERENCE_COLUMNS: { key: PreferenceKey; label: string; icon: React.ElementType }[] = [
+  { key: 'inApp', label: 'In-app', icon: MonitorSmartphone },
+  { key: 'push', label: 'Push', icon: Smartphone },
+  { key: 'email', label: 'Email', icon: Mail },
+  { key: 'sms', label: 'SMS', icon: MessageSquareText },
+];
+const PREFERENCE_GRID = `1fr repeat(${PREFERENCE_COLUMNS.length}, 90px)`;
+
+/** One row per category, one toggle per channel. Absence of a saved row means everything is on. */
 const PreferencesPanel: React.FC = () => {
   const { toast } = useToast();
   const { confirm, confirmDialog } = useConfirm();
-  const [prefs, setPrefs] = useState<NotificationPreference[] | null>(null);
+  const [prefs, setPrefs] = useState<PreferenceRow[] | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getNotificationPreferences().then(setPrefs).catch(() =>
-      toast({ type: 'error', title: 'Could not load preferences', message: 'Try refreshing the page.' }),
-    );
+    api.getNotificationPreferences()
+      .then((rows) => setPrefs(rows.map((p) => ({ ...p, sms: (p as Partial<PreferenceRow>).sms ?? true }))))
+      .catch(() =>
+        toast({ type: 'error', title: 'Could not load preferences', message: 'Try refreshing the page.' }),
+      );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const toggle = async (category: NotificationCategory, key: 'inApp' | 'push' | 'email', value: boolean) => {
+  const toggle = async (category: NotificationCategory, key: PreferenceKey, value: boolean) => {
     if (key === 'inApp' && !value) {
       // Turning off in-app for a category would mean it never appears in the
       // bell or this inbox at all — a much bigger step than muting push or
@@ -397,27 +415,29 @@ const PreferencesPanel: React.FC = () => {
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: 0 }}>
           Choose how each kind of update reaches you. Nothing selected here yet still means everything is on —
-          turning a switch off only takes effect from this point on.
+          turning a switch off only takes effect from this point on. Texts (SMS) go only to your mobile number on
+          file, and only for the updates an administrator has chosen to send by text.
         </p>
       </div>
       <div style={{ overflowX: 'auto' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '10px 20px', fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: PREFERENCE_GRID, minWidth: '530px', alignItems: 'center', padding: '10px 20px', fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)' }}>
         <span>Category</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><MonitorSmartphone size={12} /> In-app</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><Smartphone size={12} /> Push</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><Mail size={12} /> Email</span>
+        {PREFERENCE_COLUMNS.map(({ key, label, icon: Icon }) => (
+          <span key={key} style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}><Icon size={12} /> {label}</span>
+        ))}
       </div>
       {prefs.map((p) => {
         const meta = metaFor(p.category);
         return (
-          <div key={p.category} style={{ display: 'grid', gridTemplateColumns: '1fr repeat(3, 90px)', minWidth: '440px', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border-hair)' }}>
+          <div key={p.category} style={{ display: 'grid', gridTemplateColumns: PREFERENCE_GRID, minWidth: '530px', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border-hair)' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
               <meta.icon size={15} style={{ color: meta.tone }} /> {meta.label}
             </span>
-            {(['inApp', 'push', 'email'] as const).map((key) => (
+            {PREFERENCE_COLUMNS.map(({ key, label }) => (
               <span key={key} style={{ display: 'flex', justifyContent: 'center' }}>
                 <Toggle
                   checked={p[key]}
+                  label={`${label} for ${meta.label}`}
                   disabled={saving === `${p.category}:${key}`}
                   onChange={(v) => toggle(p.category, key, v)}
                 />
@@ -431,10 +451,11 @@ const PreferencesPanel: React.FC = () => {
   );
 };
 
-const Toggle: React.FC<{ checked: boolean; disabled?: boolean; onChange: (v: boolean) => void }> = ({ checked, disabled, onChange }) => (
+const Toggle: React.FC<{ checked: boolean; label?: string; disabled?: boolean; onChange: (v: boolean) => void }> = ({ checked, label, disabled, onChange }) => (
   <button
     role="switch"
     aria-checked={checked}
+    aria-label={label}
     disabled={disabled}
     onClick={() => onChange(!checked)}
     style={{

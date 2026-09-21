@@ -1,38 +1,10 @@
 import {
-  Injectable, Inject, Logger, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Optional,
+  Injectable, Inject, Logger, NotFoundException, BadRequestException, ForbiddenException, ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
-import {
-  EventCategory,
-  ApplicationStatus,
-  APPLICATION_TERMINAL_STATUSES,
-  applicationIsEditableByCandidate,
-  EmploymentCategory,
-  OnboardingDocument,
-  ApplicationSource,
-  ASSAYER_ERROR_CODES,
-  pickRegistrationRecordFields,
-  groupRegistrationRecordFields,
-  REGISTRATION_SECRET_FIELD_KEYS,
-  CURRENT_CONSENT_NOTICE,
-  CURRENT_CONSENT_VERSION,
-  consentNoticeFor,
-  type ConsentNotice,
-  REGISTRATION_FIELD_GROUPS,
-  maskRegistrationFields,
-  looksMasked,
-  pickEmploymentTermFields,
-  mergedRegistrationView,
-  missingRegistrationFields,
-  isValidPan,
-  isValidIfsc,
-  isValidAadhaar,
-  normalisePhone,
-  dateOfBirthProblem,
-  maskTail,
-} from '@fapoms/shared';
+import { EventCategory, ApplicationStatus, APPLICATION_TERMINAL_STATUSES, applicationIsEditableByCandidate, EmploymentCategory, OnboardingDocument, ApplicationSource, ASSAYER_ERROR_CODES, pickRegistrationRecordFields, groupRegistrationRecordFields, REGISTRATION_SECRET_FIELD_KEYS, CURRENT_CONSENT_NOTICE, CURRENT_CONSENT_VERSION, consentNoticeFor, type ConsentNotice, REGISTRATION_FIELD_GROUPS, maskRegistrationFields, looksMasked, pickEmploymentTermFields, mergedRegistrationView, missingRegistrationFields, isValidPan, isValidIfsc, isValidAadhaar, normalisePhone, dateOfBirthProblem, maskTail, type OutboundMessageReceipt, businessDateKey, businessTodayDateKey } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
@@ -42,8 +14,13 @@ import { AssayerService, CreateAssayerDto } from './assayer.service';
 import { RosterRecordsService } from './roster-records.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
-import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
+import { appPublicUrl } from '../../infrastructure/notifications/email-provider';
+import { REGISTRATION_INVITE_INTRO } from '../../infrastructure/notifications/email-template-registry';
+import { EmailService } from '../notifications/email.service';
+import { SmsService } from '../notifications/sms.service';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { GeoPrecisionService } from '../geo/geo-precision.service';
+import { needsBetterFix } from '../geo/coordinate-resolution';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { hashCode, numericCode, hashesEqual } from '../auth/otp-codes';
@@ -60,6 +37,7 @@ const OTP_TTL_SECONDS = 300;
 const OTP_VERIFIED_TTL_SECONDS = 24 * 60 * 60;
 const OTP_SEND_WINDOW_SECONDS = 60 * 60;
 const OTP_SEND_MAX_PER_WINDOW = 5;
+const OTP_MAX_VERIFY_ATTEMPTS = 5;
 
 /**
  * The floor on the reason for admitting a candidate no interview ever saw.
@@ -69,6 +47,14 @@ const OTP_SEND_MAX_PER_WINDOW = 5;
  * length at which "ok", "walk in" and a stray keypress stop qualifying as a recorded decision.
  */
 const MIN_NO_INTERVIEW_REASON_LENGTH = 10;
+
+/**
+ * The first half of an approval claim's advisory-lock key; the application id is the second.
+ *
+ * The two-key form lives in a different lock space from the single-bigint keys used elsewhere
+ * (the audit seal), so no application id can ever contend with them.
+ */
+const APPROVAL_CLAIM_NAMESPACE = 'assayer_application_approval';
 
 /**
  * Why a candidate is in the pipeline with no interview behind them.
@@ -361,6 +347,30 @@ function submittedApplicationView(application: AssayerApplicationEntity): Assaye
   } as unknown as AssayerApplicationEntity;
 }
 
+/** Which channel carried a registration verification code, and where, masked for the page to show. */
+export interface RegistrationOtpDelivery {
+  channel: 'SMS' | 'EMAIL';
+  sentTo: string;
+  cooldownSeconds?: number;
+  expiresInSeconds?: number;
+}
+
+/**
+ * A mobile number as the registration page may repeat it back: the last four digits only, behind a
+ * fixed-width run of bullets so the mask does not give away how long the number is — "••••• 4455".
+ */
+export function maskedMobile(phone: string): string {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  return `••••• ${digits.slice(-4)}`;
+}
+
+/** An email address as the registration page may repeat it back: "r•••@example.com". */
+export function maskedEmail(email: string): string {
+  const [user, domain] = (email ?? '').trim().split('@');
+  if (!user || !domain) return '•••';
+  return `${user.charAt(0)}•••@${domain}`;
+}
+
 @Injectable()
 export class RegistrationApplicationService {
   private readonly logger = new Logger(RegistrationApplicationService.name);
@@ -384,11 +394,26 @@ export class RegistrationApplicationService {
     private readonly rosterRecords: RosterRecordsService,
     private readonly auditService: AuditService,
     private readonly notificationDispatch: NotificationDispatchService,
-    private readonly emailProvider: EmailProvider,
+    /**
+     * Every email this service sends. All but the verification code are queued; the code is sent
+     * while the candidate waits, because the page must not say "sent" for one that was not.
+     */
+    private readonly emails: EmailService,
     private readonly cache: CacheService,
     private readonly settings: PlatformSettingsService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
-    @Optional() private readonly templateRenderer?: EmailTemplateRenderer,
+    /**
+     * Holds an approval's claim — see `approve`. Through the port, so this service still opens no
+     * transaction at an isolation level of its own choosing (`persistence-boundary.spec.ts`).
+     */
+    private readonly uow: UnitOfWork,
+    /** Where a newly approved person's home is placed, after the approval request has returned. */
+    private readonly geoPrecision: GeoPrecisionService,
+    /**
+     * The verification code, texted to the number being verified when SMS is set up (email is the
+     * fallback). Last, so the positional spec harness gains an argument rather than shifting one.
+     */
+    private readonly sms: SmsService,
   ) {}
 
   // ── Invite creation ──────────────────────────────────────────────────────
@@ -418,68 +443,43 @@ export class RegistrationApplicationService {
   }
 
   /**
-   * Returns whether the link actually went out — callers must not assume it did.
+   * Queues the invite and returns its receipt — null when there is no address to send to.
    *
-   * `EmailProvider.send` never throws; it answers `{ success: false }` when the transport is off
-   * or the send failed. Discarding that answer is how the HR screen came to say "an invite has
-   * been emailed to …" purely because an address existed, while a deployment with email switched
-   * off sent nothing at all. An invite nobody receives is the whole flow stalled with no signal.
+   * The receipt, not a boolean, because callers must not assume the email went. The HR screen once
+   * said "an invite has been emailed to …" purely because an address existed, while a deployment
+   * with email switched off sent nothing at all. The send used to happen right here, inside the
+   * desk's request, and cost it ~5 s; now the screen gets the receipt at once and watches it reach
+   * SENT or FAILED (`GET /outbound-emails/:id`), which keeps the answer honest without the wait.
+   *
+   * `intro` is what this link is for — a first invitation, a replacement, a request for more — and
+   * is the only wording decided here. The rest of the email lives in the `registration-invite`
+   * template, which carries `intro` in both its shipped HTML and its built-in fallback.
    */
   private async sendInviteEmail(
     application: AssayerApplicationEntity,
     rawToken: string,
     intro: string,
-  ): Promise<boolean> {
-    if (!application.email) return false;
-    const link = this.inviteLink(rawToken);
-    const greeting = application.fullName ? `Hello ${application.fullName},` : 'Hello,';
-    let subject = 'Your Appraiser registration link';
-    let text = `${greeting}\n\n${intro}\n\n${link}`;
-    let html = renderEmailHtml({
-      title: 'Complete Your Registration',
-      bodyLines: [
-        greeting,
-        intro,
-        'Click the button below to complete your profile and upload verification documents from your phone or computer.',
-      ],
-      linkUrl: link,
-      linkLabel: 'Complete Registration',
-      securityNotice: 'This registration link is personalized for you. Do not forward or share it.',
-    });
-
-    if (this.templateRenderer) {
-      try {
-        const rendered = await this.templateRenderer.render('registration-invite', {
+    requestedBy?: string | null,
+  ): Promise<OutboundMessageReceipt | null> {
+    if (!application.email) return null;
+    return this.emails.queue({
+      kind: 'REGISTRATION_INVITE',
+      to: application.email,
+      content: {
+        template: 'registration-invite',
+        data: {
           fullName: application.fullName || 'Candidate',
-          inviteUrl: link,
+          inviteUrl: this.inviteLink(rawToken),
+          intro,
           logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
           companyName: 'Sumeru Global',
-        });
-        subject = rendered.subject;
-        text = rendered.text;
-        html = rendered.html;
-      } catch (err: any) {
-        this.logger.warn(`Template render failed for registration-invite: ${err.message}`);
-      }
-    }
-
-    const result = await this.emailProvider.send({
-      to: application.email,
-      subject,
-      text,
-      html,
+        },
+      },
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: application.id,
+      requestedBy: requestedBy ?? null,
     });
-    if (!result?.success) {
-      this.logger.warn(
-        `Registration invite for application ${application.id} was NOT delivered to ${application.email}: `
-        + `${result?.error ?? 'email transport reported no success'}`,
-      );
-    }
-    return !!result?.success;
   }
-
-  private static readonly INVITE_INTRO = 'Use the link below to complete your Appraiser '
-    + 'registration — from your phone or any computer, no app required.';
 
   /**
    * The row behind an interview, for the desk's correction window.
@@ -512,10 +512,10 @@ export class RegistrationApplicationService {
     const trimmed = (mobile ?? '').trim();
     if (!trimmed) return null;
     const found = await this.applications.find({
-      where: { mobile: trimmed, ...(organizationId ? { organizationId } : {}) },
+      where: { mobile: trimmed, isActive: true, ...(organizationId ? { organizationId } : {}) } as any,
       order: { createdAt: 'DESC' },
     });
-    return found.find((a) => !APPLICATION_TERMINAL_STATUSES.includes(a.status)) ?? null;
+    return found.find((a) => (a.isActive ?? true) && !APPLICATION_TERMINAL_STATUSES.includes(a.status) && a.status !== ApplicationStatus.WITHDRAWN) ?? null;
   }
 
   /**
@@ -597,11 +597,14 @@ export class RegistrationApplicationService {
         const match = await this.applications.findOne({
           where: {
             mobile: v,
+            isActive: true,
             ...(organizationId ? { organizationId } : {}),
           } as any,
         });
         if (match && (!excludeApplicationId || match.id !== excludeApplicationId)
-          && match.status !== ApplicationStatus.REJECTED) {
+          && (match.isActive ?? true)
+          && !APPLICATION_TERMINAL_STATUSES.includes(match.status)
+          && match.status !== ApplicationStatus.WITHDRAWN) {
           return {
             conflict: true,
             target: 'APPLICATION',
@@ -668,18 +671,19 @@ export class RegistrationApplicationService {
   }
 
   /**
-   * Deliver a minted link, and say whether it actually went.
+   * Deliver a minted link, and hand back what the screen needs to report whether it went.
    *
-   * Called after the transaction that created the row has committed. `emailed` is reported rather
-   * than assumed, so the interview screen can say what happened instead of announcing a delivery
-   * on the strength of an address being present.
+   * Called after the transaction that created the row has committed. `email` is a receipt the
+   * screen watches (`emailDelivery`) rather than a delivery it announces, so the interview screen can say what
+   * happened instead of announcing a delivery on the strength of an address being present.
    */
   async deliverInvite(
     application: AssayerApplicationEntity,
     rawToken: string,
-  ): Promise<{ emailed: boolean; inviteLink: string }> {
-    const emailed = await this.sendInviteEmail(application, rawToken, RegistrationApplicationService.INVITE_INTRO);
-    return { emailed, inviteLink: this.inviteLink(rawToken) };
+    requestedBy?: string | null,
+  ): Promise<{ emailDelivery: OutboundMessageReceipt | null; inviteLink: string }> {
+    const emailDelivery = await this.sendInviteEmail(application, rawToken, REGISTRATION_INVITE_INTRO, requestedBy);
+    return { emailDelivery, inviteLink: this.inviteLink(rawToken) };
   }
 
   /**
@@ -692,10 +696,11 @@ export class RegistrationApplicationService {
     mobile: string;
     email?: string | null;
     organizationId?: string | null;
-  }): Promise<{ application: AssayerApplicationEntity; emailed: boolean; inviteLink: string }> {
+    requestedBy?: string | null;
+  }): Promise<{ application: AssayerApplicationEntity; emailDelivery: OutboundMessageReceipt | null; inviteLink: string }> {
     const { application, rawToken } = await this.createInviteRecord(input);
-    const { emailed, inviteLink } = await this.deliverInvite(application, rawToken);
-    return { application, emailed, inviteLink };
+    const { emailDelivery, inviteLink } = await this.deliverInvite(application, rawToken, input.requestedBy);
+    return { application, emailDelivery, inviteLink };
   }
 
   /**
@@ -722,7 +727,7 @@ export class RegistrationApplicationService {
   async openWithoutInterview(
     input: { fullName: string; mobile: string; email?: string | null; reason: string },
     actor: { id: string; name?: string | null; organizationId?: string | null },
-  ): Promise<{ applicationId: string; emailed: boolean; inviteLink: string }> {
+  ): Promise<{ applicationId: string; emailDelivery: OutboundMessageReceipt | null; inviteLink: string }> {
     const fullName = (input.fullName ?? '').trim();
     const mobile = (input.mobile ?? '').trim();
     const reason = (input.reason ?? '').trim();
@@ -787,7 +792,7 @@ export class RegistrationApplicationService {
     application.extendedProfile = { ...profile, openedWithoutInterview: stamp } as never;
     const saved = await this.applications.save(application);
 
-    const { emailed, inviteLink } = await this.deliverInvite(saved, rawToken);
+    const { emailDelivery, inviteLink } = await this.deliverInvite(saved, rawToken, actor.id);
 
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
@@ -796,13 +801,14 @@ export class RegistrationApplicationService {
       entityId: saved.id,
       userId: actor.id,
       remarks: `${fullName} was added to the hiring pipeline with no interview on record, by `
-        + `${stamp.byName ?? actor.id}. Reason: ${reason} — the invite was `
-        + `${emailed ? 'emailed' : 'minted and handed to the desk'}.`,
+        + `${stamp.byName ?? actor.id}. Reason: ${reason} — ${inviteDeliveryRemark(emailDelivery, saved.email)}`,
+      metadata: emailDelivery?.id ? { outboundMessageId: emailDelivery.id } : undefined,
     });
 
-    // `emailed` is reported rather than assumed, and the link comes back either way, so the desk
-    // can read it out when the send did not happen — the same contract the interview path has.
-    return { applicationId: saved.id, emailed, inviteLink };
+    // The email is a receipt the screen watches rather than a delivery it assumes, and the link
+    // comes back either way, so the desk can read it out when the send does not happen — the same
+    // contract the interview path has.
+    return { applicationId: saved.id, emailDelivery, inviteLink };
   }
 
   /**
@@ -817,7 +823,7 @@ export class RegistrationApplicationService {
    * It mints a new token rather than re-sending the old one, for the same reason `requestMoreInfo`
    * does: only the hash was ever stored, so the original raw token no longer exists anywhere.
    */
-  async resendInvite(id: string, actorUserId: string): Promise<{ application: AssayerApplicationEntity; emailed: boolean; inviteLink: string }> {
+  async resendInvite(id: string, actorUserId: string): Promise<{ application: AssayerApplicationEntity; emailDelivery: OutboundMessageReceipt | null; inviteLink: string }> {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found.');
     if (APPLICATION_TERMINAL_STATUSES.includes(application.status)) {
@@ -829,10 +835,11 @@ export class RegistrationApplicationService {
     // the ONLY way a candidate is ever reached. Minting still happens; only the send is skipped.
     const rawToken = await this.mintToken(application);
     const saved = await this.applications.save(application);
-    const emailed = await this.sendInviteEmail(
+    const emailDelivery = await this.sendInviteEmail(
       saved,
       rawToken,
       'Here is a fresh link to complete your Appraiser registration. Any earlier link has stopped working.',
+      actorUserId,
     );
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
@@ -840,13 +847,10 @@ export class RegistrationApplicationService {
       entityType: 'ASSAYER_APPLICATION',
       entityId: saved.id,
       userId: actorUserId,
-      remarks: emailed
-        ? `Fresh link sent to ${saved.email}.`
-        : saved.email
-          ? `Fresh link generated but delivery to ${saved.email} failed — it was handed to the desk instead.`
-          : 'Fresh link generated and handed to the desk; there is no email address on this application.',
+      remarks: `Fresh link generated; ${inviteDeliveryRemark(emailDelivery, saved.email)}`,
+      metadata: emailDelivery?.id ? { outboundMessageId: emailDelivery.id } : undefined,
     });
-    return { application: saved, emailed, inviteLink: this.inviteLink(rawToken) };
+    return { application: saved, emailDelivery, inviteLink: this.inviteLink(rawToken) };
   }
 
   // ── Token resolution ─────────────────────────────────────────────────────
@@ -923,28 +927,30 @@ export class RegistrationApplicationService {
   // ── OTP ──────────────────────────────────────────────────────────────────
 
   /**
-   * Send the candidate a verification code, by email.
+   * Send the candidate a verification code: by text to the mobile number they typed when SMS is set
+   * up, by email otherwise — the owner's decision.
    *
-   * Email is the delivery channel for everything that reaches a candidate or an assayer here —
-   * the owner's decision, and the only one that works: MSG91 is unconfigured
-   * (`SMS_PROVIDER_API_KEY` is blank in `.env.production.example` and absent from `.env.docker`),
-   * so an SMS-only code meant nobody could finish registering at all.
+   * A texted code is what makes this a real check of the number: only the person holding that phone
+   * can read it back, so a code proven here means the mobile on the record is theirs. Email is the
+   * fallback (SMS not configured, or the gateway refused this one) because an SMS-only code meant
+   * nobody could finish registering while SMS was unconfigured. What the fallback costs, stated
+   * plainly: the invite link already arrived in that mailbox, so an emailed code proves the person
+   * holding the link is the person invited, and the number is then taken on trust — still bound to
+   * the code below, so the record gets it, but not proven.
    *
-   * What that costs, stated plainly because it is a real reduction: the invite link already
-   * arrived in this mailbox, so a code sent to the same mailbox proves the same thing the link
-   * did. It confirms the person holding the link is the person invited; it does NOT verify the
-   * mobile number the way an SMS would. The number is still captured and still bound to the code
-   * below, so the record gets it — but it is captured on trust, not proven. Wiring MSG91 is what
-   * would make this a second factor again.
+   * Answers which channel carried the code and a masked destination, so the page can say "texted to
+   * ••••• 4455" or "emailed to r•••@example.com" rather than guess.
    */
-  async requestOtp(rawToken: string, phone: string): Promise<void> {
+  async requestOtp(rawToken: string, phone: string): Promise<RegistrationOtpDelivery> {
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
     }
     // A code is a message to a real phone number: nothing is sent before they have agreed.
     this.assertConsented(application);
-    if (!application.email) {
+    // Asked once, so the "no email" refusal and the send below agree about whether SMS is there.
+    const textsAvailable = this.sms.isEnabled();
+    if (!textsAvailable && !application.email) {
       throw new BadRequestException(
         'There is no email address on this application to send a code to. Ask HR to add one and resend your link.',
       );
@@ -963,76 +969,153 @@ export class RegistrationApplicationService {
       );
     }
 
+    const normPhone = normalisePhone(phone) ?? phone.replace(/\D/g, '');
+    const phoneSendCounterKey = `regotp:phonesent:${normPhone}`;
+    const phoneSent = (await this.cache.getJson<{ count: number }>(phoneSendCounterKey))?.count ?? 0;
+    if (phoneSent >= OTP_SEND_MAX_PER_WINDOW) {
+      throw new BadRequestException(
+        'Too many verification codes have been requested for this mobile number. Try again later, or ask HR for help.',
+      );
+    }
+
     const cooldownSeconds = await this.settings.getNumber('registration.otpResendCooldownSeconds', 60);
     const lastSentKey = `regotp:lastsent:${tokenHash}`;
     const lastSentAt = await this.cache.getJson<number>(lastSentKey);
-    if (lastSentAt && Date.now() - lastSentAt < cooldownSeconds * 1000) {
-      throw new BadRequestException('Please wait before requesting another code.');
-    }
-
-    const code = numericCode(6);
-    await this.cache.setJson(`regotp:code:${tokenHash}`, { hash: hashCode(code), phone }, OTP_TTL_SECONDS);
-    await this.cache.setJson(sendCounterKey, { count: sent + 1 }, OTP_SEND_WINDOW_SECONDS);
-    await this.cache.setJson(lastSentKey, Date.now(), OTP_SEND_WINDOW_SECONDS);
-
-    let subject = 'Your Appraiser registration code';
-    let text = `Your Appraiser registration verification code is ${code}. It expires in 5 minutes.`;
-    let html = renderEmailHtml({
-      title: 'Verification Code',
-      bodyLines: [
-        'Please enter the 6-digit code below to verify your email address and continue your Sumeru Global appraiser registration.',
-      ],
-      otpCode: code,
-      securityNotice: 'This code expires in 5 minutes. If you did not request this, you can safely ignore this email.',
-    });
-
-    if (this.templateRenderer) {
-      try {
-        const rendered = await this.templateRenderer.render('otp-verification', {
-          otpCode: code,
-          validMinutes: '5',
-          logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
-          supportEmail: 'recruitment@sumeruglobal.com',
-          companyName: 'Sumeru Global',
-        });
-        subject = rendered.subject;
-        text = rendered.text;
-        html = rendered.html;
-      } catch (err: any) {
-        this.logger.warn(`Template render failed for otp-verification: ${err.message}`);
+    if (lastSentAt) {
+      const elapsed = (Date.now() - lastSentAt) / 1000;
+      if (elapsed < cooldownSeconds) {
+        const remaining = Math.max(1, Math.ceil(cooldownSeconds - elapsed));
+        throw new BadRequestException(
+          `Please wait ${remaining} second${remaining === 1 ? '' : 's'} before requesting another code.`,
+        );
       }
     }
 
-    const result = await this.emailProvider.send({
-      to: application.email,
-      subject,
-      text,
-      html,
-    });
+    const phoneLastSentKey = `regotp:phonelastsent:${normPhone}`;
+    const phoneLastSentAt = await this.cache.getJson<number>(phoneLastSentKey);
+    if (phoneLastSentAt) {
+      const elapsed = (Date.now() - phoneLastSentAt) / 1000;
+      if (elapsed < cooldownSeconds) {
+        const remaining = Math.max(1, Math.ceil(cooldownSeconds - elapsed));
+        throw new BadRequestException(
+          `Please wait ${remaining} second${remaining === 1 ? '' : 's'} before requesting another code.`,
+        );
+      }
+    }
+
+    const code = numericCode(6);
+    await this.cache.del(`regotp:fail:${tokenHash}`);
+    await this.cache.setJson(`regotp:code:${tokenHash}`, { hash: hashCode(code), phone }, OTP_TTL_SECONDS);
+    await this.cache.setJson(sendCounterKey, { count: sent + 1 }, OTP_SEND_WINDOW_SECONDS);
+    await this.cache.setJson(phoneSendCounterKey, { count: phoneSent + 1 }, OTP_SEND_WINDOW_SECONDS);
+    const now = Date.now();
+    await this.cache.setJson(lastSentKey, now, OTP_SEND_WINDOW_SECONDS);
+    await this.cache.setJson(phoneLastSentKey, now, OTP_SEND_WINDOW_SECONDS);
+    const validMinutes = String(Math.round(OTP_TTL_SECONDS / 60));
+
     /**
-     * A code that was never sent is a dead end, so say so instead of answering "sent".
+     * Both sends happen now, not queued: the candidate is on the page waiting for it, and the answer
+     * to this request is whether it went. The code travels only as template data; `sendNow` records
+     * each send without its body, and no log line below names the code or the full destination.
      *
-     * `EmailProvider.send` answers `{ success: false }` — it does not throw — when the transport
-     * is off or the send fails. This route used to log that and return success, so the candidate
-     * read that a code was on its way and waited for a message nobody had sent.
+     * `sendNow` answers `{ sent: false }` — it does not throw — when a transport is off or refuses.
+     * This route once logged that and returned success, so the candidate read that a code was on its
+     * way and waited for a message nobody had sent. A text that did not go falls through to email.
      */
-    if (!result?.success) {
+    if (textsAvailable) {
+      try {
+        const texted = await this.sms.sendNow({
+          kind: 'REGISTRATION_OTP',
+          to: phone,
+          recipientName: application.fullName,
+          content: { template: 'registration-otp', data: { code, validMinutes } },
+          entityType: 'ASSAYER_APPLICATION',
+          entityId: application.id,
+        });
+        if (texted?.sent) {
+          return {
+            channel: 'SMS',
+            sentTo: maskedMobile(phone),
+            cooldownSeconds,
+            expiresInSeconds: OTP_TTL_SECONDS,
+          };
+        }
+        this.logger.warn(
+          `Registration OTP text to ${maskedMobile(phone)} failed for token ${tokenHash.slice(0, 8)}…: `
+          + `${texted?.error ?? 'SMS gateway reported no success'}`,
+        );
+      } catch (err) {
+        this.logger.warn(`Registration OTP text for token ${tokenHash.slice(0, 8)}… threw: ${(err as Error)?.message ?? err}`);
+      }
+    }
+
+    if (application.email) {
+      const result = await this.emails.sendNow({
+        kind: 'REGISTRATION_OTP',
+        to: application.email,
+        content: {
+          template: 'otp-verification',
+          data: {
+            otpCode: code,
+            validMinutes,
+            logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+            supportEmail: 'recruitment@sumeruglobal.com',
+            companyName: 'Sumeru Global',
+          },
+        },
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application.id,
+      });
+      if (result?.sent) {
+        return {
+          channel: 'EMAIL',
+          sentTo: maskedEmail(application.email),
+          cooldownSeconds,
+          expiresInSeconds: OTP_TTL_SECONDS,
+        };
+      }
       this.logger.warn(
-        `Registration OTP email to ${application.email} failed for token ${tokenHash.slice(0, 8)}…: `
+        `Registration OTP email to ${maskedEmail(application.email)} failed for token ${tokenHash.slice(0, 8)}…: `
         + `${result?.error ?? 'email transport reported no success'}`,
       );
-      throw new BadRequestException(
-        'We could not email you a verification code just now. Contact HR — they can help you finish registering.',
-      );
     }
+
+    /** A code that was never sent is a dead end, so clean up and say so instead of answering "sent". */
+    await this.cache.del(`regotp:code:${tokenHash}`, lastSentKey, phoneLastSentKey);
+    await this.cache.setJson(sendCounterKey, { count: sent }, OTP_SEND_WINDOW_SECONDS);
+    await this.cache.setJson(phoneSendCounterKey, { count: phoneSent }, OTP_SEND_WINDOW_SECONDS);
+    throw new BadRequestException(
+      'We could not send you a verification code just now. Contact HR — they can help you finish registering.',
+    );
   }
 
   async verifyOtp(rawToken: string, phone: string, code: string): Promise<void> {
     const tokenHash = hashCode(rawToken);
-    const pending = await this.cache.getJson<{ hash: string; phone: string }>(`regotp:code:${tokenHash}`);
-    if (!pending || pending.phone !== phone || !hashesEqual(pending.hash, hashCode(code))) {
-      throw new BadRequestException('That code is incorrect or has expired.');
+    const codeKey = `regotp:code:${tokenHash}`;
+    const failKey = `regotp:fail:${tokenHash}`;
+
+    const pending = await this.cache.getJson<{ hash: string; phone: string }>(codeKey);
+    if (!pending) {
+      throw new BadRequestException('That code has expired or has not been requested.');
     }
+
+    if (pending.phone !== phone || !hashesEqual(pending.hash, hashCode(code))) {
+      const fails = ((await this.cache.getJson<{ count: number }>(failKey))?.count ?? 0) + 1;
+      if (fails >= OTP_MAX_VERIFY_ATTEMPTS) {
+        await this.cache.del(codeKey, failKey);
+        throw new BadRequestException(
+          'Too many incorrect attempts. This code has been invalidated. Please request a new code.',
+        );
+      }
+      await this.cache.setJson(failKey, { count: fails }, OTP_TTL_SECONDS);
+      const remaining = OTP_MAX_VERIFY_ATTEMPTS - fails;
+      throw new BadRequestException(
+        `That code is incorrect. You have ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`,
+      );
+    }
+
+    // Success: invalidate code and fail counter immediately so code cannot be verified twice
+    await this.cache.del(codeKey, failKey);
     await this.cache.setJson(`regotp:verified:${tokenHash}`, { phone }, OTP_VERIFIED_TTL_SECONDS);
 
     /**
@@ -1850,45 +1933,24 @@ export class RegistrationApplicationService {
     const saved = await this.applications.save(application);
 
     if (saved.email) {
-      const greeting = saved.fullName ? `Hello ${saved.fullName},` : 'Hello,';
-      let subject = 'Your Appraiser application';
-      let text = `${greeting}\n\nAfter review, we are unable to proceed with your application at this time.\n\nReason: ${saved.reviewNotes}`;
-      let html = renderEmailHtml({
-        title: 'Application Status Update',
-        bodyLines: [
-          greeting,
-          'Thank you for your interest in joining Sumeru Global. After reviewing your application dossier and submitted credentials, our verification committee is unable to proceed with your onboarding at this time.',
-        ],
-        callout: {
-          title: 'Review Remarks',
-          text: saved.reviewNotes || 'Does not meet minimum criteria at this time.',
-          tone: 'crimson',
-        },
-        footer: 'Questions regarding this decision may be directed to recruitment@sumeruglobal.com.',
-      });
-
-      if (this.templateRenderer) {
-        try {
-          const rendered = await this.templateRenderer.render('application-rejected', {
+      await this.emails.queue({
+        kind: 'APPLICATION_REJECTED',
+        to: saved.email,
+        content: {
+          template: 'application-rejected',
+          data: {
             fullName: saved.fullName || 'Candidate',
+            // For the built-in letter: a plain "Hello," when there is no name, not "Hello Candidate,".
+            greeting: saved.fullName ? `Hello ${saved.fullName},` : 'Hello,',
             reviewNotes: saved.reviewNotes || 'Does not meet minimum criteria at this time.',
             supportEmail: 'recruitment@sumeruglobal.com',
             logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
             companyName: 'Sumeru Global',
-          });
-          subject = rendered.subject;
-          text = rendered.text;
-          html = rendered.html;
-        } catch (err: any) {
-          this.logger.warn(`Template render failed for application-rejected: ${err.message}`);
-        }
-      }
-
-      await this.emailProvider.send({
-        to: saved.email,
-        subject,
-        text,
-        html,
+          },
+        },
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: saved.id,
+        requestedBy: actorUserId,
       });
     }
     await this.auditService.recordEventSafe({
@@ -1999,7 +2061,7 @@ export class RegistrationApplicationService {
          * is also the honest date: nothing was in force before the person existed.
          */
         const commercial = {
-          effectiveStartDate: new Date().toISOString().slice(0, 10),
+          effectiveStartDate: businessTodayDateKey(),
           ...(profile.commercial as Record<string, unknown>),
         };
         await this.assayerService.createCommercialProfile(assayerId, commercial as never, actorUserId);
@@ -2034,6 +2096,68 @@ export class RegistrationApplicationService {
   }
 
   /**
+   * ONE APPROVAL OF AN APPLICATION AT A TIME.
+   *
+   * Promotion is a chain of separate commits — create the person, re-home each scan, apply the
+   * profile a group at a time, set the terms, close the application — and nothing stopped two of
+   * them running together: a second click after a slow first one, or the web client giving up at
+   * 30 s and retrying while the first request was still working. `create` answered the second with
+   * the same person (its idempotency key is the application id), but everything after it ran
+   * twice: every scan filed again as a new document version, every profile group applied again.
+   *
+   * So the first thing an approval does is claim the application, and a caller that cannot claim
+   * it is told so rather than queued behind it. The claim is a transaction-scoped advisory lock
+   * keyed on the application id, held for the whole promotion:
+   *  - only one caller can hold it, on any API instance, because Postgres arbitrates;
+   *  - the transaction ending releases it, whether the promotion finished or threw part way, and
+   *    so does the connection closing if the process dies — there is no stale claim for the desk
+   *    to wait out and no marker column to clear;
+   *  - it needs no new application status that every screen would have to learn.
+   *
+   * The application is read AFTER the claim is taken (`promote` does it), never before: a caller
+   * that loaded it first could be holding a PENDING copy of a row the previous approval has just
+   * closed.
+   *
+   * The lock's transaction writes nothing — the promotion's own writes commit as they always did.
+   * Its cost is one pooled connection held for the promotion's length, which is part of why the
+   * geocoding that made this take seconds now happens afterwards. Should that connection be reaped
+   * anyway (`idle_in_transaction_session_timeout`) the claim lapses early, and the idempotent
+   * create and scan attach are the backstop; a promotion that did finish is not then reported as a
+   * failure merely because the empty transaction could not commit.
+   */
+  async approve(
+    id: string,
+    actorUserId: string,
+    actorRoles: string[] | undefined,
+    organizationId?: string | null,
+    input?: ApproveApplicationInput,
+  ): Promise<{ assayer: AssayerEntity; gaps: string[] }> {
+    let promoted = null as { assayer: AssayerEntity; gaps: string[] } | null;
+    try {
+      await this.uow.run(async (manager) => {
+        const rows: Array<{ claimed: boolean }> = await manager.query(
+          'SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2)) AS claimed',
+          [APPROVAL_CLAIM_NAMESPACE, id],
+        );
+        if (!rows?.[0]?.claimed) {
+          throw new ConflictException(
+            'This application is already being approved — somebody pressed Approve on it a moment '
+            + 'ago and it is still going through. Wait a few seconds and reopen it rather than '
+            + 'approving it again.',
+          );
+        }
+        promoted = await this.promote(id, actorUserId, actorRoles, organizationId, input);
+      });
+    } catch (err) {
+      if (!promoted) throw err;
+      this.logger.warn(
+        `Application ${id} was approved, but its approval claim did not release cleanly: ${(err as Error)?.message ?? err}`,
+      );
+    }
+    return promoted as { assayer: AssayerEntity; gaps: string[] };
+  }
+
+  /**
    * Approving is the moment the person is hired, so it is the moment the terms are set.
    *
    * The reviewer could previously add NOTHING. The drawer was read-only, the call carried no body,
@@ -2049,8 +2173,10 @@ export class RegistrationApplicationService {
    *    joining date by putting one in their form.
    *  - `commercial` / `empanelments` — the rate card and the first client standings. These feed
    *    branches `applyExtendedProfile` has always had and nothing could reach.
+   *
+   * Called only by `approve`, while it holds the application's claim.
    */
-  async approve(
+  private async promote(
     id: string,
     actorUserId: string,
     actorRoles: string[] | undefined,
@@ -2214,7 +2340,7 @@ export class RegistrationApplicationService {
       // rather than assume one, since `CreateAssayerDto.dateOfBirth` wants the ISO string form.
       dateOfBirth: application.dateOfBirth
         ? (application.dateOfBirth instanceof Date
-          ? application.dateOfBirth.toISOString().slice(0, 10)
+          ? businessDateKey(application.dateOfBirth)
           : String(application.dateOfBirth))
         : undefined,
       gender: application.gender ?? undefined,
@@ -2288,6 +2414,23 @@ export class RegistrationApplicationService {
     clearAppliedSecrets(application, failedGroups);
     await this.applications.save(application);
 
+    /**
+     * Their home is placed now, off this request.
+     *
+     * `create` no longer walks the free geocoders inline (see the note there), so a person with no
+     * pin arrives unplaced and is handed to the precision worker — which only ever improves a
+     * coordinate and never touches a hand-placed one. Handed over here, after every write above,
+     * rather than straight after `create`: the worker saves the whole row, and running it while the
+     * profile groups were still landing could put back the empty values they had just replaced.
+     *
+     * Not awaited, as the roster import does not await it: the call swallows its own failures, but
+     * a queue add against a Redis that is down can sit waiting for the reconnect, and an approval
+     * must not wait with it. The nightly assayer sweep picks the person up if the hand-off is lost.
+     */
+    if (needsBetterFix(assayer.geoSource ?? null, assayer.geoAccuracyMeters ?? null)) {
+      void this.geoPrecision.enqueueBackfill('assayer', [assayer.id], `application ${application.id} approved`);
+    }
+
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: 'ASSAYER_APPLICATION_APPROVED',
@@ -2307,52 +2450,50 @@ export class RegistrationApplicationService {
     });
 
     if (application.email) {
-      const greeting = application.fullName ? `Hello ${application.fullName},` : 'Hello,';
-      let subject = 'Your Appraiser application has been approved';
-      let text = `${greeting}\n\nYour application has been approved. Your Appraiser code is ${assayer.assayerCode}. HR will be in touch about next steps.`;
-      let html = renderEmailHtml({
-        title: 'Application Approved — Welcome to Sumeru Global',
-        bodyLines: [
-          greeting,
-          'Congratulations! Your application has been approved. You have been officially registered as an authorized Appraiser in our network.',
-          'Our operations team will be in touch shortly regarding branch roster assignments and field audit schedules.',
-        ],
-        kvTable: [
-          { label: 'Official Appraiser Code', value: assayer.assayerCode },
-          { label: 'Registered Name', value: assayer.displayName || application.fullName || '—' },
-          { label: 'Status', value: 'Active Roster Ready' },
-        ],
-        linkUrl: appPublicUrl(),
-        linkLabel: 'Sign in to FAPOMS',
-        securityNotice: `Keep your Appraiser code (${assayer.assayerCode}) confidential. It is required during bank branch audit verification.`,
-      });
+      const name = application.fullName || assayer.displayName || 'Appraiser';
+      /*
+        Queued, not sent here: approving was the one step a reviewer waited on the mail server for.
 
-      if (this.templateRenderer) {
-        try {
-          const rendered = await this.templateRenderer.render('application-approved', {
+        The profile gaps are NOT in this letter. They are the record's own refusal messages (an
+        empanelment "for client <id>", say), written for the desk, which reads them on the audit row
+        above. Neither the shipped HTML nor the built-in letter ever showed them to the candidate.
+      */
+      await this.emails.queue({
+        kind: 'APPLICATION_APPROVED',
+        to: application.email,
+        content: {
+          template: 'application-approved',
+          data: {
             assayerCode: assayer.assayerCode,
             loginUrl: appPublicUrl(),
             logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
-            candidateName: application.fullName || assayer.displayName || 'Appraiser',
-            remarks: profileGaps.length ? `Note: ${profileGaps.join('; ')}` : '',
+            candidateName: name,
+            // The shipped HTML greets and names the person by `fullName`.
+            fullName: name,
+            displayName: assayer.displayName || name,
             companyName: 'Sumeru Global',
-          });
-          subject = rendered.subject;
-          text = rendered.text;
-          html = rendered.html;
-        } catch (err: any) {
-          this.logger.warn(`Template render failed for application-approved: ${err.message}`);
-        }
-      }
-
-      await this.emailProvider.send({
-        to: application.email,
-        subject,
-        text,
-        html,
+          },
+        },
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application.id,
+        requestedBy: actorUserId,
       });
     }
 
     return { assayer, gaps: profileGaps };
   }
+}
+
+/**
+ * What the audit trail says about an invite's delivery at the moment it is queued.
+ *
+ * It cannot say "emailed" any more — the send happens after this row is written — and it must not
+ * pretend to. The outbound email's own row records whether it went, and its id is on the event.
+ */
+function inviteDeliveryRemark(email: OutboundMessageReceipt | null, address: string | null | undefined): string {
+  if (!address) return 'there is no email address on this application, so the link was handed to the desk.';
+  if (!email || email.status === 'NOT_QUEUED') {
+    return `the invite email to ${address} could not be queued, so the link was handed to the desk.`;
+  }
+  return `the invite email to ${address} was queued, and the link was also handed to the desk.`;
 }

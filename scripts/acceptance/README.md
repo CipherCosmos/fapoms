@@ -34,8 +34,10 @@ enforced in `_lib.mjs` on `pool.query` itself — not by convention — so a pro
 the shared helper by accident, including through the multi-statement teardown several of them run
 directly.
 
-Scripts that do not import `_lib.mjs` carry no gate. Their safety table row says so, and each one
-also carries a `SAFETY CLASSIFICATION` block at the top of the file.
+Scripts that do not go through `_lib.mjs`'s gates carry no gate. Their safety table row says so, and
+each one also carries a `SAFETY CLASSIFICATION` block at the top of the file. Several of them import
+**only** the job-polling helpers from `_lib.mjs` (see below). The polling itself is GETs only — the
+POST it waits on is the probe's own write — and importing them does not put a script behind the gate.
 
 ---
 
@@ -51,6 +53,7 @@ unless `AC_ALLOW_WRITES=1`.
 | `verify-deployment.mjs` | **read-only by default** | never — reports `mustChangePassword` as a finding | none | none | none | opt-in (`AC_EICAR`, `AC_ALLOW_WRITES`) |
 | `bulk-lifecycle.mjs` | writes | none | INSERTs `ACBL-` assayers | its own `ACBL-` rows, both ends | walks real `lifecycle_status`, real audit rows | yes |
 | `reopen-redo-money.mjs` | writes | none | fixture branch + assignment | its own fixture, incl. payables and billing entries | **books and voids real money** | yes |
+| `money-workflow.mjs` | writes | none | fixture branches + assignments; fills bank/IFSC/PAN on ONE assayer, restored at the end; widens project dates, restored | its own fixture — payments, payables, entries, invoices, history, assignments, project_branches, branches | **books, approves and PAYS real money; raises and settles a client invoice** | yes |
 | `custom-role-parity.mjs` | writes | none | none | none | **rewrites a role's permission set** (restored at the end) | yes |
 | `region-parity.mjs` | **destructive** | none | `users.regions`, `is_active`, `must_change_password`; **moves a branch between regions** | branches, contacts, documents, remarks via API | **rewrites `user_roles`**; writes that succeed are the finding | yes |
 | `assayer-child-region.mjs` | **destructive** | rotates an app login it minted (gated) | `users.regions`; clones assayer + child rows | assayer child rows via API | **rewrites `user_roles`**; writes that succeed are the finding | yes |
@@ -101,6 +104,54 @@ directory, where they used to default to an absolute path into a campaign scratc
 the repository — so they ran a forked, older copy of the helpers and aborted outright on any other
 machine.
 
+## Routes that answer 202: wait for the job, then look
+
+Since 2026-09-17 the slow bulk writes no longer do their work inside the request (the web client gave
+up at 30 s while the server carried on). They answer **202 `{ jobId, deduplicated }`** and the body
+they used to return is the finished job's `result`, read from a status route:
+
+| POST | poll |
+|---|---|
+| `/assayers/app-access/bulk`, `/assayers/bulk/notify`, `/assayers/bulk/lifecycle` | `/assayers/bulk-jobs/:jobId` |
+| `/billing-engine/payouts/approve`, `/payouts/pay`, `/assayer-invoices/invite-all` | `/billing-engine/bulk-jobs/:jobId` |
+| `/planning/coverage-plans/:planId/execute`, `/planning/bulk-offers/jobs`, `/planning/unable-to-cover/jobs` | `/planning/write-jobs/:jobId` |
+| `/documents/dispatch-batch` | `/documents/dispatch-batch/:jobId` |
+| `/assayers/roster/import` (the `dryRun` rehearsal too) | `/assayers/roster/import-jobs/:jobId` |
+| `/admin/data-reset/execute` | `/admin/data-reset/runs/:jobId` |
+
+Probes do not write polling loops. `_lib.mjs` has one:
+
+```js
+import { postAndAwait, awaitJob, JOB_STATUS, describeJobOutcome } from './_lib.mjs';
+
+const run = await postAndAwait('/billing-engine/payouts/approve', { payableIds: [id] },
+  JOB_STATUS.billingBulk, { token });            // token may be () => currentToken
+// run: { r, status, accepted: { jobId, deduplicated } | null, result, error, throttled }
+check('...', run.result?.refused?.length === 1, describeJobOutcome(run));
+
+const result = await awaitJob(JOB_STATUS.assayerBulk(jobId), { token, timeoutMs, pollMs });
+```
+
+`awaitJob` returns `result` when the state is `done` and throws a `JobError` (with the server's
+`error`) when it is `failed`, when the budget runs out (`AC_JOB_TIMEOUT_MS`, default 120 s), or when
+the status route refuses. `postAndAwait` never throws for an outcome: a request-level refusal comes
+back as `accepted: null` with the response in `r`, and a failed run as `error`. Probes with their own
+request plumbing pass `send: (path, body) => theirCall(...)` and `api: API`.
+
+Four rules the scripts follow, each of which silently changes what a check measures if ignored:
+
+- **Read the database after the run, never on the 202.** On the 202 the worker has not reached the
+  row, so every "nothing moved" check passes whether or not anything was refused.
+- **Know which refusals are still immediate.** Validation (bad target status, over-long reason,
+  more than 500 ids, unknown fields), the role gate and the region ceiling are still 400/403/404 with
+  nothing queued — assert on `status`. Per-row refusals (a duties conflict, a held payout, a
+  reason-gated hop) are inside `result`, as they always were — the POST now says 202, not 201.
+- **Poll as the account that started the job.** Anyone else gets 404, administrators included.
+- **"Press it again" means after the first run finished.** An identical press by the same account
+  while a run is queued or running joins it (`deduplicated: true`) and gets that run's result, so a
+  repeat pressed too early measures the join, not the repeat. The ids are also de-duplicated when a
+  batch is accepted, so `[a, a]` is reported once, not twice.
+
 ## Two things that will waste your afternoon otherwise
 
 **Point `DB_*` at the same database the API is using.** `deploy/docker-compose.prod.yml` publishes
@@ -115,6 +166,24 @@ product failing — and `req()` honours `Retry-After`, so a busy run spends real
 waiting is **never** reported as latency: `req()` returns `requestMs` and `waitedMs` separately and
 the probes tally them on separate lines. A performance number that includes the measurer's own sleep
 is worse than none, which is what produced the "60.4 second login" this campaign chased.
+
+## `money-workflow.mjs` needs three accounts and an assayer in range
+
+It walks both roads to an approved payout — the assayer's bill and the desk's recorded exception —
+and every illegal transition on the way, checking the **database** after each refusal rather than
+the HTTP status. Two things it needs that are easy to get wrong:
+
+- **Three separate logins.** Segregation of duties has two rules, not one: whoever booked the work
+  may not approve its payout, and whoever approved it may not pay it. Set `AC_BOOKER` (default
+  `manager`), `AC_APPROVER` (default `admin`) and `AC_PAYER` (default `admin2`), with
+  `AC_BOOKER_PASSWORD` / `AC_PAYER_PASSWORD` if they differ from `AC_PASSWORD`. Signed in once the
+  script cannot reach a single approval; signed in twice it reaches approval but never a payment.
+- **An assayer inside the client's coverage band.** The rule has BOTH ends — under 5km is refused
+  as a conflict of interest, over 200km as out of range — and the seeded dataset's only
+  payable-ready assayer is filed under "Pune City" carrying Bangalore's coordinates, 745km from
+  the branch these probes clone. The script picks by distance and says so when nobody qualifies,
+  rather than reporting "could not book an assignment" as though the money path were broken.
+  `reopen-redo-money.mjs` picks the same way, for the same reason.
 
 ## The loop consumes branches
 

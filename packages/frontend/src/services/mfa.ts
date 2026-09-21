@@ -15,6 +15,12 @@ export interface MfaStatus {
   confirmed: boolean;
   factors: MfaFactor[];
   recoveryCodesRemaining: number;
+  /**
+   * Whether a text message can be set up as a factor on this server. False until an administrator
+   * configures SMS; the panel then shows the option as unavailable instead of letting someone type a
+   * number only to be refused.
+   */
+  smsAvailable: boolean;
 }
 
 /** My current MFA status — which factors are active and how many recovery codes remain. */

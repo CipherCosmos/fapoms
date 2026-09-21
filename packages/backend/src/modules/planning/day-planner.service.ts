@@ -26,7 +26,7 @@ import { RoutingService, DestinationCoords } from '../geo/routing.provider';
 import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import { FeePolicyService } from '../pricing/fee-policy.service';
-import { calculateHaversineDistance, AssayerStatus } from '@fapoms/shared';
+import { calculateHaversineDistance, AssayerStatus, businessDateKey } from '@fapoms/shared';
 // Type-only: the planner counts clusters, and stays ignorant of whether a queue is watching.
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
@@ -541,13 +541,21 @@ export class DayPlannerService {
     clientIds: string[] = [],
   ): Promise<{ scheduledDate: Date; dateStr: string; dateAdjustment: ProjectDayPlan['dateAdjustment'] }> {
     const states = [...new Set(branches.map((pb) => pb.branch?.state).filter(Boolean))] as string[];
-    const requestedStr = requested.toISOString().split('T')[0];
+    /**
+     * Every date in this walk is an Indian calendar date.
+     *
+     * This formatted in UTC while stepping with `setDate`/`getDate`, which are server-LOCAL —
+     * two clocks in one loop. `recommendation.engine.ts`, which consumes the plan, already
+     * uses `businessDateKey`; this diverged from its own sibling. The visible effect is a plan
+     * scheduled, and reported back to the operator, on the day before the one they asked for.
+     */
+    const requestedStr = businessDateKey(requested);
 
     const candidate = new Date(requested);
     for (let attempt = 0; attempt <= MAX_DATE_LOOKAHEAD_DAYS; attempt++) {
       const blocker = await this.describeDateBlocker(candidate, states, clientIds);
       if (!blocker) {
-        const dateStr = candidate.toISOString().split('T')[0];
+        const dateStr = businessDateKey(candidate);
         return {
           scheduledDate: candidate,
           dateStr,

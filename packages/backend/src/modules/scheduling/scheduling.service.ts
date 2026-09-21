@@ -9,7 +9,7 @@ import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
-import { EventCategory, ScheduleStatus, ProjectBranchStatus, AssignmentStatus, SCHEDULE_TRANSITIONS, isValidTransition } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, ProjectBranchStatus, AssignmentStatus, SCHEDULE_TRANSITIONS, isValidTransition, businessDateKey } from '@fapoms/shared';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
@@ -314,7 +314,7 @@ export class SchedulingService {
     const fmt = (d: Date | string | null) => {
       if (!d) return 'the original date';
       const dd = typeof d === 'string' ? new Date(d) : d;
-      return Number.isNaN(dd.getTime()) ? String(d) : dd.toISOString().slice(0, 10);
+      return Number.isNaN(dd.getTime()) ? String(d) : businessDateKey(dd);
     };
     const branchName = (schedule.assignment as any)?.projectBranch?.branch?.name ?? 'the branch';
 

@@ -2,20 +2,12 @@ import React, { useState } from 'react';
 import { auditDocumentTypeLabel } from '@fapoms/shared';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { Pagination } from '../../components/ui';
+// One source for every document word on these screens — see documents/vocabulary.ts.
+import { stageWords } from './vocabulary';
 import {
   Send, AlertTriangle, CheckCircle2, Clock, Search, FileText, ChevronRight, ChevronDown,
 } from 'lucide-react';
 
-const STAGE_META: Record<string, { label: string; color: string; bg: string }> = {
-  UPLOADED: { label: 'Prepared', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
-  DISPATCHED: { label: 'With assayer', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
-  RECEIVED: { label: 'Returned', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-  SENT_TO_DATA_ENTRY: { label: 'Data entry', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
-  SENT_TO_EXTERNAL_OCR: { label: 'External OCR', color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
-  EXCEL_GENERATED: { label: 'Excel ready', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-  PROCESSED: { label: 'Processed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-  COMPLETED: { label: 'Completed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-};
 
 export interface DocRow {
   id: string;
@@ -192,10 +184,10 @@ export const DocumentControlPanel: React.FC<{
               key={s.stage}
               active={stage === s.stage}
               onClick={() => onStageChange(stage === s.stage ? 'ALL' : s.stage)}
-              label={STAGE_META[s.stage]?.label ?? s.stage}
+              label={stageWords(s.stage)?.label ?? s.stage}
               count={s.count}
-              color={STAGE_META[s.stage]?.color ?? 'var(--text-muted)'}
-              bg={STAGE_META[s.stage]?.bg ?? 'var(--status-draft-bg)'}
+              color={stageWords(s.stage)?.color ?? 'var(--text-muted)'}
+              bg={stageWords(s.stage)?.bg ?? 'var(--status-draft-bg)'}
             />
           ))}
         </div>
@@ -233,15 +225,12 @@ export const DocumentControlPanel: React.FC<{
               <Send size={13} /> {busy ? `Sending ${dispatchableIds.length}…` : `Send ${dispatchableIds.length} to assayers`}
             </button>
             {/*
-              A working state rather than "12 of 40", deliberately. Dispatch is a single
-              `POST /documents/dispatch-batch` carrying every id; the server marks them and
-              answers once. Nothing on this side observes an individual document being sent, so
-              any per-item counter here would be invented — and an invented counter is worse than
-              a spinner, because it tells the user a document has gone out when it may not have.
-              Cancelling is not offered for the same reason: aborting the request would only stop
-              us listening, while the server carried on releasing paperwork to assayers. The
-              button naming the count is the part that was actually missing — on a forty-document
-              selection it previously said "Sending…" and looked dead.
+              A working state here, not a counter. `POST /documents/dispatch-batch` queues the
+              batch and the Documents page follows the job: the real "(12/40)" the server reports
+              is shown there, above every view, rather than invented here. Cancelling is not
+              offered: leaving the page only stops the watching, while the server carries on
+              releasing paperwork. The button naming the count is the part that was actually
+              missing — on a forty-document selection it previously said "Sending…" and looked dead.
             */}
             {busy && (
               <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
@@ -263,7 +252,7 @@ export const DocumentControlPanel: React.FC<{
           </div>
         )}
         {rows.map((d) => {
-          const meta = STAGE_META[d.status] ?? { label: d.status, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
+          const meta = stageWords(d.status) ?? { label: d.status, meaning: '', color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
           const open = expanded === d.id;
           return (
             <div key={d.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>

@@ -21,13 +21,18 @@ import { NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 
 import { ImportJobService } from './import-job.service';
 import { ImportJobWorker } from '../project/import-job.worker';
-import { IMPORT_QUEUE, BRANCH_IMPORT_JOB } from './import.constants';
+import { IMPORT_QUEUE, ROSTER_IMPORT_QUEUE, CUSTOMER_MASTER_IMPORT_QUEUE, BRANCH_IMPORT_JOB } from './import.constants';
 import { ProjectService } from '../project/project.service';
 
 describe('ImportJobService', () => {
   let service: ImportJobService;
 
+  /** The branch-import queue. Roster imports have their own; see import-queue-routing.spec.ts. */
   const mockQueue = {
+    add: jest.fn(),
+    getJob: jest.fn(),
+  };
+  const mockRosterQueue = {
     add: jest.fn(),
     getJob: jest.fn(),
   };
@@ -37,6 +42,8 @@ describe('ImportJobService', () => {
       providers: [
         ImportJobService,
         { provide: getQueueToken(IMPORT_QUEUE), useValue: mockQueue },
+        { provide: getQueueToken(ROSTER_IMPORT_QUEUE), useValue: mockRosterQueue },
+        { provide: getQueueToken(CUSTOMER_MASTER_IMPORT_QUEUE), useValue: { add: jest.fn(), getJob: jest.fn() } },
       ],
     }).compile();
 
@@ -103,6 +110,27 @@ describe('ImportJobService', () => {
     it('does not retry an import automatically', () => {
       expect(ImportJobService.JOB_OPTIONS.attempts).toBe(1);
     });
+
+    /**
+     * No import had a timeout, so a handler whose promise never settled held its kind's only slot
+     * forever and every later upload of that kind queued behind it. But Bull's timeout frees the
+     * slot WITHOUT stopping the handler, so a bound a real run can reach lets the next import start
+     * beside a live one. Each bound below is the worst real run worked out in
+     * `ImportJobService.TIMEOUT_MS`'s comment; these pin that none has been cut beneath it.
+     */
+    it('gives every import kind a timeout, set above the slowest real run of that kind', () => {
+      const HOUR = 60 * 60 * 1000;
+      // 3,759 rows x ~4.5 s of public geocoding = ~4.7 h
+      expect(ImportJobService.jobOptions('branch').timeout).toBeGreaterThan(4.7 * HOUR);
+      // 1,155 distinct IFSC codes x 3 s cap + a minute of writes = ~1 h
+      expect(ImportJobService.jobOptions('roster').timeout).toBeGreaterThan(1 * HOUR);
+      // ~200 read chunks + ~200 insert batches + parsing, database only = ~8 min
+      expect(ImportJobService.jobOptions('customerMaster').timeout).toBeGreaterThan(8 * 60 * 1000);
+      // …and each is still the shared retention and no-retry rules, not a replacement for them.
+      for (const kind of ['branch', 'roster', 'customerMaster'] as const) {
+        expect(ImportJobService.jobOptions(kind)).toMatchObject(ImportJobService.JOB_OPTIONS);
+      }
+    });
   });
 
   describe('enqueueBranchImport', () => {
@@ -123,7 +151,7 @@ describe('ImportJobService', () => {
       expect(mockQueue.add).toHaveBeenCalledWith(
         BRANCH_IMPORT_JOB,
         expect.objectContaining({ scope: { kind: 'PROJECT' as const, id: 'p-1' }, userId: 'u-1' }),
-        ImportJobService.JOB_OPTIONS,
+        ImportJobService.jobOptions('branch'),
       );
     });
 
@@ -171,7 +199,7 @@ describe('ImportJobService', () => {
 
   describe('enqueueRosterImport', () => {
     beforeEach(() => {
-      mockQueue.add.mockResolvedValue({ id: 7 });
+      mockRosterQueue.add.mockResolvedValue({ id: 7 });
     });
 
     /**
@@ -181,12 +209,28 @@ describe('ImportJobService', () => {
      * only, file a review issue on a disagreement), not an accidental overwrite because the flag
      * fell out of the object somewhere in the queue.
      */
+    /**
+     * The rehearsal is queued now, through the same job and handler as the real import. What must
+     * never happen is the flag defaulting the dangerous way: a caller that says nothing gets the
+     * real import it always got, and only an explicit rehearsal is one.
+     */
+    it('queues a rehearsal only when asked, and a real import by default', async () => {
+      await service.enqueueRosterImport({
+        actorId: 'u-1', fileBuffer: Buffer.from('xlsx'), fileName: 'roster.xlsx', totalRows: 100, dryRun: true,
+      });
+      await service.enqueueRosterImport({
+        actorId: 'u-1', fileBuffer: Buffer.from('xlsx'), fileName: 'roster.xlsx', totalRows: 100,
+      });
+
+      expect(mockRosterQueue.add.mock.calls.map(([, data]) => data.dryRun)).toEqual([true, false]);
+    });
+
     it('carries overwrite in the queued job data, defaulting to false', async () => {
       await service.enqueueRosterImport({
         actorId: 'u-1', fileBuffer: Buffer.from('xlsx'), fileName: 'roster.xlsx', totalRows: 100,
       });
 
-      const [, data] = mockQueue.add.mock.calls[0];
+      const [, data] = mockRosterQueue.add.mock.calls[0];
       expect(data.overwrite).toBe(false);
     });
 
@@ -196,7 +240,7 @@ describe('ImportJobService', () => {
         overwrite: true,
       });
 
-      const [, data] = mockQueue.add.mock.calls[0];
+      const [, data] = mockRosterQueue.add.mock.calls[0];
       expect(data.overwrite).toBe(true);
     });
 
@@ -206,7 +250,7 @@ describe('ImportJobService', () => {
         actorId: 'u-1', fileBuffer: Buffer.from('xlsx'), fileName: 'sumeru-roster.xlsx', totalRows: 100,
       });
 
-      const [, data] = mockQueue.add.mock.calls[0];
+      const [, data] = mockRosterQueue.add.mock.calls[0];
       expect(data.fileName).toBe('sumeru-roster.xlsx');
     });
   });
@@ -423,7 +467,7 @@ describe('ImportJobService.getBranchImportStatus — scope isolation', () => {
         getState: jest.fn().mockResolvedValue('completed'), progress: () => 0,
       }),
     };
-    const svc = new ImportJobService(queue as any);
+    const svc = new ImportJobService(queue as any, {} as any, {} as any);
     await expect(svc.getBranchImportStatus({ kind: 'CLIENT', id: 'same-uuid' }, '7'))
       .rejects.toBeInstanceOf(NotFoundException);
   });

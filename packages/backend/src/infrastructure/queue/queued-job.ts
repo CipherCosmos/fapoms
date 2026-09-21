@@ -220,7 +220,9 @@ export async function describeJob<TResult = unknown>(
   job: Job,
   opts: { includeResult?: boolean } = {},
 ): Promise<QueuedJobStatus<TResult>> {
-  const raw = await job.getState();
+  const settled = await resolveState(job);
+  job = settled.job;
+  const raw = settled.raw;
   const state = toQueuedState(raw);
 
   const status: QueuedJobStatus<TResult> = {
@@ -259,6 +261,47 @@ export async function describeJob<TResult = unknown>(
   }
 
   return status;
+}
+
+/**
+ * How long to wait before asking a second time whether a job is really stuck.
+ *
+ * Long enough for a job to finish crossing between two of Bull's lists, short enough that a
+ * poll does not feel stalled. The transient was measured at roughly one poll in six against a
+ * local stack, and every occurrence resolved on the very next read 25ms later.
+ */
+const STUCK_RECHECK_MS = 250;
+
+/**
+ * Ask twice before declaring a job dead, because `stuck` is two different things.
+ *
+ * `Job.getState()` is six sequential Redis reads — completed, failed, delayed, active, waiting,
+ * paused — and reports `stuck` when none of them matched. A worker that died holding the lock
+ * looks like that, which is what the state is for. So does a perfectly healthy job that moved
+ * from `waiting` to `active` while the six reads were being made: the early checks miss it in
+ * the list it has left and the later ones miss it in the list it has not yet reached.
+ *
+ * The two are indistinguishable from one read and trivially distinguishable from two, because a
+ * dead job stays stuck forever and a moving one does not. Measured on a local stack, 2 of 12
+ * billing runs reported `stuck` on one poll and `done` on the next — and `stuck` is mapped to
+ * `failed`, which is terminal for a polling client. So one press in six of Approve or Pay told
+ * the operator their money action had failed when it had in fact just succeeded, and advised
+ * them to run it again. The money itself was never at risk — a second approval of an approved
+ * payout is a no-op and a second payment of a paid one is refused — but "it failed, try again"
+ * on a screen that moves money is the kind of false alarm that gets a real payment made twice by
+ * hand, outside the system, to make up for one the operator believes did not happen.
+ *
+ * The job is RE-FETCHED rather than only re-read: `returnvalue` and `finishedOn` are snapshots
+ * taken when the job was loaded, so a job that completed in between would otherwise be reported
+ * as done with no result. If it has vanished entirely by the second look, the original is used
+ * and will report stuck, which is the right answer for a job that is no longer there.
+ */
+async function resolveState(job: Job): Promise<{ job: Job; raw: JobStatus | 'stuck' }> {
+  const first = await job.getState();
+  if (first !== 'stuck') return { job, raw: first };
+  await new Promise((r) => setTimeout(r, STUCK_RECHECK_MS));
+  const fresh = (await job.queue?.getJob?.(job.id)) ?? job;
+  return { job: fresh, raw: await fresh.getState() };
 }
 
 /** Bull's seven states, collapsed onto the four a client can act on. */

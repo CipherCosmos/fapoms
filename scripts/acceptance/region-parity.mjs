@@ -36,7 +36,9 @@
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
-import { API, req, login, sql, one, tally, env, declareMutating } from './_lib.mjs';
+import {
+  API, req, login, sql, one, tally, env, declareMutating, postAndAwait, JOB_STATUS, describeJobOutcome,
+} from './_lib.mjs';
 
 const TAG = `RP${Date.now()}`;
 const ADMIN_PASSWORD = env.AC_PASSWORD;
@@ -465,10 +467,17 @@ export async function main() {
 
   // ── billing writes ───────────────────────────────────────────────────────
 
-  await pair('POST /billing-engine/payouts/approve', (f) =>
-    f.payableId
-      ? req('/billing-engine/payouts/approve', { method: 'POST', token: ops.token, body: { payableIds: [f.payableId] } })
-      : Promise.resolve({ status: 599, msg: 'no payable fixture' }));
+  // Answers 202 and a job id since 2026-09-17. The region ceiling is still asserted IN the request,
+  // before anything is queued, so the verdict is still read off the POST's status: a WEST 403/404
+  // means no job exists. The run is waited for all the same — for the EAST control, so the hold and
+  // bank-file probes below meet the payable the approval left rather than racing the worker for it;
+  // and for a WEST leak, so the write that is the finding has actually happened when it is reported.
+  await pair('POST /billing-engine/payouts/approve', async (f) => {
+    if (!f.payableId) return { status: 599, msg: 'no payable fixture' };
+    const run = await postAndAwait('/billing-engine/payouts/approve', { payableIds: [f.payableId] },
+      JOB_STATUS.billingBulk, { token: ops.token });
+    return run.accepted ? { ...run.r, msg: describeJobOutcome(run) } : run.r;
+  });
 
   await pair('PATCH /billing-engine/payouts/:id/hold', (f) =>
     f.payableId

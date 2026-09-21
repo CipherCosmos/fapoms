@@ -17,41 +17,69 @@ import { NotificationDispatchService } from './notification-dispatch.service';
 import { AuditModule } from '../../core/audit/audit.module';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { NotificationDeliveryWorker } from './notification-delivery.worker';
-import { NOTIFICATION_QUEUE } from './notification.constants';
+import { NOTIFICATION_QUEUE, OUTBOUND_EMAIL_QUEUE, OUTBOUND_SMS_QUEUE } from './notification.constants';
+import { SmsService } from './sms.service';
+import { SmsTemplateService } from './sms-template.service';
+import { OutboundSmsWorker } from './outbound-sms.worker';
 import { NotificationSweeper } from './notification.sweeper';
 import { NotificationSettingEntity } from './notification-setting.entity';
 import { NotificationSettingsService } from './notification-settings.service';
 import { NotificationAdminController } from './notification-admin.controller';
 import { NotificationTenancyService } from './notification-tenancy';
+import { OutboundMessageEntity } from './outbound-message.entity';
+import { OutboundMessageService } from './outbound-message.service';
+import { OutboundEmailWorker, OUTBOUND_MESSAGE_SWEEP_JOB } from './outbound-email.worker';
+import { OutboundMessageController } from './outbound-message.controller';
+import { EmailService } from './email.service';
 
 import { EmailTemplateLoader } from '../../infrastructure/notifications/email-template-loader';
+import { MessageTokensService } from '../../infrastructure/notifications/message-tokens';
 import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       NotificationEntity, DeviceTokenEntity, UserEntity, AssayerEntity, NotificationPreferenceEntity,
-      NotificationSettingEntity,
+      NotificationSettingEntity, OutboundMessageEntity,
     ]),
     BullModule.registerQueue({ name: NOTIFICATION_QUEUE }),
+    // Its own queue so a burst of action emails cannot hold the notification queue's loops; see
+    // OUTBOUND_EMAIL_QUEUE. A stalled send is safe to re-run: the job must claim its row first.
+    BullModule.registerQueue({ name: OUTBOUND_EMAIL_QUEUE }),
+    // Texts: same ledger and lifecycle as emails, their own queue so a slow gateway holds only texts.
+    BullModule.registerQueue({ name: OUTBOUND_SMS_QUEUE }),
     // The admin screen's "run the digest now" enqueues onto the scanner's queue. Registering
     // the queue here (rather than importing SlaScannerModule, which imports this one) keeps
     // the two modules acyclic.
     BullModule.registerQueue({ name: 'sla-scanner' }),
     AuditModule,
   ],
-  controllers: [NotificationController, NotificationAdminController],
+  controllers: [NotificationController, NotificationAdminController, OutboundMessageController],
   providers: [
     NotificationService, PushNotificationService, NotificationDispatchService,
     NotificationDeliveryWorker, NotificationSweeper, FcmProvider, EmailProvider, SmsProvider, NotificationSettingsService,
-    EmailTemplateLoader, EmailTemplateRenderer,
+    EmailTemplateLoader, EmailTemplateRenderer, MessageTokensService,
+    // Emails an action asks for leave the request here; see OutboundMessageService.
+    OutboundMessageService, OutboundEmailWorker,
+    // The one way anything in the application sends email — see its class comment.
+    EmailService,
+    // Its SMS twin, on the same ledger and delivery routine.
+    SmsService, SmsTemplateService, OutboundSmsWorker,
     // Deliberately a plain singleton, not request-scoped: dispatch is reached from Bull workers
     // and cron scans where there is no request to be scoped to. See its own comment.
     NotificationTenancyService,
   ],
+  /*
+    Email leaves this module only as `EmailService`, and texts only as `SmsService`. The transports
+    (`EmailProvider`, `SmsProvider`), the template renderers/loader and the queue
+    (`OutboundMessageService`) are internal: exporting them is what let feature modules grow seven
+    direct paths to the mail server, two to the SMS gateway, and their own copies of the wording.
+    `messaging-single-path.spec.ts` guards the source; not exporting them makes Nest refuse the
+    injection outright.
+  */
   exports: [
-    NotificationService, PushNotificationService, NotificationDispatchService, EmailProvider, SmsProvider, NotificationSettingsService,
-    EmailTemplateLoader, EmailTemplateRenderer,
+    NotificationService, PushNotificationService, NotificationDispatchService, NotificationSettingsService,
+    EmailService, SmsService,
   ],
 })
 export class NotificationsModule implements OnModuleInit {
@@ -61,8 +89,16 @@ export class NotificationsModule implements OnModuleInit {
   private static readonly SWEEP_CRON = '*/5 * * * *';
   /** Settles sends abandoned mid-flight. */
   private static readonly ABANDONED_CRON = '7 * * * *';
+  /**
+   * Re-queues emails whose job was lost and settles abandoned sends. Every two minutes, because a
+   * person may be watching one of these say "Sending…" — five minutes is too long to leave it.
+   */
+  private static readonly OUTBOUND_SWEEP_CRON = '*/2 * * * *';
 
-  constructor(@InjectQueue(NOTIFICATION_QUEUE) private readonly queue: Queue) {}
+  constructor(
+    @InjectQueue(NOTIFICATION_QUEUE) private readonly queue: Queue,
+    @InjectQueue(OUTBOUND_EMAIL_QUEUE) private readonly outboundQueue: Queue,
+  ) {}
 
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
@@ -75,6 +111,11 @@ export class NotificationsModule implements OnModuleInit {
         { name: 'sweep', cron: NotificationsModule.SWEEP_CRON },
         { name: 'fail-abandoned', cron: NotificationsModule.ABANDONED_CRON },
       ],
+      this.logger,
+    );
+    ensureRepeatableSchedules(
+      this.outboundQueue,
+      [{ name: OUTBOUND_MESSAGE_SWEEP_JOB, cron: NotificationsModule.OUTBOUND_SWEEP_CRON }],
       this.logger,
     );
   }

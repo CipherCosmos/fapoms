@@ -12,6 +12,8 @@ import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useCurrentRoles, canManageAssayers, canCreateAssayers } from '../../hooks/useCurrentRoles';
 import { useQueuedExcelExport } from '../../hooks/useQueuedExcelExport';
+import { waitForQueuedJob, type EnqueuedJob } from '../../services/queued-job';
+import { DeliveryBatchNote } from '../../components/DeliveryNote';
 import {
   type RosterPerson,
 } from './roster-filters';
@@ -100,6 +102,16 @@ export const AssayerRoster: React.FC<{
   const [bulkBusy, setBulkBusy] = useState(false);
   const [appAccessBusy, setAppAccessBusy] = useState(false);
   const [notifyBusy, setNotifyBusy] = useState(false);
+  /**
+   * A bulk run's progress line. The runs happen on the server in the background now — a 540-person
+   * credential run used to hold one request for about half an hour and time out in the browser at
+   * 30 s while the server carried on — so the page shows where the run has got to instead.
+   */
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
+  /** The emails a finished bulk run queued, followed until they have gone. */
+  const [bulkEmails, setBulkEmails] = useState<{ ids: string[]; what: string } | null>(null);
+  /** The texts a finished credential run queued, followed the same way beside the emails. */
+  const [bulkTexts, setBulkTexts] = useState<{ ids: string[]; what: string } | null>(null);
 
   // Excel export & import hooks
   const { download: downloadExcel, busy: exporting } = useQueuedExcelExport();
@@ -111,6 +123,8 @@ export const AssayerRoster: React.FC<{
   const [uploading, setUploading] = useState(false);
   const [overwriteConflicts, setOverwriteConflicts] = useState(false);
   const rosterImport = useImportJob<RosterImportSummary>();
+  /** The rehearsal that must answer before the import is offered — queued and polled the same way. */
+  const rosterRehearsal = useImportJob<RosterImportSummary>();
 
   // Deep-link query param routing
   useEffect(() => {
@@ -206,16 +220,19 @@ export const AssayerRoster: React.FC<{
     );
 
     try {
-      const res = await api.request<{
+      // Accepted, then walked on the server: a select-all walk took 50–120 s, past this client's 30 s.
+      const { jobId } = await api.request<EnqueuedJob>('/assayers/bulk/lifecycle', {
+        method: 'POST',
+        body: JSON.stringify({ ids, targetStatus, reason }),
+      });
+      setBulkProgress(`Moving ${counted(ids.length, 'person', 'people')} to ${assayerLifecycleLabel(targetStatus)}…`);
+      const res = await waitForQueuedJob<{
         succeeded: { id: string; from: string; to: string }[];
         skipped: { id: string; current: string; reason: string }[];
         failed: { id: string; reason: string }[];
         /** Moved, but not all the way — stopped part-way along a multi-hop walk. */
         partial: { id: string; from: string; reached: string; target: string; reason: string }[];
-      }>('/assayers/bulk/lifecycle', {
-        method: 'POST',
-        body: JSON.stringify({ ids, targetStatus, reason }),
-      });
+      }>(`/assayers/bulk-jobs/${jobId}`, { onProgress: (p) => setBulkProgress(`${p.stage}…`) });
 
       /**
        * `partial` is a fourth outcome and has to be said out loud.
@@ -256,9 +273,12 @@ export const AssayerRoster: React.FC<{
             },
       );
     } catch (e) {
-      setNotice({ tone: 'err', text: `Nobody was moved. ${userMessage(e)}` });
+      // "Nobody was moved" is only certain when the request itself was refused; a run that failed
+      // or is still going may have moved some people, which the refreshed list shows.
+      setNotice({ tone: 'err', text: `The move did not finish. ${userMessage(e)} Check the list — it has been refreshed.` });
     } finally {
       setBulkBusy(false);
+      setBulkProgress(null);
       setSelectedIds(new Set());
       refresh();
     }
@@ -285,22 +305,29 @@ export const AssayerRoster: React.FC<{
     if (!ok) return;
 
     setAppAccessBusy(true);
+    setBulkEmails(null);
+    setBulkTexts(null);
     const ids = selectedVisibleIds;
     try {
-      const res = await api.request<{
-        succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[];
+      const { jobId } = await api.request<EnqueuedJob>('/assayers/app-access/bulk', { method: 'POST', body: JSON.stringify({ ids }) });
+      setBulkProgress(`Issuing app access to ${counted(ids.length, 'person', 'people')}…`);
+      const res = await waitForQueuedJob<{
+        /** `EMAIL`/`SMS` mean queued, not delivered; `emailId`/`smsId` are the receipts to follow. */
+        succeeded: { id: string; channels: ('EMAIL' | 'SMS')[]; emailId?: string; smsId?: string }[];
         skipped: { id: string; reason: string }[];
         failed: { id: string; reason: string }[];
-      }>('/assayers/app-access/bulk', { method: 'POST', body: JSON.stringify({ ids }) });
+      }>(`/assayers/bulk-jobs/${jobId}`, { onProgress: (p) => setBulkProgress(`${p.stage}…`) });
       const { succeeded = [], skipped = [], failed = [] } = res ?? {};
       const byEmail = succeeded.filter((s) => s.channels.includes('EMAIL')).length;
       const bySms = succeeded.filter((s) => s.channels.includes('SMS')).length;
+      setBulkEmails({ ids: succeeded.flatMap((s) => (s.emailId ? [s.emailId] : [])), what: 'credential emails' });
+      setBulkTexts({ ids: succeeded.flatMap((s) => (s.smsId ? [s.smsId] : [])), what: 'credential texts' });
 
       setNotice(
         failed.length || skipped.length
           ? {
               tone: 'err',
-              text: `Issued credentials to ${succeeded.length} (${byEmail} by email, ${bySms} by SMS), ${skipped.length} skipped, ${failed.length} failed.`,
+              text: `Issued credentials to ${succeeded.length} (${byEmail} emails queued, ${bySms} texts queued), ${skipped.length} skipped, ${failed.length} failed.`,
               details: [
                 ...skipped.map((s) => `${s.id}: ${s.reason}`),
                 ...failed.map((f) => `${f.id}: ${f.reason}`),
@@ -308,13 +335,14 @@ export const AssayerRoster: React.FC<{
             }
           : {
               tone: 'ok',
-              text: `Issued app access to ${counted(succeeded.length, 'person', 'people')} (${byEmail} by email, ${bySms} by SMS).`,
+              text: `Issued app access to ${counted(succeeded.length, 'person', 'people')} (${byEmail} emails queued, ${bySms} texts queued).`,
             },
       );
     } catch (e) {
       setNotice({ tone: 'err', text: `Failed to issue app access. ${userMessage(e)}` });
     } finally {
       setAppAccessBusy(false);
+      setBulkProgress(null);
       setSelectedIds(new Set());
     }
   };
@@ -331,25 +359,30 @@ export const AssayerRoster: React.FC<{
     );
 
     setNotifyBusy(true);
+    setBulkEmails(null);
+    setBulkTexts(null);
     const ids = selectedVisibleIds;
     try {
-      const res = await api.request<{
-        succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[] }[];
-        skipped: { id: string; reason: string }[];
-        failed: { id: string; reason: string }[];
-      }>('/assayers/bulk/notify', {
+      const { jobId } = await api.request<EnqueuedJob>('/assayers/bulk/notify', {
         method: 'POST',
         body: JSON.stringify({ ids, subject, body, sendEmail }),
       });
+      setBulkProgress(`Sending the message to ${counted(ids.length, 'person', 'people')}…`);
+      const res = await waitForQueuedJob<{
+        succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[]; emailId?: string }[];
+        skipped: { id: string; reason: string }[];
+        failed: { id: string; reason: string }[];
+      }>(`/assayers/bulk-jobs/${jobId}`, { onProgress: (p) => setBulkProgress(`${p.stage}…`) });
       const { succeeded = [], skipped = [], failed = [] } = res ?? {};
       const byInApp = succeeded.filter((s) => s.channels.includes('IN_APP')).length;
       const byEmail = succeeded.filter((s) => s.channels.includes('EMAIL')).length;
+      setBulkEmails({ ids: succeeded.flatMap((s) => (s.emailId ? [s.emailId] : [])), what: 'messages' });
 
       setNotice(
         failed.length || skipped.length
           ? {
               tone: 'err',
-              text: `Notified ${succeeded.length} (${byInApp} in-app, ${byEmail} by email), ${skipped.length} skipped, ${failed.length} failed.`,
+              text: `Notified ${succeeded.length} (${byInApp} in-app, ${byEmail} emails queued), ${skipped.length} skipped, ${failed.length} failed.`,
               details: [
                 ...skipped.map((s) => `${nameById[s.id] ?? s.id}: ${s.reason}`),
                 ...failed.map((f) => `${nameById[f.id] ?? f.id}: ${f.reason}`),
@@ -357,13 +390,14 @@ export const AssayerRoster: React.FC<{
             }
           : {
               tone: 'ok',
-              text: `Notified ${counted(succeeded.length, 'person', 'people')} (${byInApp} in-app, ${byEmail} by email).`,
+              text: `Notified ${counted(succeeded.length, 'person', 'people')} (${byInApp} in-app, ${byEmail} emails queued).`,
             },
       );
     } catch (e) {
       setNotice({ tone: 'err', text: `Failed to notify. ${userMessage(e)}` });
     } finally {
       setNotifyBusy(false);
+      setBulkProgress(null);
       setSelectedIds(new Set());
     }
   };
@@ -388,19 +422,37 @@ export const AssayerRoster: React.FC<{
   };
 
   // Rehearsal & real import
-  const rehearseRoster = async (file: File, overwrite: boolean): Promise<RosterImportSummary> => {
-    const form = new FormData();
-    form.append('file', file);
-    return api.request<RosterImportSummary>(
-      `/assayers/roster/import?dryRun=true&overwrite=${overwrite}`,
-      { method: 'POST', body: form },
-    );
-  };
-
+  /**
+   * Rehearse the workbook, show what it would do, and import it only if the operator agrees.
+   *
+   * The rehearsal was one awaited request, `POST /assayers/roster/import?dryRun=true`, with two
+   * faults. The server read `dryRun` from the form body, not the URL, so this "rehearsal" was queued
+   * as a REAL import before anyone had confirmed anything — and its 202 had no `rowsRead`, so the
+   * page then failed and showed an error while the import ran. And a true rehearsal is the whole
+   * import rolled back: minutes for a full roster, past the three-minute upload timeout. The flags
+   * now travel as form fields, and the rehearsal is queued and followed to its answer like the
+   * import is.
+   */
   const handleUpload = async (file: File) => {
     setUploading(true);
     try {
-      const dry = await rehearseRoster(file, overwriteConflicts);
+      const rehearsal = await rosterRehearsal.run('/assayers/roster/import', file, {
+        dryRun: 'true',
+        overwrite: String(overwriteConflicts),
+      });
+      // A failed check stays on screen in its own panel with the server's reason; a dismissed or
+      // abandoned one needs nothing said. Either way there is nothing to confirm.
+      if (rehearsal.phase !== 'done') return;
+      const dry = rehearsal.report;
+      rosterRehearsal.reset();
+      if (dry.dryRun !== true) {
+        // Offering "import" now would import it a second time.
+        setNotice({
+          tone: 'err',
+          text: 'The server imported this workbook instead of only checking it. Review the roster before uploading it again.',
+        });
+        return;
+      }
       const proceed = await confirm({
         title: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers from this workbook?`,
         message: (
@@ -416,10 +468,7 @@ export const AssayerRoster: React.FC<{
         ),
         confirmLabel: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers`,
       });
-      if (!proceed) {
-        setUploading(false);
-        return;
-      }
+      if (!proceed) return;
       await rosterImport.start('/assayers/roster/import', file, {
         overwrite: String(overwriteConflicts),
       });
@@ -449,12 +498,30 @@ export const AssayerRoster: React.FC<{
       {confirmDialog}
 
       <ImportProgressPanel
+        // Only while it runs or if it fails: a finished rehearsal's answer is the confirm dialog, and
+        // a "Roster imported — N new" panel for a run that saved nothing would say the opposite.
+        state={rosterRehearsal.state.phase === 'done' ? { phase: 'idle' } : rosterRehearsal.state}
+        onDismiss={rosterRehearsal.reset}
+        summarise={summariseRosterImport}
+        mode="rehearsal"
+      />
+      <ImportProgressPanel
         state={rosterImport.state}
         onDismiss={rosterImport.reset}
         summarise={summariseRosterImport}
       />
 
       {/* Alert Notices */}
+      {bulkProgress && (
+        <div role="status" data-testid="bulk-progress" style={{
+          padding: '8px 16px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)',
+          background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
+        }}>
+          {bulkProgress} It runs on the server, so it carries on if you leave this page.
+        </div>
+      )}
+      {bulkEmails && bulkEmails.ids.length > 0 && <DeliveryBatchNote ids={bulkEmails.ids} what={bulkEmails.what} />}
+      {bulkTexts && bulkTexts.ids.length > 0 && <DeliveryBatchNote ids={bulkTexts.ids} what={bulkTexts.what} channel="SMS" />}
       {notice && (
         <AlertBanner
           type={notice.tone === 'ok' ? 'success' : 'error'}

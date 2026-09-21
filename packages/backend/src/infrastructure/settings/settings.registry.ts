@@ -75,6 +75,7 @@ export interface SettingDef {
 export const SETTINGS_GROUPS = [
   { key: 'company', label: 'Company & tax identity', audience: 'business', description: 'Your firm\'s legal identity as it appears on the GST invoices you send bank clients, and the tax labels on statements. These are printed exactly as entered — set them before sending a real invoice.' },
   { key: 'email', label: 'Email delivery', audience: 'technical', description: 'The mailbox the platform sends from, and where its links point.' },
+  { key: 'sms', label: 'SMS delivery', audience: 'technical', description: 'The text-message company the platform sends through, and the DLT registration every text to an Indian number is checked against. Until this is set up, one-time codes and sign-in details go by email only.' },
   { key: 'schedule', label: 'Schedules', audience: 'technical', description: 'When recurring work runs — the morning brief and the SLA sweep.' },
   { key: 'fees', label: 'Fees & pricing', audience: 'business', description: 'What an audit is worth when no client or assayer contract says otherwise.' },
   { key: 'transport', label: 'Transport recommendation', audience: 'business', description: 'How the recommended way to travel is chosen — the speed assumed for each mode when no timetable exists, when a mode is ruled out, and how cost is weighed against time.' },
@@ -312,6 +313,71 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: 'http://localhost:5173',
     envVar: 'APP_PUBLIC_URL',
     applies: 'immediately',
+  },
+
+  // ── SMS ─────────────────────────────────────────────────────────────────
+  //
+  // Read by SmsProvider (saved → environment → default, rebuilt on every save under `sms.`). India's
+  // DLT rules are why there are more fields than a key: operators block any commercial text whose
+  // sender header, Principal Entity and content template are not registered together.
+  {
+    key: 'sms.provider',
+    label: 'SMS company',
+    description: 'Which company sends the platform\'s text messages. Off sends no texts — one-time codes and sign-in details then go by email only. Choose Pinnacle once its API key and the details below are filled in.',
+    group: 'sms',
+    type: 'select',
+    options: [
+      { value: 'PINNACLE', label: 'Pinnacle' },
+      { value: 'NONE', label: 'Off — send no texts' },
+    ],
+    default: 'NONE',
+    // So a deployment can name its company in the environment beside the key, and the screen still
+    // wins once somebody chooses there.
+    envVar: 'SMS_PROVIDER',
+    applies: 'immediately',
+  },
+  {
+    key: 'sms.pinnacle.apiKey',
+    label: 'Pinnacle API key',
+    description: 'The key from your Pinnacle account, sent as the `apikey` header on every text. It works like a password: stored encrypted and never shown again once saved.',
+    group: 'sms',
+    type: 'password',
+    default: null,
+    envVar: 'SMS_PINNACLE_API_KEY',
+    secret: true,
+    applies: 'immediately',
+  },
+  {
+    key: 'sms.senderId',
+    label: 'Sender header',
+    description: 'The 6-letter name texts arrive from, e.g. SUMERU — exactly as approved on your DLT portal under Headers. Texts sent under any other header are blocked by the phone companies. Must be exactly 6 letters.',
+    group: 'sms',
+    type: 'string',
+    default: null,
+    envVar: 'SMS_SENDER_ID',
+    applies: 'immediately',
+  },
+  {
+    key: 'sms.dltEntityId',
+    label: 'DLT Principal Entity ID',
+    description: 'Your company\'s ID from your DLT portal — a long number (usually 19 digits) shown on your DLT registration. Once this is filled in, every text must also carry its own DLT Template ID: add those under Email Templates → Text messages. Also link this ID to your sender header in the Pinnacle panel — it is set up there, not sent with each text.',
+    group: 'sms',
+    type: 'string',
+    default: null,
+    envVar: 'SMS_DLT_ENTITY_ID',
+    applies: 'immediately',
+  },
+  {
+    key: 'sms.templates',
+    label: 'Text message wording',
+    description: 'Edited wording and the DLT Template ID for each text the platform sends. Managed on the Text messages screen, which checks each one before saving.',
+    group: 'sms',
+    type: 'json',
+    default: null,
+    applies: 'immediately',
+    // The wording is the business's, like the email templates; the gateway above is plumbing. The
+    // Text messages screen that writes it is open to administrators, so the key must be too.
+    audience: 'business',
   },
 
   // ── Schedules ───────────────────────────────────────────────────────────
@@ -718,12 +784,15 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
      */
     key: 'billing.assayerInvoicingEnabled',
     label: 'Assayer invoicing',
-    description: 'Turns on the invoicing round: the desk invites assayers to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and earnings appear only after the desk approves the submitted invoice. Leave off until the updated mobile app is distributed.',
+    description: 'The invoicing round, which is how assayers are paid: the desk invites them to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and earnings appear only after the desk approves what they submitted. On by default, because this IS the payment flow. Switch it off only for a deployment whose field app predates the invoicing round — assayers there will not see their fees at all.',
     group: 'billing',
     type: 'boolean',
     default: true,
-    // A rollout flag wearing a business group's clothes — flip it only in step with the mobile
-    // release, so it is the Developer's; remove the override when the rollout completes.
+    // Stays the Developer's, though it sits in a business group. It reads like a business dial
+    // and is not one: switching it off does not change a policy, it withdraws the only surface on
+    // which an assayer can ever see what they are owed. The rollout it once gated is finished —
+    // the default is ON — so what remains is a compatibility escape hatch for an estate still on
+    // an older field app, which is a deployment decision, not an everyday one.
     audience: 'technical',
     applies: 'immediately',
   },

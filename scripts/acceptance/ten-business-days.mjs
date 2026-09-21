@@ -67,7 +67,16 @@
  * `PA_LIB` still overrides, for anyone who genuinely wants a different helper set.
  */
 const LIB = process.env.PA_LIB || new URL('./_lib.mjs', import.meta.url).href;
-const { env, req, sql, one, login, tally, pool, freshBranch, empanelmentVersion, declareMutating, canRotatePassword } = await import(LIB);
+const {
+  env, req, sql, one, login, tally, pool, freshBranch, empanelmentVersion, declareMutating, canRotatePassword,
+  postAndAwait, JOB_STATUS, describeJobOutcome,
+} = await import(LIB);
+if (typeof postAndAwait !== 'function') {
+  // Payout approve and pay answer 202 + a job id since 2026-09-17; without the poller every money
+  // check below would read the payable before the worker had touched it.
+  throw new Error(`${LIB} has no postAndAwait — it predates the accepted-then-polled routes. `
+    + 'Unset PA_LIB, or point it at a helper set that has it.');
+}
 
 // ── house-keeping ──────────────────────────────────────────────────────────────────────────────
 
@@ -244,6 +253,19 @@ const GET = (p, t) => api(p, { token: t });
 const POST = (p, t, body) => api(p, { method: 'POST', token: t, body });
 const PUT_ = (p, t, body) => api(p, { method: 'PUT', token: t, body });
 const PATCH = (p, t, body) => api(p, { method: 'PATCH', token: t, body });
+
+/**
+ * Payout approve and pay answer 202 and a job id since 2026-09-17; the `{ done, refused }` body they
+ * used to answer with is the finished run's `result`. POSTed through `api()` (timed, renewed on
+ * 401) and waited for with that persona's CURRENT token — `api()` may have replaced it, and a job
+ * is readable only by the account that started it. Every read of a payable after one of these sees
+ * what the run did; read on the 202, the worker would not have reached it yet.
+ *
+ * `who` is a key of `cast`. The status polls are not counted in `traffic` — they are waiting, not
+ * the latency of a business call.
+ */
+const billingRun = (who, path, body) => postAndAwait(path, body, JOB_STATUS.billingBulk,
+  { token: () => cast[who].token, send: (p, b) => POST(p, cast[who].token, b) });
 const created = {      // everything this run made, for the teardown and the final report
   assayers: [], branches: [], projectBranches: [], assignments: [], invoices: [],
 };
@@ -757,34 +779,41 @@ async function main() {
     + `Stored: taxable ${e1r.taxable_amount}, tax ${e1r.tax_amount}, tds ${e1r.tds_amount}, total ${e1r.total_amount}`);
 
   // Segregation of duties, in both directions.
-  const selfApprove = await POST('/billing-engine/payouts/approve', cast.ops.token, { payableIds: [p1.id] });
+  // A duties refusal is a per-row outcome: it is in the finished run's `refused`, not an HTTP status.
+  const selfApprove = await billingRun('ops', '/billing-engine/payouts/approve', { payableIds: [p1.id] });
   let ps = await one(`SELECT status, approved_by FROM assayer_payables WHERE id=$1`, [p1.id]);
-  const refusal1 = short(selfApprove.body?.data?.refused?.[0]?.reason ?? msg(selfApprove), 110);
+  const refusal1 = short(selfApprove.result?.refused?.[0]?.reason ?? msg(selfApprove.r), 110);
   check('whoever booked the work cannot approve the payout for it',
     ps.status === 'PENDING' && /segregation|duti/i.test(refusal1),
-    `approve as the booker -> HTTP ${selfApprove.status}, refused: "${refusal1}"; payable still ${ps.status}`);
+    `approve as the booker -> ${describeJobOutcome(selfApprove)}, refused: "${refusal1}"; payable still ${ps.status}`);
 
-  const app1 = await POST('/billing-engine/payouts/approve', cast.admin.token, { payableIds: [p1.id] });
+  const app1 = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: [p1.id] });
   ps = await one(`SELECT status, approved_by, approved_at FROM assayer_payables WHERE id=$1`, [p1.id]);
   check('a second person approves it',
     app1.status < 400 && ps.status === 'APPROVED' && ps.approved_by === cast.admin.user?.id,
-    `assayer_payables.status=${ps.status}, approved_by ${ps.approved_by === cast.admin.user?.id ? 'the approver' : ps.approved_by}`);
+    `${describeJobOutcome(app1)}; assayer_payables.status=${ps.status}, approved_by ${ps.approved_by === cast.admin.user?.id ? 'the approver' : ps.approved_by}`);
 
   const REF1 = `${TAG}-S1-${STAMP}`;
-  const selfPay = await POST('/billing-engine/payouts/pay', cast.admin.token, { payableIds: [p1.id], paymentReference: REF1, method: 'NEFT' });
+  const selfPay = await billingRun('admin', '/billing-engine/payouts/pay', { payableIds: [p1.id], paymentReference: REF1, method: 'NEFT' });
   ps = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [p1.id]);
-  const refusal2 = short(selfPay.body?.data?.refused?.[0]?.reason ?? msg(selfPay), 110);
+  const refusal2 = short(selfPay.result?.refused?.[0]?.reason ?? msg(selfPay.r), 110);
   check('and the approver cannot also release the cash',
     ps.status === 'APPROVED' && /segregation|duti/i.test(refusal2),
-    `pay as the approver -> HTTP ${selfPay.status}, refused: "${refusal2}"; payable still ${ps.status}`);
+    `pay as the approver -> ${describeJobOutcome(selfPay)}, refused: "${refusal2}"; payable still ${ps.status}`);
 
-  await POST('/billing-engine/payouts/pay', cast.finance.token, { payableIds: [p1.id], paymentReference: REF1, method: 'NEFT' });
-  await POST('/billing-engine/payouts/pay', cast.finance.token, { payableIds: [p1.id], paymentReference: REF1, method: 'NEFT' });
+  // The second press goes in after the first run has FINISHED (billingRun waits), so it is a real
+  // repeat with its own run — not a press that joined the first while it was in flight, which would
+  // make "still one payment" true without testing anything. Required to have finished, too: a run
+  // still going when the payments are counted could add its row after the count.
+  const pay1a = await billingRun('finance', '/billing-engine/payouts/pay', { payableIds: [p1.id], paymentReference: REF1, method: 'NEFT' });
+  const pay1b = await billingRun('finance', '/billing-engine/payouts/pay', { payableIds: [p1.id], paymentReference: REF1, method: 'NEFT' });
   ps = await one(`SELECT status, paid_amount, paid_by FROM assayer_payables WHERE id=$1`, [p1.id]);
   const pays1 = await sql(`SELECT amount, direction FROM billing_payments WHERE payable_id=$1 AND is_active`, [p1.id]);
   check('a third person pays it, and paying twice is still one payment for the right amount',
-    ps.status === 'PAID' && pays1.length === 1 && near(pays1[0]?.amount, want1.assayer.net),
-    `assayer_payables.status=${ps.status}; ${pays1.length} active billing_payments row(s); paid ${pays1[0]?.amount} against a recomputed net of ${want1.assayer.net}`);
+    ps.status === 'PAID' && pays1.length === 1 && near(pays1[0]?.amount, want1.assayer.net)
+      && !!pay1b.result && pay1b.accepted?.deduplicated === false,
+    `assayer_payables.status=${ps.status}; ${pays1.length} active billing_payments row(s); paid ${pays1[0]?.amount} against a recomputed net of ${want1.assayer.net}; `
+    + `first pay ${describeJobOutcome(pay1a)}; second ${describeJobOutcome(pay1b)}`);
 
   const recon = await GET('/billing-engine/reconcile/preview', cast.admin.token);
   const unbooked = await one(
@@ -1189,29 +1218,30 @@ async function main() {
     voidedVia.status < 400 && voidRow?.status === 'VOIDED',
     `POST /assignments/:id/reopen -> ${voidedVia.status}; assayer_payables.status=${voidRow?.status} (there is no direct "void a payout" route)`);
 
-  const tryHeld = await POST('/billing-engine/payouts/approve', cast.admin.token, { payableIds: [jHold.payable.id, jVoid.payable.id] });
+  // Held and voided are per-row refusals: the batch is accepted (202) and they are in its `refused`.
+  const tryHeld = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: [jHold.payable.id, jVoid.payable.id] });
   const heldAfter = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [jHold.payable.id]);
   const voidAfter = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [jVoid.payable.id]);
-  const refusedIds = (tryHeld.body?.data?.refused ?? []).map((x) => x.id);
+  const refusedIds = (tryHeld.result?.refused ?? []).map((x) => x.id);
   check('a held payout and a voided one are both refused approval, and neither moves',
     refusedIds.length === 2 && heldAfter?.status === 'PENDING' && voidAfter?.status === 'VOIDED',
-    `approve -> ${tryHeld.status}; refused ${(tryHeld.body?.data?.refused ?? []).map((x) => `"${short(x.reason, 50)}"`).join(', ')}; `
+    `approve -> ${describeJobOutcome(tryHeld)}; refused ${(tryHeld.result?.refused ?? []).map((x) => `"${short(x.reason, 50)}"`).join(', ')}; `
     + `held now ${heldAfter?.status}, voided now ${voidAfter?.status}`);
 
-  const appBatch = await POST('/billing-engine/payouts/approve', cast.admin.token, { payableIds: batch });
+  const appBatch = await billingRun('admin', '/billing-engine/payouts/approve', { payableIds: batch });
   const approved = await sql(`SELECT id, status FROM assayer_payables WHERE id = ANY($1)`, [batch]);
   check('the rest are approved in one batch',
     appBatch.status < 400 && approved.every((p) => p.status === 'APPROVED'),
-    `approve ${batch.length} -> ${appBatch.status}; done ${appBatch.body?.data?.done?.length ?? 0}, refused ${appBatch.body?.data?.refused?.length ?? 0}; statuses ${approved.map((p) => p.status).join(',')}`);
+    `approve ${batch.length} -> ${describeJobOutcome(appBatch)}; done ${appBatch.result?.done?.length ?? 0}, refused ${appBatch.result?.refused?.length ?? 0}; statuses ${approved.map((p) => p.status).join(',')}`);
 
   const REF8 = `${TAG}-PAYRUN-${STAMP}`;
-  const paid = await POST('/billing-engine/payouts/pay', cast.finance.token, { payableIds: batch, paymentReference: REF8, method: 'NEFT' });
+  const paid = await billingRun('finance', '/billing-engine/payouts/pay', { payableIds: batch, paymentReference: REF8, method: 'NEFT' });
   const paidRows = await sql(`SELECT id, status, paid_amount FROM assayer_payables WHERE id = ANY($1)`, [batch]);
   const payments = await sql(
     `SELECT amount, direction, payable_id FROM billing_payments WHERE payment_reference=$1 AND is_active`, [REF8]);
   check('and paid in one run, under one reference, by a third person',
     paid.status < 400 && paidRows.every((p) => p.status === 'PAID') && payments.length === batch.length,
-    `pay -> ${paid.status}; statuses ${paidRows.map((p) => p.status).join(',')}; ${payments.length} payment row(s) under ${REF8}, all ${payments.every((p) => p.direction === 'OUTBOUND') ? 'OUTBOUND' : 'MIXED DIRECTION'}`);
+    `pay -> ${describeJobOutcome(paid)}; statuses ${paidRows.map((p) => p.status).join(',')}; ${payments.length} payment row(s) under ${REF8}, all ${payments.every((p) => p.direction === 'OUTBOUND') ? 'OUTBOUND' : 'MIXED DIRECTION'}`);
 
   // The reconciliation: recomputed from the assignments, never from the payables.
   const inputs = await sql(
@@ -1333,8 +1363,10 @@ async function main() {
     ['book work', await offer(cast.auditor.token, { pb: bWrite, assayerId: a1.id, date: dWrite.date, fee: FEE })],
     ['complete the job', await POST(`/assignments/${A1}/complete`, cast.auditor.token, { reason: 'auditor probe' })],
     ['reopen the job', await POST(`/assignments/${A1}/reopen`, cast.auditor.token, { reason: 'auditor probe on a completed job' })],
-    ['approve a payout', await POST('/billing-engine/payouts/approve', cast.auditor.token, { payableIds: [p1.id] })],
-    ['pay a payout', await POST('/billing-engine/payouts/pay', cast.auditor.token, { payableIds: [p1.id], paymentReference: `${TAG}-AUD`, method: 'NEFT' })],
+    // Still refused IN the request (role gate, nothing queued). Sent through billingRun so that if
+    // either were wrongly accepted, the after-state below is read once its run has finished.
+    ['approve a payout', (await billingRun('auditor', '/billing-engine/payouts/approve', { payableIds: [p1.id] })).r],
+    ['pay a payout', (await billingRun('auditor', '/billing-engine/payouts/pay', { payableIds: [p1.id], paymentReference: `${TAG}-AUD`, method: 'NEFT' })).r],
     ['change a panel standing', await PUT_(`/assayers/${a1.id}/empanelment/${b1.clientId}`, cast.auditor.token, { status: 'REJECTED', statusReason: 'auditor probe' })],
     ['suspend a platform rule', await POST('/admin/rule-bypass', cast.auditor.token, { rules: ['DOUBLE_BOOKING'], reason: 'auditor probe of the bypass control' })],
   ];

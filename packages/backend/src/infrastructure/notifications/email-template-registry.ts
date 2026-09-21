@@ -15,7 +15,10 @@ export type EmailTemplateKey =
   | 'application-approved'
   | 'application-rejected'
   | 'branch-audit-paperwork'
-  | 'morning-digest';
+  | 'morning-digest'
+  | 'account-setup-link'
+  | 'password-reset-link'
+  | 'mfa-code';
 
 export interface EmailTemplateDefinition<T = Record<string, any>> {
   key: EmailTemplateKey;
@@ -29,6 +32,49 @@ export interface EmailTemplateDefinition<T = Record<string, any>> {
   allowRawHtmlTokens?: boolean;
   sampleData: T;
   fallbackRenderer: (data: T) => { html: string; text: string; subject: string };
+}
+
+/**
+ * What a first invitation says above its button. The registration invite's `intro` token carries
+ * a different sentence on the other occasions a link is sent (a resend, a request for more
+ * information), so the caller passes this one explicitly for a first invite — the shipped HTML has
+ * no way to fall back to it on its own.
+ */
+export const REGISTRATION_INVITE_INTRO = 'Use the link below to complete your Appraiser '
+  + 'registration — from your phone or any computer, no app required.';
+
+/**
+ * The staff password link, in its two variants. Two templates rather than one with a switch,
+ * because an administrator editing "the reset email" should not be able to change the new-account
+ * one by accident — but one builder, so the two cannot drift in the parts they share.
+ */
+function passwordLinkEmail(
+  variant: 'NEW_ACCOUNT' | 'RESET',
+  data: Record<string, any>,
+): { html: string; text: string; subject: string } {
+  const newAccount = variant === 'NEW_ACCOUNT';
+  const greeting = `Hello ${data.displayName || 'there'},`;
+  const link = String(data.setupUrl || appPublicUrl());
+  const hours = String(data.expiryHours || '72');
+  const intro = newAccount
+    ? 'An account has been created for you on FAPOMS. Choose a password to finish setting it up.'
+    : 'A password reset was requested for your FAPOMS account. Choose a new password below.';
+  const subject = newAccount ? 'Set up your FAPOMS account' : 'Reset your FAPOMS password';
+  const text = `${greeting}\n\n${intro}\n\n${link}\n\nThe link works once and expires in ${hours} hours.`;
+  const html = renderEmailHtml({
+    title: newAccount ? 'Set up your account' : 'Reset your password',
+    bodyLines: [
+      greeting,
+      intro,
+      ...(data.username ? [`Your username is ${data.username}.`] : []),
+      `This link works once and expires in ${hours} hours.`,
+    ],
+    linkUrl: link,
+    linkLabel: newAccount ? 'Choose my password' : 'Set a new password',
+    securityNotice: 'If you were not expecting this, ignore it and tell your administrator — '
+      + 'nothing changes until somebody uses the link.',
+  });
+  return { html, text, subject };
 }
 
 export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefinition> = {
@@ -74,7 +120,11 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
     description: 'Invitation sent to prospective appraisers with unique token link to complete registration.',
     defaultSubjectTemplate: 'Your Appraiser registration link',
     requiredTokens: ['fullName', 'inviteUrl', 'logoUrl'],
-    optionalTokens: ['companyName', 'roleName'],
+    /**
+     * `intro` is what this particular link is for: a first invitation, a fresh link that replaces
+     * one which stopped working, or HR asking for something more (with what they asked for).
+     */
+    optionalTokens: ['companyName', 'roleName', 'intro'],
     rawTokens: [],
     allowRawHtmlTokens: false,
     sampleData: {
@@ -83,17 +133,20 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
       logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
       companyName: 'Sumeru Global',
       roleName: 'Gold & Bullion Appraiser',
+      intro: REGISTRATION_INVITE_INTRO,
     },
     fallbackRenderer: (data) => {
       const greeting = data.fullName ? `Hello ${data.fullName},` : 'Hello,';
       const link = String(data.inviteUrl || appPublicUrl());
+      const intro = String(data.intro || REGISTRATION_INVITE_INTRO);
       const subject = 'Your Appraiser registration link';
-      const text = `${greeting}\n\nUse the link below to complete your Appraiser registration — from your phone or any computer, no app required.\n\n${link}`;
+      const text = `${greeting}\n\n${intro}\n\n${link}`;
       const html = renderEmailHtml({
         title: 'Complete Your Registration',
         bodyLines: [
           greeting,
-          'Use the link below to complete your Appraiser registration — from your phone or any computer, no app required.',
+          // A request for more information carries HR's note as its own paragraph.
+          ...intro.split(/\n+/).map((line) => line.trim()).filter(Boolean),
           'Click the button below to complete your profile and upload verification documents from your phone or computer.',
         ],
         linkUrl: link,
@@ -171,6 +224,8 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
       loginUrl: `${appPublicUrl()}/login`,
       logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
       candidateName: 'Pooja Sharma',
+      // The shipped HTML greets and names the person by this token.
+      fullName: 'Pooja Sharma',
       status: 'Active Roster Ready',
       companyName: 'Sumeru Global',
     },
@@ -296,12 +351,16 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
     description: 'Executive daily morning brief summarizing SLA breaches, overdue submissions, and pending approvals.',
     defaultSubjectTemplate: 'FAPOMS morning brief — {{subjectCounts}}',
     requiredTokens: ['subjectCounts', 'briefDate', 'portalUrl', 'logoUrl', 'digestSectionsHtml'],
-    optionalTokens: ['companyName'],
+    // The same sections as plain text, one line each. The built-in fallback cannot use the raw HTML
+    // token safely, and without this it sent a generic "please review items" email with none of the
+    // headings, items or links the brief exists to deliver.
+    optionalTokens: ['companyName', 'digestSectionsText'],
     rawTokens: ['digestSectionsHtml'],
     allowRawHtmlTokens: true,
     sampleData: {
       subjectCounts: '3 Overdue · 1 Approval',
       briefDate: 'Wednesday, September 16, 2026',
+      digestSectionsText: 'Desk SLA Breaches (2)\n• Fort Branch: Gold appraisal report overdue by 48 hours\n• Andheri Branch: Pending counter-party verification\nHR Verification Queue (1)\n• Candidate Rajesh Kumar awaiting final empanelment approval',
       portalUrl: `${appPublicUrl()}/operations`,
       logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
       companyName: 'Sumeru Global',
@@ -323,15 +382,95 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
     fallbackRenderer: (data) => {
       const subjectCounts = String(data.subjectCounts || 'Operations Brief');
       const subject = `FAPOMS morning brief — ${subjectCounts}`;
-      const text = `FAPOMS Operations Morning Brief\nDate: ${data.briefDate || ''}\n\nPlease review items requiring attention in the FAPOMS portal:\n${data.portalUrl || appPublicUrl()}`;
+      const sectionLines = String(data.digestSectionsText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+      const text = `FAPOMS Operations Morning Brief\nDate: ${data.briefDate || ''}\n\n`
+        + (sectionLines.length ? `${sectionLines.join('\n')}\n\n` : 'Please review items requiring attention in the FAPOMS portal:\n')
+        + `${data.portalUrl || appPublicUrl()}`;
       const html = renderEmailHtml({
         title: 'Operations Morning Brief',
         bodyLines: [
           `Date: ${data.briefDate || 'Today'}`,
           'Here is the executive summary of operational items requiring management review:',
+          ...sectionLines,
         ],
         linkUrl: String(data.portalUrl || appPublicUrl()),
         linkLabel: 'Open Operations Desk',
+      });
+      return { html, text, subject };
+    },
+  },
+
+  'account-setup-link': {
+    key: 'account-setup-link',
+    name: 'Staff Account Setup Link',
+    category: 'Provisioning',
+    description: 'Sent when a staff account is created: a single-use link for the person to choose their own password.',
+    defaultSubjectTemplate: 'Set up your FAPOMS account',
+    requiredTokens: ['displayName', 'username', 'setupUrl', 'expiryHours', 'logoUrl'],
+    optionalTokens: ['companyName'],
+    rawTokens: [],
+    allowRawHtmlTokens: false,
+    sampleData: {
+      displayName: 'Priya',
+      username: 'priya.nair',
+      setupUrl: `${appPublicUrl()}/account-setup/sample_setup_token_5b21`,
+      expiryHours: '72',
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      companyName: 'Sumeru Global',
+    },
+    fallbackRenderer: (data) => passwordLinkEmail('NEW_ACCOUNT', data),
+  },
+
+  'password-reset-link': {
+    key: 'password-reset-link',
+    name: 'Staff Password Reset Link',
+    category: 'Security',
+    description: 'Sent when an administrator resets a staff password: a single-use link to choose a new one.',
+    defaultSubjectTemplate: 'Reset your FAPOMS password',
+    requiredTokens: ['displayName', 'username', 'setupUrl', 'expiryHours', 'logoUrl'],
+    optionalTokens: ['companyName'],
+    rawTokens: [],
+    allowRawHtmlTokens: false,
+    sampleData: {
+      displayName: 'Priya',
+      username: 'priya.nair',
+      setupUrl: `${appPublicUrl()}/account-setup/sample_reset_token_9c47`,
+      expiryHours: '72',
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      companyName: 'Sumeru Global',
+    },
+    fallbackRenderer: (data) => passwordLinkEmail('RESET', data),
+  },
+
+  'mfa-code': {
+    key: 'mfa-code',
+    name: 'Second-Factor Verification Code',
+    category: 'Security',
+    description: 'One-time code for a user who signs in with, or is confirming, an email second factor.',
+    defaultSubjectTemplate: 'Your FAPOMS verification code',
+    requiredTokens: ['otpCode', 'validMinutes', 'purpose', 'logoUrl'],
+    optionalTokens: ['companyName'],
+    rawTokens: [],
+    allowRawHtmlTokens: false,
+    sampleData: {
+      otpCode: '402913',
+      validMinutes: '5',
+      purpose: 'sign in',
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      companyName: 'Sumeru Global',
+    },
+    fallbackRenderer: (data) => {
+      const otpCode = String(data.otpCode || '');
+      const validMinutes = String(data.validMinutes || '5');
+      const purpose = String(data.purpose || 'sign in');
+      const subject = 'Your FAPOMS verification code';
+      const text = `Your FAPOMS verification code is ${otpCode}. It expires in ${validMinutes} minutes. `
+        + `Use it to ${purpose}. If you did not request this, ignore this message.`;
+      const html = renderEmailHtml({
+        title: 'Verification Code',
+        bodyLines: [`Use the code below to ${purpose}.`],
+        otpCode,
+        securityNotice: `This code expires in ${validMinutes} minutes. If you did not request this, ignore this message.`,
       });
       return { html, text, subject };
     },

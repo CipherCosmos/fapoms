@@ -39,6 +39,10 @@ import { AssayerInterviewService } from './assayer-interview.service';
 import { AssayerInterviewController } from './assayer-interview.controller';
 import { PublicRegistrationController } from './public-registration.controller';
 import { HrApplicationsController } from './hr-applications.controller';
+import { BullModule } from '@nestjs/bull';
+import { WorkforceBulkJobsService } from './workforce-bulk-jobs.service';
+import { WorkforceBulkJobsWorker } from './workforce-bulk-jobs.worker';
+import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
 
 @Module({
   imports: [
@@ -53,6 +57,17 @@ import { HrApplicationsController } from './hr-applications.controller';
     // appraisers to the precision worker instead of leaving them for the nightly sweep.
     // Same hand-off the branch importer uses; GeoModule is a leaf, no cycle.
     GeoModule,
+    // Bulk "issue app access" and "notify" over a roster selection — too long for a request.
+    BullModule.registerQueue({
+      name: WORKFORCE_BULK_QUEUE,
+      /*
+        A run whose worker died mid-way (deploy, out-of-memory, lost lock) is FAILED, not restarted.
+        Bull's default re-runs a stalled job once from the top, and a credential run restarted from
+        the top re-rotates every password it had already emailed. `attempts: 1` alone does not stop
+        that — stalled recovery is a separate counter.
+      */
+      settings: { maxStalledCount: 0 },
+    }),
     TypeOrmModule.forFeature([
       AssayerEntity,
       AssayerCommercialProfileEntity,
@@ -84,7 +99,7 @@ import { HrApplicationsController } from './hr-applications.controller';
   providers: [
     AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker,
     RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService,
-    RegistrationApplicationService, AssayerInterviewService,
+    RegistrationApplicationService, AssayerInterviewService, WorkforceBulkJobsService, WorkforceBulkJobsWorker,
   ],
   exports: [
     AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService,

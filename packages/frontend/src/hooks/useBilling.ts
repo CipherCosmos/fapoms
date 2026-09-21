@@ -27,7 +27,7 @@ export function useBillingOverview(options: BillingQueryOptions = {}) {
 }
 
 export function usePayouts(
-  params: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean } & PageParams = {},
+  params: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean; onBill?: boolean } & PageParams = {},
   options: BillingQueryOptions = {},
 ) {
   return useQuery({
@@ -154,7 +154,8 @@ function useBillingMutation<TArgs, TResult>(fn: (args: TArgs) => Promise<TResult
 }
 
 export function useApprovePayouts() {
-  return useBillingMutation((payableIds: string[]) => billingApi.approvePayouts(payableIds));
+  return useBillingMutation(({ payableIds, reason }: { payableIds: string[]; reason?: string }) =>
+    billingApi.approvePayouts(payableIds, reason));
 }
 
 export function usePayPayouts() {

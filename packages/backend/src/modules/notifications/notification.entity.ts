@@ -49,6 +49,8 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 // Serves the stranded-email sweep. Declared here AND in the migration — synchronize drops
 // migration-only indexes (see the class comment above; it has happened to this very table).
 @Index('idx_notifications_email_pending', ['createdAt'], { where: `"email_status" = 'PENDING'` })
+// The same, for the stranded-text sweep. Also in migration 1799600000000-NotificationSmsChannel.
+@Index('idx_notifications_sms_pending', ['createdAt'], { where: `"sms_status" = 'PENDING'` })
 // The tenant column every scoped read filters on. Declared here as well as in migration
 // 1796600000000-NotificationTenantScope — same reason as the indexes above: synchronize deletes
 // what it does not recognise, and this table has already lost an index that way once.
@@ -148,6 +150,23 @@ export class NotificationEntity extends BaseEntity {
 
   @Column({ name: 'email_failure_reason', type: 'text', nullable: true })
   emailFailureReason: string | null;
+
+  // ── SMS delivery, tracked separately ────────────────────────────────────
+  /**
+   * The text leg's own lifecycle, for the reason the email columns above give: one channel settling
+   * must never read as, or trip the terminal-state guard of, another. Same states as `emailStatus` —
+   * PENDING owed, SENT with the message queue, DELIVERED/FAILED/SUPPRESSED written back when the
+   * queued text settles. NULL means this row never owed anyone a text, which is every row whose
+   * event an administrator has not switched SMS on for.
+   */
+  @Column({ name: 'sms_status', type: 'varchar', length: 16, nullable: true })
+  smsStatus: NotificationStatus | null;
+
+  @Column({ name: 'texted_at', type: 'timestamptz', nullable: true })
+  textedAt: Date | null;
+
+  @Column({ name: 'sms_failure_reason', type: 'text', nullable: true })
+  smsFailureReason: string | null;
 
   // ── Traceability / deep linking ─────────────────────────────────────────
   @Column({ name: 'entity_type', type: 'varchar', length: 64, nullable: true })

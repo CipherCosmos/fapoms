@@ -5,7 +5,7 @@ import { EmailDigestService } from './email-digest.service';
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
-import { EmailProvider } from '../notifications/email-provider';
+import { EmailService } from '../../modules/notifications/email.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 
 /**
@@ -29,7 +29,10 @@ describe('EmailDigestService', () => {
   const desk = { attention: jest.fn() };
   const feedback = { attention: jest.fn() };
   const hr = { credentialsExpiringWithin: jest.fn() };
-  const email = { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() };
+  const email = { isEnabled: jest.fn().mockReturnValue(true), queue: jest.fn(), sendNow: jest.fn() };
+  /** The queued request for one recipient (or the first), and the sections the template will show. */
+  const queuedTo = (to?: string) => email.queue.mock.calls.map((c: any[]) => c[0]).find((r: any) => !to || r.to === to);
+  const sectionsOf = (to?: string): string => queuedTo(to)?.content?.data?.digestSectionsHtml ?? '';
   const dataSource = { query: jest.fn(), getRepository: jest.fn() };
 
   /**
@@ -59,7 +62,7 @@ describe('EmailDigestService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     email.isEnabled.mockReturnValue(true);
-    email.send.mockResolvedValue({ success: true });
+    email.queue.mockImplementation(async (r: any) => ({ id: `e-${r.to}`, status: 'QUEUED', to: r.to }));
     desk.attention.mockResolvedValue({ ...emptyDesk });
     feedback.attention.mockResolvedValue({ firstResponseOverdue: [], resolutionOverdue: [] });
     hr.credentialsExpiringWithin.mockResolvedValue([]);
@@ -75,7 +78,7 @@ describe('EmailDigestService', () => {
         { provide: DeskEscalationService, useValue: desk },
         { provide: FeedbackEscalationService, useValue: feedback },
         { provide: HrWorkforceService, useValue: hr },
-        { provide: EmailProvider, useValue: email },
+        { provide: EmailService, useValue: email },
         {
           provide: PlatformSettingsService,
           // Nothing configured in tests: every lookup falls through to the caller's fallback,
@@ -96,16 +99,17 @@ describe('EmailDigestService', () => {
 
   it('sends nothing when nothing needs attention — silence is the feature', async () => {
     const result = await service.run();
-    expect(result.sent).toBe(0);
-    expect(email.send).not.toHaveBeenCalled();
+    expect(result.queued).toBe(0);
+    expect(email.queue).not.toHaveBeenCalled();
   });
 
   it('does nothing at all when email is not configured', async () => {
     email.isEnabled.mockReturnValue(false);
     desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: bucket(1) });
     const result = await service.run();
-    expect(result.sent).toBe(0);
+    expect(result.queued).toBe(0);
     expect(desk.attention).not.toHaveBeenCalled();
+    expect(email.queue).not.toHaveBeenCalled();
   });
 
   it('emails the desk heads when the desk has stalled items', async () => {
@@ -118,11 +122,66 @@ describe('EmailDigestService', () => {
 
     const result = await service.run();
 
-    expect(result.sent).toBe(1);
-    const payload = email.send.mock.calls[0][0];
-    expect(payload.to).toBe('head@x.in');
-    expect(payload.text).toContain('2 entry overdue');
-    expect(payload.text).toContain('1 submission to client overdue');
+    expect(result.queued).toBe(1);
+    expect(queuedTo().to).toBe('head@x.in');
+    expect(sectionsOf()).toContain('2 entry overdue');
+    expect(sectionsOf()).toContain('1 submission to client overdue');
+  });
+
+  /**
+   * One email implementation: the digest decides who gets what and queues it. It never sends,
+   * never renders, and never builds a second copy of the wording beside the template's.
+   */
+  it('queues each brief through the morning-digest template — it does not send, and does not render', async () => {
+    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: bucket(2) });
+    audience([{ id: 'u-1', email: 'head@x.in', role_name: 'DESK' }]);
+
+    await service.run();
+
+    expect(email.sendNow).not.toHaveBeenCalled();
+    const request = queuedTo();
+    expect(request).toEqual(expect.objectContaining({
+      kind: 'MORNING_DIGEST',
+      to: 'head@x.in',
+      entityType: 'DIGEST',
+      requestedBy: null,
+    }));
+    expect(request.entityId).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(request.content.template).toBe('morning-digest');
+    expect(Object.keys(request.content)).toEqual(['template', 'data']);
+    expect(request.content.data).toEqual(expect.objectContaining({
+      subjectCounts: expect.stringContaining('Data desk'),
+      briefDate: expect.any(String),
+      portalUrl: expect.stringMatching(/\/validation$/),
+      logoUrl: expect.any(String),
+    }));
+  });
+
+  it('escapes what people typed — the sections are the template\'s raw HTML token', async () => {
+    feedback.attention.mockResolvedValue({
+      firstResponseOverdue: [{ id: 'f1', title: '<img src=x onerror=alert(1)>', ageHours: 30 }],
+      resolutionOverdue: [],
+    });
+    audience([{ id: 'u-1', email: 'support@x.in', role_name: 'DEVELOPER' }]);
+
+    await service.run();
+
+    expect(sectionsOf()).not.toContain('<img');
+    expect(sectionsOf()).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+
+  it('counts a brief the queue did not take, and still queues everyone else', async () => {
+    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: bucket(1) });
+    audience([
+      { id: 'u-1', email: 'first@x.in', role_name: 'DESK' },
+      { id: 'u-2', email: 'second@x.in', role_name: 'DESK' },
+    ]);
+    email.queue.mockImplementationOnce(async () => ({ id: null, status: 'NOT_QUEUED', to: 'first@x.in', error: 'db down' }));
+
+    const result = await service.run();
+
+    expect(result).toEqual({ queued: 1, notQueued: 1 });
+    expect(email.queue).toHaveBeenCalledTimes(2);
   });
 
   it('merges sections for a person whose roles span audiences — one email, not two', async () => {
@@ -140,10 +199,9 @@ describe('EmailDigestService', () => {
 
     const result = await service.run();
 
-    expect(result.sent).toBe(1);
-    const payload = email.send.mock.calls[0][0];
-    expect(payload.text).toContain('entry overdue');
-    expect(payload.text).toContain('first response');
+    expect(result.queued).toBe(1);
+    expect(sectionsOf()).toContain('entry overdue');
+    expect(sectionsOf()).toContain('first response');
   });
 
   it('only sends people the sections their roles entitle them to', async () => {
@@ -159,12 +217,10 @@ describe('EmailDigestService', () => {
 
     await service.run();
 
-    const toDesk = email.send.mock.calls.find((c: any[]) => c[0].to === 'desk@x.in')?.[0];
-    const toSupport = email.send.mock.calls.find((c: any[]) => c[0].to === 'support@x.in')?.[0];
-    expect(toDesk.text).toContain('entry overdue');
-    expect(toDesk.text).not.toContain('first response');
-    expect(toSupport.text).toContain('first response');
-    expect(toSupport.text).not.toContain('entry overdue');
+    expect(sectionsOf('desk@x.in')).toContain('entry overdue');
+    expect(sectionsOf('desk@x.in')).not.toContain('first response');
+    expect(sectionsOf('support@x.in')).toContain('first response');
+    expect(sectionsOf('support@x.in')).not.toContain('entry overdue');
   });
 
   /**
@@ -194,10 +250,9 @@ describe('EmailDigestService', () => {
 
     const result = await service.run();
 
-    expect(result.sent).toBe(1);
-    const payload = email.send.mock.calls[0][0];
-    expect(payload.to).toBe('deskbot@x.in');
-    expect(payload.text).toContain('entry overdue');
+    expect(result.queued).toBe(1);
+    expect(queuedTo().to).toBe('deskbot@x.in');
+    expect(sectionsOf()).toContain('entry overdue');
   });
 
   it('a broken section costs its own content, never the whole brief', async () => {
@@ -210,7 +265,7 @@ describe('EmailDigestService', () => {
 
     const result = await service.run();
 
-    expect(result.sent).toBe(1);
-    expect(email.send.mock.calls[0][0].text).toContain('first response');
+    expect(result.queued).toBe(1);
+    expect(sectionsOf()).toContain('first response');
   });
 });

@@ -27,7 +27,7 @@ describe('adding somebody to the team', () => {
     jest.clearAllMocks();
     request.mockImplementation(async (path: string) => {
       if (path === '/users') return { id: 'new-1' };
-      if (path.endsWith('/send-setup-link')) return { emailed: true, link: 'https://app/account-setup/tok' };
+      if (path.endsWith('/send-setup-link')) return { emailDelivery: { id: 'e1', status: 'QUEUED', to: 'priya@example.in' }, link: 'https://app/account-setup/tok' };
       return {};
     });
   });
@@ -59,7 +59,7 @@ describe('adding somebody to the team', () => {
     await userEvent.type(screen.getByLabelText('Last name'), 'Sharma');
     await userEvent.type(screen.getByLabelText('Work email'), 'priya@example.in');
     await userEvent.click(screen.getByRole('checkbox', { name: /Desk Operator/i }));
-    await userEvent.click(screen.getByRole('button', { name: /Create and email an invite/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Create & send invite/i }));
 
     await waitFor(() => expect(onAdded).toHaveBeenCalled());
     const [createPath, createInit] = request.mock.calls[0];
@@ -73,7 +73,7 @@ describe('adding somebody to the team', () => {
 
   it('will not submit until it knows who they are and what they do', async () => {
     open();
-    const submit = screen.getByRole('button', { name: /Create and email an invite/i });
+    const submit = screen.getByRole('button', { name: /Create & send invite/i });
     expect(submit).toBeDisabled();
 
     await userEvent.type(screen.getByLabelText('First name'), 'Priya');
@@ -86,21 +86,36 @@ describe('adding somebody to the team', () => {
     expect(submit).toBeEnabled();
   });
 
+  /**
+   * Nine roles in one list meant the four a staff account actually gets were below the fold, under
+   * ones this form does not create: a field assayer comes from the workforce pipeline, and a client
+   * user is somebody outside the company.
+   */
+  it('leads with the roles staff actually get, and folds the rest away', async () => {
+    open();
+    expect(screen.getByRole('checkbox', { name: /Desk Operator/i })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Client User/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /Other roles/i }));
+    expect(screen.getByRole('checkbox', { name: /Client User/i })).toBeInTheDocument();
+  });
+
   /** A client account that belongs to no client can see either nothing or everything. */
   it('asks which client, but only when the role is a client one', async () => {
     open();
     expect(screen.queryByText(/Which client/i)).not.toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole('button', { name: /Other roles/i }));
     await userEvent.click(screen.getByRole('checkbox', { name: /Client User/i }));
     expect(screen.getByText(/Which client/i)).toBeInTheDocument();
   });
 
   it('keeps region scoping out of the way until it is wanted', async () => {
     open();
-    expect(screen.getByText(/All of India — the usual answer/i)).toBeInTheDocument();
+    expect(screen.getByText(/All of India/i)).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'North' })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /Limit them to certain regions/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Limit to regions/i }));
     // "North" exactly — "North East" is a different region and would match a loose pattern.
     expect(screen.getByRole('checkbox', { name: 'North' })).toBeInTheDocument();
   });
@@ -111,17 +126,41 @@ describe('adding somebody to the team', () => {
  * posted — the same failure the candidate invite already had to learn about.
  */
 describe('what the administrator is told afterwards', () => {
-  it('confirms the address when the email actually went', () => {
-    render(<InviteResult result={{ displayName: 'Priya', email: 'priya@example.in', emailed: true, link: 'x' }} onClose={jest.fn()} />);
-    expect(screen.getByText(/on its way to/i)).toBeInTheDocument();
-    expect(screen.getByText('priya@example.in')).toBeInTheDocument();
+  const receipt = (status: string, error?: string) => ({ id: 'e1', status, to: 'priya@example.in', error }) as any;
+  const LINK = 'https://app/account-setup/tok';
+
+  it('confirms the address when the email actually went, and does not leave the link on screen', () => {
+    render(<InviteResult result={{ displayName: 'Priya', email: 'priya@example.in', emailDelivery: receipt('SENT'), link: LINK }} onClose={jest.fn()} />);
+    expect(screen.getByTestId('email-delivery')).toHaveAttribute('data-status', 'SENT');
+    expect(screen.getByText(/was emailed to priya@example\.in/i)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(LINK)).not.toBeInTheDocument();
   });
 
-  it('hands over the link to pass on when it did not', () => {
-    render(<InviteResult result={{ displayName: 'Priya', email: 'priya@example.in', emailed: false, link: 'https://app/account-setup/tok' }} onClose={jest.fn()} />);
-    expect(screen.getByText(/could not be sent/i)).toBeInTheDocument();
-    expect(screen.getByDisplayValue('https://app/account-setup/tok')).toBeInTheDocument();
+  it('hands over the link to pass on when it did not, with the reason', () => {
+    render(<InviteResult result={{ displayName: 'Priya', email: 'priya@example.in', emailDelivery: receipt('FAILED', 'Email is not set up on this system, so it was not sent.'), link: LINK }} onClose={jest.fn()} />);
+    expect(screen.getByText(/did not go — Email is not set up on this system/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue(LINK)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Copy/i })).toBeInTheDocument();
+  });
+
+  /**
+   * The email is queued, so the answer arrives a moment after the dialog opens. Until it does,
+   * neither "emailed" nor a link to pass on is true — the dialog says it is sending, and follows it.
+   */
+  it('says it is sending while the queued email has not settled, then follows it to the answer', async () => {
+    request.mockResolvedValue({ id: 'e1', status: 'SENT', to: 'priya@example.in' });
+    render(<InviteResult result={{ displayName: 'Priya', email: 'priya@example.in', emailDelivery: receipt('QUEUED'), link: LINK }} onClose={jest.fn()} />);
+
+    expect(screen.getByText(/Sending a link to choose their password to priya@example\.in/i)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(LINK)).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByTestId('email-delivery')).toHaveAttribute('data-status', 'SENT'), { timeout: 3000 });
+    expect(request).toHaveBeenCalledWith('/outbound-messages/e1');
+  });
+
+  it('shows the link when there was nothing to watch', () => {
+    render(<InviteResult result={{ displayName: 'Priya', email: 'priya@example.in', emailDelivery: null, link: LINK }} onClose={jest.fn()} />);
+    expect(screen.getByDisplayValue(LINK)).toBeInTheDocument();
   });
 });
 

@@ -1,4 +1,49 @@
 import { api } from './api';
+import { waitForQueuedJob, type EnqueuedJob } from './queued-job';
+
+/**
+ * How a screen follows a planning job it started.
+ *
+ * `onProgress` receives the server's stage label ("Creating offers (37/166)"); `signal` lets a screen
+ * that closed stop polling. The job itself carries on either way — it runs on the server.
+ */
+export interface PlanningJobWatch {
+  onProgress?: (progress: { percent: number; stage: string }) => void;
+  signal?: { cancelled: boolean };
+  /** Told when the request joined a run of the same thing already going (a second press). */
+  onJoined?: () => void;
+  pollMs?: number;
+}
+
+/** Read jobs (coverage preview, day plans) and write jobs (deploy, bulk) are numbered separately. */
+const READ_JOB_STATUS = (jobId: string) => `/planning/jobs/${encodeURIComponent(jobId)}`;
+const WRITE_JOB_STATUS = (jobId: string) => `/planning/write-jobs/${encodeURIComponent(jobId)}`;
+
+/**
+ * POST a job route, then wait on the job.
+ *
+ * The planning routes this replaces did their work inside the request. The largest — deploying a
+ * whole plan, a bulk offer over hundreds of branches — ran past the client's 30 s budget, so the
+ * screen said "failed" while the server kept going, and the operator pressed again. The job routes
+ * answer at once with an id, and the result arrives through the poll.
+ */
+async function runPlanningJob<TResult>(
+  path: string,
+  statusPath: (jobId: string) => string,
+  body: unknown,
+  watch: PlanningJobWatch = {},
+): Promise<TResult> {
+  const { jobId, deduplicated } = await api.request<EnqueuedJob>(path, {
+    method: 'POST',
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (deduplicated) watch.onJoined?.();
+  return waitForQueuedJob<TResult>(statusPath(jobId), {
+    onProgress: watch.onProgress,
+    signal: watch.signal,
+    pollMs: watch.pollMs,
+  });
+}
 
 /**
  * Typed API layer for the Planning workspace.
@@ -78,14 +123,21 @@ export interface DayPlanQuery {
   minDistanceKm?: number;
 }
 
-/** Multi-branch day plan. Caller supplies its own ProjectDayPlan type. */
-export const getDayPlans = <T = unknown>(query: DayPlanQuery) => {
+/**
+ * Multi-branch day plan. Caller supplies its own ProjectDayPlan type.
+ *
+ * Through the queued twin (`POST /planning/day-plans/jobs`), not `GET /planning/day-plans`: the plan
+ * runs clustering plus the recommendation engine per branch per cluster, which inside a request
+ * holds the browser, the proxy and database connections for its whole length. Same parameters, same
+ * answer.
+ */
+export const getDayPlans = <T = unknown>(query: DayPlanQuery, watch?: PlanningJobWatch) => {
   const params = new URLSearchParams({
     targetDate: query.targetDate,
     projectIds: query.projectIds.join(','),
   });
   if (query.minDistanceKm != null) params.set('minDistanceKm', String(query.minDistanceKm));
-  return api.request<T>(`/planning/day-plans?${params}`);
+  return runPlanningJob<T>(`/planning/day-plans/jobs?${params}`, READ_JOB_STATUS, undefined, watch);
 };
 
 // ── Recommendations ──────────────────────────────────────────────────────────────
@@ -218,6 +270,42 @@ export const markBranchUnableToCover = (projectBranchId: string, body: Record<st
     body: JSON.stringify(body),
   });
 
+/** One branch's outcome in a bulk run. Every branch the run was given is in exactly one list. */
+export interface BulkBranchResult {
+  succeeded: Array<{ projectBranchId: string; assignmentId?: string; status?: string }>;
+  failed: Array<{ projectBranchId: string; error: string }>;
+}
+
+/**
+ * "Offer all to …" over a selection — one request, run on the server, polled.
+ *
+ * This used to be one `POST /assignments` per ticked branch from the browser, five at a time: up to
+ * 500 requests against a 300-a-minute per-user limit, each refused one reported as a name only.
+ */
+export const offerBranchesInBulk = (
+  body: {
+    projectBranchIds: string[];
+    assayerId: string;
+    assayerName?: string;
+    scheduledDate?: string;
+    acceptOnBehalf?: boolean;
+    acceptanceReason?: string;
+  },
+  watch?: PlanningJobWatch,
+) => runPlanningJob<BulkBranchResult>('/planning/bulk-offers/jobs', WRITE_JOB_STATUS, body, watch);
+
+/**
+ * "Mark unable to cover" over a selection — one request, run on the server, polled.
+ *
+ * Replaces an unbounded `Promise.all` of one POST per ticked branch, which past the rate limit was
+ * refused in part, with each refusal reported as a bare branch name.
+ */
+export const markBranchesUnableToCover = (
+  projectBranchIds: string[],
+  reason: string,
+  watch?: PlanningJobWatch,
+) => runPlanningJob<BulkBranchResult>('/planning/unable-to-cover/jobs', WRITE_JOB_STATUS, { projectBranchIds, reason }, watch);
+
 export const reopenBranchCoverage = (projectBranchId: string) =>
   api.request(`/projects/branches/${projectBranchId}/reopen-coverage`, { method: 'POST' });
 
@@ -246,18 +334,27 @@ export interface CoveragePlanExecuteResult {
   fullySkipped?: boolean;
   /** First and last date booked, when anything deployed. */
   dateRange?: { start: string; end: string } | null;
+  /** How many of `deployed` an earlier, interrupted run of this plan had already booked. */
+  alreadyDeployedCount?: number;
 }
 
-/** Computed cluster/capacity preview for a project (does not persist a version). */
-export const getCoveragePlanPreview = <T = unknown>(projectId: string) =>
-  api.request<T>(`/planning/projects/${projectId}/coverage-plan`);
+/**
+ * Computed cluster/capacity preview for a project (does not persist a version).
+ *
+ * Through the queued twin (`POST …/coverage-plan/jobs`): the preview runs the recommendation engine
+ * once per branch, which the synchronous GET did inside the request.
+ */
+export const getCoveragePlanPreview = <T = unknown>(projectId: string, watch?: PlanningJobWatch) =>
+  runPlanningJob<T>(`/planning/projects/${projectId}/coverage-plan/jobs`, READ_JOB_STATUS, undefined, watch);
 
-/** Create or regenerate a plan version (returns the persisted plan with its id + status). */
-export const createCoveragePlan = (projectId: string, body: { justification?: string } = {}) =>
-  api.request<CoveragePlan>(`/planning/projects/${projectId}/coverage-plan`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+/**
+ * Create or regenerate a plan version (resolves with the persisted plan, its id and status).
+ *
+ * On the write queue: generating a version runs the same whole-project engine as the preview, then
+ * writes the version.
+ */
+export const createCoveragePlan = (projectId: string, body: { justification?: string } = {}, watch?: PlanningJobWatch) =>
+  runPlanningJob<CoveragePlan>(`/planning/projects/${projectId}/coverage-plan/versions/jobs`, WRITE_JOB_STATUS, body, watch);
 
 /** Move a plan through its lifecycle, e.g. DRAFT/GENERATED → APPROVED. */
 export const transitionCoveragePlan = (planId: string, status: string) =>
@@ -266,12 +363,14 @@ export const transitionCoveragePlan = (planId: string, status: string) =>
     body: JSON.stringify({ status }),
   });
 
-/** Deploy an approved plan — spawns assignments across the whole project. */
-export const executeCoveragePlan = (planId: string, scheduledDate?: string) =>
-  api.request<CoveragePlanExecuteResult>(`/planning/coverage-plans/${planId}/execute`, {
-    method: 'POST',
-    body: JSON.stringify({ scheduledDate }),
-  });
+/**
+ * Deploy an approved plan — spawns assignments across the whole project.
+ *
+ * The route accepts (202 `{ jobId }`) and the deploy runs on the server; this resolves with the
+ * deploy's result once the job is done. A second press while it runs joins the same deploy.
+ */
+export const executeCoveragePlan = (planId: string, scheduledDate?: string, watch?: PlanningJobWatch) =>
+  runPlanningJob<CoveragePlanExecuteResult>(`/planning/coverage-plans/${planId}/execute`, WRITE_JOB_STATUS, { scheduledDate }, watch);
 
 /** What-if simulation: run the optimizer with weight/radius overrides without persisting. */
 export const simulateScenario = <T = unknown>(body: {

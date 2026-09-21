@@ -3,21 +3,15 @@ import { UploadCloud, AlertTriangle, CheckCircle2, Clock, Send, ArrowRightCircle
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
-import { UPLOAD_LIMIT_HINT } from '@fapoms/shared';
+import { UPLOAD_LIMIT_HINT, businessDateKey } from '@fapoms/shared';
 import { useImportJob } from '../../components/import/useImportJob';
+// The day's steps live with every other document word — see documents/vocabulary.ts.
+import { DAILY_RUN_STEP as ACTION_META } from './vocabulary';
 
 /**
  * What still has to happen for a branch on this audit date. Ordered as the day
  * actually runs, so the board reads left-to-right as work moves.
  */
-const ACTION_META: Record<string, { label: string; color: string; bg: string; hint: string }> = {
-  AWAITING_CLIENT_DATA: { label: 'No client data', color: 'var(--danger)', bg: 'var(--status-cancelled-bg)', hint: 'This branch is scheduled today but is not in the client\'s file.' },
-  GENERATE_PDF: { label: 'Generate packet', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Client data is in. Produce the audit PDF in the external app, then upload it here.' },
-  DISPATCH: { label: 'Send to assayer', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Packet is ready but the assayer cannot see it until it is sent.' },
-  AWAITING_ASSAYER_RETURN: { label: 'With assayer', color: 'var(--warning)', bg: 'var(--status-pending-bg)', hint: 'Sent. Waiting for the scanned paperwork to come back.' },
-  SEND_TO_OCR: { label: 'Send for scanning', color: 'var(--accent)', bg: 'var(--status-pending-bg)', hint: 'Paperwork is back. Push it to the external OCR application.' },
-  IN_PROGRESS: { label: 'In processing', color: 'var(--success)', bg: 'var(--status-completed-bg)', hint: 'With OCR / data entry.' },
-};
 
 export interface DailyRunBranch {
   projectBranchId: string;
@@ -71,7 +65,7 @@ export interface DailyRun {
 const tomorrowISO = () => {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  return businessDateKey(d);
 };
 
 /**

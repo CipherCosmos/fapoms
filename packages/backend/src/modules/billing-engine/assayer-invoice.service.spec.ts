@@ -495,6 +495,22 @@ describe('AssayerInvoiceService', () => {
       const grouped = managerQuery.mock.calls.find(([sql]) => sql.includes('GROUP BY p.assayer_id'));
       expect(grouped?.[1]).toEqual([null]);
     });
+
+    /**
+     * The round runs on a queue now, with a screen polling it. It is told after every assayer —
+     * whatever that assayer's outcome — so a 1,200-assayer round shows movement rather than a
+     * spinner that looks identical whether the run is working or wedged.
+     */
+    it('reports progress after every assayer in the round, an assayer with nothing eligible included', async () => {
+      eligibleAssayerRows = [{ assayer_id: 'assayer-1' }, { assayer_id: 'assayer-3' }];
+      lockedPayableRows = ((params: any) => (params?.assayerId === 'assayer-1' ? [feeLine()] : [])) as any;
+      const onProgress = jest.fn();
+
+      const result = await service.inviteAll('ops-1', undefined, onProgress);
+
+      expect(result.outcomes.map((o) => o.outcome)).toEqual(['invited', 'nothing-eligible']);
+      expect(onProgress.mock.calls).toEqual([[1, 2, 'Inviting assayers'], [2, 2, 'Inviting assayers']]);
+    });
   });
 
   // ── Submit ────────────────────────────────────────────────────────────────

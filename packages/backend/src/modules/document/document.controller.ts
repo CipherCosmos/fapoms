@@ -1,4 +1,4 @@
-import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
+import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, Inject, HttpCode } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength, IsEmail } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -21,12 +21,11 @@ import { withCode } from '../../infrastructure/http/api-error';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
-import { assertUploadAllowed, uploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
-import { parseSheet, rowReader } from '../../core/excel/sheet-reader';
-import {
-  CUSTOMER_ACCOUNT_NUMBER_ALIASES,
-  CUSTOMER_SOL_ID_ALIASES,
-} from '../customer-master/customer-master.service';
+import { assertUploadAllowed, uploadMulterOptions, diskUploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
+import { DiskUploadScanInterceptor } from './disk-upload-scan.interceptor';
+import { DocumentDispatchJobsService } from './document-dispatch-jobs.service';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
+import { createReadStream } from 'fs';
 import { AssignmentService } from '../assignment/assignment.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
@@ -49,8 +48,18 @@ import { deriveFileIntegrity, verifyClientHash } from './document-integrity';
  */
 const documentUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
 
-/** Same ceiling as `documentUploadMulterOptions`, plus the per-request file-count cap that already exists as the interceptor's own `maxCount` argument — restated here so multer enforces both at the streaming layer. */
-const documentBatchUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 100 });
+/**
+ * Same ceiling as `documentUploadMulterOptions`, plus the per-request file-count cap that already
+ * exists as the interceptor's own `maxCount` argument — restated here so multer enforces both at the
+ * streaming layer.
+ *
+ * Disk, not memory, and this is the one route where that is right. A day's batch is up to 100 files
+ * of up to 50 MB each, and in memory that was up to 5 GB held at once in an API container capped at
+ * 1.5 GB — one large batch could get the API killed for every user. On disk the batch costs one file
+ * at a time: `DiskUploadScanInterceptor` reads each back to scan it, and the handler streams each
+ * one to storage. See `diskUploadMulterOptions`.
+ */
+const documentBatchUploadMulterOptions = diskUploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 100 });
 
 /**
  * The resumable-chunk upload route has no `assertUploadAllowed` call of its own — each PUT is
@@ -60,7 +69,6 @@ const documentBatchUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPL
  * cap rather than inventing a separate number for chunks.
  */
 const resumableChunkMulterOptions = uploadMulterOptions({ maxBytes: MAX_RESUMABLE_UPLOAD_BYTES });
-
 
 /**
  * Runtime-validated bodies for the document mutations.
@@ -114,8 +122,6 @@ class AssignDataEntryRequestDto {
   @IsUUID()
   assigneeId: string;
 }
-
-
 
 /** Request a presigned URL to upload a large file straight to object storage. */
 class PresignUploadRequestDto {
@@ -180,6 +186,7 @@ export class DocumentController {
     private readonly chunkedUploadService: ChunkedUploadService,
     private readonly fileScanner: FileScanService,
     private readonly regionGuard: RegionGuardService,
+    private readonly dispatchJobs: DocumentDispatchJobsService,
   ) {}
 
   @Post('upload')
@@ -882,75 +889,6 @@ export class DocumentController {
     return { completed: targetAsn?.status === AssignmentStatus.COMPLETED };
   }
 
-  @Post('validate-customer-excel')
-  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
-  @RequirePermissions('document:create:organization')
-  @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Validate Customer Master Excel file' })
-  validateCustomerExcel(@UploadedFile() file: any) {
-    // A submitted form with no file attached reaches here as `undefined`, and reading
-    // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
-    // needs to be told to pick a file, not shown a crash.
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-    // Had no type/size allowlist at all — same gap as `uploadGeneratedBatch`/`uploadExcelReport`
-    // above, closed the same way. Size is already capped at the multer layer
-    // (`documentUploadMulterOptions`); this adds the missing type check before an arbitrary
-    // upload reaches `parseSheet`.
-    assertUploadAllowed({
-      contentType: file.mimetype,
-      size: file.size,
-      fileName: file.originalname,
-      allowed: SPREADSHEET_UPLOAD_TYPES,
-    });
-    // Same scored sheet/header-row reader every Excel import in this product uses — this route
-    // used to read SheetNames[0] and row 1 unconditionally, same gap as the real importer this
-    // previews for (customer-master.service.ts's uploadAndReconcile).
-    const { rows } = parseSheet(file.buffer, [...CUSTOMER_ACCOUNT_NUMBER_ALIASES, ...CUSTOMER_SOL_ID_ALIASES]);
-
-    const totalRows = rows.length;
-    let duplicateAccountsCount = 0;
-    let missingBranchesCount = 0;
-    const accountNumbersSeen = new Set<string>();
-    const solIdsSeen = new Set<string>();
-
-    for (const row of rows) {
-      const read = rowReader(row);
-      // The same alias list the real importer reads — this preview used to recognise a couple of
-      // SOL ID spellings (BRANCH/Branch) the importer itself did not, so a file using one of them
-      // could preview clean and then import with every row unmatched. One list now, imported from
-      // customer-master.service.ts, so the two cannot drift apart again.
-      const acc = read(...CUSTOMER_ACCOUNT_NUMBER_ALIASES);
-      const solId = read(...CUSTOMER_SOL_ID_ALIASES);
-      if (acc) {
-        if (accountNumbersSeen.has(acc)) duplicateAccountsCount++;
-        else accountNumbersSeen.add(acc);
-      }
-      if (solId) {
-        solIdsSeen.add(solId);
-      } else {
-        missingBranchesCount++;
-      }
-    }
-
-    const status = (duplicateAccountsCount > 50 || missingBranchesCount > 10) ? 'IMPORT_BLOCKED' : 'VALIDATED_READY_FOR_IMPORT';
-
-    return {
-      summary: {
-        totalRowsProcessed: totalRows,
-        uniqueAccountsCount: accountNumbersSeen.size,
-        duplicateAccountsCount,
-        uniqueBranchesCount: solIdsSeen.size,
-        missingBranchCodesCount: missingBranchesCount,
-        status,
-      },
-      recommendation: status === 'IMPORT_BLOCKED'
-        ? 'Reconciliation Blocked: Fix duplicate account numbers or missing branch codes in Excel sheet before proceeding.'
-        : 'Reconciliation Passed: Ready for OCR generation and assignment mapping.',
-    };
-  }
-
   @Get(':id')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @RequirePermissions('document:view:organization')
@@ -1362,7 +1300,10 @@ export class DocumentController {
   @Post('upload-generated-batch')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @RequirePermissions('document:upload:organization')
-  @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), FileScanInterceptor)
+  // DiskUploadScanInterceptor, not FileScanInterceptor: the files are on disk, and the shared
+  // interceptor only scans a `buffer` — it would pass every one of them unscanned. This one scans
+  // each file from disk and deletes them all when the request ends, whatever happened.
+  @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), DiskUploadScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
   async uploadGeneratedBatch(
@@ -1420,7 +1361,9 @@ export class DocumentController {
           fileName: file.originalname,
           allowed: SCAN_UPLOAD_TYPES,
         });
-        const savedPath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype);
+        // Streamed from the temp file rather than read into memory: the S3 engine encrypts a stream
+        // part by part, so storing a 50 MB packet costs a few MB of buffer, not two copies of it.
+        const savedPath = await this.storage.saveFile(file.originalname, createReadStream(file.path), file.mimetype, file.size);
         const doc = await this.documentService.create({
           assessmentId: m.projectBranchId,
           fileName: file.originalname,
@@ -1446,9 +1389,20 @@ export class DocumentController {
     };
   }
 
+  /**
+   * Accepts the batch and answers 202 `{ jobId }`; the documents go out on the dispatch queue.
+   *
+   * This used to send everything inside the request. With a branch address that is a storage read
+   * and an SMTP send per document, so thirty of them outlived the web client's 30-second timeout:
+   * the screen said it failed while the server kept sending, and Send again emailed the branch a
+   * second copy. Poll `GET /documents/dispatch-batch/:jobId` for progress and per-document results.
+   *
+   * `POST /documents/:id/dispatch` stays synchronous — for one document the email is the answer.
+   */
   @Post('dispatch-batch')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
-  @ApiOperation({ summary: 'Release several documents to their assayers in one action' })
+  @ApiOperation({ summary: 'Start releasing several documents to their assayers or a branch; poll dispatch-batch/:jobId' })
   async dispatchBatch(
     @Body() body: DispatchBatchRequestDto,
     @Req() req: any,
@@ -1457,17 +1411,36 @@ export class DocumentController {
     if (!body?.documentIds?.length) {
       throw new BadRequestException('documentIds is required.');
     }
-    // Every id before any of them is released, so a batch holding one out-of-region document is
+    // Every id before any of them is accepted, so a batch holding one out-of-region document is
     // refused whole rather than half-dispatched — the shape `assayer.bulkTransitionLifecycle` uses.
+    // Checked here, in the request, because the worker has no region scope to check against.
     for (const documentId of body.documentIds) {
       await this.assertDocumentRegion(documentId, scope, 'document:dispatchBatch');
     }
-    const result = await this.documentService.dispatchMany(body.documentIds, req.user.id, body.branchEmail);
+    const data = await this.dispatchJobs.enqueueBatch(
+      { documentIds: body.documentIds, branchEmail: body.branchEmail },
+      jobActorFrom(req),
+    );
     return {
       success: true,
-      data: result,
-      message: `Dispatched ${result.dispatched.length} document(s)${result.failed.length ? `, ${result.failed.length} failed` : ''}.`,
+      data,
+      message: data.deduplicated
+        ? 'These documents are already being sent.'
+        : `Sending ${body.documentIds.length} document(s).`,
     };
+  }
+
+  /**
+   * Where a batch dispatch has got to, and which documents went once it is done.
+   *
+   * Readable only by the person who started it (`assertJobVisibleTo`): Bull's job ids are a counter,
+   * and the result names the documents and why each one that failed did not go.
+   */
+  @Get('dispatch-batch/:jobId')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+  @ApiOperation({ summary: 'State, progress and per-document result of a batch dispatch' })
+  async getDispatchBatchJob(@Param('jobId') jobId: string, @Req() req: any) {
+    return await this.dispatchJobs.status(jobId, req?.user?.id);
   }
 
   @Get('project-branch/:projectBranchId/assayer-view')

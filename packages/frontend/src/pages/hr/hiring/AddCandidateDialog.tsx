@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { InterviewOutcome } from '@fapoms/shared';
+import { InterviewOutcome, type OutboundMessageReceipt } from '@fapoms/shared';
 
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
 import { queryKeys } from '../../../hooks/queryKeys';
 import { Modal, AlertBanner } from '../../../components/ui';
 import { Field, fieldInput, InviteLinkBox } from '../hr-ui';
+import { DeliveryNote } from '../../../components/DeliveryNote';
 
 type Route = 'interview' | 'direct';
 
@@ -14,6 +15,11 @@ interface Sent {
   tone: 'ok' | 'err';
   text: string;
   link?: string | null;
+  /**
+   * When the outcome involved emailing the form. The email is queued, so whether it went is not
+   * known when the response arrives — the note follows it from "Sending…" to its answer.
+   */
+  delivery?: { receipt: OutboundMessageReceipt | null; lead: string };
 }
 
 /**
@@ -61,7 +67,7 @@ export const AddCandidateDialog: React.FC<{
       if (route === 'interview') {
         const res = await api.request<{
           candidateName: string; outcome: InterviewOutcome; email: string | null;
-          inviteEmailed?: boolean; inviteLink?: string;
+          emailDelivery?: OutboundMessageReceipt | null; inviteLink?: string;
         }>('/assayer-interviews', {
           method: 'POST',
           body: JSON.stringify({
@@ -75,20 +81,18 @@ export const AddCandidateDialog: React.FC<{
         void queryClient.invalidateQueries({ queryKey: queryKeys.hr.interviews });
         if (res.outcome === InterviewOutcome.FAIL) {
           setSent({ tone: 'ok', text: `${res.candidateName}'s interview is recorded as not passed. Nothing was sent to them.` });
-        } else if (res.inviteEmailed) {
-          setSent({ tone: 'ok', text: `${res.candidateName} passed — their form has been emailed to ${res.email}.`, link: res.inviteLink ?? null });
         } else {
-          // An undelivered invite is a stall, not a success: somebody has to send the link by hand.
+          // Whether the email went is followed on screen, not assumed: an undelivered invite is a
+          // stall somebody has to clear by sending the link by hand.
           setSent({
-            tone: 'err',
-            text: res.email
-              ? `${res.candidateName} passed, but the email to ${res.email} did not go out. Send them the link below.`
-              : `${res.candidateName} passed. There is no email on file, so send them the link below.`,
+            tone: 'ok',
+            text: '',
             link: res.inviteLink ?? null,
+            delivery: { receipt: res.emailDelivery ?? null, lead: `${res.candidateName} passed.` },
           });
         }
       } else {
-        const res = await api.request<{ applicationId: string; emailed: boolean; inviteLink: string }>(
+        const res = await api.request<{ applicationId: string; emailDelivery: OutboundMessageReceipt | null; inviteLink: string }>(
           '/hr/applications/invite',
           {
             method: 'POST',
@@ -101,11 +105,10 @@ export const AddCandidateDialog: React.FC<{
           },
         );
         setSent({
-          tone: res.emailed ? 'ok' : 'err',
-          text: res.emailed
-            ? `${name.trim()} has been added and their form emailed to ${email.trim()}.`
-            : `${name.trim()} has been added, but no email went out. Send them the link below.`,
+          tone: 'ok',
+          text: '',
           link: res.inviteLink,
+          delivery: { receipt: res.emailDelivery ?? null, lead: `${name.trim()} has been added.` },
         });
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
@@ -165,7 +168,15 @@ export const AddCandidateDialog: React.FC<{
           ))}
         </div>
 
-        {sent && (
+        {sent?.delivery && (
+          <DeliveryNote
+            receipt={sent.delivery.receipt}
+            lead={sent.delivery.lead}
+            what="their form"
+            noAddress="There is no email on file, so send them the link below."
+          />
+        )}
+        {sent && !sent.delivery && (
           <AlertBanner type={sent.tone === 'ok' ? 'success' : 'error'} message={sent.text} />
         )}
         {sent?.link && <InviteLinkBox link={sent.link} note="Send this to them if the email did not arrive." />}

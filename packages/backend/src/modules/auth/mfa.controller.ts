@@ -44,7 +44,7 @@ export class MfaController {
 
   @Get()
   @AnyAuthenticated()
-  @ApiOperation({ summary: 'My MFA status (enrolled / confirmed / recovery codes left)' })
+  @ApiOperation({ summary: 'My MFA status (enrolled / confirmed / recovery codes left / whether SMS can be offered)' })
   async status(@Req() req: any) {
     return await this.mfa.status(req.user.id);
   }

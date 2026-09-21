@@ -743,7 +743,7 @@ export interface BillingHistoryEvent extends AuditMetadata {
 export interface BillingAttentionItem {
   kind:
     | 'UNBOOKED'            // a COMPLETED assignment with no payable or no client line
-    | 'UNSETTLED_FEE'       // booked from a proposed fee that was never agreed
+    | 'UNSETTLED_FEE'       // booked with no fee recorded as agreed; unreachable for work created since 2026-09-20
     | 'FEE_CHANGED'         // the assignment fee moved after the line was booked
     | 'HELD'                // a held payout or client line
     | 'OVERDUE_INVOICE';    // a sent invoice past its due date
@@ -774,6 +774,12 @@ export interface BillingOverview {
     dueCount: number;
     approvedCount: number;
     heldCount: number;
+    /** Σ net on PENDING payables not yet in any claim invoice cycle. */
+    unbilled?: number;
+    unbilledCount?: number;
+    /** Σ net on PENDING payables currently riding an active claim invoice awaiting confirmation/approval. */
+    inClaimReview?: number;
+    inClaimReviewCount?: number;
   };
   receivables: {
     /**

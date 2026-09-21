@@ -102,26 +102,54 @@ const personNameOf = (i: Issue): string | null => {
 };
 
 /**
+ * The most ids `POST /assayers/roster/import-issues/resolve` accepts in one request
+ * (`BatchResolveImportIssuesDto`'s `@ArrayMaxSize(500)`).
+ */
+const RESOLVE_BATCH_LIMIT = 500;
+
+/** One id's outcome from the batch route. */
+interface BatchResolveResult {
+  id: string;
+  resolved: boolean;
+  reason?: string;
+}
+
+/**
  * Close every entry in one decision, and say honestly what happened to each.
  *
- * There is no batch endpoint (`POST /assayers/roster/import-issues/:id/resolve` takes one id),
- * so the calls still go one at a time — but through `allSettled`, so a failure part-way stops
- * nothing, and the outcome is reported per entry: how many closed, and which ones could not be,
- * with the server's reason against each.
+ * This sent one `POST …/import-issues/:id/resolve` per entry, all at once — 68 requests for the 68
+ * rows one unreadable word produced — although the batch route existed for exactly this: one
+ * request, one decision, and an outcome per id (an id already closed by somebody else is reported
+ * against that id while the rest still close). Chunked only at the route's own cap.
+ *
+ * The route refuses a whole request, rather than one id, when any id is outside the caller's
+ * regions (`assertImportIssuesInScope`), or on a network failure — so every entry in that chunk is
+ * reported as not closed with that reason, which is true: none of them were.
  */
 async function closeIssues(
   issues: Issue[],
   stated: string,
 ): Promise<{ closed: number; failed: { who: string; reason: string }[] }> {
-  const outcomes = await Promise.allSettled(issues.map((i) =>
-    api.request(`/assayers/roster/import-issues/${i.id}/resolve`, {
-      method: 'POST', body: JSON.stringify({ resolution: stated }),
-    })));
-  const failed = outcomes.flatMap((o, idx) => (
-    o.status === 'rejected'
-      ? [{ who: whoOf(issues[idx]), reason: userMessage(o.reason) }]
-      : []));
-  return { closed: outcomes.length - failed.length, failed };
+  let closed = 0;
+  const failed: { who: string; reason: string }[] = [];
+
+  for (let i = 0; i < issues.length; i += RESOLVE_BATCH_LIMIT) {
+    const chunk = issues.slice(i, i + RESOLVE_BATCH_LIMIT);
+    try {
+      const res = await api.request<{ results: BatchResolveResult[] }>('/assayers/roster/import-issues/resolve', {
+        method: 'POST', body: JSON.stringify({ ids: chunk.map((issue) => issue.id), resolution: stated }),
+      });
+      const byId = new Map((res?.results ?? []).map((r) => [r.id, r]));
+      for (const issue of chunk) {
+        const outcome = byId.get(issue.id);
+        if (outcome?.resolved) closed += 1;
+        else failed.push({ who: whoOf(issue), reason: outcome?.reason ?? 'The server did not say whether this one closed.' });
+      }
+    } catch (err) {
+      for (const issue of chunk) failed.push({ who: whoOf(issue), reason: userMessage(err) });
+    }
+  }
+  return { closed, failed };
 }
 
 /** Import cell or standing data check — the two writers of this queue, told apart at a glance. */

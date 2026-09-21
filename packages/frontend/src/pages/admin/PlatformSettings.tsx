@@ -2,10 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SlidersHorizontal, Mail, Clock, Wallet, Receipt, Database, Send, Sliders,
-  RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle, LayoutTemplate,
+  RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle, LayoutTemplate, MessageSquare,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { isValidPan } from '@fapoms/shared';
+import { isValidPan, DLT_ID_PATTERN, DLT_SENDER_ID_PATTERN } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useToast, Select, useConfirm, PageHeader } from '../../components/ui';
@@ -19,6 +19,7 @@ import { DangerZoneSection } from './DangerZone/DangerZoneSection';
 import { RulesSection } from '../Rules';
 import { TransportCostsSection } from '../TransportCosts';
 import { EmailTemplatesSection } from './EmailTemplatesSection';
+import { SmsDeliveryCard, SmsTemplatesSection } from './SmsTemplatesSection';
 import { Page } from '../../components/ui/Page';
 import { SkeletonList } from '../../components/ui/Loading';
 
@@ -67,7 +68,7 @@ interface Setting {
   label: string;
   description: string;
   group: string;
-  type: 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron';
+  type: 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron' | 'json';
   value: any;
   source: 'saved' | 'environment' | 'default';
   isSet?: boolean;
@@ -86,6 +87,7 @@ interface Group { key: string; label: string; description: string }
 const GROUP_ICON: Record<string, React.ElementType> = {
   email: Mail,
   email_templates: LayoutTemplate,
+  sms: MessageSquare,
   schedule: Clock,
   fees: Wallet,
   billing: Receipt,
@@ -143,6 +145,10 @@ const formatWarning = (s: Setting, raw: any): string | null => {
         : 'Expected an email address, or "Name <email@domain>".';
     case 'app.publicUrl':
       return isValidHttpUrl(v) ? null : 'Expected a full address starting with http:// or https://.';
+    case 'sms.senderId':
+      return DLT_SENDER_ID_PATTERN.test(v) ? null : 'A DLT sender header is exactly 6 letters, e.g. SUMERU — texts under any other header are not sent.';
+    case 'sms.dltEntityId':
+      return DLT_ID_PATTERN.test(v) ? null : 'A DLT Principal Entity ID is digits only (usually 19) — copy it from your DLT portal.';
     case 'email.smtpHost':
       return HOSTNAME_SHAPE.test(v) ? null : 'Expected a server name, e.g. smtp.yourprovider.com — not a full URL or IP with a path.';
     default:
@@ -281,7 +287,8 @@ export const PlatformSettings: React.FC = () => {
   /** Not "email is off" — "we did not get to ask". The card below told those apart as one. */
   const emailStatusUnknown = loadFailed(emailStatusQuery);
 
-  const inGroup = settings.filter((s) => s.group === activeGroup);
+  // A JSON value has no row control — it has its own editor (the SMS wording under Email Templates).
+  const inGroup = settings.filter((s) => s.group === activeGroup && s.type !== 'json');
   const savedCount = (g: string) => settings.filter((s) => s.group === g && s.source === 'saved').length;
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['platform-settings'] })
@@ -592,6 +599,8 @@ export const PlatformSettings: React.FC = () => {
             </SectionCard>
           )}
 
+          {activeGroup === 'sms' && <SmsDeliveryCard canEdit={canEdit} />}
+
           {activeGroup === 'schedule' && canEdit && (
             <SectionCard
               icon={<Send size={16} />}
@@ -628,7 +637,10 @@ export const PlatformSettings: React.FC = () => {
           ) : activeGroup === 'dangerZone' ? (
             <DangerZoneSection />
           ) : activeGroup === 'email_templates' ? (
-            <EmailTemplatesSection canEdit={canEdit} />
+            <>
+              <EmailTemplatesSection canEdit={canEdit} />
+              <SmsTemplatesSection canEdit={canEdit} />
+            </>
           ) : (
           <SectionCard
             title={groups.find((g) => g.key === activeGroup)?.label ?? 'Settings'}

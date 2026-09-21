@@ -5,6 +5,7 @@
  * tokens, and scans HTML for dangerous script injection, event handlers, and unsafe URI schemes.
  */
 
+import { COMMON_MESSAGE_TOKENS } from '@fapoms/shared';
 import { EmailTemplateDefinition } from './email-template-registry';
 
 export interface ExtractedTokens {
@@ -136,6 +137,8 @@ export function validateTemplateContract(
   const allowedSet = new Set<string>([
     ...definition.requiredTokens,
     ...(definition.optionalTokens || []),
+    // Filled for every message, under the same names in email and SMS — see `message-tokens.ts`.
+    ...COMMON_MESSAGE_TOKENS,
     ...(definition.rawTokens || []),
   ]);
 

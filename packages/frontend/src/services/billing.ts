@@ -1,5 +1,6 @@
 import { api } from './api';
 import { AppError } from './errors';
+import { waitForQueuedJob, type EnqueuedJob } from './queued-job';
 import type {
   BillingEntry,
   BillingInvoice,
@@ -43,7 +44,7 @@ export interface PageParams {
 }
 
 /** One screenful of a dense money table. */
-export const BILLING_PAGE_SIZE = 50;
+export const BILLING_PAGE_SIZE = 20;
 
 export type PayoutRow = AssayerPayable & {
   assayerName: string | null;
@@ -292,16 +293,55 @@ async function getOverview(): Promise<BillingOverview> {
 
 async function listPayouts(params: {
   assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean;
+  /** Riding an assayer bill, or on none. The pay screen's stages are built from this. */
+  onBill?: boolean;
 } & PageParams = {}): Promise<BillingPage<PayoutRow>> {
   return api.request<BillingPage<PayoutRow>>(`/billing-engine/payouts${qs(params)}`);
 }
 
-async function approvePayouts(payableIds: string[]): Promise<PayoutActionResult> {
-  return api.request<PayoutActionResult>('/billing-engine/payouts/approve', { method: 'POST', body: JSON.stringify({ payableIds }) });
+/**
+ * How a screen follows a billing bulk run it started — approve, pay, or the invite-all round.
+ *
+ * Those three POSTs used to do the work inside the request, one transaction per row, and at
+ * realistic sizes outlived this client's 30 s: the screen said "failed" while the server carried on
+ * writing, and a second press started it again. They now answer at once with the run's id
+ * (`EnqueuedJob`), and `followBulkJob` waits for the result — the same `done`/`refused` lists and
+ * per-assayer outcomes the POST used to return. `onProgress` receives the server's stage label,
+ * e.g. "Approving payouts (7/20)".
+ */
+export interface BillingBulkJobWatch {
+  onProgress?: (progress: { percent: number; stage: string }) => void;
+  signal?: { cancelled: boolean };
+  pollMs?: number;
 }
 
-async function payPayouts(payload: PayPayoutsPayload): Promise<PayPayoutsResult> {
-  return api.request<PayPayoutsResult>('/billing-engine/payouts/pay', { method: 'POST', body: JSON.stringify(payload) });
+/** Start approving: the approvals run on the server's queue. Wait on it with `followBulkJob`. */
+/**
+ * Start approving. `reason` is sent only when the desk approved WITHOUT the assayer having
+ * confirmed a bill — it lands on the payout's history row and its audit remark, so the exception
+ * can be told from the rule afterwards. Omitted on the normal path (approving a bill), where the
+ * assayer's own confirmation is the record.
+ */
+async function approvePayouts(payableIds: string[], reason?: string): Promise<EnqueuedJob> {
+  return api.request<EnqueuedJob>('/billing-engine/payouts/approve', { method: 'POST', body: JSON.stringify({ payableIds, reason }) });
+}
+
+/** Start paying: the disbursements run on the server's queue. Wait on it with `followBulkJob`. */
+async function payPayouts(payload: PayPayoutsPayload): Promise<EnqueuedJob> {
+  return api.request<EnqueuedJob>('/billing-engine/payouts/pay', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+/**
+ * Wait for a started approve / pay / invite-all run and resolve with its result. Rejects with the
+ * run's own failure, `QueuedJobGone` when the run is no longer readable, or `QueuedJobTimeout`
+ * when it is still going after the give-up time — which is not a failure: it carries on.
+ */
+async function followBulkJob<TResult>(started: EnqueuedJob, watch: BillingBulkJobWatch = {}): Promise<TResult> {
+  return waitForQueuedJob<TResult>(`/billing-engine/bulk-jobs/${encodeURIComponent(started.jobId)}`, {
+    onProgress: watch.onProgress,
+    signal: watch.signal,
+    pollMs: watch.pollMs,
+  });
 }
 
 async function holdPayout(id: string, onHold: boolean, reason?: string): Promise<AssayerPayable> {
@@ -331,9 +371,13 @@ async function inviteAssayerInvoice(assayerId: string): Promise<AssayerInvoiceSu
   return api.request<AssayerInvoiceSummary>('/billing-engine/assayer-invoices/invite', { method: 'POST', body: JSON.stringify({ assayerId }) });
 }
 
-/** The bulk cadence round: one invoice per assayer with eligible work, per-assayer outcomes. */
-async function inviteAllAssayerInvoices(): Promise<AssayerInvoiceInviteAllResult> {
-  return api.request<AssayerInvoiceInviteAllResult>('/billing-engine/assayer-invoices/invite', { method: 'POST', body: JSON.stringify({ all: true }) });
+/**
+ * Start the bulk cadence round: one invoice per assayer with eligible work. It runs on the server's
+ * queue — about 1,200 assayers — and `followBulkJob` resolves with the per-assayer outcomes
+ * (`AssayerInvoiceInviteAllResult`). 404 while the rollout flag is off, before anything is queued.
+ */
+async function inviteAllAssayerInvoices(): Promise<EnqueuedJob> {
+  return api.request<EnqueuedJob>('/billing-engine/assayer-invoices/invite-all', { method: 'POST' });
 }
 
 async function listAssayerInvoices(params: { status?: AssayerInvoiceStatus; assayerId?: string } & PageParams = {}): Promise<BillingPage<AssayerInvoiceSummary>> {
@@ -438,6 +482,7 @@ export const billingApi = {
   listPayouts,
   approvePayouts,
   payPayouts,
+  followBulkJob,
   holdPayout,
   reopenAssignment,
   getAssayerStatement,

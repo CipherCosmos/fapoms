@@ -18,7 +18,6 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
@@ -129,7 +128,6 @@ describe('AssayerService', () => {
   // Bulk app-access issuance is the only thing in this file that touches these; every other
   // suite here never sends anything, so a resolved `false` keeps them inert by default.
   const mockEmailProvider = { send: jest.fn().mockResolvedValue({ success: false }) };
-  const mockSmsProvider = { send: jest.fn().mockResolvedValue(false) };
 
   const mockWorkflowEngine = {
     registerWorkflow: jest.fn(),
@@ -151,7 +149,6 @@ describe('AssayerService', () => {
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: mockEmailProvider },
-        { provide: SmsProvider, useValue: mockSmsProvider },
         { provide: UnitOfWork, useValue: mockUow },
         { provide: getDataSourceToken(), useValue: mockDataSource },
         { provide: CacheService, useValue: mockCache },

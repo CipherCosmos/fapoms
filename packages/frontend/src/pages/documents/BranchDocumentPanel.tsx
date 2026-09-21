@@ -6,36 +6,11 @@ import {
 import { Pagination } from '../../components/ui';
 import type { BranchGroup } from './DocumentControlPanel';
 import { UPLOAD_LIMIT_HINT } from '@fapoms/shared';
-
-const TYPE_META: Record<string, { label: string; short: string }> = {
-  CUSTOMER_MASTER_DATA: { label: 'Customer Master Excel', short: 'Customer data' },
-  PRE_FIELD_AUDIT_PDF: { label: 'Pre-Field Audit PDF', short: 'Audit packet' },
-  AUDITED_RETURN_PDF: { label: 'Audited Return PDF', short: 'Field return' },
-  GENERATED_EXCEL: { label: 'Generated Excel', short: 'OCR output' },
-};
-// Rendered in this fixed order regardless of which types happen to exist, so a
-// branch's card always reads left-to-right in the order the paperwork actually
-// flows: input data, then the packet out, then the return, then the OCR output.
-const TYPE_ORDER = ['CUSTOMER_MASTER_DATA', 'PRE_FIELD_AUDIT_PDF', 'AUDITED_RETURN_PDF', 'GENERATED_EXCEL'];
-
-// Only these two arrive by upload from this console. AUDITED_RETURN_PDF comes
-// from the assayer's phone and GENERATED_EXCEL is produced from a specific
-// return via its own action below — neither has a generic "upload this type" slot.
-const UPLOADABLE_TYPES = new Set(['CUSTOMER_MASTER_DATA', 'PRE_FIELD_AUDIT_PDF']);
-
-const STAGE_META: Record<string, { label: string; color: string; bg: string }> = {
-  UPLOADED: { label: 'Prepared', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
-  DISPATCHED: { label: 'With assayer', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
-  RECEIVED: { label: 'Returned', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-  SENT_TO_DATA_ENTRY: { label: 'Data entry', color: 'var(--accent)', bg: 'var(--status-pending-bg)' },
-  SENT_TO_EXTERNAL_OCR: { label: 'External OCR', color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
-  EXCEL_GENERATED: { label: 'Excel ready', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-  PROCESSED: { label: 'Processed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-  COMPLETED: { label: 'Completed', color: 'var(--success)', bg: 'var(--status-completed-bg)' },
-};
-// Same lifecycle order the backend pipeline counts use, so the strip here and
-// the one on the "All Files" view never disagree about what order stages come in.
-const STAGE_ORDER = ['UPLOADED', 'DISPATCHED', 'RECEIVED', 'SENT_TO_DATA_ENTRY', 'SENT_TO_EXTERNAL_OCR', 'EXCEL_GENERATED', 'PROCESSED', 'COMPLETED'];
+// One source for every document word on these screens — see documents/vocabulary.ts.
+import {
+  DOCUMENT_STAGE_ORDER as STAGE_ORDER, stageWords,
+  DOCUMENT_TYPE, DOCUMENT_TYPE_ORDER as TYPE_ORDER, UPLOADABLE_TYPES, documentTypeLabel,
+} from './vocabulary';
 
 const fmtDate = (d?: string | null) => (d ? new Date(d).toLocaleDateString() : null);
 const fmtDateTime = (d?: string | null) => (d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : null);
@@ -112,7 +87,7 @@ export const BranchDocumentPanel: React.FC<{
         {STAGE_ORDER.map((stage) => {
           const count = pipeline.find((p) => p.stage === stage)?.count ?? 0;
           if (count === 0) return null;
-          const meta = STAGE_META[stage];
+          const meta = stageWords(stage)!;
           return (
             <StageChip key={stage} active={stageFilter === stage} onClick={() => onStageChange(stageFilter === stage ? 'ALL' : stage)} label={meta.label} count={count} color={meta.color} bg={meta.bg} />
           );
@@ -198,11 +173,12 @@ export const BranchDocumentPanel: React.FC<{
                 <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
                   {TYPE_ORDER.map((t) => {
                     const docs = b.documentsByType[t];
-                    const meta = TYPE_META[t];
+                    const meta = DOCUMENT_TYPE[t];
+                    const typeName = documentTypeLabel(t);
                     if (!docs?.length) {
                       if (!UPLOADABLE_TYPES.has(t)) {
                         return (
-                          <span key={t} title={`${meta.label}: not applicable yet`} style={{
+                          <span key={t} title={`${typeName}: not applicable yet`} style={{
                             fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: 'var(--radius-sm)',
                             background: 'transparent', border: '1px dashed var(--border-color)', color: 'var(--text-muted)',
                           }}>{meta.short}</span>
@@ -213,16 +189,16 @@ export const BranchDocumentPanel: React.FC<{
                         <UploadChip
                           key={t}
                           label={meta.short}
-                          title={`Upload ${meta.label}`}
+                          title={`Upload ${typeName}`}
                           busy={acting.has(uploadKey)}
                           onFile={(file) => withActing(uploadKey, () => onUpload(b.projectBranchId, t, file))}
                         />
                       );
                     }
                     const latest = docs[0];
-                    const stage = STAGE_META[latest.status] ?? { label: latest.status, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
+                    const stage = stageWords(latest.status) ?? { label: latest.status, meaning: '', color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
                     return (
-                      <span key={t} title={`${meta.label}: ${stage.label}${docs.length > 1 ? ` (${docs.length} files)` : ''}`} style={{
+                      <span key={t} title={`${typeName}: ${stage.label}${docs.length > 1 ? ` (${docs.length} files)` : ''}`} style={{
                         fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '2px 7px', borderRadius: 'var(--radius-sm)',
                         background: stage.bg, color: stage.color,
                       }}>{meta.short}{docs.length > 1 ? ` ×${docs.length}` : ''}</span>
@@ -236,10 +212,10 @@ export const BranchDocumentPanel: React.FC<{
                   {TYPE_ORDER.filter((t) => b.documentsByType[t]?.length).map((t) => (
                     <div key={t}>
                       <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: 5 }}>
-                        {TYPE_META[t].label}
+                        {documentTypeLabel(t)}
                       </div>
                       {b.documentsByType[t].map((d) => {
-                        const stage = STAGE_META[d.status] ?? { label: d.status, color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
+                        const stage = stageWords(d.status) ?? { label: d.status, meaning: '', color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
                         const isReturn = d.type === 'AUDITED_RETURN_PDF';
                         const canMarkReceived = isReturn && d.status === 'UPLOADED';
                         const canSendToOcr = isReturn && (d.status === 'RECEIVED' || d.status === 'SENT_TO_DATA_ENTRY');

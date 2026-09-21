@@ -18,6 +18,7 @@ import {
 } from './useAssignmentQueue';
 import { readAttendance, attendanceSummary } from './attendance';
 import type { Assignment } from './types';
+import { businessTodayDateKey } from '@fapoms/shared';
 
 export interface AssignmentTableProps {
   assignments: Assignment[];
@@ -62,7 +63,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
   onQuickAction,
   isAttentionView,
   openIssueAssignmentIds = new Set<string>(),
-  todayStr = new Date().toISOString().split('T')[0],
+  todayStr = businessTodayDateKey(),
   isError,
   error,
   onResetFilters,

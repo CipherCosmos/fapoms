@@ -5,6 +5,7 @@ import { NotificationChannel, NotificationStatus } from '@fapoms/shared';
 import { NotificationSweeper } from './notification.sweeper';
 import { NotificationEntity } from './notification.entity';
 import { NOTIFICATION_QUEUE } from './notification.constants';
+import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
 /**
  * The sweeper — the thing that notices when the queue never heard about a notification.
@@ -210,7 +211,48 @@ describe('NotificationSweeper', () => {
     });
   });
 
+  /**
+   * Failed-job retention on both re-queues.
+   *
+   * The sweeper re-queues exactly the notifications most likely to be failing (they were stranded
+   * once already), and its `deliver` / `deliver-email` jobs carried no `removeOnFail` — so each one
+   * that exhausted its five attempts stayed in Redis forever, one more per sweep. The original
+   * enqueue in NotificationDispatchService already bounds this with FAILED_JOB_RETENTION; a rescued
+   * notification must not be the one that leaks. (`removeOnFail.spec.ts` only refuses a literal
+   * `false`; an option that is simply absent slips past it, which is how these two did.)
+   */
+  describe('failed-job retention on re-queued jobs', () => {
+    it('bounds failed deliver jobs with the shared retention, not Bull’s keep-forever default', async () => {
+      found = [row({ id: 'n-1' })];
+
+      await sweeper.requeueStranded();
+
+      expect(queueAdd).toHaveBeenCalledWith(
+        'deliver',
+        { notificationId: 'n-1' },
+        expect.objectContaining({ removeOnFail: FAILED_JOB_RETENTION }),
+      );
+    });
+
+    it('bounds failed deliver-email jobs the same way', async () => {
+      found = [row({ id: 'n-e1', status: NotificationStatus.DELIVERED, emailStatus: NotificationStatus.PENDING })];
+
+      await sweeper.requeueStrandedMessages('EMAIL');
+
+      expect(queueAdd).toHaveBeenCalledWith(
+        'deliver-email',
+        { notificationId: 'n-e1' },
+        expect.objectContaining({ removeOnFail: FAILED_JOB_RETENTION }),
+      );
+    });
+  });
+
   describe('requeueStrandedEmails — the email leg', () => {
+    it('re-queues only emails not yet handed to the mail queue — PENDING, never SENT', async () => {
+      await sweeper.requeueStrandedMessages('EMAIL');
+      expect(find.mock.calls[0][0].where.emailStatus).toBe(NotificationStatus.PENDING);
+    });
+
     /**
      * The two sweeps are not duplicates and merging them would silently drop the email leg. An
      * IN_APP+EMAIL row is born with row-status DELIVERED because the bell already has it, so the
@@ -220,7 +262,7 @@ describe('NotificationSweeper', () => {
     it('selects on emailStatus, which is the only column that knows an email is still owed', async () => {
       found = [row({ id: 'n-e1', status: NotificationStatus.DELIVERED, emailStatus: NotificationStatus.PENDING })];
 
-      const count = await sweeper.requeueStrandedEmails();
+      const count = await sweeper.requeueStrandedMessages('EMAIL');
 
       expect(find.mock.calls[0][0].where.emailStatus).toBe(NotificationStatus.PENDING);
       expect(find.mock.calls[0][0].where.status).toBeUndefined();
@@ -231,7 +273,7 @@ describe('NotificationSweeper', () => {
     it('does not apply the push leg’s channel rule — an email row has no PUSH channel by definition', async () => {
       found = [row({ id: 'n-e1', channels: [NotificationChannel.EMAIL] })];
 
-      const count = await sweeper.requeueStrandedEmails();
+      const count = await sweeper.requeueStrandedMessages('EMAIL');
 
       // If this ever starts settling rows to DELIVERED the way the push leg does, every stranded
       // email on the deployment is marked delivered without being sent.
@@ -243,7 +285,52 @@ describe('NotificationSweeper', () => {
       found = [row({ id: 'n-e1' }), row({ id: 'n-e2' })];
       queueAdd.mockRejectedValue(new Error('ECONNREFUSED'));
 
-      expect(await sweeper.requeueStrandedEmails()).toBe(0);
+      expect(await sweeper.requeueStrandedMessages('EMAIL')).toBe(0);
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The text leg of the same guarantee, through the same parameterised method. A text whose enqueue
+   * missed Redis is otherwise PENDING for ever — and, exactly as for email, an IN_APP+SMS row is born
+   * DELIVERED, so only `sms_status` knows a text is still owed.
+   */
+  describe('requeueStrandedMessages — the text leg', () => {
+    it('selects on smsStatus alone and re-queues deliver-sms on the same retry and retention terms', async () => {
+      found = [row({ id: 'n-s1', status: NotificationStatus.DELIVERED, emailStatus: null, smsStatus: NotificationStatus.PENDING })];
+
+      const count = await sweeper.requeueStrandedMessages('SMS');
+
+      const { where } = find.mock.calls[0][0];
+      expect(where.smsStatus).toBe(NotificationStatus.PENDING);
+      // Not the email column, not the push column: a stranded email must not be re-queued as a text.
+      expect(where.emailStatus).toBeUndefined();
+      expect(where.status).toBeUndefined();
+      expect(count).toBe(1);
+      expect(queueAdd).toHaveBeenCalledWith(
+        'deliver-sms',
+        { notificationId: 'n-s1' },
+        { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true, removeOnFail: FAILED_JOB_RETENTION },
+      );
+    });
+
+    it('never re-queues a text as an email, nor an email as a text', async () => {
+      found = [row({ id: 'n-e1' })];
+      await sweeper.requeueStrandedMessages('EMAIL');
+      found = [row({ id: 'n-s1' })];
+      await sweeper.requeueStrandedMessages('SMS');
+
+      expect(queued).toEqual([
+        { name: 'deliver-email', data: { notificationId: 'n-e1' } },
+        { name: 'deliver-sms', data: { notificationId: 'n-s1' } },
+      ]);
+    });
+
+    it('stops at the first failure, for the same reason the other legs do', async () => {
+      found = [row({ id: 'n-s1' }), row({ id: 'n-s2' })];
+      queueAdd.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      expect(await sweeper.requeueStrandedMessages('SMS')).toBe(0);
       expect(queueAdd).toHaveBeenCalledTimes(1);
     });
   });
@@ -254,6 +341,10 @@ describe('NotificationSweeper', () => {
      * call so that two jobs cannot send the same message. A process killed mid-call leaves it
      * there, and SENT reads as success on every screen. Without this, a notification nobody ever
      * received is indistinguishable from one that arrived.
+     *
+     * For the email leg, SENT means "with the mail queue", and the mail queue's own sweep settles
+     * everything it holds and writes the outcome back. What is left for this rescue is only the
+     * email that never reached the queue: claimed, and then the process died before the hand-off.
      */
     it('marks a push send abandoned after an hour, with a reason a human can read', async () => {
       affectedQueue = [3, 0];
@@ -284,14 +375,32 @@ describe('NotificationSweeper', () => {
 
       expect(count).toBe(2);
       const email = builderCalls[1];
-      expect(email.where.map((w: any) => w.clause)).toEqual([
+      expect(email.where.map((w: any) => w.clause).slice(0, 2)).toEqual([
         'email_status = :sent',
         'emailed_at < :cutoff',
       ]);
       expect(email.set.emailStatus).toBe(NotificationStatus.FAILED);
+      expect(email.set.emailFailureReason).toMatch(/email never reached the message queue/);
       // The push leg's `status` must not be touched here: an email that never sent says nothing
       // about whether the push did.
       expect(email.set.status).toBeUndefined();
+    });
+
+    /**
+     * The one thing that stops this rescue from lying. An email the mail queue holds may be waiting
+     * out a retry for hours, or already sent and about to be written back; failing it here would
+     * record a delivered email as failed. Only a notification with no email row at all is this
+     * sweep's to settle.
+     */
+    it('leaves alone every email the mail queue has a row for — that queue settles those', async () => {
+      affectedQueue = [0, 0];
+
+      await sweeper.failAbandonedSends();
+
+      const email = builderCalls[1];
+      const guard = email.where[2];
+      expect(guard.clause).toMatch(/^NOT EXISTS \(SELECT 1 FROM outbound_messages o WHERE o\.channel = :channel AND o\.entity_type = :entityType AND o\.entity_id = "notifications"\."id"::text\)$/);
+      expect(guard.params).toEqual({ channel: 'EMAIL', entityType: 'NOTIFICATION' });
     });
 
     it('uses an hour’s cutoff — far longer than any provider round trip', async () => {
@@ -305,10 +414,35 @@ describe('NotificationSweeper', () => {
       expect(cutoff.getTime()).toBeLessThanOrEqual(Date.now() - 60 * 60_000 + 50);
     });
 
-    it('reports the two legs added together, so one sweep gives one number', async () => {
-      affectedQueue = [4, 5];
+    /**
+     * The text leg's rescue: claimed SENT, then the process died before `SmsService.queue` wrote
+     * its row. It keys off `texted_at` for the reason email keys off `emailed_at`, and its guard
+     * looks only for a message row of ITS channel — an email row for the same notification says
+     * nothing about whether the text reached the queue.
+     */
+    it('rescues a text that never reached the message queue, on the SMS columns only', async () => {
+      affectedQueue = [0, 0, 2];
 
-      expect(await sweeper.failAbandonedSends()).toBe(9);
+      const count = await sweeper.failAbandonedSends();
+
+      expect(count).toBe(2);
+      const sms = builderCalls[2];
+      expect(sms.where.map((w: any) => w.clause).slice(0, 2)).toEqual([
+        'sms_status = :sent',
+        'texted_at < :cutoff',
+      ]);
+      expect(sms.where[2].clause).toMatch(/FROM outbound_messages o WHERE o\.channel = :channel AND/);
+      expect(sms.where[2].params).toEqual({ channel: 'SMS', entityType: 'NOTIFICATION' });
+      expect(sms.set).toEqual({
+        smsStatus: NotificationStatus.FAILED,
+        smsFailureReason: expect.stringMatching(/text never reached the message queue/),
+      });
+    });
+
+    it('reports every leg added together, so one sweep gives one number', async () => {
+      affectedQueue = [4, 5, 6];
+
+      expect(await sweeper.failAbandonedSends()).toBe(15);
     });
 
     it('survives a driver that reports no affected count', async () => {

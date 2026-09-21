@@ -32,9 +32,12 @@ import { progressReporter } from '../../infrastructure/queue/queued-job';
  * queue protects the API" from a slogan into a guarantee: however many plans are requested, at
  * most one is scoring branches at any moment, and the rest wait in Redis where waiting is free.
  *
- * Three named handlers at concurrency 1 means up to three heavy jobs in parallel, one of each
- * kind. That is deliberate: a long day-plan run should not block a coverage plan an operator is
- * waiting on, and three is a bound that stays comfortably inside the pool.
+ * Three named handlers at concurrency 1 means up to three heavy jobs in parallel. Not "one of each
+ * kind", as this used to say: Bull's loops belong to the queue and each takes the next job of ANY
+ * name, so three coverage plans can hold all three at once. Three is still a bound that stays
+ * comfortably inside the pool, and these jobs only read, so sharing loops costs latency, not
+ * correctness. Planning WRITES are on their own queue with one loop for exactly that reason — see
+ * `planning-write-jobs.contract.ts`.
  */
 const ONE_AT_A_TIME = 1;
 

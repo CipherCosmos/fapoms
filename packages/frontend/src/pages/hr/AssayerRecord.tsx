@@ -6,8 +6,10 @@ import {
 } from 'lucide-react';
 import {
   nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel,
-  employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason,
+  employmentTypeLabel,
   ASSAYER_RECORD_FIELDS, isValidIfsc, IDENTITY_GATE_DOCUMENTS, payoutBlockingGaps,
+  businessDateKey,
+  assayerEngagementLabel, assayerUnavailableLabel,
 } from '@fapoms/shared';
 import { useSearchParams } from 'react-router-dom';
 
@@ -63,14 +65,6 @@ import { DeleteAssayerModal } from './record/DeleteAssayerModal';
 import { IdCardDialog } from './record/AppraiserIdCard';
 import { identityFormatHint, normaliseIdentityOnBlur } from '../../config/identity-fields';
 
-const ENGAGEMENT_LABELS: Record<string, string> = {
-  [AssayerEngagementType.REGULAR]: 'Regular',
-  [AssayerEngagementType.LOCAL]: 'Local',
-  [AssayerEngagementType.BACK_UP]: 'Back-up',
-  [AssayerEngagementType.AGENCY_AUDIT]: 'Agency audits',
-  [AssayerEngagementType.MYSTERY_AUDIT]: 'Mystery audits',
-};
-
 const SIGN_IN_CLOSED_REASON: Partial<Record<AssayerLifecycleStatus, string>> = {
   [AssayerLifecycleStatus.INVITED]: 'They have only been invited — they cannot sign in until they accept.',
   [AssayerLifecycleStatus.ON_LEAVE]: 'They are marked on leave.',
@@ -79,15 +73,6 @@ const SIGN_IN_CLOSED_REASON: Partial<Record<AssayerLifecycleStatus, string>> = {
   [AssayerLifecycleStatus.RESIGNED]: 'They have resigned — they have left, and sign-in is closed on their record.',
   [AssayerLifecycleStatus.TERMINATED]: 'Their engagement was terminated — they have left, and sign-in is closed on their record.',
   [AssayerLifecycleStatus.ARCHIVED]: 'Their record has been archived.',
-};
-
-const UNAVAILABLE_LABELS: Record<string, string> = {
-  [AssayerUnavailableReason.REJECTED_BY_US]: 'Rejected by us',
-  [AssayerUnavailableReason.NOT_INTERESTED]: 'Not interested',
-  [AssayerUnavailableReason.DECEASED]: 'Deceased',
-  [AssayerUnavailableReason.MOVED_ABROAD]: 'Moved abroad',
-  [AssayerUnavailableReason.NO_WORK_IN_AREA]: 'No work in area',
-  [AssayerUnavailableReason.MOVED_TO_COMPANY]: 'Moved to company',
 };
 
 export const STAGE_CONSEQUENCE: Record<string, string> = {
@@ -478,7 +463,7 @@ export const AssayerRecord: React.FC<{
       let val = (rec as any)[key];
       if (key === 'workingHoursStart') { f[key] = String((rec as any).workingHours?.start ?? ''); continue; }
       if (key === 'workingHoursEnd') { f[key] = String((rec as any).workingHours?.end ?? ''); continue; }
-      if (key === 'dateOfBirth' || key === 'joiningDate') val = val ? new Date(val).toISOString().split('T')[0] : '';
+      if (key === 'dateOfBirth' || key === 'joiningDate') val = val ? businessDateKey(val as string) : '';
       else val = val !== null && val !== undefined ? String(val) : '';
       f[key] = val;
     }
@@ -1331,8 +1316,8 @@ export const AssayerRecord: React.FC<{
                       ['Joined', fmtDate(a.joiningDate), 'joiningDate'],
                       ...(a.exitDate ? ([['Left', fmtDate(a.exitDate)]] as [string, any][]) : []),
                       ['Experience', `${a.experienceYears ?? 0} years`, 'experienceYears'],
-                      ['Engaged as', a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null, 'engagementType'],
-                      ['Availability', a.unavailableReason ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason) : 'Available for work', 'unavailableReason'],
+                      ['Engaged as', a.engagementType ? assayerEngagementLabel(a.engagementType) : null, 'engagementType'],
+                      ['Availability', a.unavailableReason ? assayerUnavailableLabel(a.unavailableReason) : 'Available for work', 'unavailableReason'],
                       ['Reporting manager', managerDisplay, 'managerId'],
                       ['HR owner', a.hrOwnerName, 'hrOwnerName'],
                       ['Performance rating',

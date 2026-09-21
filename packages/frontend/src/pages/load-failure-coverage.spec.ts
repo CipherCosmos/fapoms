@@ -53,7 +53,15 @@ const REPAIRED: Array<[path: string, whatItUsedToSay: string, ownMarker?: string
   ['pages/billing/InvoiceDetailDrawer.tsx', 'a drawer titled "Loading…" that never resolved'],
   ['pages/billing/AssignmentMoneyCard.tsx', '"Loading…", forever, on one assignment\'s money'],
   ['pages/billing/AssayerStatementPage.tsx', 'the raw text of the throw, in red'],
-  ['pages/billing/OverviewTab.tsx', 'full chrome and no figures'],
+  /*
+   * Was `pages/billing/OverviewTab.tsx`, which did two jobs at once — tell a clerk what to do,
+   * and show a manager where the book is — and was split into the To-do queue and the read-only
+   * position beneath it. `TodoTab.tsx` is the half that fetches, so it is the half that has to
+   * know how a refused load differs from an empty one: five counts drive its queue, and a
+   * refusal drawn as zero would read as "nothing is waiting on you". `MoneyPosition.tsx` is
+   * handed its data and queries nothing, so there is no failure for it to consult.
+   */
+  ['pages/billing/TodoTab.tsx', 'full chrome and no figures'],
   ['pages/hr/HrPayPage.tsx', 'four tiles counting a roster that never loaded'],
   ['pages/ExpenseReview.tsx', '"No expense claims are awaiting review."'],
   ['pages/Billing.tsx', '"Could not count." beside a button reading "Nothing to book"'],

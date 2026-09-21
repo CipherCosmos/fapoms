@@ -183,8 +183,53 @@ describe('queued-job', () => {
 
     it('terminates the polling loop on a stuck job rather than reporting it as running', async () => {
       // Bull reports `stuck` for a job whose worker died holding the lock. It will never finish,
-      // so anything but a terminal state leaves the client polling forever.
+      // so anything but a terminal state leaves the client polling forever. Asked twice — see
+      // the transient below — and stuck both times is the real thing.
       const status = await describeJob(jobStub({ getState: jest.fn().mockResolvedValue('stuck') }));
+
+      expect(status.state).toBe('failed');
+      expect(status.error).toMatch(/no longer tracking this job/i);
+    });
+
+    /**
+     * The defect this pair pins down, found by the money-workflow probe and then reproduced
+     * directly: 2 of 12 billing runs against a local stack reported `stuck` on one poll and
+     * `done` on the next, 25ms later. `stuck` is mapped to `failed`, which is terminal for a
+     * polling client, so roughly one press in six of Approve or Pay told the operator their
+     * money action had failed when it had just succeeded — and told them to run it again.
+     *
+     * `getState()` is six sequential Redis reads and a job crossing from `waiting` to `active`
+     * matches none of them. A dead job stays stuck; a moving one does not.
+     */
+    it('does not declare a job dead on a single stuck read — it asks again', async () => {
+      // The job really had finished; the first read merely caught it mid-move between two of
+      // Bull's lists and matched none of the six.
+      const fresh = jobStub({
+        getState: jest.fn().mockResolvedValue('completed'),
+        finishedOn: 1_700_000_100_000,
+        returnvalue: { done: ['p-1'] },
+      });
+      const job = jobStub({
+        getState: jest.fn().mockResolvedValue('stuck'),
+        queue: { getJob: jest.fn().mockResolvedValue(fresh) },
+      });
+
+      const status = await describeJob(job);
+
+      expect(status.state).toBe('done');
+      expect(status.error).toBeUndefined();
+      // Re-FETCHED, not merely re-read: `returnvalue` is a snapshot from load time, so a job
+      // that finished in between would otherwise come back done with nothing in it.
+      expect(status.result).toEqual({ done: ['p-1'] });
+    });
+
+    it('falls back to what it already holds when the job has vanished by the second look', async () => {
+      const job = jobStub({
+        getState: jest.fn().mockResolvedValue('stuck'),
+        queue: { getJob: jest.fn().mockResolvedValue(null) },
+      });
+
+      const status = await describeJob(job);
 
       expect(status.state).toBe('failed');
       expect(status.error).toMatch(/no longer tracking this job/i);

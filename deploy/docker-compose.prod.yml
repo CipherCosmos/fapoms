@@ -237,6 +237,36 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Road router. ONE of these serves the whole application: the backend prices travel from it,
+  # and the planning map draws its road lines from it through POST /geo/route rather than
+  # calling a public router from the browser (which was a second implementation, uncached, and
+  # sent assayer home coordinates off-shore).
+  #
+  # Behind a PROFILE, deliberately. This file is also what the homeserver and the AWS box
+  # deploy, and the graph below is a ~10 GB artefact prepared once by osrm-extract/partition/
+  # customize — a deployment without it must not get a crash-looping container. Start it with
+  # `--profile routing`; `deploy/aws/docker-compose.aws-full.yml` declares its own `osrm` for
+  # the AWS box and overrides this one where both are layered.
+  #
+  # Prepare the graph the way deploy/aws/bootstrap.sh does (download the Geofabrik India
+  # extract, then osrm-extract -p /opt/car.lua, osrm-partition, osrm-customize) into
+  # ${OSM_DATA_DIR}/osrm, then point OSRM_URL at http://osrm:5000.
+  osrm:
+    profiles: ["routing"]
+    image: docker.io/osrm/osrm-backend:latest
+    restart: unless-stopped
+    # Which prepared graph to serve. A regional extract is a legitimate choice: a full-India
+    # osrm-extract peaks around 16 GB, while western-zone peaks at 2.3 GB and covers the
+    # branches this deployment actually audits. Anything outside the graph answers as a
+    # labelled ESTIMATE rather than a wrong road figure.
+    command: osrm-routed --algorithm mld --max-table-size 8000 /data/${OSRM_GRAPH:-india-latest}.osrm
+    volumes:
+      - ${OSM_DATA_DIR:-/opt/fapoms-osm}/osrm:/data
+    mem_limit: ${OSRM_MEM_LIMIT:-4g}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # HTTP replica. Runs no Bull processors (PROCESS_ROLE=api pauses them locally at boot, in
   # main.ts) so a request handler never contends with a job for the pool below. Split from
   # backend-worker on 2026-09-03 so the two roles scale, and get sized, independently — see
@@ -374,9 +404,9 @@ services:
       MINIO_ROOT_PASSWORD: ""
       # Postgres default max_connections is 100. Reserved ~10 for psql/migrations/superuser,
       # leaving 90 to split between this replica and backend-worker below: 20 here (HTTP
-      # concurrency; unchanged from the pre-split default) + 40 on the worker (comfortably above
-      # its 33 declared job slots, see worker-concurrency.ts) = 60, well under the 90 budget with
-      # room for a second replica of either role later.
+      # concurrency; unchanged from the pre-split default) + 50 on the worker (above its 43
+      # declared job slots, see worker-concurrency.ts) = 70, under the 90 budget with room for a
+      # small second replica of either role later.
       DB_POOL_MAX: ${BACKEND_API_DB_POOL_MAX:-20}
       # Cap the V8 heap below the container limit so Node degrades (GC pressure, then a clean
       # heap-out-of-memory exit that restart policy recovers) instead of being SIGKILLed by
@@ -456,10 +486,11 @@ services:
       DB_USERNAME: ${FAPOMS_RUNTIME_USER:-fapoms_runtime}
       DB_PASSWORD: ${FAPOMS_RUNTIME_PASSWORD}
       DB_MIGRATIONS_RUN: "false"
-      # See the arithmetic on `backend` above: 40 here is sized above the 33 slots
-      # WORKER_CONCURRENCY currently declares (worker-concurrency.ts), not against this
-      # container's own headroom, because that table is the source of truth for demand.
-      DB_POOL_MAX: ${BACKEND_WORKER_DB_POOL_MAX:-40}
+      # See the arithmetic on `backend` above: 50 here is sized above the 43 slots
+      # WORKER_CONCURRENCY declares (worker-concurrency.ts) since the email outbox and the roster
+      # bulk jobs joined on 2026-09-17 — not against this container's own headroom, because that
+      # table is the source of truth for demand. It was 40, which the boot check flagged.
+      DB_POOL_MAX: ${BACKEND_WORKER_DB_POOL_MAX:-50}
       NODE_OPTIONS: ${BACKEND_WORKER_NODE_OPTIONS:---max-old-space-size=1024}
     volumes:
       - backupsdata:/app/backups

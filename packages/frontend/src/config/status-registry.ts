@@ -19,6 +19,16 @@ import {
   UserStatus,
   ApplicationStatus,
   InterviewOutcome,
+  assayerLifecycleLabel,
+  branchStatusLabel,
+  projectStatusLabel,
+  assignmentStatusLabel,
+  billingStateLabel,
+  invoiceStatusLabel,
+  payableStatusLabel,
+  validationStatusLabel,
+  scheduleStatusLabel,
+  userStatusLabel,
 } from '@fapoms/shared';
 
 /**
@@ -71,7 +81,22 @@ export type StatusIconKey =
   | 'file-edit';
 
 export interface StatusDescriptor {
-  label: string;
+  /**
+   * OPTIONAL, and for most domains it must be absent.
+   *
+   * The words belong to `@fapoms/shared`'s label functions, which the phone and every other
+   * screen already read. This file used to carry its own copy, and the two shipped **27
+   * different spellings of the same status** — `PAYABLE APPROVED` read "Approved" on one screen
+   * and "Approved (Frozen)" on another, `BRANCH CANDIDATE_SEARCH` was "Finding Assayer" here and
+   * "Seeking Assayer" there, `ASSIGNMENT REJECTED` was "Rejected" and "Declined". A user cannot
+   * learn a product whose words change between two views of one row.
+   *
+   * So `getStatusDescriptor` takes the word from shared for every domain in `SHARED_LABEL`, and
+   * this field is only for the few domains shared does not name (UI-only groupings such as the
+   * attention buckets). `status-registry-one-vocabulary.spec.ts` fails the build if a literal
+   * reappears for a shared domain.
+   */
+  label?: string;
   semantic: SemanticCategory;
   icon?: StatusIconKey;
   description?: string;
@@ -112,67 +137,56 @@ export type StatusDomain =
 // ── 1. Assayer Lifecycle Statuses (11 Canonical States) ──────────────────────
 export const ASSAYER_LIFECYCLE_STATUS_MAP: Record<AssayerLifecycleStatus, StatusDescriptor> = {
   [AssayerLifecycleStatus.ACTIVE]: {
-    label: 'Active',
     semantic: 'positive',
     icon: 'check-circle',
     description: 'Fully onboarded, verified, and active for dispatch',
   },
   [AssayerLifecycleStatus.INVITED]: {
-    label: 'Invited',
     semantic: 'info',
     icon: 'mail',
     description: 'Invitation issued; awaiting onboarding registration',
   },
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: {
-    label: 'Document Check',
     semantic: 'info',
     icon: 'file-check',
     description: 'Identity & qualifications submitted; awaiting document review',
   },
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: {
-    label: 'Background Check',
     semantic: 'info',
     icon: 'shield-check',
     description: 'Undergoing third-party background screening',
   },
   [AssayerLifecycleStatus.TRAINING]: {
-    label: 'In Training',
     semantic: 'warning',
     icon: 'book-open',
     description: 'Completing required orientation and audit protocol training',
   },
   [AssayerLifecycleStatus.ON_LEAVE]: {
-    label: 'On Leave',
     semantic: 'warning',
     icon: 'calendar-off',
     description: 'Temporarily unavailable due to approved leave',
   },
   [AssayerLifecycleStatus.INACTIVE]: {
-    label: 'Inactive',
     semantic: 'neutral',
     icon: 'pause-circle',
     description: 'Temporarily deactivated or paused by operations',
   },
   [AssayerLifecycleStatus.SUSPENDED]: {
-    label: 'Suspended',
     semantic: 'danger',
     icon: 'shield-alert',
     description: 'Access suspended due to compliance, audit, or integrity issues',
   },
   [AssayerLifecycleStatus.RESIGNED]: {
-    label: 'Resigned',
     semantic: 'archived',
     icon: 'user-x',
     description: 'Voluntarily resigned and off-boarded',
   },
   [AssayerLifecycleStatus.TERMINATED]: {
-    label: 'Terminated',
     semantic: 'danger',
     icon: 'x-circle',
     description: 'Engagement formally terminated',
   },
   [AssayerLifecycleStatus.ARCHIVED]: {
-    label: 'Archived',
     semantic: 'archived',
     icon: 'archive',
     description: 'Record permanently closed and archived',
@@ -201,67 +215,54 @@ export const ASSAYER_OPERATIONAL_STATUS_MAP: Record<AssayerStatus, StatusDescrip
 // ── 3. Branch Lifecycle Statuses (13 Canonical States) ───────────────────────
 export const BRANCH_STATUS_MAP: Record<ProjectBranchStatus, StatusDescriptor> = {
   [ProjectBranchStatus.IMPORTED]: {
-    label: 'Imported',
     semantic: 'neutral',
     icon: 'inbox',
   },
   [ProjectBranchStatus.PLANNING]: {
-    label: 'Planning',
     semantic: 'neutral',
     icon: 'map',
   },
   [ProjectBranchStatus.CANDIDATE_SEARCH]: {
-    label: 'Seeking Assayer',
     semantic: 'pending',
     icon: 'users',
   },
   [ProjectBranchStatus.CONTACT_INITIATED]: {
-    label: 'Contacted',
     semantic: 'pending',
     icon: 'phone',
   },
   [ProjectBranchStatus.NEGOTIATION]: {
-    label: 'Contacted (Legacy)',
     semantic: 'pending',
     icon: 'phone',
   },
   [ProjectBranchStatus.ASSIGNMENT_CONFIRMED]: {
-    label: 'Confirmed',
     semantic: 'positive',
     icon: 'check-check',
   },
   [ProjectBranchStatus.SCHEDULED]: {
-    label: 'Scheduled',
     semantic: 'info',
     icon: 'calendar',
   },
   [ProjectBranchStatus.AUDIT_COMPLETED]: {
-    label: 'Audit Completed',
     semantic: 'positive',
     icon: 'file-text',
   },
   [ProjectBranchStatus.VALIDATION_COMPLETED]: {
-    label: 'Validation Done',
     semantic: 'positive',
     icon: 'check-circle',
   },
   [ProjectBranchStatus.CLOSED]: {
-    label: 'Closed',
     semantic: 'archived',
     icon: 'lock',
   },
   [ProjectBranchStatus.UNABLE_TO_COVER]: {
-    label: 'Unable to Cover',
     semantic: 'danger',
     icon: 'alert-circle',
   },
   [ProjectBranchStatus.ON_HOLD]: {
-    label: 'On Hold',
     semantic: 'warning',
     icon: 'pause-circle',
   },
   [ProjectBranchStatus.CANCELLED]: {
-    label: 'Cancelled',
     semantic: 'danger',
     icon: 'x-circle',
   },
@@ -270,47 +271,38 @@ export const BRANCH_STATUS_MAP: Record<ProjectBranchStatus, StatusDescriptor> = 
 // ── 4. Project Statuses (9 Canonical States) ─────────────────────────────────
 export const PROJECT_STATUS_MAP: Record<ProjectStatus, StatusDescriptor> = {
   [ProjectStatus.DRAFT]: {
-    label: 'Draft',
     semantic: 'neutral',
     icon: 'file-edit',
   },
   [ProjectStatus.PLANNING]: {
-    label: 'Planning',
     semantic: 'neutral',
     icon: 'map',
   },
   [ProjectStatus.SCHEDULING]: {
-    label: 'Scheduling',
     semantic: 'info',
     icon: 'calendar',
   },
   [ProjectStatus.EXECUTION]: {
-    label: 'In Execution',
     semantic: 'positive',
     icon: 'play-circle',
   },
   [ProjectStatus.VALIDATION]: {
-    label: 'Validation',
     semantic: 'info',
     icon: 'file-check',
   },
   [ProjectStatus.COMPLETED]: {
-    label: 'Completed',
     semantic: 'positive',
     icon: 'check-check',
   },
   [ProjectStatus.ARCHIVED]: {
-    label: 'Archived',
     semantic: 'archived',
     icon: 'archive',
   },
   [ProjectStatus.CANCELLED]: {
-    label: 'Cancelled',
     semantic: 'danger',
     icon: 'x-circle',
   },
   [ProjectStatus.ON_HOLD]: {
-    label: 'On Hold',
     semantic: 'warning',
     icon: 'pause-circle',
   },
@@ -319,37 +311,30 @@ export const PROJECT_STATUS_MAP: Record<ProjectStatus, StatusDescriptor> = {
 // ── 5. Assignment Execution Statuses (7 Canonical States) ───────────────────
 export const ASSIGNMENT_STATUS_MAP: Record<AssignmentStatus, StatusDescriptor> = {
   [AssignmentStatus.PENDING]: {
-    label: 'Pending Response',
     semantic: 'pending',
     icon: 'clock',
   },
   [AssignmentStatus.ACCEPTED]: {
-    label: 'Accepted',
     semantic: 'info',
     icon: 'check',
   },
   [AssignmentStatus.CHECKED_IN]: {
-    label: 'Checked In on Site',
     semantic: 'positive',
     icon: 'map-pin',
   },
   [AssignmentStatus.IN_PROGRESS]: {
-    label: 'In Progress',
     semantic: 'positive',
     icon: 'play-circle',
   },
   [AssignmentStatus.COMPLETED]: {
-    label: 'Completed',
     semantic: 'positive',
     icon: 'check-circle',
   },
   [AssignmentStatus.REJECTED]: {
-    label: 'Declined',
     semantic: 'danger',
     icon: 'x-circle',
   },
   [AssignmentStatus.CANCELLED]: {
-    label: 'Cancelled',
     semantic: 'danger',
     icon: 'ban',
   },
@@ -474,25 +459,21 @@ export const DOCUMENT_VERIFICATION_STATUS_MAP: Record<DocumentVerificationStatus
 // ── 9. Billing State (4 States) ─────────────────────────────────────────────
 export const BILLING_STATE_MAP: Record<BillingState, StatusDescriptor> = {
   [BillingState.UNBILLED]: {
-    label: 'Unbilled',
     semantic: 'neutral',
     icon: 'clock',
     description: 'Assignment completed; ready for client invoice generation',
   },
   [BillingState.INVOICED]: {
-    label: 'Invoiced',
     semantic: 'info',
     icon: 'file-text',
     description: 'Client invoice generated and dispatched',
   },
   [BillingState.PAID]: {
-    label: 'Paid',
     semantic: 'positive',
     icon: 'check-circle',
     description: 'Client payment fully received and reconciled',
   },
   [BillingState.CANCELLED]: {
-    label: 'Cancelled',
     semantic: 'danger',
     icon: 'x-circle',
     description: 'Billing line cancelled and excluded from client billing',
@@ -502,25 +483,21 @@ export const BILLING_STATE_MAP: Record<BillingState, StatusDescriptor> = {
 // ── 10. Invoice Status (4 States) ───────────────────────────────────────────
 export const INVOICE_STATUS_MAP: Record<InvoiceStatus, StatusDescriptor> = {
   [InvoiceStatus.DRAFT]: {
-    label: 'Draft',
     semantic: 'neutral',
     icon: 'file-edit',
     description: 'Invoice created; pending final ops review and issue',
   },
   [InvoiceStatus.ISSUED]: {
-    label: 'Issued (Sent)',
     semantic: 'info',
     icon: 'mail',
     description: 'Invoice dispatched to client bank; awaiting payment',
   },
   [InvoiceStatus.PAID]: {
-    label: 'Paid',
     semantic: 'positive',
     icon: 'check-circle',
     description: 'Invoice fully settled by client',
   },
   [InvoiceStatus.CANCELLED]: {
-    label: 'Cancelled',
     semantic: 'danger',
     icon: 'x-circle',
     description: 'Invoice voided or replaced',
@@ -530,25 +507,21 @@ export const INVOICE_STATUS_MAP: Record<InvoiceStatus, StatusDescriptor> = {
 // ── 11. Assayer Payable Status (4 States) ───────────────────────────────────
 export const ASSAYER_PAYABLE_STATUS_MAP: Record<AssayerPayableStatus, StatusDescriptor> = {
   [AssayerPayableStatus.PENDING]: {
-    label: 'Pending Approval',
     semantic: 'pending',
     icon: 'clock',
     description: 'Audit completed; payable pending operations/finance approval',
   },
   [AssayerPayableStatus.APPROVED]: {
-    label: 'Approved (Frozen)',
     semantic: 'info',
     icon: 'lock',
     description: 'Approved by finance; payment destination locked and frozen',
   },
   [AssayerPayableStatus.PAID]: {
-    label: 'Paid',
     semantic: 'positive',
     icon: 'check-circle',
     description: 'Payout transaction confirmed and settled',
   },
   [AssayerPayableStatus.VOIDED]: {
-    label: 'Voided',
     semantic: 'danger',
     icon: 'ban',
     description: 'Payable voided due to audit invalidation or error',
@@ -669,37 +642,30 @@ export const DOCUMENT_STATUS_MAP: Record<DocumentStatus, StatusDescriptor> = {
 // ── 15. Validation Status (7 States) ────────────────────────────────────────
 export const VALIDATION_STATUS_MAP: Record<ValidationStatus, StatusDescriptor> = {
   [ValidationStatus.PENDING]: {
-    label: 'Pending Validation',
     semantic: 'pending',
     icon: 'clock',
   },
   [ValidationStatus.ASSIGNED]: {
-    label: 'Assigned to Validator',
     semantic: 'info',
     icon: 'users',
   },
   [ValidationStatus.OCR_PROCESSING]: {
-    label: 'Processing OCR',
     semantic: 'pending',
     icon: 'clock',
   },
   [ValidationStatus.HUMAN_REVIEW]: {
-    label: 'Under Human Review',
     semantic: 'warning',
     icon: 'book-open',
   },
   [ValidationStatus.CORRECTION_REQUIRED]: {
-    label: 'Correction Required',
     semantic: 'danger',
     icon: 'alert-triangle',
   },
   [ValidationStatus.APPROVED]: {
-    label: 'Validation Approved',
     semantic: 'positive',
     icon: 'check-circle',
   },
   [ValidationStatus.SUBMITTED]: {
-    label: 'Submitted to Client',
     semantic: 'positive',
     icon: 'check-check',
   },
@@ -708,22 +674,18 @@ export const VALIDATION_STATUS_MAP: Record<ValidationStatus, StatusDescriptor> =
 // ── 16. Schedule Status (4 States) ──────────────────────────────────────────
 export const SCHEDULE_STATUS_MAP: Record<ScheduleStatus, StatusDescriptor> = {
   [ScheduleStatus.TENTATIVE]: {
-    label: 'Tentative',
     semantic: 'pending',
     icon: 'calendar',
   },
   [ScheduleStatus.CONFIRMED]: {
-    label: 'Confirmed',
     semantic: 'positive',
     icon: 'check-check',
   },
   [ScheduleStatus.RESCHEDULED]: {
-    label: 'Rescheduled',
     semantic: 'warning',
     icon: 'calendar-off',
   },
   [ScheduleStatus.COMPLETED]: {
-    label: 'Completed',
     semantic: 'positive',
     icon: 'check-circle',
   },
@@ -761,32 +723,26 @@ export const FEEDBACK_STATUS_MAP: Record<FeedbackStatus, StatusDescriptor> = {
 // ── 18. User Account Status (6 States) ──────────────────────────────────────
 export const USER_STATUS_MAP: Record<UserStatus, StatusDescriptor> = {
   [UserStatus.INVITED]: {
-    label: 'Invited',
     semantic: 'info',
     icon: 'mail',
   },
   [UserStatus.ACTIVE]: {
-    label: 'Active',
     semantic: 'positive',
     icon: 'check-circle',
   },
   [UserStatus.SUSPENDED]: {
-    label: 'Suspended',
     semantic: 'danger',
     icon: 'shield-alert',
   },
   [UserStatus.LOCKED]: {
-    label: 'Locked',
     semantic: 'danger',
     icon: 'lock',
   },
   [UserStatus.DISABLED]: {
-    label: 'Disabled',
     semantic: 'neutral',
     icon: 'ban',
   },
   [UserStatus.ARCHIVED]: {
-    label: 'Archived',
     semantic: 'archived',
     icon: 'archive',
   },
@@ -1015,6 +971,27 @@ export function createFallbackDescriptor(domain: string, rawStatus: unknown): St
 }
 
 // ── Unified Pure Registry Resolver ─────────────────────────────────────────
+/**
+ * Where each domain's WORDS come from. Icon and tone stay here; the wording does not.
+ *
+ * A domain listed here has exactly one spelling, shared with the mobile app and every screen
+ * that does not go through this registry. A domain absent from it is one `@fapoms/shared` does
+ * not name — the attention buckets and hiring groupings are UI-only — and those keep a literal
+ * label on the descriptor.
+ */
+const SHARED_LABEL: Partial<Record<StatusDomain, (s?: string | null) => string>> = {
+  assayerLifecycle: assayerLifecycleLabel,
+  branch: branchStatusLabel,
+  project: projectStatusLabel,
+  assignment: assignmentStatusLabel,
+  billingState: billingStateLabel,
+  invoice: invoiceStatusLabel,
+  assayerPayable: payableStatusLabel,
+  validation: validationStatusLabel,
+  schedule: scheduleStatusLabel,
+  user: userStatusLabel,
+};
+
 export function getStatusDescriptor(
   domain: StatusDomain,
   status: string | null | undefined
@@ -1108,8 +1085,12 @@ export function getStatusDescriptor(
   if (map[norm]) {
     const desc = map[norm];
     const tokens = getSemanticTokens(desc.semantic);
+    // The word is shared's wherever shared has one, so a badge here and a badge anywhere else
+    // for the same row can never read differently. See the note on `StatusDescriptor.label`.
+    const shared = SHARED_LABEL[domain];
     return {
       ...desc,
+      label: shared ? shared(norm) : desc.label,
       category: desc.semantic,
       ...tokens,
     };

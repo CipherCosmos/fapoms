@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { View, TextInput, TextStyle } from 'react-native';
+import { View } from 'react-native';
 import { parseRupeeInput, formatRupees } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { MobileApiService } from '../services/api.service';
-import { AppText, Button, ChipSelector, ModalSheet } from './ui/primitives';
+import { Button, ChipSelector, FieldLabel, Input, ModalSheet } from './ui/primitives';
 import { useT, type TranslationKey } from '../i18n';
 
 export type ExpenseCategory = 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER';
@@ -158,23 +158,10 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
     }
   };
 
-  const inputStyle: TextStyle = {
-    backgroundColor: t.colors.bg,
-    borderRadius: t.radius.md,
-    borderWidth: 1.5,
-    borderColor: t.colors.border,
-    paddingHorizontal: t.space.lg,
-    height: 50,
-    color: t.colors.text,
-    fontSize: 15,
-    fontWeight: '600',
-    paddingVertical: 0,
-  };
-
   return (
     <ModalSheet visible={visible} onClose={handleClose} title={tr('expense.title')} avoidKeyboard>
-      <View style={{ gap: t.space.xs }}>
-        <AppText variant="overline" tone="faint">{tr('expense.categoryLabel')}</AppText>
+      <View style={{ gap: t.space.sm }}>
+        <FieldLabel>{tr('expense.categoryLabel')}</FieldLabel>
         <ChipSelector
           options={(['TRAVEL_KM', 'TOLL', 'FOOD', 'OTHER'] as const).map((c) => ({ key: c, label: tr(CAT_LABEL_KEYS[c]) }))}
           value={cat}
@@ -182,46 +169,37 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
         />
       </View>
 
-      <View style={{ gap: t.space.xs, marginTop: t.space.lg }}>
-        <AppText variant="overline" tone="faint">{tr('expense.amountLabel')}</AppText>
-        <TextInput
-          style={inputStyle}
-          keyboardType="number-pad"
-          value={amt}
-          onChangeText={handleAmtChange}
-          placeholder={tr('expense.amountPlaceholder')}
-          placeholderTextColor={t.colors.textFaint}
-        />
-        {/*
-          Said before it is needed, and again when it is exceeded. A ceiling the assayer only
-          discovers by having a filled-in claim rejected is a ceiling they meet at the worst
-          possible moment.
-        */}
-        {overLimit ? (
-          <AppText variant="small" tone="danger">
-            {tr('expense.overLimit', { limit: formatRupees(Number(maxClaim)) })}
-          </AppText>
-        ) : maxClaim !== null ? (
-          <AppText variant="small" tone="faint">
-            {tr('expense.limitHint', { limit: formatRupees(Number(maxClaim)) })}
-          </AppText>
-        ) : null}
-      </View>
+      {/*
+        Said before it is needed, and again when it is exceeded. A ceiling the assayer only
+        discovers by having a filled-in claim rejected is a ceiling they meet at the worst
+        possible moment.
+      */}
+      <Input
+        label={tr('expense.amountLabel')}
+        keyboardType="number-pad"
+        value={amt}
+        onChangeText={handleAmtChange}
+        placeholder={tr('expense.amountPlaceholder')}
+        error={overLimit ? tr('expense.overLimit', { limit: formatRupees(Number(maxClaim)) }) : undefined}
+        hint={maxClaim !== null ? tr('expense.limitHint', { limit: formatRupees(Number(maxClaim)) }) : undefined}
+        style={{ marginTop: t.space.lg }}
+      />
 
-      <View style={{ gap: t.space.xs, marginTop: t.space.lg }}>
-        <AppText variant="overline" tone="faint">{tr('expense.descriptionLabel')}</AppText>
-        <TextInput
-          style={inputStyle}
-          value={desc}
-          onChangeText={handleDescChange}
-          placeholder={tr('expense.descriptionPlaceholder')}
-          placeholderTextColor={t.colors.textFaint}
-        />
-      </View>
+      <Input
+        label={tr('expense.descriptionLabel')}
+        value={desc}
+        onChangeText={handleDescChange}
+        placeholder={tr('expense.descriptionPlaceholder')}
+        style={{ marginTop: t.space.lg }}
+      />
 
       <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.lg }}>
-        <Button label={tr('expense.submit')} icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} style={{ flex: 1 }} />
-        <Button label={tr('common.cancel')} variant="neutral" onPress={handleClose} style={{ flex: 1 }} />
+        <View style={{ flex: 1 }}>
+          <Button label={tr('expense.submit')} icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} full />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Button label={tr('common.cancel')} variant="neutral" onPress={handleClose} full />
+        </View>
       </View>
     </ModalSheet>
   );

@@ -64,7 +64,7 @@ const AUTHORIZATION_CALLS = [
   // routes and found four more child tables keyed the same way. Same standing as the three
   // above them.
   'assertWorkforceAttributeInScope', 'assertScoreOverrideInScope', 'assertAssayerReferenceInScope',
-  'assertImportIssueInScope', 'assertImportIssuesInScope',
+  'assertImportIssueInScope', 'assertImportIssuesInScope', 'assertAssayersInScope',
   'assertOwnedAssayer', 'assertTenantOwns', 'assertAssayerInTenant', 'assertSelfOrPrivileged',
   'assertAssayerMayDownload', 'assertJobVisibleTo', 'assertClientAllowed',
   'assertSegregationOfDuties', 'assertAssayerAssignedToBranch',
@@ -156,6 +156,8 @@ const REVIEWED: Record<string, string> = {
     'unrestricted caller, or no reference named — the row is never resolved to an assayer',
   'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertImportIssueInScope':
     'unrestricted caller, or no issue named — the row is never resolved; an issue that names no assayer is separately let through by assertRegionAllowed, which is the rule listIssues already applies on the read side',
+  'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertAssayersInScope':
+    'The batch form of assertAssayerInScope: an empty selection or an unrestricted caller has nothing to check, the same shortcut and the same answer as the single-id guard.',
   'infrastructure/scope/region-guard.service.ts :: RegionGuardService.assertImportIssuesInScope':
     'unrestricted caller, or an empty id list — nothing is resolved and nothing is refused',
   'modules/assayer/assayer.service.ts :: AssayerService.assertAssayerInTenant':
@@ -203,8 +205,6 @@ const REVIEWED: Record<string, string> = {
     'the payable is already APPROVED, so there is nothing to approve; returns null, not the row',
   'modules/billing-engine/billing-engine.service.ts :: BillingEngineService.recordDisbursement':
     'a payment with this reference already exists on this payable — a replay of a disbursement that happened, creating no second one; the caller already reads payments through the payouts list',
-  'modules/billing-engine/billing-engine.controller.ts :: BillingEngineController.inviteAssayerInvoices':
-    'the bulk round, whose region narrowing is done by the service over assayers.region rather than per assayer here',
   'modules/scheduling/scheduling.controller.ts :: SchedulingController.getAssayerWorkload':
     'no assayer or no date was named — returns an empty result, naming nobody',
 };

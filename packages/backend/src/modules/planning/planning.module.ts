@@ -21,6 +21,9 @@ import { DayPlannerService } from './day-planner.service';
 import { PlanningJobsService } from './planning-jobs.service';
 import { PlanningJobsWorker } from './planning-jobs.worker';
 import { PLANNING_QUEUE } from './planning-jobs.contract';
+import { PlanningWriteJobsService } from './planning-write-jobs.service';
+import { PlanningWriteJobsWorker } from './planning-write-jobs.worker';
+import { PLANNING_WRITE_QUEUE, PLANNING_WRITE_QUEUE_SETTINGS } from './planning-write-jobs.contract';
 import { PlanningAntiCorruptionLayer } from './planning-acl.adapter';
 import { OperationsAntiCorruptionLayer } from './operations-acl.adapter';
 import { OperationsProjectMetricsAdapter } from './operations-project-metrics.adapter';
@@ -93,6 +96,12 @@ import { AssayerRemarksModule } from '../assayer-remarks/assayer-remarks.module'
      * every queue registered anywhere, so nothing outside this module needs to change.
      */
     BullModule.registerQueue({ name: PLANNING_QUEUE }),
+    /**
+     * Planning's WRITES — deploy a plan, generate a version, offer or mark a selection of branches —
+     * on a queue of their own, with one loop and no stalled re-run. See
+     * `planning-write-jobs.contract.ts` for why they cannot share the read queue's loops.
+     */
+    BullModule.registerQueue({ name: PLANNING_WRITE_QUEUE, settings: PLANNING_WRITE_QUEUE_SETTINGS }),
     TypeOrmModule.forFeature([
       BranchEntity,
       AssayerEntity,
@@ -130,6 +139,8 @@ import { AssayerRemarksModule } from '../assayer-remarks/assayer-remarks.module'
     DayPlannerService,
     PlanningJobsService,
     PlanningJobsWorker,
+    PlanningWriteJobsService,
+    PlanningWriteJobsWorker,
     ConstraintEvaluator,
     PlanningAntiCorruptionLayer,
     OperationsAntiCorruptionLayer,

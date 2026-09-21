@@ -65,6 +65,8 @@ export interface PreferenceRow {
   inApp: boolean;
   push: boolean;
   email: boolean;
+  /** Texts, for events an administrator has switched SMS on for. */
+  sms: boolean;
 }
 
 @Injectable()
@@ -384,7 +386,7 @@ export class NotificationService {
 
   /**
    * Every category's preference row for this recipient, filled in with the opt-out default
-   * (everything on, including email) wherever no row has been saved yet. The caller never has to
+   * (everything on, including email and SMS) wherever no row has been saved yet. The caller never has to
    * special-case "no preference set" — the list is always complete and always the right shape
    * for a settings screen to render directly.
    */
@@ -401,6 +403,7 @@ export class NotificationService {
         inApp: row?.inApp ?? true,
         push: row?.push ?? true,
         email: row?.email ?? true,
+        sms: row?.sms ?? true,
       };
     });
   }
@@ -409,7 +412,7 @@ export class NotificationService {
     recipientId: string,
     isAssayer: boolean,
     category: NotificationCategory,
-    updates: Partial<Pick<PreferenceRow, 'inApp' | 'push' | 'email'>>,
+    updates: Partial<Pick<PreferenceRow, 'inApp' | 'push' | 'email' | 'sms'>>,
   ): Promise<PreferenceRow> {
     const where = isAssayer ? { assayerId: recipientId, category } : { userId: recipientId, category };
     let row = await this.preferenceRepository.findOne({ where });
@@ -424,6 +427,7 @@ export class NotificationService {
         // Opted in, matching the other channels and what delivery actually does. A row created
         // because somebody touched a different switch must not arrive pre-muted.
         email: true,
+        sms: true,
         createdBy: recipientId,
       });
     }
@@ -431,9 +435,10 @@ export class NotificationService {
     if (updates.inApp !== undefined) row.inApp = updates.inApp;
     if (updates.push !== undefined) row.push = updates.push;
     if (updates.email !== undefined) row.email = updates.email;
+    if (updates.sms !== undefined) row.sms = updates.sms;
     row.updatedBy = recipientId;
 
     const saved = await this.preferenceRepository.save(row);
-    return { category: saved.category, inApp: saved.inApp, push: saved.push, email: saved.email };
+    return { category: saved.category, inApp: saved.inApp, push: saved.push, email: saved.email, sms: saved.sms };
   }
 }

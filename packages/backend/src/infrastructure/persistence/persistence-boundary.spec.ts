@@ -69,6 +69,12 @@ const IMPORTS_TYPEORM = [
   // there is no domain aggregate for it to sit behind, and routing an audit record through
   // another service is how such records end up incomplete.
   'modules/platform/rule-bypass/rule-bypass.service.ts',
+  // The durable half of the message queue (email and SMS). It owns exactly one table, `outbound_messages`, and no
+  // domain concept: its whole job is the row's lifecycle — a conditional QUEUED→SENDING UPDATE so a
+  // Bull retry racing the sweep cannot send twice, the erase-on-settle of an encrypted credential,
+  // and bounded sweeps by status and age. Those are statements about one table's rows that no
+  // aggregate owns, the same shape as the rule-bypass window above.
+  'modules/notifications/outbound-message.service.ts',
   // The assayer movement trail. It owns one append-only table of raw GPS fixes and nothing else:
   // the evidence a travel claim is checked against. It stays a persistence-owning service on
   // purpose — what the fixes *mean* is decided by the pure functions in travel-track.ts, so the

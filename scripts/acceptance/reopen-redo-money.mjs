@@ -76,12 +76,27 @@ const main = async () => {
   check('admin session alive', !!admin.token, 'token issued');
 
   const br = await freshBranch('Reopen Redo Invariant');
+  /**
+   * Payable-ready AND within the client's coverage band of the branch this fixture clones.
+   *
+   * `LIMIT 1` on its own picks whoever happens to be first, and on a seeded database that is an
+   * assayer filed under "Pune City" carrying Bangalore's coordinates — so every booking attempt
+   * came back "Out of range: 745.3km exceeds the client's 200km limit" and the probe reported
+   * "booked the work: FAIL" as though the money path were broken. The band below is a
+   * degree-space proxy for the client's own rule, which has BOTH ends: under 5km is refused as a
+   * conflict of interest, over 200km as out of range. See money-workflow.mjs, which hit this
+   * first.
+   */
   const assayer = await one(`
-    SELECT id, assayer_code FROM assayers
-     WHERE lifecycle_status = 'ACTIVE' AND is_active
-       AND bank_account_number IS NOT NULL AND ifsc_code IS NOT NULL AND pan_number IS NOT NULL
+    SELECT a.id, a.assayer_code FROM assayers a, branches b
+     WHERE b.name = 'Pune Main Branch'
+       AND a.lifecycle_status = 'ACTIVE' AND a.is_active
+       AND a.bank_account_number IS NOT NULL AND a.ifsc_code IS NOT NULL AND a.pan_number IS NOT NULL
+       AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL
+       AND (a.latitude - b.latitude) ^ 2 + (a.longitude - b.longitude) ^ 2 BETWEEN 0.08 ^ 2 AND 1.2 ^ 2
+     ORDER BY (a.latitude - b.latitude) ^ 2 + (a.longitude - b.longitude) ^ 2
      LIMIT 1`);
-  check('found a payable-ready ACTIVE assayer', !!assayer, assayer?.assayer_code);
+  check('found a payable-ready ACTIVE assayer inside the client\u2019s coverage band', !!assayer, assayer?.assayer_code);
   await req(`/assayers/${assayer.id}/empanelment/${br.clientId}`,
     { method: 'PUT', token: admin.token, body: { status: 'ACTIVE' } });
 
@@ -108,7 +123,8 @@ const main = async () => {
       break;
     }
   }
-  check('booked the work', !!created?.id, `tried ${tried.length} dates: ${tried.join(', ')}`);
+  check('booked the work', !!created?.id, `tried ${tried.length} dates: ${tried.join(', ')}`
+    + (created?.id ? '' : ' — no assayer in range, or the calendar refused every candidate'));
   if (!created?.id) { await done(); return; }
   const id = created.id;
   await req(`/assignments/${id}/accept`, { method: 'POST', token: admin.token, body: {} });

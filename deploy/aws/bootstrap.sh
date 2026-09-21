@@ -184,9 +184,36 @@ if [ "$MODE" = "full" ]; then
   mkdir -p "$OSM_DATA_DIR/osrm"; cd "$OSM_DATA_DIR/osrm"
   [ -f india-latest.osm.pbf ] || curl -fSL "$PBF_URL" -o india-latest.osm.pbf
   if [ ! -f india-latest.osrm.mldgr ]; then
+    # ── Refuse a build this box cannot finish, rather than be killed halfway ────────────────
+    # `osrm-extract` on india-latest.osm.pbf dies during "Generating edge-expanded graph
+    # representation" if it runs out of memory, and it dies the worst possible way: the kernel
+    # OOM-killer takes it with NO error line, so the log simply stops mid-phase and the next
+    # command runs against a half-written graph.
+    #
+    # Measured 2026-09-19, three runs on the same 1.6 GB extract: killed at 11.7 GiB, killed
+    # again at 17.6 GiB with other work on the box, and killed a THIRD time at 17.6 GiB with the
+    # VM entirely to itself. So 16 GB is NOT enough, whatever the resident figure looks like
+    # mid-run (it sat around 12-14 GiB and still died). t4g.2xlarge (32 GB) is the floor for a
+    # whole-India graph; t4g.large (8 GB) and t4g.xlarge (16 GB) cannot do it.
+    #
+    # The threshold below is set at 24 GB rather than 32 so a machine between the two may try —
+    # but do not read a pass here as a guarantee. If it dies anyway, build a REGIONAL extract
+    # instead (geofabrik .../asia/india/<zone>-latest.osm.pbf) and set OSRM_GRAPH to it, or
+    # build the graph on a bigger machine once and copy the files in.
+    OSRM_BUILD_MIN_KB=$((24 * 1024 * 1024))
+    MEM_TOTAL_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    if [ "$MEM_TOTAL_KB" -lt "$OSRM_BUILD_MIN_KB" ]; then
+      echo "ERROR: building the India road graph needs ~14 GB of RAM; this box has $((MEM_TOTAL_KB / 1024 / 1024)) GB." >&2
+      echo "       Use t4g.xlarge (16 GB, the floor) or t4g.2xlarge (32 GB, comfortable)," >&2
+      echo "       or build the graph on a larger machine and copy *.osrm* into $OSM_DATA_DIR/osrm." >&2
+      echo "       Routing falls back to labelled straight-line ESTIMATEs until a graph is present." >&2
+      exit 1
+    fi
     docker run --rm -v "$PWD:/data" osrm/osrm-backend osrm-extract   -p /opt/car.lua /data/india-latest.osm.pbf
     docker run --rm -v "$PWD:/data" osrm/osrm-backend osrm-partition /data/india-latest.osrm
     docker run --rm -v "$PWD:/data" osrm/osrm-backend osrm-customize /data/india-latest.osrm
+    # An OOM-killed extract leaves .osrm fragments but never the MLD graph; say so plainly.
+    [ -f india-latest.osrm.mldgr ] || { echo "ERROR: the OSRM graph did not build (likely out of memory). See above." >&2; exit 1; }
   fi
   cd "$APP_DIR"
   COMPOSE_FILES+=(-f "$APP_DIR/deploy/aws/docker-compose.aws-full.yml")

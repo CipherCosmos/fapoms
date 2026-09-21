@@ -1,93 +1,110 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Banknote, PauseCircle, PlayCircle, Receipt, FileDown, Percent, RotateCcw, Send } from 'lucide-react';
-import { AssayerPayableStatus, PaymentMethod, payableStatusLabel, paymentMethodLabel } from '@fapoms/shared';
-import type { AssayerInvoiceInviteOutcome } from '@fapoms/shared';
-import { Modal, Pagination, Select, StyledInput, useConfirm, useToast } from '../../components/ui';
+import { AlertTriangle, Banknote, FileDown, Hourglass, Landmark, PauseCircle, Percent, PlayCircle, Receipt, RotateCcw, Send } from 'lucide-react';
+import { AssayerPayableStatus, PaymentMethod, paymentMethodLabel, businessTodayDateKey } from '@fapoms/shared';
+import { Modal, Pagination, Select, StyledInput, useToast } from '../../components/ui';
 import {
   usePayouts, useApprovePayouts, usePayPayouts, useHoldPayout, useReopenAssignment,
-  useInviteAssayerInvoice, useInviteAllAssayerInvoices, useAssayerInvoiceLookup,
+  useInviteAssayerInvoice, useAssayerInvoiceLookup, useBillingOverview,
 } from '../../hooks/useBilling';
 import { BILLING_PAGE_SIZE, billingApi, isInvoicingNotEnabled } from '../../services/billing';
-import type { PayoutRow, AssayerInvoiceInviteAllResult } from '../../services/billing';
+import type { PayoutRow, PayoutActionResult, PayPayoutsResult, AssayerInvoiceInviteAllResult } from '../../services/billing';
 import { userMessage } from '../../services/errors';
+import { QueuedJobTimeout } from '../../services/queued-job';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { moneyTotal as money } from '../../utils/money';
 import { visibleSelection } from '../../utils/selection';
 import { downloadCsv, datedFilename } from '../../utils/csv';
-import { Card, Empty, PayoutStatusPill, AssayerInvoiceStatusPill, fmtDate, th, td, tdNum, inputStyle } from './shared';
-import { ExpenseReview } from '../ExpenseReview';
+import { Card, Empty, PayoutStatusPill, AssayerInvoiceStatusPill, fmtDate, th, td, tdNum, inputStyle, tableScrollStyle } from './shared';
 import { TdsReportModal } from './TdsReportModal';
+import { PAYOUT_STAGES, type PayoutStage } from './vocabulary';
 
 /**
- * Payouts — what we owe assayers, and the one gate before paying it.
+ * Pay assayers — what we owe, arranged by what is holding each payout up.
  *
- * One table, grouped by assayer. Tick rows, then Approve (Due → Approved) or Pay (Approved →
- * Paid, with a bank reference). Hold/release is per row. PAID is only ever reached by recording
- * a payment; there is no status dropdown. Reimbursements of expense claims appear in the same
- * table as their own rows, because an expense payout is the same act as a fee payout.
+ * This tab used to filter by the payout's raw status, and its "Due" filter was the single most
+ * misleading control on the money screens. "Due" holds two piles that need opposite handling:
  *
- * This tab is also where the assayer-invoicing round STARTS: "Ask assayers to invoice" (the
- * periodic bulk gesture) and the per-assayer invite put unbilled payouts in front of the
- * assayer — their first sight of money — for confirmation; the invoices themselves are
- * reviewed and approved on the Assayer Invoices tab. A payout riding an active invoice wears
- * its invoice as a chip, and per-payout Approve is refused for it (the server says so, and the
- * refusal is shown verbatim) because approving the invoice is the one gesture that approves
- * its lines.
+ *   - on a bill the assayer has not confirmed — the desk CANNOT approve these; the server throws
+ *     "awaiting assayer invoice AINV-… — approve the invoice instead"
+ *   - on no bill at all — approvable, but the assayer has not seen a rupee of it
+ *
+ * On the live book that was 20 rows and 19 rows, shown as one list of 39 with one Approve button
+ * over it. Ticking the assayer's group header and pressing Approve authorised half a selection
+ * and collected a screenful of refusals for the rest.
+ *
+ * So the filters are stages now — the question is "what is this waiting for", and each stage is a
+ * real server-side query (see `PAYOUT_STAGES`), so the chip's count and the table under it cannot
+ * disagree. Each stage offers only the actions that stage can accept, which is why there is no
+ * checkbox at all on the two stages where nothing the desk does would be accepted.
+ *
+ * The normal road to APPROVED is through the assayer's bill, on the Assayer bills tab: they
+ * confirm the amounts, the desk approves the bill, and every payout on it is approved in one
+ * gesture with the assayer's agreement on the record. Some assayers cannot walk that road — no
+ * smartphone, an app that will not install, someone who has already left — so "Not billed yet"
+ * keeps a direct approval, presented as the exception it is and requiring a reason that is
+ * written to the payout's history.
  */
-export type PayoutFilter = 'ALL' | 'PENDING' | 'APPROVED' | 'PAID' | 'HELD';
+export type { PayoutStage };
 
 /**
- * The client's mirror of `ASSAYER_INVOICE_ELIGIBLE_SQL` — which rows the invite would pick up:
- * due or approved-unpaid, not held, not already riding an invoice, and not pre-invoicing-era
- * history (revealed and often paid under the old rules; inviting it would bill history twice).
- * Keyed on exactly what the payout rows carry (`status`/`onHold`/`assayerInvoiceId`/
- * `preInvoicingEra`); the server re-derives this under lock, so this only decides whether the
- * button is worth pressing, never what the invoice contains.
+ * The client's mirror of `ASSAYER_INVOICE_ELIGIBLE_SQL` — which rows an invite would pick up:
+ * due or approved-unpaid, not held, not already riding a bill, and not pre-invoicing-era history
+ * (revealed and often paid under the old rules; inviting it would bill history twice). Keyed on
+ * exactly what the payout rows carry; the server re-derives this under lock, so this only decides
+ * whether the button is worth pressing, never what the bill contains.
  */
 export const isInviteEligible = (r: PayoutRow): boolean =>
   (r.status === AssayerPayableStatus.PENDING || r.status === AssayerPayableStatus.APPROVED) &&
   !r.onHold && !r.assayerInvoiceId && !r.preInvoicingEra;
 
-export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFilter) => void; canAct: boolean; canReviewClaims: boolean }> = ({ filter, onFilter, canAct, canReviewClaims }) => {
+export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage) => void; canAct: boolean }> = ({ stage, onStage, canAct }) => {
   const { toast } = useToast();
-  const { confirm, confirmDialog } = useConfirm();
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [payOpen, setPayOpen] = useState(false);
+  const [approveOpen, setApproveOpen] = useState(false);
   const [holding, setHolding] = useState<PayoutRow | null>(null);
   const [reopeningRow, setReopeningRow] = useState<PayoutRow | null>(null);
   const [bankBusy, setBankBusy] = useState(false);
   const [tdsOpen, setTdsOpen] = useState(false);
 
-  const params = {
-    status: filter === 'PENDING' || filter === 'APPROVED' || filter === 'PAID' ? (filter as AssayerPayableStatus) : undefined,
-    onHold: filter === 'HELD' ? true : undefined,
-    page, limit: BILLING_PAGE_SIZE,
-  };
-  const payouts = usePayouts(params);
+  const current = PAYOUT_STAGES.find((s) => s.key === stage) ?? PAYOUT_STAGES[0];
+  const payouts = usePayouts({ ...current.query, page, limit: BILLING_PAGE_SIZE });
+  /** Chip counts. Shared cache entry with the To-do queue and the tab badges — one read. */
+  const overview = useBillingOverview();
   const approve = useApprovePayouts();
   const pay = usePayPayouts();
   const hold = useHoldPayout();
   const reopen = useReopenAssignment();
   const inviteOne = useInviteAssayerInvoice();
-  const inviteAll = useInviteAllAssayerInvoices();
+
   /**
    * Rollout gate (`billing.assayerInvoicingEnabled`): while the flag is off, the invite POSTs
    * answer 404 "not enabled" — a deployment state, not a mistake by whoever clicked. Remembered
-   * here so the first click turns the buttons into a quiet banner instead of an error toast;
-   * cleared implicitly on remount once the flag is flipped.
+   * here so the first click turns the button into a quiet banner instead of an error toast.
    */
   const [invoicingDark, setInvoicingDark] = useState(false);
-  const [inviteOutcome, setInviteOutcome] = useState<AssayerInvoiceInviteAllResult | null>(null);
+  /**
+   * Approve and pay are ACCEPTED by the server and run on its queue: run in the request, a
+   * realistic batch outlived this client's 30 s, so the screen said "failed" while the server kept
+   * writing and a second press started it again. While one runs this holds the server's own stage
+   * line ("Approving payouts (7/20)…"); non-null also means "a run is going".
+   */
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
+  const bulkBusy = bulkProgress !== null;
+  const followProgress = { onProgress: (p: { stage: string }) => setBulkProgress(`${p.stage}…`) };
+  /** A run still going after the give-up time is not a failure — it carries on, and says so. */
+  const toastRunError = (title: string, e: unknown) => (e instanceof QueuedJobTimeout
+    ? toast({ type: 'info', title: 'Still running on the server', message: e.message })
+    : toast({ type: 'error', title, message: userMessage(e) }));
 
-  // Memoised so the `?? []` fallback keeps a stable identity between renders.
   const rows = useMemo(() => payouts.data?.items ?? [], [payouts.data?.items]);
   const total = payouts.data?.total ?? 0;
 
-  // The invoice each visible row rides, resolved by id — rows carry `assayerInvoiceId` only
-  // (see the note on PayoutRow), so the page looks up the few distinct invoices it can see.
+  // The bill each visible row rides, resolved by id — rows carry `assayerInvoiceId` only, so the
+  // page looks up the few distinct bills it can see.
   const invoiceById = useAssayerInvoiceLookup(rows.map((r) => r.assayerInvoiceId));
 
   const groups = useMemo(() => {
@@ -101,9 +118,17 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
     return [...m.values()];
   }, [rows]);
 
+  /**
+   * Which stages let the desk do anything at all.
+   *
+   * "With the assayer" and "Paid" get no checkbox column, because every bulk action on them
+   * would be refused by the server — and a control that can only fail is worse than no control:
+   * it invites the attempt, then blames the person who made it.
+   */
+  const selectable = canAct && (stage === 'NOT_BILLED' || stage === 'TO_PAY');
   const selectedRows = rows.filter((r) => selected.has(r.id));
-  const approvable = selectedRows.filter((r) => r.status === AssayerPayableStatus.PENDING && !r.onHold);
-  const payable = selectedRows.filter((r) => r.status === AssayerPayableStatus.APPROVED && !r.onHold);
+  const approvable = stage === 'NOT_BILLED' ? selectedRows.filter((r) => r.status === AssayerPayableStatus.PENDING && !r.onHold && !r.assayerInvoiceId) : [];
+  const payable = stage === 'TO_PAY' ? selectedRows.filter((r) => r.status === AssayerPayableStatus.APPROVED && !r.onHold) : [];
 
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleGroup = (ids: string[]) => setSelected((s) => {
@@ -113,52 +138,27 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
     return n;
   });
 
+  const changeStage = (s: PayoutStage) => { onStage(s); setPage(1); setSelected(new Set()); };
+
   /**
-   * Approve is the gate before money leaves: an approved payout is the one thing Pay will
-   * accept, so approving is the decision, and paying is the paperwork that follows it.
+   * Approving without the assayer's confirmation — the exception, and it behaves like one.
    *
-   * It had no confirmation at all. The billing rebuild replaced the old PayableModals, which
-   * asked "Approve this payable? This authorizes disbursement and is not easily reversed."
-   * before every approval, with a single toolbar button wired straight to the mutation — so
-   * one click on a header checkbox (which ticks a whole assayer's rows) followed by one click
-   * on Approve authorised every selected payout with nothing in between. There is no un-approve
-   * in this UI; the only way back is a hold, row by row, before someone pays them.
-   *
-   * A second click would not have fixed that — it is the same reflex as the first. So the
-   * dialog states the count and the rupee total being authorised and makes the user type the
-   * total, which cannot be done by reflex and forces them to read the number they are
-   * committing to. Nothing about the request itself changes: the same ids, the same call.
+   * Two things are asked for and neither can be given by reflex: the rupee total, typed, so the
+   * number being authorised has to be read; and a reason, which is written to the payout's
+   * history row and its audit remark. There is no un-approve in this UI — the only way back is a
+   * hold, row by row, before somebody pays them — so this is the last cheap moment to stop.
    */
-  const runApprove = async () => {
-    const totalAmount = approvable.reduce((s, p) => s + Number(p.totalAmount), 0);
-    const assayers = new Set(approvable.map((p) => p.assayerId)).size;
-    const amountText = money(totalAmount);
-    // Typed as plain digits, not the formatted "₹1,23,456": the rupee sign and the Indian
-    // grouping are awkward to reproduce on a keyboard, and a phrase people cannot type is a
-    // phrase they route around. The digits are still the number they must read to type it.
-    const amountPhrase = String(Math.round(totalAmount));
-    const ok = await confirm({
-      title: `Approve ${approvable.length} payout${approvable.length === 1 ? '' : 's'}?`,
-      message: (
-        <>
-          This authorises <strong>{amountText}</strong> to be paid to {assayers} assayer{assayers === 1 ? '' : 's'},
-          across {approvable.length} payout{approvable.length === 1 ? '' : 's'}. Approved payouts are the ones finance
-          can pay out, so this is the approval to disburse the money.
-        </>
-      ),
-      confirmLabel: `Approve ${amountText}`,
-      reversible: false,
-      reversibleNote: 'Approving cannot be undone here. To stop one afterwards, you must put it on hold before it is paid.',
-      tone: 'danger',
-      confirmPhrase: amountPhrase,
-    });
-    if (!ok) return;
+  const runApprove = async (reason: string) => {
+    setApproveOpen(false);
+    setBulkProgress(`Approving ${approvable.length} payout${approvable.length === 1 ? '' : 's'}…`);
     try {
-      const r = await approve.mutateAsync(approvable.map((p) => p.id));
+      const started = await approve.mutateAsync({ payableIds: approvable.map((p) => p.id), reason });
+      const r = await billingApi.followBulkJob<PayoutActionResult>(started, followProgress);
       if (r.refused.length) toast({ type: 'warning', title: `${r.done.length} approved, ${r.refused.length} refused`, message: r.refused.map((x) => x.reason).join(' · ') });
       else toast('success', `${r.done.length} payout${r.done.length === 1 ? '' : 's'} approved`);
       setSelected(new Set());
-    } catch (e) { toast({ type: 'error', title: 'Approval failed', message: userMessage(e) }); }
+      void payouts.refetch();
+    } catch (e) { toastRunError('Approval failed', e); } finally { setBulkProgress(null); }
   };
 
   /**
@@ -200,137 +200,100 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
     }
   };
 
-  /**
-   * The invitation is the money REVEAL: the invited assayer sees, for the first time anywhere,
-   * the fees on their completed work, and is asked to confirm them as one invoice. It moves no
-   * money — approval later does — so the confirm here restates what the assayer will experience
-   * rather than demanding a typed total.
-   */
+  /** Send one assayer their bill — the normal road, offered next to the people who need it. */
   const runInviteOne = async (g: { assayerId: string; assayerName: string }) => {
-    const ok = await confirm({
-      title: `Invite ${g.assayerName} to invoice?`,
-      message: (
-        <>
-          This creates one invitation covering <strong>all</strong> of {g.assayerName}&rsquo;s eligible unbilled
-          payouts — due or approved, not held, not already invited — and shows them those amounts for the
-          first time. They confirm on their phone; the invoice then comes to Billing → Assayer Invoices for approval.
-        </>
-      ),
-      confirmLabel: 'Invite to invoice',
-      reversible: true,
-      reversibleNote: 'An invitation can be cancelled from the Assayer Invoices tab, which releases its lines again.',
-    });
-    if (!ok) return;
     try {
       const inv = await inviteOne.mutateAsync(g.assayerId);
-      toast('success', `${inv.invoiceNumber} created — ${inv.lineCount} line${inv.lineCount === 1 ? '' : 's'} for ${g.assayerName} to confirm`);
+      toast('success', `${inv.invoiceNumber} sent — ${inv.lineCount} line${inv.lineCount === 1 ? '' : 's'} for ${g.assayerName} to confirm`);
+      void payouts.refetch();
     } catch (e) {
       if (isInvoicingNotEnabled(e)) { setInvoicingDark(true); return; } // rollout gate — banner, not an error
       // 409 "already has an active invoice (AINV-…)" and friends arrive as human sentences — verbatim.
-      toast({ type: 'error', title: 'Could not invite', message: userMessage(e) });
+      toast({ type: 'error', title: 'Could not send the bill', message: userMessage(e) });
     }
   };
 
-  /**
-   * The cadence gesture (roughly every 15 days / monthly): one invitation per assayer with
-   * eligible work, server-wide — not limited to this page. The server answers per-assayer
-   * outcomes and never fails the round as a whole; the summary modal shows the counts and
-   * lists any 'failed' rows distinctly, because an infrastructure error is not a business
-   * outcome and must not hide inside "skipped".
-   */
-  const runInviteAll = async () => {
-    const ok = await confirm({
-      title: 'Invite every assayer with unbilled work?',
-      message: (
-        <>
-          Every assayer with eligible unbilled payouts — across the whole book, not just this page — gets
-          <strong> one</strong> invoice invitation covering all of theirs, and sees those amounts for the first
-          time. Assayers already holding an active invitation are skipped, so running this again is safe.
-        </>
-      ),
-      confirmLabel: 'Invite all',
-      reversible: true,
-      reversibleNote: 'Each invitation can be cancelled individually from the Assayer Invoices tab.',
-    });
-    if (!ok) return;
-    try {
-      setInviteOutcome(await inviteAll.mutateAsync());
-    } catch (e) {
-      if (isInvoicingNotEnabled(e)) { setInvoicingDark(true); return; } // rollout gate — banner, not an error
-      toast({ type: 'error', title: 'The invitation round could not run', message: userMessage(e) });
-    }
+  const stageCount = (key: PayoutStage): number | undefined => {
+    const p = overview.data?.payouts;
+    if (!p || loadFailed(overview)) return undefined;
+    return key === 'WITH_ASSAYER' ? p.inClaimReviewCount
+      : key === 'NOT_BILLED' ? p.unbilledCount
+      : key === 'TO_PAY' ? p.approvedCount
+      : key === 'HELD' ? p.heldCount
+      : undefined; // Paid is history, and a count of history is not a call to action.
   };
-
-  const changeFilter = (f: PayoutFilter) => { onFilter(f); setPage(1); setSelected(new Set()); };
-
-  // The outcome rows are keyed by assayer id; name what this page can (its own rows), and let
-  // the id stand for anyone outside the current page rather than pretending to know them.
-  const assayerNameOf = (assayerId: string): string =>
-    rows.find((r) => r.assayerId === assayerId)?.assayerName ?? `assayer ${assayerId.slice(0, 8)}…`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        {(['ALL', 'PENDING', 'APPROVED', 'PAID', 'HELD'] as PayoutFilter[]).map((f) => (
-          <button key={f} onClick={() => changeFilter(f)} style={{
-            padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
-            background: filter === f ? 'var(--status-pending-bg)' : 'transparent', color: filter === f ? 'var(--text-primary)' : 'var(--text-secondary)',
-            border: `1px solid ${filter === f ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-          }}>
-            {f === 'ALL' ? 'All' : f === 'HELD' ? 'On hold' : payableStatusLabel(f)}
-          </button>
-        ))}
-        <span style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{total} payout{total === 1 ? '' : 's'}</span>
-        {canAct && (
-          <button onClick={runInviteAll} disabled={inviteAll.isPending || invoicingDark} className="btn btn-primary"
-            style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}
-            title={invoicingDark
-              ? 'Assayer invoicing is not enabled on this deployment yet'
-              : 'Send monthly bill statements to all assayers with completed unbilled work'}>
-            <Send size={13} /> {inviteAll.isPending ? 'Sending…' : 'Send Monthly Bills'}
-          </button>
-        )}
-        <button onClick={() => setTdsOpen(true)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}
-          title="Download TDS tax report as CSV">
-          <Percent size={13} /> TDS Report
+        {PAYOUT_STAGES.map((s) => {
+          const active = stage === s.key;
+          const n = stageCount(s.key);
+          return (
+            <button key={s.key} onClick={() => changeStage(s.key)} title={s.waitingOn} style={{
+              padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: active ? 700 : 600,
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              background: active ? 'var(--status-pending-bg)' : 'transparent', color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+              border: `1px solid ${active ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+            }}>
+              {s.label}
+              {n !== undefined && n > 0 && (
+                <span style={{ fontSize: 'var(--text-3xs, var(--text-2xs))', padding: '1px 6px', borderRadius: 10, background: active ? 'var(--accent-primary)' : 'var(--bg-tertiary)', color: active ? '#fff' : 'var(--text-muted)', fontWeight: 700 }}>{n}</span>
+              )}
+            </button>
+          );
+        })}
+        <button onClick={() => setTdsOpen(true)} className="btn btn-secondary" style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)' }}
+          title="Download the PAN-wise TDS report as CSV">
+          <Percent size={13} /> TDS report
         </button>
-        <Link to="/billing?tab=assayer-invoices" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Review Assayer Bills →</Link>
+      </div>
+
+      {/* What this stage is waiting for, in one sentence. The chip names the state; this says
+          what it means and whose move it is. */}
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
+        {stage === 'WITH_ASSAYER' ? <Hourglass size={14} style={{ flexShrink: 0, marginTop: 1, color: 'var(--text-muted)' }} /> : <Landmark size={14} style={{ flexShrink: 0, marginTop: 1, color: 'var(--text-muted)' }} />}
+        <span>{current.waitingOn}</span>
       </div>
 
       {/* Rollout gate: the backend answered "not enabled" to an invite. Deployment state, not an
-          error — said once, quietly, and the invite buttons above/below stay disabled. */}
+          error — said once, quietly, and the invite buttons stay disabled. */}
       {invoicingDark && (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: '8px 12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-          Assayer invoicing is not enabled on this deployment yet, so invitations cannot be sent.
-          Everything else on this tab works as usual; the invite buttons wake up when the
+          Assayer bills are not enabled on this deployment yet, so bills cannot be sent. Everything
+          else on this tab works as usual; the button wakes up when the
           <code style={{ margin: '0 4px' }}>billing.assayerInvoicingEnabled</code> setting is turned on.
         </div>
       )}
 
-      {canAct && selected.size > 0 && (
+      {/* A queued approve / pay run, in the server's own words. It carries on if this page is
+          closed; the lists update as it writes. */}
+      {bulkProgress && (
+        <div role="status" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '8px 12px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+          {bulkProgress}
+        </div>
+      )}
+
+      {selectable && selected.size > 0 && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '10px 14px', background: 'var(--bg-tertiary)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-md)' }}>
           <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{selected.size} selected</span>
-          <button className="btn btn-primary" disabled={!approvable.length || approve.isPending} onClick={runApprove} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <CheckCircle2 size={14} /> Approve {approvable.length ? `(${approvable.length} · ${money(approvable.reduce((s, p) => s + Number(p.totalAmount), 0))})` : ''}
-          </button>
-          {/*
-            Gated on `pay.isPending` as well as on there being something payable — Approve
-            beside it already was, and Pay is the button that actually disburses money. Without
-            the in-flight guard the toolbar stayed live while a payment request was on the wire,
-            so a slow response invited a second click: the modal reopened over the same
-            selection and a second batch of disbursements went out against the same payouts.
-            Double-paying is the one mistake on this screen the product cannot walk back.
-          */}
-          <button className="btn btn-primary" disabled={!payable.length || pay.isPending} onClick={() => setPayOpen(true)} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <Banknote size={14} /> Pay {payable.length ? `(${payable.length} · ${money(payable.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0))})` : ''}
-          </button>
-          {/* Exports the approved-unpaid selection as a NEFT bank file, so beneficiaries are not
-              hand-keyed at the bank portal. It reads bank details but moves no money. */}
-          <button className="btn btn-secondary" disabled={!payable.length || bankBusy} onClick={downloadBankFile}
-            title="Download the selected approved, unpaid payouts as a NEFT bank-upload file (beneficiary, account, IFSC, amount)"
-            style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <FileDown size={14} /> {bankBusy ? 'Preparing…' : 'Download Bank CMS Batch (NEFT)'}
-          </button>
+          {stage === 'NOT_BILLED' && (
+            <button className="btn btn-secondary" disabled={!approvable.length || approve.isPending || bulkBusy} onClick={() => setApproveOpen(true)}
+              title="Approve these without waiting for the assayer to confirm a bill. The exception, not the rule."
+              style={{ display: 'inline-flex', gap: 6, alignItems: 'center', borderColor: 'var(--warning)', color: 'var(--warning)' }}>
+              <AlertTriangle size={14} /> Approve without a bill {approvable.length ? `(${approvable.length} · ${money(approvable.reduce((s, p) => s + Number(p.totalAmount), 0))})` : ''}
+            </button>
+          )}
+          {stage === 'TO_PAY' && <>
+            <button className="btn btn-primary" disabled={!payable.length || pay.isPending || bulkBusy} onClick={() => setPayOpen(true)} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <Banknote size={14} /> Record payment {payable.length ? `(${payable.length} · ${money(payable.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0))})` : ''}
+            </button>
+            <button className="btn btn-secondary" disabled={!payable.length || bankBusy} onClick={downloadBankFile}
+              title="Download the selected approved, unpaid payouts as a NEFT bank-upload file (beneficiary, account, IFSC, amount)"
+              style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <FileDown size={14} /> {bankBusy ? 'Preparing…' : 'Download bank file'}
+            </button>
+          </>}
           <button className="btn btn-secondary" onClick={() => setSelected(new Set())}>Clear</button>
           {selectedRows.length > approvable.length + payable.length && (
             <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Held and already-paid rows are skipped.</span>
@@ -338,26 +301,18 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
         </div>
       )}
 
-      {/*
-        Failure is decided before emptiness, and it is `loadFailed` that decides it.
-        The check here used to be a bare `payouts.isError`, which misses a query that failed and
-        PAUSED — no error, no data, `groups.length === 0` — so a refused load fell through to
-        "No payouts yet. They appear here the moment an assignment completes." on a screen about
-        money somebody is owed. And when it did fire it said "Check your connection and try
-        again", which sends a person whose role simply excludes payouts to their router.
-        `LoadFailure` quotes the server's own sentence and offers Retry only where retrying could
-        change the answer.
-      */}
       {loadFailed(payouts) ? (
         <LoadFailure loads={[{ label: 'payouts', query: payouts }]} />
       ) : payouts.isLoading ? <Empty>Loading payouts…</Empty> : groups.length === 0 ? (
-        <Empty>{filter === 'ALL' ? 'No payouts yet. They appear here the moment an assignment completes.' : 'Nothing here.'}</Empty>
+        // Short on purpose: the sentence explaining this stage is already in the band directly
+        // above, and repeating it here printed it twice, one line apart.
+        <Empty>Nothing at this stage.</Empty>
       ) : (
-        <Card>
-          <div style={{ overflowX: 'auto' }}>
+        <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Landmark size={14} /> {current.label} ({total})</span>}>
+          <div style={tableScrollStyle}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
-                {canAct && <th style={{ ...th, width: 28 }} />}
+                {selectable && <th style={{ ...th, width: 28 }} />}
                 <th style={th}>Assignment</th><th style={th}>Client · Branch</th><th style={th}>Status</th>
                 <th style={{ ...th, textAlign: 'right' }}>Fee</th><th style={{ ...th, textAlign: 'right' }}>Travel</th>
                 <th style={{ ...th, textAlign: 'right' }}>TDS</th><th style={{ ...th, textAlign: 'right' }}>To pay</th>
@@ -367,95 +322,88 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                 {groups.map((g) => {
                   const eligible = g.rows.filter(isInviteEligible);
                   return (
-                  <React.Fragment key={g.assayerId}>
-                    <tr style={{ background: 'var(--bg-tertiary)' }}>
-                      {canAct && <td style={td}><input type="checkbox" checked={g.rows.every((r) => selected.has(r.id))} onChange={() => toggleGroup(g.rows.map((r) => r.id))} /></td>}
-                      <td style={{ ...td, fontWeight: 700, color: 'var(--text-primary)' }} colSpan={2}>
-                        <Link to={`/billing/statement?assayer=${g.assayerId}`} style={{ color: 'inherit', textDecoration: 'none' }}>{g.assayerName}</Link>
-                        {g.assayerCode && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 6 }}>{g.assayerCode}</span>}
-                      </td>
-                      <td style={td} colSpan={4}>
-                        {canAct && (
-                          /* Secondary to the header's bulk round: invites THIS assayer now.
-                             Enabled off the rows on screen; the server re-checks under lock, so
-                             at worst a stale page gets a clear refusal, never a wrong invoice. */
-                          <button
-                            onClick={() => runInviteOne(g)}
-                            disabled={!eligible.length || inviteOne.isPending || invoicingDark}
-                            title={invoicingDark
-                              ? 'Assayer invoicing is not enabled on this deployment yet'
-                              : eligible.length
-                                ? `Invite ${g.assayerName} to confirm ${eligible.length} unbilled payout${eligible.length === 1 ? '' : 's'} as one invoice`
-                                : 'No eligible payouts on screen — eligible rows are due or approved, not held, not already on an invoice, and not pre-invoicing history'}
-                            style={{ background: 'transparent', border: 'none', cursor: eligible.length && !invoicingDark ? 'pointer' : 'default', color: eligible.length && !invoicingDark ? 'var(--accent)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', fontWeight: 600, opacity: eligible.length && !invoicingDark ? 1 : 0.6 }}>
-                            <Send size={12} /> Invite to invoice
-                          </button>
-                        )}
-                      </td>
-                      <td style={{ ...tdNum, fontWeight: 700, color: 'var(--text-primary)' }}>{money(g.owed)}</td>
-                      <td style={td} colSpan={canAct ? 2 : 1} />
-                    </tr>
-                    {g.rows.map((r) => {
-                      const toPay = Number(r.totalAmount) - Number(r.paidAmount);
-                      const isReimb = !!r.expenseId;
-                      return (
-                        <tr key={r.id} style={{ opacity: r.status === AssayerPayableStatus.PAID ? 0.7 : 1 }}>
-                          {canAct && <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>}
-                          <td style={td}>
-                            <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                              {isReimb && <Receipt size={12} style={{ color: 'var(--text-muted)' }} />}{r.assignmentNumber ?? '—'}
-                            </div>
-                            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{isReimb ? 'Expense reimbursement' : r.payableNumber}</div>
-                          </td>
-                          <td style={td}>{[r.clientName, r.branchName].filter(Boolean).join(' · ') || '—'}</td>
-                          <td style={td}>
-                            <PayoutStatusPill status={r.status} onHold={r.onHold} holdReason={r.holdReason} />
-                            {r.assayerInvoiceId && (() => {
-                              /* Same rendering as the client-invoice line on the money card:
-                                 number as muted text, status as the pill. While the lookup is
-                                 still resolving (or refused), say only that it rides one. */
-                              const inv = invoiceById.get(r.assayerInvoiceId!);
-                              return (
-                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 3, display: 'flex', gap: 5, alignItems: 'center', whiteSpace: 'nowrap' }}
-                                  title="This payout rides an assayer invoice. While it is invited or submitted, per-payout Approve is refused — approve or cancel the invoice on the Assayer Invoices tab.">
-                                  {inv ? (
-                                    <Link to={`/billing?tab=assayer-invoices`} style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                      {inv.invoiceNumber} <AssayerInvoiceStatusPill status={inv.status} />
-                                    </Link>
-                                  ) : 'On assayer invoice'}
-                                </div>
-                              );
-                            })()}
-                          </td>
-                          <td style={tdNum}>{money(r.baseAmount)}</td>
-                          <td style={tdNum}>{Number(r.travelAmount) ? money(r.travelAmount) : '—'}</td>
-                          <td style={tdNum}>{Number(r.tdsAmount) ? `−${money(r.tdsAmount)}` : '—'}</td>
-                          <td style={{ ...tdNum, fontWeight: 700, color: 'var(--text-primary)' }}>{money(toPay)}</td>
-                          <td style={td}>{fmtDate(r.createdAt)}</td>
-                          {canAct && (
-                            <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                              {r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
-                                <button onClick={() => setHolding(r)} title={r.onHold ? 'Release hold' : 'Put on hold'} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: r.onHold ? 'var(--success)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)' }}>
-                                  {r.onHold ? <><PlayCircle size={13} /> Release</> : <><PauseCircle size={13} /> Hold</>}
-                                </button>
-                              )}
-                              {/*
-                                Expense reimbursements have no assignment to reopen — this is
-                                the fee payable a completion booked, and the assignment it came
-                                from is what actually gets reopened; the server refuses once a
-                                payable is DISBURSED, which PAID/VOIDED already cover here.
-                              */}
-                              {!isReimb && r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
-                                <button onClick={() => setReopeningRow(r)} title="Reopen the assignment and void this payable" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', marginLeft: 8 }}>
-                                  <RotateCcw size={13} /> Reopen
-                                </button>
-                              )}
-                            </td>
+                    <React.Fragment key={g.assayerId}>
+                      <tr style={{ background: 'var(--bg-tertiary)' }}>
+                        {selectable && <td style={td}><input type="checkbox" checked={g.rows.every((r) => selected.has(r.id))} onChange={() => toggleGroup(g.rows.map((r) => r.id))} /></td>}
+                        <td style={{ ...td, fontWeight: 700, color: 'var(--text-primary)' }} colSpan={2}>
+                          <Link to={`/billing/statement?assayer=${g.assayerId}`} style={{ color: 'inherit', textDecoration: 'none' }}>{g.assayerName}</Link>
+                          {g.assayerCode && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 6 }}>{g.assayerCode}</span>}
+                        </td>
+                        <td style={td} colSpan={4}>
+                          {/*
+                            The normal road, offered exactly where the people who need it are
+                            listed: on "Not billed yet", beside each assayer with work no bill
+                            has reached. It is not on the other stages, where it would only be
+                            refused — a bill already covers those rows, or they are settled.
+                          */}
+                          {canAct && stage === 'NOT_BILLED' && (
+                            <button
+                              onClick={() => runInviteOne(g)}
+                              disabled={!eligible.length || inviteOne.isPending || invoicingDark}
+                              title={invoicingDark
+                                ? 'Assayer bills are not enabled on this deployment yet'
+                                : `Send ${g.assayerName} a bill for ${eligible.length} unbilled payout${eligible.length === 1 ? '' : 's'} to confirm`}
+                              className="btn btn-secondary"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>
+                              <Send size={12} /> Send bill
+                            </button>
                           )}
-                        </tr>
-                      );
-                    })}
-                  </React.Fragment>
+                        </td>
+                        <td style={{ ...tdNum, fontWeight: 700, color: 'var(--text-primary)' }}>{money(g.owed)}</td>
+                        <td style={td} colSpan={canAct ? 2 : 1} />
+                      </tr>
+                      {g.rows.map((r) => {
+                        const toPay = Number(r.totalAmount) - Number(r.paidAmount);
+                        const isReimb = !!r.expenseId;
+                        return (
+                          <tr key={r.id} style={{ opacity: r.status === AssayerPayableStatus.PAID ? 0.7 : 1 }}>
+                            {selectable && <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>}
+                            <td style={td}>
+                              <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                                {isReimb && <Receipt size={12} style={{ color: 'var(--text-muted)' }} />}{r.assignmentNumber ?? '—'}
+                              </div>
+                              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{isReimb ? 'Expense reimbursement' : r.payableNumber}</div>
+                            </td>
+                            <td style={td}>{[r.clientName, r.branchName].filter(Boolean).join(' · ') || '—'}</td>
+                            <td style={td}>
+                              <PayoutStatusPill status={r.status} onHold={r.onHold} holdReason={r.holdReason} />
+                              {r.assayerInvoiceId && (() => {
+                                const inv = invoiceById.get(r.assayerInvoiceId!);
+                                return (
+                                  <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: 3, display: 'flex', gap: 5, alignItems: 'center', whiteSpace: 'nowrap' }}
+                                    title="This payout is on an assayer bill. While the bill is out or confirmed, approving the payout on its own is refused — approve the bill instead.">
+                                    {inv ? (
+                                      <Link to="/billing?tab=bills" style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                        {inv.invoiceNumber} <AssayerInvoiceStatusPill status={inv.status} />
+                                      </Link>
+                                    ) : 'On an assayer bill'}
+                                  </div>
+                                );
+                              })()}
+                            </td>
+                            <td style={tdNum}>{money(r.baseAmount)}</td>
+                            <td style={tdNum}>{Number(r.travelAmount) ? money(r.travelAmount) : '—'}</td>
+                            <td style={tdNum}>{Number(r.tdsAmount) ? `−${money(r.tdsAmount)}` : '—'}</td>
+                            <td style={{ ...tdNum, fontWeight: 700, color: 'var(--text-primary)' }}>{money(toPay)}</td>
+                            <td style={td}>{fmtDate(r.createdAt)}</td>
+                            {canAct && (
+                              <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                                {r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
+                                  <button onClick={() => setHolding(r)} title={r.onHold ? 'Release hold' : 'Put on hold'} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: r.onHold ? 'var(--success)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)' }}>
+                                    {r.onHold ? <><PlayCircle size={13} /> Release</> : <><PauseCircle size={13} /> Hold</>}
+                                  </button>
+                                )}
+                                {!isReimb && r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
+                                  <button onClick={() => setReopeningRow(r)} title="Reopen the assignment and void this payable" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', marginLeft: 8 }}>
+                                    <RotateCcw size={13} /> Reopen
+                                  </button>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -467,27 +415,31 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
         </Card>
       )}
 
-      {canReviewClaims && (
-        <Card title="Expense claims to review">
-          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: 10 }}>
-            Approving a claim books it as a payout for the assayer in the same step; it then appears above, due for approval to pay.
-          </div>
-          <ExpenseReview />
-        </Card>
+      {approveOpen && (
+        <ApproveWithoutBillModal
+          payables={approvable}
+          busy={approve.isPending || bulkBusy}
+          onClose={() => setApproveOpen(false)}
+          onApprove={runApprove}
+        />
       )}
 
       {payOpen && (
         <PayModal
           payables={payable}
-          busy={pay.isPending}
+          busy={pay.isPending || bulkBusy}
+          progress={bulkProgress}
           onClose={() => setPayOpen(false)}
           onPay={async (dto) => {
+            setBulkProgress(`Paying ${payable.length} payout${payable.length === 1 ? '' : 's'}…`);
             try {
-              const r = await pay.mutateAsync({ payableIds: payable.map((p) => p.id), ...dto });
+              const started = await pay.mutateAsync({ payableIds: payable.map((p) => p.id), ...dto });
+              const r = await billingApi.followBulkJob<PayPayoutsResult>(started, followProgress);
               if (r.refused.length) toast({ type: 'warning', title: `${r.done.length} paid, ${r.refused.length} refused`, message: r.refused.map((x) => x.reason).join(' · ') });
               else toast('success', `${r.done.length} payout${r.done.length === 1 ? '' : 's'} paid`);
               setPayOpen(false); setSelected(new Set());
-            } catch (e) { toast({ type: 'error', title: 'Payment failed', message: userMessage(e) }); }
+              void payouts.refetch();
+            } catch (e) { toastRunError('Payment failed', e); } finally { setBulkProgress(null); }
           }}
         />
       )}
@@ -523,35 +475,102 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
       )}
 
       {tdsOpen && <TdsReportModal onClose={() => setTdsOpen(false)} />}
-
-      {inviteOutcome && (
-        <Modal open onClose={() => setInviteOutcome(null)} title={<><Send size={18} /> Invitation round finished</>} width="560px"
-          footer={<button type="button" onClick={() => setInviteOutcome(null)} className="btn btn-primary">Close</button>}>
-          <InviteOutcomeSummary result={inviteOutcome} nameOf={assayerNameOf} />
-        </Modal>
-      )}
-
-      {confirmDialog}
     </div>
   );
 };
 
 /**
- * What the bulk invitation round did, per assayer, grouped by outcome.
+ * The reasons an assayer cannot confirm their own bill, offered as one-click options.
  *
- * The two refusals — an active invoice already standing, nothing eligible left by that
- * assayer's turn — are expected states of the round and read as counts. 'failed' is neither: it
- * is an infrastructure error on ONE assayer that the round deliberately did not let abort the
- * other forty, so it is listed name by name with the server's error text, in the danger tone,
- * and told apart from "skipped" — those assayers were NOT invited and nothing about their book
- * decided that.
+ * Seeded from what the owner described when this path was kept open: "in real world several
+ * don't have things". A free-text box alone would have been filled with "ok" and "as
+ * discussed", which records nothing; a fixed list alone would have blocked the case nobody
+ * thought of. "Other…" keeps that case sayable.
+ */
+export const APPROVE_WITHOUT_BILL_REASONS = [
+  'Assayer has no smartphone, or the app will not run on theirs',
+  'Assayer has left; settling their final dues',
+  'Assayer confirmed the amounts by phone or in person',
+  'Bill was sent and they did not respond; agreed to proceed',
+  'Urgent payment agreed with management',
+];
+
+/**
+ * Approving without the assayer's confirmation.
+ *
+ * It asks for two things, and neither can be produced by reflex. The rupee total must be typed —
+ * not the formatted "₹1,23,456", which is awkward on a keyboard and so gets routed around, but
+ * the plain digits, which are still the number the person has to read in order to type. And a
+ * reason, which goes onto every approved payout's history row.
+ *
+ * The wording states plainly what is being skipped. That matters more than the friction: the
+ * person doing this is usually right to do it, and should be able to, but they should know they
+ * are stepping off the normal road rather than discovering later that they were.
+ */
+const ApproveWithoutBillModal: React.FC<{
+  payables: PayoutRow[]; busy: boolean; onClose: () => void; onApprove: (reason: string) => void;
+}> = ({ payables, busy, onClose, onApprove }) => {
+  const [preset, setPreset] = useState('');
+  const [other, setOther] = useState('');
+  const [typed, setTyped] = useState('');
+  const total = payables.reduce((s, p) => s + Number(p.totalAmount), 0);
+  const assayers = new Set(payables.map((p) => p.assayerId)).size;
+  const phrase = String(Math.round(total));
+  const reason = preset === '__other__' ? other.trim() : preset;
+  const ready = !!reason && typed.trim() === phrase;
+  return (
+    <Modal open onClose={onClose} width="540px" asForm
+      title={<><AlertTriangle size={18} style={{ color: 'var(--warning)' }} /> Approve without the assayer&rsquo;s confirmation</>}
+      onSubmit={(e) => { e.preventDefault(); if (ready) onApprove(reason); }}
+      footer={<>
+        <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
+        <button type="submit" disabled={busy || !ready} className="btn btn-primary">{busy ? 'Approving…' : `Approve ${money(total)}`}</button>
+      </>}>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+        Normally the assayer is sent a bill, confirms the amounts, and approving that bill approves
+        these payouts with their agreement recorded. This skips that: <strong>{money(total)}</strong> to{' '}
+        {assayers} assayer{assayers === 1 ? '' : 's'}, across {payables.length} payout{payables.length === 1 ? '' : 's'},
+        approved for payment without {assayers === 1 ? 'them' : 'any of them'} having seen it.
+      </div>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+        Approving cannot be undone here. To stop one afterwards you must put it on hold before it is paid.
+      </div>
+      <Select
+        value={preset}
+        onChange={(v) => setPreset(v)}
+        options={[
+          { value: '', label: 'Why can this assayer not confirm? *' },
+          ...APPROVE_WITHOUT_BILL_REASONS.map((r) => ({ value: r, label: r })),
+          { value: '__other__', label: 'Other…' },
+        ]}
+        style={{ width: '100%' }}
+      />
+      {preset === '__other__' && (
+        <textarea value={other} onChange={(e) => setOther(e.target.value)} rows={2} placeholder="Why can this assayer not confirm? *" style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+      )}
+      <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        Type <strong style={{ color: 'var(--text-primary)' }}>{phrase}</strong> to confirm the amount
+        <StyledInput value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={phrase} style={{ width: 200 }} />
+      </label>
+    </Modal>
+  );
+};
+
+/**
+ * What a bulk invitation round did, per assayer, grouped by outcome.
+ *
+ * The two refusals — an active bill already standing, nothing eligible left by that assayer's
+ * turn — are expected states of the round and read as counts. 'failed' is neither: it is an
+ * infrastructure error on ONE assayer that the round deliberately did not let abort the other
+ * forty, so it is listed name by name with the server's error text, in the danger tone, and told
+ * apart from "skipped" — those assayers were NOT invited and nothing about their book decided that.
  */
 export const InviteOutcomeSummary: React.FC<{
   result: AssayerInvoiceInviteAllResult;
   /** Assayer label for an id — the page names who it can see; ids stand in for the rest. */
   nameOf: (assayerId: string) => string;
 }> = ({ result, nameOf }) => {
-  const by = (o: AssayerInvoiceInviteOutcome['outcome']) => result.outcomes.filter((x) => x.outcome === o);
+  const by = (o: string) => result.outcomes.filter((x) => x.outcome === o);
   const invited = by('invited');
   const skippedActive = by('skipped-active-invoice');
   const nothingEligible = by('nothing-eligible');
@@ -564,7 +583,7 @@ export const InviteOutcomeSummary: React.FC<{
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--text-secondary)' }}>
           <div><strong style={{ color: 'var(--text-primary)' }}>{invited.length}</strong> invited — each now sees their amounts and can confirm.</div>
           {skippedActive.length > 0 && (
-            <div><strong>{skippedActive.length}</strong> skipped — they already hold an active invoice; approve or cancel it first.</div>
+            <div><strong>{skippedActive.length}</strong> skipped — they already hold an active bill; approve or cancel it first.</div>
           )}
           {nothingEligible.length > 0 && (
             <div><strong>{nothingEligible.length}</strong> had nothing eligible left by their turn (a payout was held, voided or invited in the meantime).</div>
@@ -596,16 +615,18 @@ const METHODS = Object.values(PaymentMethod);
 
 const PayModal: React.FC<{
   payables: PayoutRow[]; busy: boolean; onClose: () => void;
+  /** The queued payment run's stage line while it runs — see `bulkProgress` in the tab. */
+  progress?: string | null;
   onPay: (dto: { paymentReference: string; method: PaymentMethod; paidDate?: string; notes?: string }) => Promise<void>;
-}> = ({ payables, busy, onClose, onPay }) => {
+}> = ({ payables, busy, progress, onClose, onPay }) => {
   const [reference, setReference] = useState('');
   const [method, setMethod] = useState<PaymentMethod>(PaymentMethod.NEFT);
-  const [paidDate, setPaidDate] = useState(new Date().toISOString().slice(0, 10));
+  const [paidDate, setPaidDate] = useState(businessTodayDateKey());
   const [notes, setNotes] = useState('');
   const total = payables.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0);
   const assayers = new Set(payables.map((p) => p.assayerId)).size;
   return (
-    <Modal open onClose={onClose} title={<><Banknote size={18} /> Pay {payables.length} payout{payables.length === 1 ? '' : 's'}</>} width="520px" asForm
+    <Modal open onClose={onClose} title={<><Banknote size={18} /> Record payment of {payables.length} payout{payables.length === 1 ? '' : 's'}</>} width="520px" asForm
       onSubmit={(e) => { e.preventDefault(); if (!reference.trim()) return; void onPay({ paymentReference: reference.trim(), method, paidDate: paidDate || undefined, notes: notes || undefined }); }}
       footer={<>
         <span style={{ marginRight: 'auto', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>Total <strong>{money(total)}</strong> to {assayers} assayer{assayers === 1 ? '' : 's'}</span>
@@ -613,7 +634,7 @@ const PayModal: React.FC<{
         <button type="submit" disabled={busy || !reference.trim()} className="btn btn-primary">{busy ? 'Paying…' : 'Record payment'}</button>
       </>}>
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-        Each payout is paid in full and recorded as a disbursement. One bank reference may cover the whole batch.
+        This records money the bank has already sent — it does not move any. Each payout is settled in full. One bank reference may cover the whole batch.
       </div>
       <StyledInput placeholder="Bank / UTR reference *" value={reference} onChange={(e) => setReference(e.target.value)} style={{ width: '100%' }} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -621,6 +642,7 @@ const PayModal: React.FC<{
         <StyledInput type="date" value={paidDate} onChange={(e) => setPaidDate(e.target.value)} style={{ width: '100%' }} />
       </div>
       <StyledInput placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%' }} />
+      {progress && <div role="status" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{progress}</div>}
     </Modal>
   );
 };
@@ -640,7 +662,7 @@ const PayModal: React.FC<{
  */
 export const HOLD_REASONS = [
   'Bank details missing or incorrect',
-  'Waiting for the assayer\u2019s invoice',
+  'Waiting for the assayer’s invoice',
   'Report still being checked',
   'Client has disputed this assignment',
   'Duplicate of another payout',
@@ -676,7 +698,7 @@ const HoldModal: React.FC<{ row: PayoutRow; busy: boolean; onClose: () => void; 
             options={[
               { value: '', label: 'Why is this on hold? *' },
               ...HOLD_REASONS.map((r) => ({ value: r, label: r })),
-              { value: '__other__', label: 'Other\u2026' },
+              { value: '__other__', label: 'Other…' },
             ]}
             style={{ width: '100%' }}
           />

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { ConflictException, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, IsNull, Not } from 'typeorm';
 import { BillingEngineService } from './billing-engine.service';
 import { BillingJobsService } from './billing-jobs.service';
 import { BillingEntryEntity } from './billing-entry.entity';
@@ -624,6 +624,21 @@ describe('BillingEngineService', () => {
       const r = await service.approvePayouts(['payable-1'], 'finance-1');
       expect(r.refused[0].reason).toContain('already paid');
     });
+
+    /**
+     * Approval runs on a queue now, with a screen polling it: it is told after every payout, a
+     * refused one included, and counts each payout once however often the selection repeats it.
+     */
+    it('reports progress after every distinct payout, a refused one included', async () => {
+      payableRepo.findOne.mockImplementation(async (opts: any) =>
+        opts.where.id === 'held-1' ? payable({ id: 'held-1', payableNumber: 'PY-H', onHold: true, holdReason: 'Client dispute' }) : payable());
+      const onProgress = jest.fn();
+
+      const r = await service.approvePayouts(['held-1', 'payable-1', 'held-1'], 'finance-1', onProgress);
+
+      expect(r.done).toEqual(['payable-1']);
+      expect(onProgress.mock.calls).toEqual([[1, 2, 'Approving payouts'], [2, 2, 'Approving payouts']]);
+    });
   });
 
   describe('payPayouts / recordDisbursement — the only path to PAID', () => {
@@ -633,6 +648,16 @@ describe('BillingEngineService', () => {
       expect(r.done).toEqual([]);
       expect(r.refused[0].reason).toContain('not been approved');
       expect(committed).toHaveLength(0);
+    });
+
+    it('reports progress after every payout it tries to pay, a refused one included', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const onProgress = jest.fn();
+
+      const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1', onProgress);
+
+      expect(r.refused).toHaveLength(1);
+      expect(onProgress.mock.calls).toEqual([[1, 1, 'Paying payouts']]);
     });
 
     it('refuses a held payout even when approved', async () => {
@@ -1494,6 +1519,60 @@ describe('BillingEngineService', () => {
       invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()], payments: [] }));
       assertInvoiceInScope.mockImplementationOnce(async () => { throw new ForbiddenException('nope'); });
       await expect(call(restricted)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  /**
+   * The filter the pay screen's stages are built on.
+   *
+   * "Due" is two piles with opposite handling — work on a bill the assayer has not confirmed
+   * (per-row approval is REFUSED, `approveOne` throws) and work no bill has reached — and status
+   * alone cannot separate them. Shown as one list with one Approve button over it, ticking a
+   * whole assayer's rows authorised half a selection and collected refusals for the rest.
+   *
+   * Both code paths matter: an unscoped caller takes the `findAndCount` road and a region-scoped
+   * one takes the query builder. A filter honoured on only one of them would quietly stop
+   * separating the piles for exactly the region desks, which is the audience most likely to be
+   * approving payouts by the page.
+   */
+  describe('listPayouts — on a bill, or on none', () => {
+    it('narrows to payouts riding a bill, and to those on none, on the unscoped path', async () => {
+      stagedMode.mockImplementation(async () => 'off');
+      payableRepo.findAndCount.mockImplementation(async () => [[payable()], 1]);
+
+      await service.listPayouts({ onBill: true });
+      expect(payableRepo.findAndCount).toHaveBeenLastCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ assayerInvoiceId: Not(IsNull()) }) }),
+      );
+
+      await service.listPayouts({ onBill: false });
+      expect(payableRepo.findAndCount).toHaveBeenLastCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ assayerInvoiceId: IsNull() }) }),
+      );
+    });
+
+    it('leaves both kinds in when nothing is asked for', async () => {
+      stagedMode.mockImplementationOnce(async () => 'off');
+      payableRepo.findAndCount.mockImplementationOnce(async () => [[payable()], 1]);
+
+      await service.listPayouts({});
+
+      const [{ where }] = payableRepo.findAndCount.mock.calls.at(-1)!;
+      expect(where).not.toHaveProperty('assayerInvoiceId');
+    });
+
+    it('narrows the same way for a region-scoped caller, who reads through the query builder', async () => {
+      stagedMode.mockImplementation(async () => 'enforce');
+      const qb: any = queryBuilderStub();
+      qb.getRawAndEntities = jest.fn(async () => ({ entities: [payable()], raw: [{ region_scope: 'NORTH' }] }));
+      qb.getCount = jest.fn(async () => 1);
+      payableRepo.createQueryBuilder.mockImplementation(() => qb);
+
+      await service.listPayouts({ onBill: true }, { regions: ['NORTH'] as any });
+      expect(qb.andWhere).toHaveBeenCalledWith('p.assayer_invoice_id IS NOT NULL');
+
+      await service.listPayouts({ onBill: false }, { regions: ['NORTH'] as any });
+      expect(qb.andWhere).toHaveBeenCalledWith('p.assayer_invoice_id IS NULL');
     });
   });
 

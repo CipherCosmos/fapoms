@@ -31,6 +31,10 @@ const FACTOR_META: Record<MfaFactor, { label: string; blurb: string; Icon: typeo
   SMS: { label: 'Text message (SMS)', blurb: 'A one-time code texted to your phone when you sign in.', Icon: MessageSquare },
 };
 
+/** Shown on the SMS card while the server has no SMS gateway, in place of a button that would only fail. */
+export const SMS_UNAVAILABLE_NOTE =
+  'Not available yet: text messages have not been set up on this system. Use an authenticator app or email instead.';
+
 const labelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' };
 const inputStyle: React.CSSProperties = {
   padding: '10px 14px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
@@ -67,6 +71,8 @@ export const MfaPanel: React.FC = () => {
   useEffect(() => { void refresh(); }, [refresh]);
 
   const active = (f: MfaFactor) => !!status?.factors.includes(f);
+  /** Only an explicit "no" hides SMS; a status that has not loaded yet is not a refusal. */
+  const unavailable = (f: MfaFactor) => f === 'SMS' && status?.smsAvailable === false;
 
   const closeFlow = () => { setFlow(null); setFlowError(null); setBusy(false); };
 
@@ -247,6 +253,7 @@ export const MfaPanel: React.FC = () => {
           const meta = FACTOR_META[factor];
           const on = active(factor);
           const open = flow?.factor === factor;
+          const offline = unavailable(factor);
           return (
             <div key={factor} style={{
               border: `1px solid ${open ? 'var(--accent-primary)' : 'var(--border-color)'}`,
@@ -259,8 +266,12 @@ export const MfaPanel: React.FC = () => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--text-primary)' }}>{meta.label}</span>
                     {on && <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'var(--status-active-bg, rgba(34,197,94,0.14))', color: 'var(--success, #22c55e)' }}>ON</span>}
+                    {offline && !on && <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>Unavailable</span>}
                   </div>
                   <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: '3px 0 0' }}>{meta.blurb}</p>
+                  {offline && (
+                    <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '3px 0 0' }}>{SMS_UNAVAILABLE_NOTE}</p>
+                  )}
                 </div>
                 <div style={{ flexShrink: 0 }}>
                   {on ? (
@@ -271,7 +282,7 @@ export const MfaPanel: React.FC = () => {
                     <button onClick={closeFlow} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                       <X size={14} /> Cancel
                     </button>
-                  ) : (
+                  ) : offline ? null : (
                     <button onClick={() => startFlow(factor)} disabled={busy} className="btn btn-primary" style={{ gap: 6, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
                       Set up
                     </button>

@@ -6,7 +6,8 @@ import { NotificationEntity } from './notification.entity';
 import { DeviceTokenEntity } from './device-token.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from './email.service';
+import { SmsService } from './sms.service';
 import { NotificationSettingsService } from './notification-settings.service';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { UserEntity } from '../user/user.entity';
@@ -41,9 +42,9 @@ describe('NotificationDeliveryWorker', () => {
   const prefRepo = { findOne: jest.fn() };
   const userRepo = { findOne: jest.fn() };
   const assayerRepo = { findOne: jest.fn() };
-  const fcm = { sendMulticast: jest.fn() };
-  const emailProvider = { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() };
-  const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn(), requeueStrandedEmails: jest.fn() };
+  const fcm = { sendMulticast: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) };
+  const emailService = { isEnabled: jest.fn().mockReturnValue(true), queue: jest.fn() };
+  const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn(), requeueStrandedMessages: jest.fn() };
 
   const lastStatus = () => [...updates].reverse().find((u) => u.status)?.status;
 
@@ -62,7 +63,9 @@ describe('NotificationDeliveryWorker', () => {
         { provide: getRepositoryToken(UserEntity), useValue: userRepo },
         { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
         { provide: FcmProvider, useValue: fcm },
-        { provide: EmailProvider, useValue: emailProvider },
+        { provide: EmailService, useValue: emailService },
+        // The text leg's hand-off; never reached by these tests, which are about other legs.
+        { provide: SmsService, useValue: { queue: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) } },
         {
           provide: NotificationSettingsService,
           // No overrides in tests: resolve straight to the shipped catalog entry.
@@ -129,6 +132,35 @@ describe('NotificationDeliveryWorker', () => {
       { id: expect.objectContaining({ _value: ['t1'] }) },
       { isActive: false },
     );
+  });
+
+  it('does not burn five retries on a server with no push credential', async () => {
+    // Every failed job in the live notification queue was "FCM not initialized", retried 5 times.
+    notifRepo.findOne.mockResolvedValue(baseNotification());
+    tokenRepo.find.mockResolvedValue([{ id: 't1', token: 'tok-1' }]);
+    fcm.isEnabled.mockReturnValueOnce(false);
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(fcm.sendMulticast).not.toHaveBeenCalled();
+    expect(lastStatus()).not.toBe(NotificationStatus.SENT);
+    expect(updates.at(-1).failureReason).toMatch(/not set up/);
+  });
+
+  it.each([
+    ['bell already carried it', NotificationStatus.DELIVERED, [NotificationChannel.IN_APP, NotificationChannel.PUSH]],
+    ['only channel is push', NotificationStatus.SUPPRESSED, [NotificationChannel.PUSH]],
+  ])('with no push credential, a notification whose %s settles %s', async (_why, expected, channels) => {
+    // A push-only notice that reached nobody must not read as delivered.
+    notifRepo.findOne.mockResolvedValue(baseNotification({ channels }));
+    tokenRepo.find.mockResolvedValue([{ id: 't1', token: 'tok-1' }]);
+    fcm.isEnabled.mockReturnValueOnce(false);
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(fcm.sendMulticast).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ status: expected, failureReason: expect.stringMatching(/not set up/) });
   });
 
   it('honours an explicit push opt-out without treating it as a failure', async () => {

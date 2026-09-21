@@ -1,47 +1,51 @@
 /**
- * FAPOMS — API Contracts
+ * The response envelope, and the pagination inside it. Nothing else.
  *
- * Standardized request/response shapes used across the API.
- * These types ensure consistency between backend and frontend.
+ * This file used to hold twenty exported types under a header claiming they "ensure consistency
+ * between backend and frontend". Sixteen of them had **no reference anywhere** — not in the
+ * backend, the web app, the phone app or the rest of this package — so they ensured nothing.
+ * Worse than idle, they were misleading in two specific ways:
+ *
+ *   - A SECOND ERROR CONTRACT. `ApiError` / `ApiErrorDetail` / `ApiErrorResponse` described a
+ *     `{ code, message, details[], traceId }` body, while the error vocabulary this product
+ *     actually speaks is `error-codes.ts` in this same package (`ApiErrorCode`, `FieldError`),
+ *     wired through `infrastructure/http/api-error.ts`. Two error contracts in one package, one
+ *     of them fiction.
+ *   - A SEARCH SHAPE THE SERVER DOES NOT SERVE. `SearchResult` described a flat
+ *     `{ entityType, entityId, title… }` row. `GET /search` returns results GROUPED by entity
+ *     (`{ branches[], assayers[], projects[], clients[], assignments[] }`), which is what
+ *     `useGlobalSearch.ts` declares for itself. Anyone who had trusted the shared type would
+ *     have written code that could never run.
+ *
+ * Also deleted: a duplicate auth DTO set (`LoginRequest` / `LoginResponse` /
+ * `RefreshTokenRequest` / `AuthenticatedUser`) beside the live `LoginDto` in
+ * `auth/auth.controller.ts`, plus unused `PaginationParams`, `SortParams`, `FilterParams` and
+ * the three `BulkOperation*` types.
+ *
+ * What remains is what is actually imported and enforced: `ApiResponse` by the response
+ * interceptor, `PaginationMeta` by `buildPaginationMeta`. A type nobody imports does not
+ * document a contract — it invents one.
  */
 
 // ---------------------------------------------------------------------------
 // Standard API Response Envelope
 // ---------------------------------------------------------------------------
 
+/** What `ResponseInterceptor` wraps every handler return value in. */
 export interface ApiResponse<T> {
   success: boolean;
   data: T;
   meta?: ApiMeta;
 }
 
-export interface ApiErrorResponse {
-  success: false;
-  error: ApiError;
-}
-
-export interface ApiError {
-  code: string;
-  message: string;
-  details?: ApiErrorDetail[];
-  traceId?: string;
-}
-
-export interface ApiErrorDetail {
-  field?: string;
-  constraint?: string;
-  message?: string;
+export interface ApiMeta {
+  pagination?: PaginationMeta;
+  timestamp?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Pagination (Part 10 §6)
+// Pagination
 // ---------------------------------------------------------------------------
-
-export interface PaginationParams {
-  page?: number;
-  limit?: number;
-  cursor?: string;
-}
 
 /**
  * The paginated envelope the API actually returns: `data` plus `meta.pagination`. It was previously
@@ -63,104 +67,4 @@ export interface PaginationMeta {
   hasNext: boolean;
   hasPrevious: boolean;
   nextCursor?: string;
-}
-
-export interface ApiMeta {
-  pagination?: PaginationMeta;
-  timestamp?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Filtering & Sorting (Part 10 §6, §13)
-// ---------------------------------------------------------------------------
-
-export interface SortParams {
-  sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
-}
-
-export interface FilterParams {
-  [key: string]: string | string[] | number | boolean | undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Bulk Operations (Part 9 §16)
-// ---------------------------------------------------------------------------
-
-export interface BulkOperationRequest<T = Record<string, unknown>> {
-  action: string;
-  ids: string[];
-  data?: T;
-  remarks?: string;
-}
-
-export interface BulkOperationResponse {
-  success: boolean;
-  totalRequested: number;
-  totalSucceeded: number;
-  totalFailed: number;
-  results: BulkOperationResult[];
-}
-
-export interface BulkOperationResult {
-  id: string;
-  status: 'success' | 'error';
-  error?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Authentication (Part 8 §4)
-// ---------------------------------------------------------------------------
-
-export interface LoginRequest {
-  username: string;
-  password: string;
-}
-
-export interface LoginResponse {
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: number;
-  user: AuthenticatedUser;
-}
-
-export interface RefreshTokenRequest {
-  refreshToken: string;
-}
-
-export interface AuthenticatedUser {
-  id: string;
-  username: string;
-  email: string;
-  displayName: string;
-  roles: string[];
-  permissions: string[];
-}
-
-// ---------------------------------------------------------------------------
-// Search (Part 10 §12)
-// ---------------------------------------------------------------------------
-
-export interface SearchRequest {
-  query: string;
-  entityTypes?: string[];
-  limit?: number;
-}
-
-export interface SearchResult {
-  entityType: string;
-  entityId: string;
-  title: string;
-  subtitle?: string;
-  status?: string;
-  matchField?: string;
-}
-
-export interface SearchResponse {
-  success: boolean;
-  data: SearchResult[];
-  meta: {
-    total: number;
-    query: string;
-  };
 }

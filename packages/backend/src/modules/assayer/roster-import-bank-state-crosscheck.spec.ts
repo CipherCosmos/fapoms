@@ -246,6 +246,50 @@ describe('roster import — state and bank cross-checks', () => {
       expect(mockedLookupIfsc).not.toHaveBeenCalled();
     });
 
+    /**
+     * The lookup ran once per row, inside the import's transaction, at ~0.37 s a time — and a
+     * roster repeats codes heavily, because a branch's appraisers bank at that branch. 1,155 rows
+     * was minutes of asking the same question. One answer per code per run is all the row needs.
+     */
+    it('asks the directory once for an IFSC code that repeats across rows, and uses the answer for each', async () => {
+      mockedLookupIfsc.mockResolvedValue({
+        bankName: 'State Bank of India', branchName: 'MAIN', city: null, state: null, address: null,
+      });
+      const h = harness();
+
+      await h.service.importAssayerSheet(
+        book([
+          row({ 'Appraiser code': 'AS0001', 'Bank Name': 'SBI', 'IFSC Code': 'SBIN0001234' }),
+          row({ 'Appraiser code': 'AS0002', 'Bank Name': 'SBI', 'IFSC Code': 'SBIN0001234' }),
+          row({ 'Appraiser code': 'AS0003', 'Bank Name': 'SBI', 'IFSC Code': 'sbin0001234' }),
+        ]),
+        'user-1', {},
+      );
+
+      expect(mockedLookupIfsc).toHaveBeenCalledTimes(1);
+      expect(h.savedAssayers.map((a) => a.bankName)).toEqual(['State Bank of India', 'State Bank of India', 'State Bank of India']);
+    });
+
+    /** …and a cache keyed on anything coarser than the code would give one bank's name to another's rows. */
+    it('still looks up each different IFSC code on its own', async () => {
+      mockedLookupIfsc.mockImplementation(async (code: string) => ({
+        bankName: code.startsWith('SBIN') ? 'State Bank of India' : 'HDFC Bank', branchName: 'MAIN', city: null, state: null, address: null,
+      }));
+      const h = harness();
+
+      await h.service.importAssayerSheet(
+        book([
+          // A typed name that agrees with neither answer, so each row shows which answer it got.
+          row({ 'Appraiser code': 'AS0001', 'Bank Name': 'Canara', 'IFSC Code': 'SBIN0001234' }),
+          row({ 'Appraiser code': 'AS0002', 'Bank Name': 'Canara', 'IFSC Code': 'HDFC0000001' }),
+        ]),
+        'user-1', {},
+      );
+
+      expect(mockedLookupIfsc).toHaveBeenCalledTimes(2);
+      expect(h.savedAssayers.map((a) => a.bankName)).toEqual(['State Bank of India', 'HDFC Bank']);
+    });
+
     it('times out fast rather than hanging the import when the lookup never resolves', async () => {
       jest.useFakeTimers({ doNotFake: ['nextTick'] });
       mockedLookupIfsc.mockImplementation(() => new Promise(() => {}));

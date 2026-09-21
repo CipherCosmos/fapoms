@@ -43,22 +43,34 @@ describe('Phase 4: Cross-Screen Product Hardening Specification', () => {
       expect(descriptor.label).not.toBe('Empanelment Refused');
     });
 
-    it('enforces canonical label "Inactive" for AssayerLifecycleStatus.INACTIVE without unauthoritative "Hold" terms', () => {
-      const descriptor = ASSAYER_LIFECYCLE_STATUS_MAP[AssayerLifecycleStatus.INACTIVE];
-      expect(descriptor).toBeDefined();
+    /**
+     * Read through `getStatusDescriptor`, not out of the map.
+     *
+     * These two asserted `MAP[status].label` directly, and that is where the divergence lived:
+     * the maps carried a private spelling ("Declined" for a REJECTED assignment) while the rest
+     * of the product — and the phone — said "Rejected". The maps no longer hold words at all for
+     * any domain `@fapoms/shared` names, so the only meaningful question is what the resolver
+     * hands a screen, and the answer must be shared's.
+     */
+    it('resolves AssayerLifecycleStatus.INACTIVE to shared wording, with no "Hold" term', () => {
+      const descriptor = getStatusDescriptor('assayerLifecycle', AssayerLifecycleStatus.INACTIVE);
       expect(descriptor.label).toBe('Inactive');
       expect(descriptor.semantic).toBe('neutral');
       expect(descriptor.label).not.toContain('Hold');
+      // ...and the map itself must not have grown a private copy back.
+      expect(ASSAYER_LIFECYCLE_STATUS_MAP[AssayerLifecycleStatus.INACTIVE].label).toBeUndefined();
     });
 
-    it('enforces canonical assignment labels ("Declined" for REJECTED, "Completed" for COMPLETED)', () => {
-      const rejectedDesc = ASSIGNMENT_STATUS_MAP[AssignmentStatus.REJECTED];
-      expect(rejectedDesc.label).toBe('Declined');
+    it('resolves assignment statuses to shared wording ("Rejected", not a second word for it)', () => {
+      const rejectedDesc = getStatusDescriptor('assignment', AssignmentStatus.REJECTED);
+      expect(rejectedDesc.label).toBe('Rejected');
       expect(rejectedDesc.semantic).toBe('danger');
 
-      const completedDesc = ASSIGNMENT_STATUS_MAP[AssignmentStatus.COMPLETED];
+      const completedDesc = getStatusDescriptor('assignment', AssignmentStatus.COMPLETED);
       expect(completedDesc.label).toBe('Completed');
       expect(completedDesc.semantic).toBe('positive');
+
+      expect(ASSIGNMENT_STATUS_MAP[AssignmentStatus.REJECTED].label).toBeUndefined();
     });
 
     it('strictly forbids unauthoritative domain statuses in canonical maps', () => {

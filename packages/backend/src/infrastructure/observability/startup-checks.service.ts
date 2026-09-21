@@ -3,7 +3,7 @@ import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { SystemRole } from '@fapoms/shared';
-import { EmailProvider } from '../notifications/email-provider';
+import { EmailService } from '../../modules/notifications/email.service';
 import { FcmProvider } from '../notifications/fcm-provider';
 import { NOTIFICATION_CATALOG } from '../../modules/notifications/notification-catalog';
 import { RUNTIME_ASSERTIONS } from '../database/roles/role-model';
@@ -55,7 +55,7 @@ export class StartupChecksService implements OnApplicationBootstrap {
   /**
    * Resolved through `ModuleRef` with `strict: false`, not constructor-injected.
    *
-   * `EmailProvider` and `FcmProvider` live in `NotificationsModule`, which is not global, so
+   * `EmailService` and `FcmProvider` live in `NotificationsModule`, which is not global, so
    * constructor injection from here yields nothing. With `@Optional()` that failure is *silent*:
    * both arrive as `undefined` and every run reports "NOT configured" — which is exactly what
    * the first version of this file did, on a deployment where both were demonstrably working.
@@ -132,7 +132,7 @@ export class StartupChecksService implements OnApplicationBootstrap {
     });
 
     // ── Outbound email ───────────────────────────────────────────────────────
-    const email = this.resolve(EmailProvider);
+    const email = this.resolve(EmailService);
     checks.push({
       name: 'email',
       ok: email?.isEnabled() ?? false,
@@ -141,7 +141,7 @@ export class StartupChecksService implements OnApplicationBootstrap {
         ? 'provider not registered in this process'
         : email.isEnabled()
           ? 'transport configured'
-          : 'NOT configured — every email notification will be recorded SUPPRESSED and silently not sent. Administration → Platform Settings → Email delivery.',
+          : 'NOT configured — no email will be sent: every email notification will be recorded SUPPRESSED, and every other email FAILED. Administration → Platform Settings → Email delivery.',
     });
 
     // ── Push ─────────────────────────────────────────────────────────────────

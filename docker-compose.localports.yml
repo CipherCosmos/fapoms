@@ -39,3 +39,9 @@ services:
   backend:
     ports: !override
       - "3001:3000"
+    # Links this stack emails (registration invites, password setup) must open THIS stack's web
+    # app. `.env.docker` is shared with the acceptance rig via deploy/.env, and its APP_PUBLIC_URL
+    # names the rig (:8080) — so a link minted here opened the rig's database and reported
+    # "This registration link is not valid".
+    environment:
+      APP_PUBLIC_URL: http://localhost:5173

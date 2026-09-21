@@ -33,9 +33,16 @@ export function ImportProgressPanel<TReport = ImportReport>({
   state,
   onDismiss,
   summarise,
+  mode = 'import',
 }: {
   state: ImportPhase<TReport>;
   onDismiss: () => void;
+  /**
+   * `rehearsal` for a run that writes nothing — the roster's "what would this do?" check, which is
+   * queued and polled like an import. Worded as checking, because telling an operator a file is
+   * "Importing" while it is only being tried is how they come to believe it already landed.
+   */
+  mode?: 'import' | 'rehearsal';
   /**
    * How to describe this importer's finished report.
    *
@@ -46,6 +53,8 @@ export function ImportProgressPanel<TReport = ImportReport>({
   summarise?: (report: TReport) => ImportSummary;
 }) {
   if (state.phase === 'idle') return null;
+
+  const doing = mode === 'rehearsal' ? 'Checking' : 'Importing';
 
   const shell = (
     tone: 'info' | 'success' | 'warning' | 'error',
@@ -132,7 +141,7 @@ export function ImportProgressPanel<TReport = ImportReport>({
         'info',
         <Loader2 size={20} className="spin" />,
         <>
-          <strong>Importing {state.fileName}</strong>
+          <strong>{doing} {state.fileName}</strong>
           <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{state.message}</div>
 
           {/* Indeterminate: a moving segment rather than a filled width, and no `aria-valuenow`
@@ -145,7 +154,7 @@ export function ImportProgressPanel<TReport = ImportReport>({
             role="progressbar"
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={`Importing ${state.fileName}, in progress`}
+            aria-label={`${doing} ${state.fileName}, in progress`}
           >
             <div className="import-progress-indeterminate" style={{ height: '100%', width: '35%', borderRadius: 4, background: 'var(--primary)' }} />
           </div>
@@ -176,7 +185,7 @@ export function ImportProgressPanel<TReport = ImportReport>({
       'info',
       <Loader2 size={20} className="spin" />,
       <>
-        <strong>Importing {state.fileName}</strong>
+        <strong>{doing} {state.fileName}</strong>
         <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
           {/*
             The server's own sentence, which already explains in plain words why this takes a while
@@ -216,7 +225,7 @@ export function ImportProgressPanel<TReport = ImportReport>({
       'error',
       <AlertCircle size={20} />,
       <>
-        <strong>{state.fileName} could not be imported</strong>
+        <strong>{state.fileName} could not be {mode === 'rehearsal' ? 'checked' : 'imported'}</strong>
         <div style={{ marginTop: 2 }}>{state.error}</div>
       </>,
     );

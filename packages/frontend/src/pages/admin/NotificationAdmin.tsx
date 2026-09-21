@@ -22,7 +22,7 @@ import { SkeletonList } from '../../components/ui/Loading';
  * following the defaults as they improve. Every row shows which fields have been customised.
  */
 
-type Channel = 'IN_APP' | 'PUSH' | 'EMAIL';
+type Channel = 'IN_APP' | 'PUSH' | 'EMAIL' | 'SMS';
 
 interface CatalogType {
   type: string;
@@ -63,8 +63,18 @@ interface EmailStatus {
   hint: string | null;
 }
 
-const CHANNELS: Channel[] = ['IN_APP', 'PUSH', 'EMAIL'];
-const CHANNEL_LABEL: Record<Channel, string> = { IN_APP: 'In-app', PUSH: 'Push', EMAIL: 'Email' };
+const CHANNELS: Channel[] = ['IN_APP', 'PUSH', 'EMAIL', 'SMS'];
+const CHANNEL_LABEL: Record<Channel, string> = { IN_APP: 'In-app', PUSH: 'Push', EMAIL: 'Email', SMS: 'SMS' };
+
+/**
+ * The warning a channel's checkbox carries before it is ticked, for the channels that cost the
+ * recipient something. No shipped event texts anyone: SMS starts off everywhere and is switched on
+ * here one event at a time.
+ */
+const CHANNEL_ENABLE_HINT: Partial<Record<Channel, string>> = {
+  EMAIL: 'Turning email on for a frequent event floods inboxes — prefer it for events that force a decision.',
+  SMS: 'Every text is paid for and lands on a personal phone — switch SMS on only for events someone must act on quickly.',
+};
 
 const PRIORITY_TONE: Record<string, string> = {
   CRITICAL: 'var(--danger)',
@@ -303,11 +313,8 @@ export const NotificationAdmin: React.FC = () => {
                               checked={t.channels.includes(c)}
                               disabled={!canAdminister || busy || !t.enabled}
                               onChange={() => toggleChannel(t, c)}
-                              title={
-                                c === 'EMAIL' && !t.channels.includes(c)
-                                  ? 'Turning email on for a frequent event floods inboxes — prefer it for events that force a decision.'
-                                  : undefined
-                              }
+                              aria-label={`${CHANNEL_LABEL[c]} for ${t.title}`}
+                              title={t.channels.includes(c) ? undefined : CHANNEL_ENABLE_HINT[c]}
                             />
                           </td>
                         ))}
@@ -347,7 +354,8 @@ export const NotificationAdmin: React.FC = () => {
               <span>
                 Changes take effect on the next event — no deploy. Events not customised keep following the shipped
                 defaults, including improvements in later releases. Email reaches internal staff only; assayers are
-                reached in the mobile app.
+                reached in the mobile app. SMS is off for every event until ticked here; it texts staff and assayers
+                at the mobile number on their record, unless they have turned texts off for that kind of update.
               </span>
             </div>
           </div>
@@ -566,7 +574,17 @@ const TemplateEditor: React.FC<{
             </div>
             <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginBottom: '4px' }}>As an email:</div>
             <div style={{ border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden' }}>
-              <iframe title="Email preview" srcDoc={preview.emailHtml} style={{ width: '100%', height: '260px', border: 'none', background: '#fff' }} />
+              <iframe
+                title="Email preview"
+                srcDoc={
+                  preview.emailHtml
+                    ? preview.emailHtml
+                        .replaceAll('http://localhost:5173', window.location.origin)
+                        .replaceAll('cid:sumeru-logo', `${window.location.origin}/sumeru-logo@2x.png`)
+                    : ''
+                }
+                style={{ width: '100%', height: '260px', border: 'none', background: '#fff' }}
+              />
             </div>
           </div>
         )}

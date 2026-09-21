@@ -143,11 +143,37 @@ export function hydrateRegistration(token: string): Promise<RegistrationHydrateR
   return call<RegistrationHydrateResult>(basePath(token));
 }
 
-export function requestRegistrationOtp(token: string, phone: string): Promise<{ sent: boolean }> {
+/**
+ * Where a verification code went. The server texts the mobile being verified when SMS is set up and
+ * emails the address on the application otherwise, and says which — `sentTo` is already masked
+ * ("••••• 4455", "r•••@example.com") and is shown as it comes.
+ */
+export interface RegistrationOtpSent {
+  sent: boolean;
+  channel: 'SMS' | 'EMAIL';
+  sentTo: string;
+  cooldownSeconds?: number;
+  expiresInSeconds?: number;
+}
+
+export function requestRegistrationOtp(token: string, phone: string): Promise<RegistrationOtpSent> {
   return call(`${basePath(token)}/otp/request`, {
     method: 'POST',
     body: JSON.stringify({ phone }),
   });
+}
+
+/**
+ * Said before a code is requested. The page cannot know yet which channel the server will use, so it
+ * names both rather than promise one that may not be the one that arrives.
+ */
+export const OTP_BEFORE_SEND_WORDS =
+  'We will send a 6-digit code to your mobile, or to your email if texts are not available.';
+
+/** Said once a code is on its way: exactly where the server says it went. */
+export function otpSentWords(delivery: Pick<RegistrationOtpSent, 'channel' | 'sentTo'>): string {
+  const where = delivery.channel === 'SMS' ? 'texted' : 'emailed';
+  return `A 6-digit code has been ${where} to ${delivery.sentTo}. It expires in 5 minutes.`;
 }
 
 export function verifyRegistrationOtp(token: string, phone: string, code: string): Promise<{ verified: boolean }> {

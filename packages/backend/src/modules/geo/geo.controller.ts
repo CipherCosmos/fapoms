@@ -65,6 +65,30 @@ export class DestinationDto extends CoordinateDto implements DestinationCoords {
   id: string;
 }
 
+/**
+ * One pair, one road line. The planning map's only routing call.
+ *
+ * It exists so the browser has somewhere to ask other than a second router. `InteractivePlanningMap`
+ * used to fetch `https://router.project-osrm.org` directly, which was a parallel implementation of
+ * routing: its own profile mapping, no cache, no physics check on the answer, and — once this
+ * deployment declared India data residency — assayers' home coordinates going to a third party.
+ */
+export class RouteBetweenDto {
+  @ValidateNested()
+  @Type(() => CoordinateDto)
+  @IsNotEmpty()
+  origin: CoordinateDto;
+
+  @ValidateNested()
+  @Type(() => CoordinateDto)
+  @IsNotEmpty()
+  destination: CoordinateDto;
+
+  @IsOptional()
+  @IsString()
+  mode?: 'driving' | 'walking' | 'cycling';
+}
+
 export class OptimizeRouteDto {
   @ValidateNested()
   @Type(() => CoordinateDto)
@@ -155,7 +179,7 @@ export class GeoController {
   async autocomplete(@Query('q') q?: string) {
     const results = await autocompleteIndia((q || '').trim());
     /**
-     * `autocompleteIndia`'s own doc comment: with no GOOGLE_MAPS_API_KEY configured, an empty
+     * `autocompleteIndia`'s own doc comment: with no place lookup configured, an empty
      * list is "indistinguishable from 'no such place' unless the caller asks" — and this
      * controller is exactly that caller. Every query, including unambiguous ones like "Mumbai",
      * returned `data: []` with nothing to tell a consumer the integration is absent rather than
@@ -204,6 +228,20 @@ export class GeoController {
       this.cityRepo.find({ where: { districtId }, order: { name: 'ASC' } }),
     );
     return cities;
+  }
+
+  @Post('route')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // Same gate as route/optimize below: no GEO permission exists, and this serves the planning read.
+  @RequirePermissions('planning:view:organization')
+  @ApiOperation({ summary: 'Road route between two points, with geometry — the ONE router the app uses' })
+  async routeBetween(@Body() dto: RouteBetweenDto) {
+    return await this.routingService.calculateRoute(
+      dto.origin,
+      dto.destination,
+      dto.mode,
+      { withGeometry: true },
+    );
   }
 
   @Post('route/optimize')

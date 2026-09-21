@@ -5,6 +5,8 @@ import {
 import {
   ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS,
   uploadSizeProblem, isValidIfsc, normalisePhone, scanMimeType, storedScanFileName,
+  inferRegistrationStep, registrationStepProblems, resumableRegistrationStep, REGISTRATION_CONDITIONAL_DOCUMENTS,
+  type RegistrationFormField, type RegistrationFormValues, type RegistrationProblem,
 } from '@fapoms/shared';
 import { Select } from '../components/ui/Select';
 import { ScanOrAttach } from '../components/scanner/ScanOrAttach';
@@ -12,11 +14,11 @@ import { AlertBanner } from '../components/ui/AlertBanner';
 import { userMessage } from '../services/errors';
 import { identityFormatHint, normaliseIdentityOnBlur } from '../config/identity-fields';
 import {
-  STATE_OPTIONS, GENDER_OPTIONS, EXPERIENCE_OPTIONS, EXPERIENCE_MIN, EXPERIENCE_MAX,
+  STATE_OPTIONS, GENDER_OPTIONS, EXPERIENCE_OPTIONS,
   RELATION_OPTIONS, OTHER_SENTINEL, isOtherValue,
   resolvePincode, pincodeStateConflict, resolveIfsc,
-  mobileHint, mobileHelper, normaliseMobile, DOB_MIN, dobMaxToday, dobHint,
-  isSixDigitPin, isBankAccountNumber, FIELD_LIMITS, limitHint,
+  mobileHint, mobileHelper, normaliseMobile, DOB_MIN, dobMaxToday,
+  isSixDigitPin, FIELD_LIMITS,
 } from '../config/registration-options';
 import {
   hydrateRegistration, requestRegistrationOtp, verifyRegistrationOtp, updateRegistrationDraft,
@@ -24,6 +26,7 @@ import {
   acceptRegistrationConsent,
   withdrawRegistrationConsent,
   type RegistrationHydrateResult, uploadRegistrationDocument, submitRegistration, isOtpVerificationLost,
+  OTP_BEFORE_SEND_WORDS, otpSentWords,
   getRegistrationDocumentFileBlob,
   type RegistrationApplication, type RegistrationApplicationDocument, type UpdateRegistrationDraftInput,
 } from '../services/public-registration';
@@ -214,32 +217,8 @@ const PhoneInput: React.FC<{
   </div>
 );
 
-interface FormState {
-  fullName: string;
-  dateOfBirth: string;
-  gender: string;
-  address: string;
-  state: string;
-  city: string;
-  pincode: string;
-  experienceYears: string;
-  currentEmployer: string;
-  expertise: string;
-  availability: string;
-  employmentCategory: EmploymentCategory | '';
-  email: string;
-  alternatePhone: string;
-  district: string;
-  panNumber: string;
-  aadhaarNumber: string;
-  bankAccountNumber: string;
-  ifscCode: string;
-  bankName: string;
-  qualification: string;
-  emergencyContactName: string;
-  emergencyContactPhone: string;
-  emergencyContactRelation: string;
-}
+/** The same answers the phone app's registration holds — the rules over them live in shared. */
+type FormState = RegistrationFormValues;
 
 export const RECORD_KEYS = [
   'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
@@ -341,8 +320,7 @@ const WIZARD_STEPS = [
   { id: 4, title: 'Documents & Submit', shortTitle: 'Documents', icon: FileCheck, desc: 'Scans, Photo & Declaration' },
 ] as const;
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const CONDITIONAL_DOCS = new Set(['RENT_AGREEMENT', 'ELECTRICITY_BILL']);
+const CONDITIONAL_DOCS = new Set(REGISTRATION_CONDITIONAL_DOCUMENTS);
 
 type StepErrors = Record<string, string>;
 
@@ -407,106 +385,44 @@ const saveStepPosition = (token: string, step: number) => {
   }
 };
 
-function inferProgressStep(app: RegistrationApplication, docs: RegistrationApplicationDocument[]): number {
-  if (app.status !== ApplicationStatus.DRAFT && app.status !== ApplicationStatus.AWAITING_INFO) {
-    return 1;
-  }
-  if ((docs && docs.some((d) => d.filePaths && d.filePaths.length > 0)) || app.consentAcceptedAt) {
-    return 4;
-  }
-  const hasStep3 = Boolean(
-    app.employmentCategory ||
-    app.extendedProfile?.fields?.panNumber ||
-    app.extendedProfile?.fields?.aadhaarNumber ||
-    app.extendedProfile?.fields?.bankAccountNumber ||
-    app.extendedProfile?.fields?.ifscCode ||
-    app.extendedProfile?.fields?.bankName,
-  );
-  if (hasStep3) return 3;
+/**
+ * The sentence for each problem the shared step rules report. The rules — what is required, what
+ * shape an answer must have — are `registrationStepProblems`, which the phone app runs too.
+ */
+const STEP_MESSAGES: Partial<Record<RegistrationFormField, Partial<Record<RegistrationProblem['code'], string>>>> = {
+  fullName: {
+    required: 'Enter your full name exactly as on your Aadhaar or PAN.',
+    tooShort: 'That name looks too short — enter your full legal name.',
+  },
+  email: { invalid: 'That email address does not look right.' },
+  dateOfBirth: { required: 'Enter your date of birth as printed on your Aadhaar or PAN.' },
+  pincode: { required: 'Enter your 6-digit postal pincode.', invalid: 'A pincode is exactly 6 digits.' },
+  state: { required: 'Select your state.' },
+  city: { required: 'Enter your city or town.' },
+  address: {
+    required: 'Enter your full residential street address (flat/house no., building, street).',
+    tooShort: 'Please enter a complete street address so we can locate you accurately.',
+  },
+  employmentCategory: { required: 'Choose Freelancer or Proprietor — it decides which documents we ask for.' },
+  panNumber: { invalid: 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.' },
+  aadhaarNumber: { invalid: 'An Aadhaar number is 12 digits — check it against the card.' },
+  ifscCode: { invalid: 'An IFSC code looks like HDFC0001234 — four letters, a zero, then six characters.' },
+  bankAccountNumber: { invalid: 'A bank account number is 9–18 digits.' },
+  alternatePhone: { invalid: 'That number does not look like a valid 10-digit mobile number.' },
+  emergencyContactPhone: { invalid: 'That number does not look like a valid 10-digit mobile number.' },
+};
 
-  const hasStep2 = Boolean(
-    app.address ||
-    app.pincode ||
-    app.state ||
-    app.city ||
-    app.experienceYears != null ||
-    app.currentEmployer ||
-    app.expertise ||
-    app.availability,
-  );
-  if (hasStep2) return 2;
-
-  return 1;
+function problemMessage(field: RegistrationFormField, problem: RegistrationProblem): string {
+  if (problem.code === 'tooLong') return `Keep this under ${problem.max} characters (${problem.length} now).`;
+  if (problem.code === 'outOfRange') return `Enter ${problem.min} for fresher, up to ${problem.max} years.`;
+  if (problem.code === 'dateOfBirth') return problem.message;
+  return STEP_MESSAGES[field]?.[problem.code] ?? 'Check this answer.';
 }
 
 function validateRegistrationStep(step: number, f: FormState): StepErrors {
   const errs: StepErrors = {};
-  const tooLong = (key: keyof FormState) => {
-    const message = limitHint(key as string, String(f[key] ?? ''));
-    if (message) errs[key as string] = message;
-  };
-  if (step === 1) {
-    if (!f.fullName.trim()) errs.fullName = 'Enter your full name exactly as on your Aadhaar or PAN.';
-    else if (f.fullName.trim().length < 3) errs.fullName = 'That name looks too short — enter your full legal name.';
-    else tooLong('fullName');
-    if (f.email.trim() && !EMAIL_PATTERN.test(f.email.trim())) errs.email = 'That email address does not look right.';
-    else tooLong('email');
-    /*
-      Required, not optional. HR chased a missing date of birth afterwards anyway — it is one of
-      the roster sweep's own findings — and the age rule below has nothing to judge without it.
-    */
-    if (!f.dateOfBirth.trim()) errs.dateOfBirth = 'Enter your date of birth as printed on your Aadhaar or PAN.';
-    else {
-      const dobProblem = dobHint(f.dateOfBirth);
-      if (dobProblem) errs.dateOfBirth = dobProblem;
-    }
-  }
-  if (step === 2) {
-    if (!f.pincode.trim()) {
-      errs.pincode = 'Enter your 6-digit postal pincode.';
-    } else if (!isSixDigitPin(f.pincode)) {
-      errs.pincode = 'A pincode is exactly 6 digits.';
-    }
-    if (!f.state.trim()) {
-      errs.state = 'Select your state.';
-    }
-    if (!f.city.trim()) {
-      errs.city = 'Enter your city or town.';
-    }
-    if (!f.address.trim()) {
-      errs.address = 'Enter your full residential street address (flat/house no., building, street).';
-    } else if (f.address.trim().length < 8) {
-      errs.address = 'Please enter a complete street address so we can locate you accurately.';
-    }
-    if (f.experienceYears.trim()) {
-      const n = Number(f.experienceYears);
-      if (!Number.isInteger(n) || n < EXPERIENCE_MIN || n > EXPERIENCE_MAX) {
-        errs.experienceYears = `Enter ${EXPERIENCE_MIN} for fresher, up to ${EXPERIENCE_MAX} years.`;
-      }
-    }
-    (['city', 'currentEmployer', 'expertise', 'availability'] as const).forEach(tooLong);
-  }
-  if (step === 3) {
-    if (!f.employmentCategory) errs.employmentCategory = 'Choose Freelancer or Proprietor — it decides which documents we ask for.';
-    if (f.panNumber.trim() && identityFormatHint('panNumber', f.panNumber)) {
-      errs.panNumber = 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.';
-    }
-    if (f.aadhaarNumber.trim() && identityFormatHint('aadhaarNumber', f.aadhaarNumber)) {
-      errs.aadhaarNumber = 'An Aadhaar number is 12 digits — check it against the card.';
-    }
-    if (f.ifscCode.trim() && identityFormatHint('ifscCode', f.ifscCode)) {
-      errs.ifscCode = 'An IFSC code looks like HDFC0001234 — four letters, a zero, then six characters.';
-    }
-    if (f.bankAccountNumber.trim() && !isBankAccountNumber(f.bankAccountNumber)) {
-      errs.bankAccountNumber = 'A bank account number is 9–18 digits.';
-    }
-    if (f.alternatePhone.trim() && mobileHint(f.alternatePhone)) {
-      errs.alternatePhone = mobileHint(f.alternatePhone) as string;
-    }
-    if (f.emergencyContactPhone.trim() && mobileHint(f.emergencyContactPhone)) {
-      errs.emergencyContactPhone = mobileHint(f.emergencyContactPhone) as string;
-    }
-    (['bankName', 'qualification', 'emergencyContactName', 'emergencyContactRelation'] as const).forEach(tooLong);
+  for (const [field, problem] of Object.entries(registrationStepProblems(step, f))) {
+    if (problem) errs[field] = problemMessage(field as RegistrationFormField, problem);
   }
   return errs;
 }
@@ -533,6 +449,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [otpError, setOtpError] = useState<string | null>(null);
   const [otpInfo, setOtpInfo] = useState<string | null>(null);
   const [otpSentTo, setOtpSentTo] = useState<string | null>(null);
+  const [otpCooldown, setOtpCooldown] = useState<number>(0);
   const [phoneConflict, setPhoneConflict] = useState<string | null>(null);
   const [checkingPhone, setCheckingPhone] = useState(false);
 
@@ -624,31 +541,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
 
       // Check stored step and draft progress
       const currentStored = getStoredStep(token);
-      const inferred = inferProgressStep(result.application, result.documents);
+      const inferred = inferRegistrationStep(result.application, result.documents);
       const target = currentStored !== null ? currentStored : inferred;
-
-      // Validate prerequisite steps before restoring position
-      let safeStep = 1;
-      if (target >= 2) {
-        const s1 = validateRegistrationStep(1, seeded);
-        if (Object.keys(s1).length === 0) {
-          safeStep = 2;
-          if (target >= 3) {
-            const s2 = validateRegistrationStep(2, seeded);
-            if (Object.keys(s2).length === 0) {
-              safeStep = 3;
-              if (target >= 4) {
-                const s3 = validateRegistrationStep(3, seeded);
-                if (Object.keys(s3).length === 0) {
-                  safeStep = 4;
-                }
-              }
-            }
-          }
-        }
-      }
-
-      const finalStep = Math.max(safeStep, 1);
+      const finalStep = resumableRegistrationStep(target, seeded);
       setActiveStep(finalStep);
       setMaxStepVisited((prev) => Math.max(prev, finalStep, inferred));
       saveStepPosition(token, finalStep);
@@ -690,6 +585,14 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   useEffect(() => {
     if (codeSent && !otpVerified) codeRef.current?.focus();
   }, [codeSent, otpVerified]);
+
+  useEffect(() => {
+    if (otpCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setOtpCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [otpCooldown]);
 
   /**
    * Asks the server whether this number is free, and returns the sentence it gave — not a boolean.
@@ -737,10 +640,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       // The clash is already shown under the number itself, which is where it belongs and where
       // the candidate is looking. Repeating it under the button said the same thing twice.
       if (await checkPhoneConflictFn(norm)) return;
-      await requestRegistrationOtp(token, trimmed);
+      const delivery = await requestRegistrationOtp(token, trimmed);
       setCodeSent(true);
       setOtpSentTo(trimmed);
-      setOtpInfo(`A 6-digit code has been emailed to ${application?.email ?? 'your email address'}. It expires in 5 minutes.`);
+      setOtpInfo(otpSentWords(delivery));
+      setOtpCooldown(delivery.cooldownSeconds ?? 60);
     } catch (err) {
       setOtpError(userMessage(err));
     } finally {
@@ -1621,8 +1525,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   {!otpVerified ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                        We will email a 6-digit verification code to <strong style={{ color: 'var(--text-primary)' }}>{application.email ?? 'your email address'}</strong> to
-                        confirm your identity. Enter your 10-digit mobile number below — it will be recorded on your appraiser profile.
+                        {OTP_BEFORE_SEND_WORDS} Enter your 10-digit mobile number below — it will be recorded on
+                        your appraiser profile.
                       </div>
                       <div id="reg-phone">
                         <label htmlFor="reg-phone-input" style={LABEL_STYLE}>Your mobile number *</label>
@@ -1669,9 +1573,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         <PrimaryButton
                           onClick={() => void handleSendCode()}
                           busy={otpBusy || checkingPhone}
-                          disabled={Boolean(phoneConflict) || Boolean(mobileHint(phone))}
+                          disabled={Boolean(phoneConflict) || Boolean(mobileHint(phone)) || otpCooldown > 0}
                         >
-                          Send verification code
+                          {otpCooldown > 0 ? `Send verification code (${otpCooldown}s)` : 'Send verification code'}
                         </PrimaryButton>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -1682,7 +1586,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                             </div>
                           )}
                           <div>
-                            <label htmlFor="reg-code" style={LABEL_STYLE}>6-digit code from your email</label>
+                            <label htmlFor="reg-code" style={LABEL_STYLE}>6-digit verification code</label>
                             <input
                               id="reg-code"
                               ref={codeRef}
@@ -1695,13 +1599,13 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                                   Six digits is the whole answer, so nothing is gained by asking
                                   for a click as well — the code is either right or it is not, and
                                   the form can find that out the moment it has one. Pasting the
-                                  code from the email lands here too.
+                                  code from the text or email lands here too.
                                 */
                                 if (next.length === 6 && !otpBusy) void handleVerifyCode(next);
                               }}
                               inputMode="numeric"
                               autoComplete="one-time-code"
-                              aria-label="The 6-digit code from your email"
+                              aria-label="The 6-digit verification code"
                               maxLength={6}
                               placeholder="000000"
                               className="reg-input reg-code-input"
@@ -1718,11 +1622,18 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                             <button
                               type="button"
                               onClick={() => void handleSendCode()}
-                              disabled={otpBusy || checkingPhone || Boolean(phoneConflict)}
+                              disabled={otpBusy || checkingPhone || Boolean(phoneConflict) || otpCooldown > 0}
                               className="btn btn-secondary"
-                              style={{ flex: '1 1 140px', padding: '10px 16px', minHeight: '48px', fontSize: 'var(--text-sm)' }}
+                              style={{
+                                flex: '1 1 140px',
+                                padding: '10px 16px',
+                                minHeight: '48px',
+                                fontSize: 'var(--text-sm)',
+                                cursor: otpCooldown > 0 || otpBusy ? 'not-allowed' : 'pointer',
+                                opacity: otpCooldown > 0 ? 0.6 : 1,
+                              }}
                             >
-                              Resend code
+                              {otpCooldown > 0 ? `Resend code (${otpCooldown}s)` : 'Resend code'}
                             </button>
                           </div>
                         </div>

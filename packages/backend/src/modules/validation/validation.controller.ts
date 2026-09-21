@@ -8,7 +8,7 @@ import { SystemRole, ValidationStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
-import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString, IsArray } from 'class-validator';
+import { IsUUID, IsNotEmpty, IsEnum, IsOptional, IsString, IsArray, ArrayMaxSize } from 'class-validator';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 class CreateValidationCaseRequestDto implements CreateValidationCaseDto {
@@ -42,9 +42,16 @@ class TransitionValidationCaseDto {
   ocrResult?: any;
 }
 
+/**
+ * Bounded. `ValidationService.bulkTransition` runs the full per-case transition (state machine,
+ * workflow command, audit) for each id in turn inside one request, so an uncapped array was an
+ * uncapped request. The desk's own screen sends one page of 25 at most; the cap matches the other
+ * bulk routes (`BulkIssueAppAccessDto`).
+ */
 class BulkTransitionValidationCaseDto {
   @IsArray()
   @IsNotEmpty()
+  @ArrayMaxSize(500, { message: 'Transition at most 500 validation cases at a time.' })
   @IsUUID('4', { each: true })
   ids: string[];
 

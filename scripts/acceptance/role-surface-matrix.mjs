@@ -636,7 +636,11 @@ const provisionCustomRole = async (adminToken) => {
     // put the password back to the known bootstrap value. Guessing at the state a previous run
     // left behind is how the fixture ends up unusable in a way that reads as a product refusal.
     await call(adminToken, 'PUT', `/users/${user.id}/roles`, { roleIds: [role.id] });
-    await call(adminToken, 'POST', '/users/bulk/status', { ids: [user.id], status: 'ACTIVE' });
+    // Checked, not assumed: since 2026-09-17 this route refuses more than 500 ids and any id that is
+    // not a v4 UUID with a 400. One API-created id passes both, but a refusal here used to vanish
+    // and leave the fixture suspended, which then reads as the product refusing the custom role.
+    const reactivated = await call(adminToken, 'POST', '/users/bulk/status', { ids: [user.id], status: 'ACTIVE' });
+    if (reactivated.status >= 400) note(`could not reactivate ${CUSTOM_USER} (${reactivated.status} ${reactivated.body?.message ?? ''})`);
     const reset = await call(adminToken, 'POST', `/users/${user.id}/reset-password`, { newPassword: BOOTSTRAP_PASSWORD });
     if (reset.status >= 400) note(`could not reset ${CUSTOM_USER}'s password (${reset.status} ${reset.body?.message ?? ''})`);
   }

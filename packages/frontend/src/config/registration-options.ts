@@ -5,6 +5,14 @@ import {
   isValidIfsc,
   normalisePhone,
   pincodeFromAddress,
+  mobileNumberLooksWrong,
+  isSixDigitPincode,
+  isBankAccountNumber as sharedIsBankAccountNumber,
+  registrationLengthProblem,
+  REGISTRATION_EXPERIENCE_MAX,
+  REGISTRATION_EXPERIENCE_MIN,
+  REGISTRATION_FIELD_LIMITS,
+  REGISTRATION_GENDERS,
 } from '@fapoms/shared';
 import { lookupRegistrationIfsc, lookupRegistrationPincode } from '../services/public-registration';
 
@@ -39,16 +47,11 @@ export const STATE_OPTIONS = INDIAN_STATES.map((s) => ({
   label: s.label,
 }));
 
-export const GENDER_OPTIONS = [
-  { value: 'Male', label: 'Male' },
-  { value: 'Female', label: 'Female' },
-  { value: 'Other', label: 'Other' },
-  { value: 'Prefer not to say', label: 'Prefer not to say' },
-];
+export const GENDER_OPTIONS = REGISTRATION_GENDERS.map((g) => ({ value: g as string, label: g as string }));
 
 /** Backend `UpdateDraftRequestDto.experienceYears` is `@IsInt() @Min(0) @Max(60)`. */
-export const EXPERIENCE_MIN = 0;
-export const EXPERIENCE_MAX = 60;
+export const EXPERIENCE_MIN = REGISTRATION_EXPERIENCE_MIN;
+export const EXPERIENCE_MAX = REGISTRATION_EXPERIENCE_MAX;
 
 export const EXPERIENCE_OPTIONS = Array.from(
   { length: EXPERIENCE_MAX - EXPERIENCE_MIN + 1 },
@@ -175,10 +178,7 @@ export async function resolveIfsc(token: string, code: string): Promise<IfscLook
  * field does not scold an unfinished number.
  */
 export function mobileHint(value: string): string | null {
-  const v = (value || '').trim();
-  if (!v) return null;
-  if (normalisePhone(v) !== null) return null;
-  return v.replace(/\D/g, '').length >= 10
+  return mobileNumberLooksWrong(value)
     ? 'That number does not look like a valid 10-digit mobile number.'
     : null;
 }
@@ -219,38 +219,15 @@ export function dobHint(value: string): string | null {
 // ---------------------------------------------------------------------------
 
 /** A pincode is exactly 6 digits — the same test the identity hint uses. */
-export function isSixDigitPin(value: string): boolean {
-  return /^\d{6}$/.test((value || '').trim());
-}
+export const isSixDigitPin = isSixDigitPincode;
 
 /** Bank account numbers are 9–18 digits. */
-export function isBankAccountNumber(value: string): boolean {
-  return /^\d{9,18}$/.test((value || '').trim());
-}
+export const isBankAccountNumber = sharedIsBankAccountNumber;
 
-/**
- * Longest value each box may hold, mirroring the enforced limits so an
- * over-long entry is refused HERE with its field named, not at save time with
- * a generic error. Draft DTO (`UpdateDraftRequestDto`): fullName 200, email
- * 255, city/state 100, employer 200, expertise 300, availability 200.
- * Record columns (checked at promotion): bankName 150, qualification 150,
- * emergencyContactName 200, emergencyContactRelation 100.
- */
-export const FIELD_LIMITS: Record<string, number> = {
-  fullName: 200,
-  email: 255,
-  city: 100,
-  currentEmployer: 200,
-  expertise: 300,
-  availability: 200,
-  bankName: 150,
-  qualification: 150,
-  emergencyContactName: 200,
-  emergencyContactRelation: 100,
-};
+/** Longest value each box may hold — the draft DTO's and the record columns' limits, kept in shared. */
+export const FIELD_LIMITS = REGISTRATION_FIELD_LIMITS;
 
 export function limitHint(key: string, value: string): string | null {
-  const max = FIELD_LIMITS[key];
-  if (!max || (value ?? '').length <= max) return null;
-  return `Keep this under ${max} characters (${(value ?? '').length} now).`;
+  const problem = registrationLengthProblem(key, value);
+  return problem?.code === 'tooLong' ? `Keep this under ${problem.max} characters (${problem.length} now).` : null;
 }

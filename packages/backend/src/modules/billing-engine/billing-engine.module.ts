@@ -17,6 +17,9 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { BILLING_QUEUE } from './billing-jobs.contract';
 import { BillingJobsService } from './billing-jobs.service';
 import { BillingJobsWorker } from './billing-jobs.worker';
+import { BILLING_BULK_QUEUE } from './billing-bulk-jobs.contract';
+import { BillingBulkJobsService } from './billing-bulk-jobs.service';
+import { BillingBulkJobsWorker } from './billing-bulk-jobs.worker';
 
 @Module({
   imports: [
@@ -31,6 +34,18 @@ import { BillingJobsWorker } from './billing-jobs.worker';
      * mistake recurring.
      */
     BullModule.registerQueue({ name: BILLING_QUEUE }),
+    // Approve / pay a selection of payouts and the invite-all round — too long for a request, and
+    // NOT on the queue above, whose loops would then be shared with completion booking.
+    BullModule.registerQueue({
+      name: BILLING_BULK_QUEUE,
+      /*
+        A run whose worker died mid-way (deploy, out-of-memory, lost lock) is FAILED, not restarted.
+        Bull's default re-runs a stalled job once from the top, which would re-approve, re-pay or
+        re-invite everything the dead run had already written. `attempts: 1` alone does not stop
+        that — stalled recovery is a separate counter.
+      */
+      settings: { maxStalledCount: 0 },
+    }),
     TypeOrmModule.forFeature([
       BillingEntryEntity,
       BillingInvoiceEntity,
@@ -46,7 +61,10 @@ import { BillingJobsWorker } from './billing-jobs.worker';
     ]),
   ],
   controllers: [BillingEngineController],
-  providers: [BillingEngineService, AssayerInvoiceService, BillingJobsService, BillingJobsWorker],
+  providers: [
+    BillingEngineService, AssayerInvoiceService, BillingJobsService, BillingJobsWorker,
+    BillingBulkJobsService, BillingBulkJobsWorker,
+  ],
   exports: [BillingEngineService, AssayerInvoiceService, BillingJobsService],
 })
 export class BillingEngineModule {}

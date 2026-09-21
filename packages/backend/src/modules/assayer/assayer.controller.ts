@@ -113,6 +113,8 @@ import { QualificationScoreService } from './qualification-score.service';
 import { RosterQueryService, RosterFilters, rosterCursorFor } from './roster-query.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { formatRule, IsIndianMobile } from '../../infrastructure/http/format-validators';
+import { WorkforceBulkJobsService } from './workforce-bulk-jobs.service';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
 const STAFF_ASSAYER_EDITORS: string[] = [
@@ -292,7 +294,6 @@ class SetDocumentRequestDto {
   remarks?: string;
 }
 
-
 /**
  * These call the shared rulebook in `@fapoms/shared` (identity-validation.ts) — the same
  * functions the roster importer applies — so the form and the spreadsheet can never disagree
@@ -343,8 +344,6 @@ const IsAadhaarNumber = identityFormatRule('isAadhaarNumber', isValidAadhaar,
       ? 'That looks like a placeholder rather than a real Aadhaar number — 12 identical digits. Please enter the number from the card, or leave the field empty until you have it.'
       : 'This doesn\'t match a real Aadhaar number — one digit looks mistyped or swapped. Please re-check it against the card.';
   });
-
-
 
 /**
  * Shape only — nothing checked this before, and any string passed. Reuses the same
@@ -965,8 +964,6 @@ export class UpdateCommercialProfileRequestDto {
   effectiveEndDate?: string | null;
 }
 
-
-
 export class TransitionLifecycleDto {
   @IsString() @IsNotEmpty()
   targetStatus: string;
@@ -1003,6 +1000,8 @@ export class DeleteAssayerDto {
 
 export class BulkTransitionLifecycleDto {
   @IsArray() @IsNotEmpty()
+  // Uncapped, the roster's select-all sent all ~1,200 people in one walk.
+  @ArrayMaxSize(500, { message: 'Move at most 500 assayers at a time.' })
   @IsUUID('4', { each: true })
   ids: string[];
 
@@ -1125,7 +1124,6 @@ export class UpdateAssayerDocumentRequestDto {
   remarks?: string;
 }
 
-
 /**
  * Password bodies.
  *
@@ -1193,6 +1191,8 @@ export class AssayerController {
     // Reused for exactly one thing: the phone half of `checkIdentifiers` below, which asks the
     // same mechanism `duplicatesForPerson` uses rather than inventing a second one.
     private readonly dataIntegrity: DataIntegrityService,
+    /** Bulk credential and message runs, which no longer fit inside a request. */
+    private readonly bulkJobs: WorkforceBulkJobsService,
   ) {}
 
   /**
@@ -2188,10 +2188,10 @@ export class AssayerController {
 
   // Lifecycle management
   @Post('bulk/lifecycle')
-  @HttpCode(201)
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Transition a batch of assayers forward to a target lifecycle stage' })
+  @ApiOperation({ summary: 'Start moving a batch of assayers to a target lifecycle stage; poll bulk-jobs/:jobId' })
   /**
    * Four outcomes per row, not three — see `BulkLifecycleResult`.
    *
@@ -2221,15 +2221,22 @@ export class AssayerController {
      * Verified live: a NORTH-scoped OPERATIONS account moved two WEST assayers from ACTIVE to
      * ON_LEAVE in one call, with `updated_by` recording the out-of-region caller.
      *
-     * Asserted for every id before any of them is transitioned, so a batch containing one
-     * out-of-scope record is refused whole rather than half-applied.
+     * Asserted for every id before anything is accepted, so a batch containing one out-of-scope
+     * record is refused whole rather than half-applied — in one query now, not one per id.
      */
-    for (const id of dto.ids) {
-      await this.regionGuard.assertAssayerInScope(id, scope);
-    }
+    await this.regionGuard.assertAssayersInScope(dto.ids, scope);
     const effectiveReason = dto.reason || dto.remarks;
-    const result = await this.assayerService.bulkTransitionLifecycle(dto.ids, dto.targetStatus, req.user.id, effectiveReason);
-    return result;
+    // A bad target or an over-long reason is still a 400 here, before anything is queued.
+    this.assayerService.assertBulkLifecycleRequest(dto.targetStatus, effectiveReason);
+    /*
+      Accepted, not performed: measured 9–25 ms per hop, so the roster's select-all walking
+      INVITED → ACTIVE took 50–120 s in this request, past the web client's 30 s. The result shape
+      (succeeded / partial / skipped / failed) is unchanged — it is the job's result now.
+    */
+    return this.bulkJobs.enqueueLifecycle(
+      { ids: dto.ids, targetStatus: dto.targetStatus, reason: effectiveReason },
+      jobActorFrom(req),
+    );
   }
 
   @Post(':id/lifecycle')
@@ -2999,60 +3006,53 @@ export class AssayerController {
    *
    * `dryRun` is the point of the endpoint as much as the import is: it does the entire read and
    * reports exactly what would happen without writing a row, because nobody should discover
-   * what an import of 1,155 people does by running it.
+   * what an import of 1,155 people does by running it. Both are queued and answered with a 202;
+   * the result of either is read from `GET /roster/import-jobs/:jobId`.
    */
   @Post('/roster/import')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
   @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Import the appraiser roster workbook, or rehearse it with dryRun' })
+  @ApiOperation({ summary: 'Queue an import of the appraiser roster workbook, or a rehearsal of it with dryRun' })
   async importRoster(
     @UploadedFile() file: any,
     @Body() body: any,
+    @Query() query: any,
     @Req() req: any,
     @Res({ passthrough: true }) res: Response,
   ) {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose the roster workbook and try again.');
     }
-    // Multipart carries everything as text, so "false" arrives as a non-empty string and would
-    // be truthy — the one mistake here would silently turn a rehearsal into a real import.
-    const dryRun = String(body?.dryRun ?? '').toLowerCase() === 'true';
-    const sheetName = body?.sheetName || undefined;
-    // Same multipart-string caveat as `dryRun` above: absent or "false" must mean the safe
-    // default (fill blanks only, file an issue on a disagreement), not accidentally overwrite.
-    const overwrite = String(body?.overwrite ?? '').toLowerCase() === 'true';
-
     /**
-     * The rehearsal stays in the request; the real import is queued.
+     * Read from the multipart body OR the query string, and only an explicit "true" counts.
      *
-     * They are different acts. A rehearsal writes nothing and exists to answer a question the
-     * operator is sitting there waiting for — "what would this do?" — so its answer has to come
-     * back on the same request. The real run writes a person plus their references, background
-     * checks, documents and empanelments, and geocodes each address; the web client was holding
-     * the upload open for **fifteen minutes** to accommodate it, which is a page that cannot be
-     * told apart from a hung one.
+     * The web sent its rehearsal as `?dryRun=true&overwrite=…` in the URL while this read only the
+     * body — so the "rehearsal" arrived with `dryRun` absent and was queued as a REAL import, with
+     * no confirmation asked and the operator's overwrite choice dropped. Its 202 carried no
+     * `rowsRead`, so the page then failed reading it: the operator was shown a check that had failed
+     * while the import it was meant to guard ran anyway. A web bundle loaded before this fix still
+     * sends the query form, so both places are honoured.
      *
-     * The rehearsal also does all the parsing, so a wrong or unreadable file is still refused
-     * immediately with a specific 400 — before anything is queued.
+     * Both carry text, so "false" arrives as a non-empty string and would be truthy — which is why
+     * the comparison is to the exact word. Absent or anything else is a real import that does not
+     * overwrite (fill blanks only, file an issue on a disagreement).
      */
-    if (dryRun) {
-      const summary = await this.rosterImport.importAssayerSheet(file.buffer, req.user.id, {
-        dryRun: true,
-        sheetName,
-        overwrite,
-      });
-      return summary;
-    }
+    const flag = (name: string): boolean =>
+      [body?.[name], query?.[name]].some((v) => String(v ?? '').toLowerCase() === 'true');
+    const dryRun = flag('dryRun');
+    const overwrite = flag('overwrite');
+    const sheetName = body?.sheetName || undefined;
 
     /**
-     * Inspected, not rehearsed.
+     * Inspected before anything is queued — and never rehearsed here.
      *
-     * This called `importAssayerSheet({ dryRun: true })` — written on the assumption that a dry run
-     * is a cheap parse. It is not: a dry run performs the *entire* import inside a transaction and
-     * rolls it back, roughly ten writes per row. For the real 1,155-person roster that is ~11,000
-     * sequential statements holding one of twenty pool connections and taking row locks on
-     * `assayers`, on the request thread — and then the queued job did all of it again for real.
+     * A rehearsal is not a cheap parse: it performs the *entire* import inside a transaction and
+     * rolls it back, roughly ten writes per row plus an IFSC cross-check. For the real 1,155-person
+     * roster that is minutes of sequential statements holding one of twenty pool connections and
+     * row locks on `assayers`. It used to run here, in the upload request, against a web timeout of
+     * three minutes; it is now queued on the roster queue, behind any real import, and polled like
+     * one (see `ImportJobService.enqueueRosterImport`).
      *
      * `inspectSheet` resolves the sheet, applies the same wrong-file guard and counts the rows,
      * opening no transaction and issuing no query. So an unreadable workbook — or the branch list
@@ -3068,6 +3068,7 @@ export class AssayerController {
       totalRows: inspection.rowsRead,
       sheetName: sheetName ?? null,
       overwrite,
+      dryRun,
     });
 
     // 202: accepted, not done. The body says where to watch.
@@ -3075,16 +3076,19 @@ export class AssayerController {
     return {
       ...job,
       queued: true,
+      dryRun,
       statusUrl: `/assayers/roster/import-jobs/${job.jobId}`,
-      message:
-        `This roster has ${inspection.rowsRead} row(s). Each one writes a person along with their ` +
-        `references, checks, documents and empanelments, and their address is looked up — so the ` +
-        `import is running in the background. It does not need this page kept open.`,
+      message: dryRun
+        ? `This roster has ${inspection.rowsRead} row(s). Checking what importing it would do — every ` +
+          `row is tried and then undone, so nothing is saved. A full roster takes a few minutes.`
+        : `This roster has ${inspection.rowsRead} row(s). Each one writes a person along with their ` +
+          `references, checks, documents and empanelments, and their address is looked up — so the ` +
+          `import is running in the background. It does not need this page kept open.`,
     };
   }
 
   /**
-   * State and result of a queued roster import.
+   * State and result of a queued roster import or rehearsal (the result's `dryRun` says which).
    *
    * Scoped to the person who started it: the roster is one national list, so there is no project
    * or client to check a job id against, and Bull's ids are a per-queue counter that would
@@ -3094,7 +3098,7 @@ export class AssayerController {
   @Get('/roster/import-jobs/:jobId')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
-  @ApiOperation({ summary: 'State and result of a queued roster import' })
+  @ApiOperation({ summary: 'State and result of a queued roster import or rehearsal' })
   async getRosterImportJob(@Param('jobId') jobId: string, @Req() req: any) {
     return await this.importJobService.getRosterImportStatus(req.user.id, jobId);
   }
@@ -3159,9 +3163,10 @@ export class AssayerController {
    * here (`app-access/bulk`'s second segment is `bulk`, never `app-access`).
    */
   @Post('app-access/bulk')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Issue app access to a batch of assayers, delivered by email and SMS' })
+  @ApiOperation({ summary: 'Start issuing app access to a batch of assayers, delivered by email and SMS; poll bulk-jobs/:jobId' })
   async bulkIssueAppAccess(
     @Body() dto: BulkIssueAppAccessDto,
     @Req() req: any,
@@ -3177,10 +3182,15 @@ export class AssayerController {
      *
      * Asserted per id before any credential is minted, so nobody is half-rotated.
      */
-    for (const id of dto.ids) {
-      await this.regionGuard.assertAssayerInScope(id, scope);
-    }
-    const data = await this.assayerService.bulkIssueAppAccess(dto.ids, req.user.id);
+    await this.regionGuard.assertAssayersInScope(dto.ids, scope);
+    /*
+      Accepted, not performed. This loop used to run here — a bcrypt hash, a credential write and an
+      SMTP send per person — and HR's real batch of 540 held the request for about half an hour while
+      the browser gave up at 30 s. The screen said it failed; the server kept rotating passwords; a
+      second press rotated them again. The scope check above still happens here, before anything is
+      accepted, so a batch with one out-of-region id is still refused whole.
+    */
+    const data = await this.bulkJobs.enqueueAppAccess(dto.ids, jobActorFrom(req));
     return { success: true, data };
   }
 
@@ -3189,19 +3199,35 @@ export class AssayerController {
    * bypasses the notification catalog rather than adding a templated entry to it.
    */
   @Post('bulk/notify')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Send a custom message to a batch of assayers' })
+  @ApiOperation({ summary: 'Start sending a custom message to a batch of assayers; poll bulk-jobs/:jobId' })
   async bulkNotify(
     @Body() dto: BulkNotifyDto,
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    for (const id of dto.ids) {
-      await this.regionGuard.assertAssayerInScope(id, scope);
-    }
-    const data = await this.assayerService.bulkNotify(dto.ids, dto.subject, dto.body, !!dto.sendEmail, req.user.id);
+    await this.regionGuard.assertAssayersInScope(dto.ids, scope);
+    const data = await this.bulkJobs.enqueueNotify(
+      { ids: dto.ids, subject: dto.subject, body: dto.body, sendEmail: !!dto.sendEmail },
+      jobActorFrom(req),
+    );
     return { success: true, data };
+  }
+
+  /**
+   * Where a bulk app-access or notify run has got to, and its buckets once it is done.
+   *
+   * Readable only by the person who started it (`assertJobVisibleTo`): Bull's job ids are a counter,
+   * and the result names the people it touched.
+   */
+  @Get('bulk-jobs/:jobId')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'State, progress and result of a roster bulk run' })
+  async getBulkJob(@Param('jobId') jobId: string, @Req() req: any) {
+    return await this.bulkJobs.status(jobId, req.user.id);
   }
 
   @Post(':assayerId/app-access')
@@ -3250,7 +3276,6 @@ export class AssayerController {
         : 'Password reset. Ask the assayer to sign in with it and change it.',
     };
   }
-
 }
 
 /** Quote a CSV cell only when it needs it — a comma, quote or newline in the value. */

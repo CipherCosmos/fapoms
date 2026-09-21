@@ -66,7 +66,18 @@ describe('EditClientModal', () => {
 
   it('picking a pincode result fills city and district for a client that never had them', async () => {
     const place = { label: 'Kothrud, Pune', type: 'city', state: 'MAHARASHTRA', district: 'Pune', pincode: '411038' };
-    mockRequest.mockResolvedValue([place]);
+    /**
+     * The envelope, because that is what the endpoint sends.
+     *
+     * `GET /geo/autocomplete` answers `{ success, data, meta.configured }`, and `Autocomplete`
+     * asks for it with `withMeta: true` so it can tell "no such place" apart from "this
+     * deployment has no place lookup". A bare array here modelled a shape the API never
+     * returns, so the mock passed while the real call would have found `data` undefined.
+     */
+    mockRequest.mockImplementation((url: string) =>
+      String(url).startsWith('/geo/autocomplete')
+        ? Promise.resolve({ success: true, data: [place], meta: { configured: true } })
+        : Promise.resolve([]));
     render(<EditClientModal client={baseClient} onClose={jest.fn()} />);
 
     fireEvent.change(screen.getByPlaceholderText('Type a pincode — the rest fills in'), { target: { value: '411038' } });

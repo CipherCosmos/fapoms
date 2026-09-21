@@ -695,13 +695,18 @@ describe('AssayerRoster — bulk lifecycle moves need a real reason', () => {
     person({ id: 'b-2', assayerCode: 'AS0202', displayName: 'Bulk Two', lifecycleStatus: AssayerLifecycleStatus.ACTIVE }),
   ];
 
-  /** Routes the roster GET and the bulk-move POST to different fixed answers. */
+  /**
+   * Routes the roster GET, the bulk-move POST and its job poll to fixed answers. The move is accepted
+   * as a background job now, so the POST answers a job id and the result comes from the poll.
+   */
   const serveBulk = (roster: ReturnType<typeof person>[], bulkResult: unknown) => {
-    mockRequest.mockImplementation((url: string) => (
-      url === '/assayers/bulk/lifecycle'
-        ? Promise.resolve(bulkResult)
-        : Promise.resolve({ data: roster, meta: { pagination: { total: roster.length } } })
-    ));
+    mockRequest.mockImplementation((url: string) => {
+      if (url === '/assayers/bulk/lifecycle') return Promise.resolve({ jobId: 'move-1', deduplicated: false });
+      if (url === '/assayers/bulk-jobs/move-1') {
+        return Promise.resolve({ jobId: 'move-1', state: 'done', progress: { percent: 100, stage: 'Complete' }, result: bulkResult });
+      }
+      return Promise.resolve({ data: roster, meta: { pagination: { total: roster.length } } });
+    });
   };
 
   const selectRow = (name: string) => {
@@ -841,11 +846,16 @@ describe('AssayerRoster — single assayer lifecycle modal and consequence banne
     ];
 
     mockRequest.mockImplementation((url: string) => {
-      if (url === '/assayers/bulk/lifecycle') {
+      // Accepted as a background job; the buckets arrive from the poll.
+      if (url === '/assayers/bulk/lifecycle') return Promise.resolve({ jobId: 'move-2', deduplicated: false });
+      if (url === '/assayers/bulk-jobs/move-2') {
         return Promise.resolve({
-          succeeded: [{ id: 'b-1', from: 'ACTIVE', to: 'SUSPENDED' }],
-          skipped: [{ id: 'b-2', reason: 'Assignment lock active' }],
-          failed: [],
+          jobId: 'move-2', state: 'done', progress: { percent: 100, stage: 'Complete' },
+          result: {
+            succeeded: [{ id: 'b-1', from: 'ACTIVE', to: 'SUSPENDED' }],
+            skipped: [{ id: 'b-2', reason: 'Assignment lock active' }],
+            failed: [],
+          },
         });
       }
       return Promise.resolve({ data: twoActive, meta: { pagination: { total: 2 } } });
@@ -868,10 +878,12 @@ describe('AssayerRoster — single assayer lifecycle modal and consequence banne
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Move to Suspended' }));
 
+    // The job poll waits its interval before the first read, so allow more than the default second.
     await waitFor(() => {
       expect(screen.getByText(/1 moved to Suspended, 1 skipped, 0 failed/)).toBeInTheDocument();
       expect(screen.getByText(/Assignment lock active/)).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
+    expect(mockRequest).toHaveBeenCalledWith('/assayers/bulk-jobs/move-2');
   });
 });
 

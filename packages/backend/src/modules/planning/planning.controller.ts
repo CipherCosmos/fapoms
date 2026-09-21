@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength, ValidateIf } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsUUID, IsEnum, IsDateString, IsNumber, IsBoolean, Min, MaxLength, ValidateIf, ArrayNotEmpty, ArrayMaxSize } from 'class-validator';
 
 import { CommandCenterService } from './command-center.service';
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
@@ -27,6 +27,8 @@ import { ScenarioPlanningService } from './scenario-planning.service';
 import { CoveragePlanningEngine } from './coverage-planning.engine';
 import { DayPlannerService } from './day-planner.service';
 import { PlanningJobsService } from './planning-jobs.service';
+import { PlanningWriteJobsService } from './planning-write-jobs.service';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
 import { OperationsPlanningService, PlanOverrideDto } from './operations-planning.service';
 import { CoveragePlanStatus } from './coverage-plan.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
@@ -137,6 +139,50 @@ class CreateCoveragePlanRequestDto {
   justification?: string;
 }
 
+/**
+ * The most branches one bulk run takes. The planning queue's select-all tops out at the few hundred
+ * branches of the largest project; a thousand is a ceiling on a body a caller controls, not a target.
+ */
+const MAX_BULK_BRANCHES = 1000;
+
+/**
+ * "Offer all to …" from the planning queue, as one request.
+ *
+ * Field rules are the ones `POST /assignments` applies to the same fields
+ * (`CreateAssignmentRequestDto`), because the worker hands them to the same `create` without passing
+ * back through that DTO.
+ */
+export class BulkOfferRequestDto {
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(MAX_BULK_BRANCHES) @IsUUID('all', { each: true })
+  projectBranchIds: string[];
+
+  @IsUUID()
+  assayerId: string;
+
+  /** Only for the remark written on each assignment ("Bulk-assigned to …"). */
+  @IsOptional() @IsString() @MaxLength(200)
+  assayerName?: string;
+
+  @IsOptional() @IsDateString()
+  scheduledDate?: string;
+
+  @IsOptional() @IsBoolean()
+  acceptOnBehalf?: boolean;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  acceptanceReason?: string;
+}
+
+/** "Mark unable to cover" over a selection, as one request. */
+export class BulkUnableToCoverRequestDto {
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(MAX_BULK_BRANCHES) @IsUUID('all', { each: true })
+  projectBranchIds: string[];
+
+  // Required, as on the single-branch route: the status exists so the cause is reportable.
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  reason: string;
+}
+
 class TransitionCoveragePlanRequestDto {
   @IsEnum(CoveragePlanStatus)
   status: CoveragePlanStatus;
@@ -189,6 +235,7 @@ export class PlanningController {
     private readonly dayPlannerService: DayPlannerService,
     private readonly planningJobsService: PlanningJobsService,
     private readonly regionGuard: RegionGuardService,
+    private readonly planningWriteJobs: PlanningWriteJobsService,
   ) {}
 
   @Get('projects/:projectId/coverage')
@@ -275,6 +322,35 @@ export class PlanningController {
     return plan;
   }
 
+  /**
+   * The same plan version as the POST above, generated on the write queue.
+   *
+   * Generating a version runs the whole coverage engine — the same per-branch work the read-only
+   * preview was moved off the request for — and then writes a version row. Same roles, permission
+   * and region check as the synchronous route; the response is a job id, and the job's result is
+   * the plan the POST returned.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('projects/:projectId/coverage-plan/versions/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:create:organization')
+  @ApiOperation({ summary: 'Queue creating or regenerating a coverage plan version; returns a job id to poll' })
+  async queueCreateOrRegeneratePlan(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() body: CreateCoveragePlanRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertProjectInScope(projectId, scope);
+    return await this.planningWriteJobs.enqueueGenerateVersion(
+      projectId,
+      (body.overrides ?? []) as unknown as Array<Record<string, unknown>>,
+      body.justification,
+      jobActorFrom(req),
+    );
+  }
+
   @Put('coverage-plans/:planId/transition')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:edit:organization')
@@ -290,13 +366,27 @@ export class PlanningController {
     return plan;
   }
 
+  /**
+   * Deploy an approved plan — ACCEPTED, not performed.
+   *
+   * This used to create every assignment inside the request: per branch an eligibility check, a fee
+   * quote, a road route, a row lock, a transaction and audit writes, with up to ten dated attempts.
+   * A 166-branch plan passes the web client's 30 s budget, so the screen said the deploy failed
+   * while the server carried on creating offers, and pressing Deploy again started a second run.
+   *
+   * It now answers 202 `{ jobId, deduplicated }`. The job's result, read from
+   * `GET /planning/write-jobs/:jobId`, is exactly the body this route used to return
+   * (`describeDeployment`). A second press by the same account while the run is going joins it.
+   *
+   * The region check stays here, at the request, where the principal's scope is known.
+   */
   @Post('coverage-plans/:planId/execute')
-  // Engine-heavy and write-heavy (spawns assignments across a whole project). Capped
-  // well below the global default so one caller cannot pin the CPU with repeated runs.
+  // Write-heavy (spawns assignments across a whole project). Capped well below the global default.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:create:organization')
-  @ApiOperation({ summary: 'Deploy approved plan and automatically spawn operational assignments' })
+  @ApiOperation({ summary: 'Queue deploying an approved plan (one offer per branch); returns a job id to poll' })
   async executePlan(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Body() body: ExecutePlanRequestDto,
@@ -304,22 +394,58 @@ export class PlanningController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertCoveragePlanInScope(planId, scope);
-    const result = await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id, body?.scheduledDate);
-    return {
-      message: result.fullySkipped
-        ? `Nothing could be deployed — ${result.skipped.length} allocation(s) were skipped.`
-        : `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}` +
-          (result.dateRange ? ` across ${result.dateRange.start} → ${result.dateRange.end}.` : '.'),
-      deployedCount: result.deployed.length,
-      skippedCount: result.skipped.length,
-      deployed: result.deployed,
-      skipped: result.skipped,
-      // Additive: a fully-skipped deploy is now an explained outcome rather than a thrown
-      // error, and each branch carries its own workable date instead of one shared one.
-      skippedReasons: result.skippedReasons,
-      fullySkipped: result.fullySkipped,
-      dateRange: result.dateRange,
-    };
+    return await this.planningWriteJobs.enqueueExecutePlan(planId, body?.scheduledDate, jobActorFrom(req));
+  }
+
+  /**
+   * "Offer all to …" over a selection, as one job.
+   *
+   * The planning queue used to send one `POST /assignments` per ticked branch from the browser,
+   * five at a time — up to 500 requests, each subject to the per-user rate limit. Same permission
+   * as `POST /assignments`, because that is what it does per branch; the region ceiling that route
+   * asserts per call is asserted per branch in the worker, against the scope frozen here.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('bulk-offers/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assignment:create:organization')
+  @ApiOperation({ summary: 'Queue offering a selection of branches to one assayer; returns a job id to poll' })
+  async queueBulkOffers(
+    @Body() body: BulkOfferRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    return await this.planningWriteJobs.enqueueBulkOffer(body, scope ?? null, jobActorFrom(req));
+  }
+
+  /**
+   * "Mark unable to cover" over a selection, as one job.
+   *
+   * Replaces an unbounded browser `Promise.all` of one POST per ticked branch: 500 ticked branches
+   * is past the 300-a-minute per-user brake, so some were refused with 429 and the screen reported
+   * only their names. Same permission as the single-branch route; region ceiling per branch in the
+   * worker.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('unable-to-cover/jobs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:edit:organization')
+  @ApiOperation({ summary: 'Queue recording a selection of branches as unable to cover; returns a job id to poll' })
+  async queueBulkUnableToCover(
+    @Body() body: BulkUnableToCoverRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const reason = body.reason.trim();
+    if (!reason) throw new BadRequestException('reason is required — say why these branches cannot be staffed.');
+    return await this.planningWriteJobs.enqueueBulkUnableToCover(
+      body.projectBranchIds,
+      reason,
+      scope ?? null,
+      jobActorFrom(req),
+    );
   }
 
   /** Same shape of work as the coverage plan: the engine, once per unassigned branch. */
@@ -656,6 +782,22 @@ export class PlanningController {
   @ApiOperation({ summary: 'Poll a queued planning job for progress and, once done, its result' })
   async getPlanningJob(@Param('jobId') jobId: string, @Req() req: any) {
     return await this.planningJobsService.status(jobId, req.user?.id);
+  }
+
+  /**
+   * Poll one planning WRITE job (deploy, version generation, bulk offer, bulk unable-to-cover).
+   *
+   * A separate route from `jobs/:jobId` because the write queue numbers its jobs from 1 as well: the
+   * same id on the two queues is two different jobs. Only the account that started the job can read
+   * it — a 404 otherwise, see `assertJobVisibleTo`.
+   */
+  @Get('write-jobs/:jobId')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
+  @AllowPermissionFallback()  // see the note on this controller: planning:view is the gate
+  @ApiOperation({ summary: 'Poll a queued planning write job for progress and, once done, its per-branch result' })
+  async getPlanningWriteJob(@Param('jobId') jobId: string, @Req() req: any) {
+    return await this.planningWriteJobs.status(jobId, req.user?.id);
   }
 
   // Rule Engine Management REST Endpoints

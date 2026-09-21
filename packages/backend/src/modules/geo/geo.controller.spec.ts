@@ -5,10 +5,11 @@ import * as indiaAutocomplete from './india-autocomplete.helper';
  * `GET /geo/autocomplete` — whether an empty result can be told apart from "the integration
  * isn't configured".
  *
- * `autocompleteIndia`'s own doc comment: with no `GOOGLE_MAPS_API_KEY`, every query returns an
- * empty list, and that is "indistinguishable from 'no such place' unless the caller asks" via
- * the already-exported `isPlaceLookupConfigured()`. Confirmed live on this deployment (no key
- * configured): `q=Mumbai`, `q=Maharashtra` and a real 6-digit pincode all came back
+ * `autocompleteIndia`'s own doc comment: with no place lookup configured, every query returns
+ * an empty list, and that is "indistinguishable from 'no such place' unless the caller asks" via
+ * the already-exported `isPlaceLookupConfigured()`. Confirmed live on this deployment back when
+ * the source was Google and no key was set (the source is now the self-hosted Nominatim, and
+ * the gate is `NOMINATIM_URL`): `q=Mumbai`, `q=Maharashtra` and a real 6-digit pincode all came back
  * `{success:true, data:[]}` — structurally identical to a genuine "no match", with nothing in
  * the response to tell a caller the whole integration is absent rather than the place not
  * existing. The controller was exactly the caller the helper's comment warns about: it never

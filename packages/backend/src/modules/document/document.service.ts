@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger, BadRequestException, ForbiddenException, Inject, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, BadRequestException, ForbiddenException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ValidationService } from '../validation/validation.service';
 import { Repository, In, IsNull } from 'typeorm';
@@ -12,12 +12,13 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
-import { EmailProvider, renderEmailHtml, appPublicUrl } from '../../infrastructure/notifications/email-provider';
-import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
+import { appPublicUrl } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from '../notifications/email.service';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { BranchEntity } from '../branch/branch.entity';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 import {
   EventCategory, DocumentStatus, DocumentType, DispatchMethod, businessTodayDateKey,
   DOCUMENT_TRANSITIONS, canTransitionDocument, AssignmentStatus,
@@ -436,11 +437,10 @@ export class DocumentService {
     private readonly validationService: ValidationService,
     // Reading the file back to attach it, and the branch's address to send it to.
     @Inject('StorageEngine') private readonly storage: StorageEngine,
-    private readonly emailProvider: EmailProvider,
+    private readonly emails: EmailService,
     @InjectRepository(BranchEntity)
     private readonly branchRepository: Repository<BranchEntity>,
     private readonly regionGuard: RegionGuardService,
-    @Optional() private readonly templateRenderer?: EmailTemplateRenderer,
   ) {}
 
   // ── Staged region scope (list-route filtering) ─────────────────────────────
@@ -1263,13 +1263,26 @@ export class DocumentService {
    * Dispatches many documents in one operation, reporting per-document outcomes.
    * The console previously offered only one-at-a-time dispatch, which does not
    * match how a day's paperwork is actually released.
+   *
+   * Called from the dispatch queue's worker, never inside a request (see
+   * `document-dispatch-jobs.contract.ts`): with a branch address every document is a storage read
+   * and an SMTP send, and a day's batch outlived the web client's timeout. Serial on purpose — each
+   * document goes through `dispatchDocument`, which marks it DISPATCHED only after its own email
+   * went, so `dispatched` lists exactly the documents that left and `failed` says why the rest did not.
    */
-  async dispatchMany(documentIds: string[], userId: string, branchEmail?: string): Promise<{
+  async dispatchMany(
+    documentIds: string[],
+    userId: string,
+    branchEmail?: string,
+    onProgress?: ProgressCallback,
+  ): Promise<{
     dispatched: string[];
     failed: Array<{ documentId: string; reason: string }>;
   }> {
     const dispatched: string[] = [];
     const failed: Array<{ documentId: string; reason: string }> = [];
+    const stage = branchEmail ? 'Emailing documents to the branch' : 'Releasing documents to assayers';
+    await onProgress?.(0, documentIds.length, stage);
     for (const id of documentIds) {
       try {
         await this.dispatchDocument(id, userId, DispatchMethod.MANUAL, { branchEmail });
@@ -1277,6 +1290,7 @@ export class DocumentService {
       } catch (err) {
         failed.push({ documentId: id, reason: (err as Error).message });
       }
+      await onProgress?.(dispatched.length + failed.length, documentIds.length, stage);
     }
     return { dispatched, failed };
   }
@@ -1612,7 +1626,7 @@ export class DocumentService {
      * a new place. If the send throws, nothing has been claimed.
      */
     if (branchEmail) {
-      await this.emailDocumentToBranch(doc, branchEmail);
+      await this.emailDocumentToBranch(doc, branchEmail, userId);
     }
 
     const saved = await this.updateStatus(id, DocumentStatus.DISPATCHED, userId);
@@ -1714,8 +1728,8 @@ export class DocumentService {
    * their email is still a dispatch. Here the email *is* the delivery: if it did not go, the
    * document has not been sent, and marking it DISPATCHED would be a lie the desk acts on.
    */
-  private async emailDocumentToBranch(doc: DocumentEntity, branchEmail: string): Promise<void> {
-    if (!this.emailProvider.isEnabled()) {
+  private async emailDocumentToBranch(doc: DocumentEntity, branchEmail: string, userId: string): Promise<void> {
+    if (!this.emails.isEnabled()) {
       throw new BadRequestException(
         'Email is not set up on this system, so the paperwork cannot be sent to a branch. '
         + 'Configure it under Platform Settings, or dispatch to the assayer instead.',
@@ -1735,62 +1749,31 @@ export class DocumentService {
     }
 
     const branchName = doc.assessment?.branch?.name ?? null;
-    let subject = branchName
-      ? `Audit paperwork for ${branchName}`
-      : `Audit paperwork — ${doc.fileName}`;
-    let text = [
-      branchName ? `Audit paperwork for ${branchName} is attached.` : 'Audit paperwork is attached.',
-      '',
-      'Our appraiser will collect it from your branch when they arrive for the audit.',
-      '',
-      'This message was sent automatically. Please do not reply.',
-    ].join('\n');
-    let html = renderEmailHtml({
-      title: 'Audit Documentation Packet',
-      bodyLines: [
-        branchName
-          ? `The official field audit documentation packet for ${branchName} is attached to this transmission.`
-          : 'The official field audit documentation packet is attached to this transmission.',
-        'Our assigned Sumeru Global certified appraiser will collect and cross-reference this paperwork upon arrival at the branch for the scheduled audit.',
-      ],
-      kvTable: [
-        { label: 'Attached File', value: doc.fileName },
-        { label: 'Document Type', value: doc.type || 'Audit Packet' },
-        ...(branchName ? [{ label: 'Target Branch', value: branchName }] : []),
-      ],
-      securityNotice: 'Confidential bank audit paperwork. Access is restricted to authorized bank branch personnel and certified Sumeru Global auditors.',
-    });
-
-    if (this.templateRenderer) {
-      try {
-        const rendered = await this.templateRenderer.render('branch-audit-paperwork', {
+    // Sent now: the email IS the dispatch, so the document's status waits on its answer.
+    const result = await this.emails.sendNow({
+      kind: 'BRANCH_AUDIT_PACKET',
+      to: branchEmail,
+      content: {
+        template: 'branch-audit-paperwork',
+        data: {
           fileName: doc.fileName,
           documentType: doc.type || 'Audit Packet',
           logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
           branchName: branchName || 'Bank Branch',
           companyName: 'Sumeru Global',
-        });
-        subject = rendered.subject;
-        text = rendered.text;
-        html = rendered.html;
-      } catch (err: any) {
-        this.logger.warn(`Template render failed for branch-audit-paperwork: ${err.message}`);
-      }
-    }
-
-    const result = await this.emailProvider.send({
-      to: branchEmail,
-      subject,
-      text,
-      html,
+        },
+      },
       attachments: [{
         filename: doc.fileName,
         content,
         contentType: doc.mimeType ?? 'application/pdf',
       }],
+      entityType: 'DOCUMENT',
+      entityId: doc.id,
+      requestedBy: userId === 'SYSTEM' ? null : userId,
     });
 
-    if (!result.success) {
+    if (!result.sent) {
       throw new BadRequestException(
         `The paperwork could not be emailed to ${branchEmail}: ${result.error ?? 'the mail server refused it'}. `
         + 'The document has not been marked as sent.',

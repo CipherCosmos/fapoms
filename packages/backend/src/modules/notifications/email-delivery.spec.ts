@@ -9,50 +9,60 @@ import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { UserEntity } from '../user/user.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { EmailService } from './email.service';
+import { SmsService } from './sms.service';
 import { NotificationSettingsService } from './notification-settings.service';
 import { NotificationSweeper } from './notification.sweeper';
 
 /**
- * The email leg of delivery: preference-gated, terminally bookkept.
+ * The email leg of delivery: preference-gated, handed to the one mail queue exactly once.
  *
- * The invariant under test throughout: `email_status` always ends somewhere explicable.
- * A row that never emailed says why (SUPPRESSED + reason), a failure says what happened
- * (FAILED + reason), and nothing is ever double-sent — the whole point of splitting email's
- * lifecycle from the push `status` column.
+ * The invariant under test throughout: `email_status` always ends somewhere explicable. A row that
+ * never emailed says why (SUPPRESSED + reason); a row handed to the mail queue says so (SENT) and
+ * the queue writes the outcome back when the email settles (pinned in `outbound-email.spec.ts`);
+ * and nothing is ever handed over twice — the whole point of the claim.
+ *
+ * This job does not send and does not retry a send. It never touches the transport: sending,
+ * retrying, "email is not set up" and giving up all belong to `EmailService` / the outbound worker.
  */
 describe('NotificationDeliveryWorker — deliver-email', () => {
   let worker: NotificationDeliveryWorker;
   let updates: any[];
+  /** Every conditional UPDATE the worker built, with its SET and WHERE terms. */
+  let builderCalls: Array<{ set: any; where: Record<string, any>; affected: number }>;
+  /** What each conditional UPDATE reports, in order. The first is the claim. Default 1. */
+  let affectedQueue: number[];
 
-  /** How many rows the atomic claim reports updating. 0 = another job already owns the row. */
-  let claimAffected = 1;
   const notifRepo = {
     findOne: jest.fn(),
     update: jest.fn(async (id: any, patch: any) => { updates.push({ id, ...patch }); return { affected: 1 }; }),
-    createQueryBuilder: jest.fn(() => ({
-      update: () => ({
-        set: (values: any) => {
-          updates.push({ id: 'claim', ...values });
-          return {
-            where: () => ({
-              andWhere: () => ({ execute: async () => ({ affected: claimAffected }) }),
-            }),
-          };
+    createQueryBuilder: jest.fn(() => {
+      const call = { set: null as any, where: {} as Record<string, any>, affected: 0 };
+      const qb: any = {
+        update: () => qb,
+        set: (values: any) => { call.set = values; return qb; },
+        where: (clause: string, params: any) => { call.where[clause] = params; return qb; },
+        andWhere: (clause: string, params: any) => { call.where[clause] = params; return qb; },
+        execute: async () => {
+          call.affected = affectedQueue.length ? affectedQueue.shift()! : 1;
+          builderCalls.push(call);
+          return { affected: call.affected };
         },
-      }),
-    })),
+      };
+      return qb;
+    }),
   };
   const tokenRepo = { find: jest.fn(), update: jest.fn() };
   const prefRepo = { findOne: jest.fn() };
   const userRepo = { findOne: jest.fn() };
   const assayerRepo = { findOne: jest.fn() };
-  const fcm = { sendMulticast: jest.fn() };
-  const emailProvider = { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() };
-  const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn(), requeueStrandedEmails: jest.fn() };
+  const fcm = { sendMulticast: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) };
+  const emailService = { queue: jest.fn(), sendNow: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) };
+  const sweeper = { requeueStranded: jest.fn(), failAbandonedSends: jest.fn(), requeueStrandedMessages: jest.fn() };
 
+  const NOTIFICATION_ID = '4b3c2d1e-0f9a-4b8c-9d7e-6f5a4b3c2d1e';
   const emailRow = (over: Partial<NotificationEntity> = {}): Partial<NotificationEntity> => ({
-    id: 'n-1',
+    id: NOTIFICATION_ID,
     userId: 'u-1',
     assayerId: null,
     title: 'Assignment SLA breached',
@@ -66,17 +76,19 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
   });
 
   const job = (over: any = {}) =>
-    ({ data: { notificationId: 'n-1' }, attemptsMade: 0, opts: { attempts: 5 }, ...over } as any);
+    ({ data: { notificationId: NOTIFICATION_ID }, attemptsMade: 0, opts: { attempts: 5 }, ...over } as any);
 
-  const lastEmailStatus = () =>
-    [...updates].reverse().find((u) => u.emailStatus && u.id !== 'claim')?.emailStatus;
+  const lastEmailStatus = () => [...updates].reverse().find((u) => u.emailStatus)?.emailStatus;
   const lastReason = () => [...updates].reverse().find((u) => u.emailFailureReason !== undefined)?.emailFailureReason;
+  const queuedRequest = () => emailService.queue.mock.calls[0]?.[0];
+  const claim = () => builderCalls[0];
 
   beforeEach(async () => {
     updates = [];
-    claimAffected = 1;
+    builderCalls = [];
+    affectedQueue = [];
     jest.clearAllMocks();
-    emailProvider.isEnabled.mockReturnValue(true);
+    emailService.queue.mockResolvedValue({ id: 'e-1', status: 'QUEUED', to: 'ops@example.in' });
     prefRepo.findOne.mockResolvedValue(null);
     assayerRepo.findOne.mockResolvedValue(null);
     userRepo.findOne.mockResolvedValue({ id: 'u-1', email: 'ops@example.in', isActive: true, status: 'ACTIVE' });
@@ -90,7 +102,9 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
         { provide: getRepositoryToken(UserEntity), useValue: userRepo },
         { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
         { provide: FcmProvider, useValue: fcm },
-        { provide: EmailProvider, useValue: emailProvider },
+        { provide: EmailService, useValue: emailService },
+        // The text leg's hand-off; never reached by these tests, which are about other legs.
+        { provide: SmsService, useValue: { queue: jest.fn(), isEnabled: jest.fn().mockReturnValue(true) } },
         {
           provide: NotificationSettingsService,
           // No overrides in tests: resolve straight to the shipped catalog entry.
@@ -110,56 +124,131 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
     worker = module.get(NotificationDeliveryWorker);
   });
 
-  it('emails the recipient and settles the row DELIVERED', async () => {
+  it('hands the email to the mail queue, as a notification email about this notification', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow());
-    emailProvider.send.mockResolvedValue({ success: true, messageId: 'm-1' });
 
     await worker.deliverEmail(job());
 
-    expect(emailProvider.send).toHaveBeenCalledWith(expect.objectContaining({
+    expect(emailService.queue).toHaveBeenCalledTimes(1);
+    expect(queuedRequest()).toEqual(expect.objectContaining({
+      kind: 'NOTIFICATION',
       to: 'ops@example.in',
-      subject: 'Assignment SLA breached',
+      entityType: 'NOTIFICATION',
+      entityId: NOTIFICATION_ID,
     }));
-    expect(lastEmailStatus()).toBe(NotificationStatus.DELIVERED);
+    expect(queuedRequest().content.subject).toBe('Assignment SLA breached');
+    expect(queuedRequest().content.layout.bodyLines).toEqual(['ASN-1 is 3h past its response SLA.']);
+    // It never sends anything itself.
+    expect(emailService.sendNow).not.toHaveBeenCalled();
+  });
+
+  it('claims the row PENDING → SENT before handing it over, and leaves it SENT — the queue settles it', async () => {
+    notifRepo.findOne.mockResolvedValue(emailRow());
+
+    await worker.deliverEmail(job());
+
+    expect(claim().where).toEqual({
+      'id = :id': { id: NOTIFICATION_ID },
+      'email_status = :pending': { pending: NotificationStatus.PENDING },
+    });
+    expect(claim().set.emailStatus).toBe(NotificationStatus.SENT);
+    expect(claim().set.emailedAt).toBeInstanceOf(Date);
+    // Claimed first, handed over second: a hand-off with no claim is how a duplicate job doubles it.
+    expect(notifRepo.createQueryBuilder.mock.invocationCallOrder[0])
+      .toBeLessThan(emailService.queue.mock.invocationCallOrder[0]);
+    // Nothing after the hand-off: DELIVERED is the mail queue's to write, once the email went.
+    expect(builderCalls).toHaveLength(1);
+    expect(updates).toHaveLength(0);
   });
 
   it('puts the deep link in the message as an absolute URL', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow());
-    emailProvider.send.mockResolvedValue({ success: true });
 
     await worker.deliverEmail(job());
 
-    const payload = emailProvider.send.mock.calls[0][0];
-    expect(payload.text).toContain('/assignments?id=asn-1');
-    expect(payload.text).toMatch(/https?:\/\//);
+    const { content } = queuedRequest();
+    expect(content.text).toContain('/assignments?id=asn-1');
+    expect(content.text).toMatch(/https?:\/\//);
+    expect(content.layout.linkUrl).toMatch(/^https?:\/\/.*\/assignments\?id=asn-1$/);
   });
 
-  it('does nothing for a row already settled — a duplicate job cannot double-send', async () => {
-    notifRepo.findOne.mockResolvedValue(emailRow({ emailStatus: NotificationStatus.DELIVERED }));
+  it('carries the badge its type earns — an SLA breach reads as an escalation', async () => {
+    notifRepo.findOne.mockResolvedValue(emailRow({ type: 'ASSIGNMENT_SLA_BREACH' }));
     await worker.deliverEmail(job());
-    expect(emailProvider.send).not.toHaveBeenCalled();
+    expect(queuedRequest().content.layout.badge).toEqual({ text: 'SLA ESCALATION', tone: 'flame' });
+  });
+
+  it('does nothing for a row already handed over or settled — a duplicate job cannot hand it over twice', async () => {
+    for (const emailStatus of [NotificationStatus.SENT, NotificationStatus.DELIVERED, NotificationStatus.FAILED]) {
+      notifRepo.findOne.mockResolvedValue(emailRow({ emailStatus }));
+      await worker.deliverEmail(job());
+    }
+    expect(emailService.queue).not.toHaveBeenCalled();
     expect(updates).toHaveLength(0);
+    expect(builderCalls).toHaveLength(0);
   });
 
   it('does nothing for a row that never owed an email', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow({ emailStatus: null }));
     await worker.deliverEmail(job());
-    expect(emailProvider.send).not.toHaveBeenCalled();
+    expect(emailService.queue).not.toHaveBeenCalled();
+  });
+
+  it('stops without handing over when another job already claimed the row', async () => {
+    // The sweeper re-enqueues anything PENDING for five minutes, which a slow fan-out produces
+    // routinely. Two jobs then race; exactly one may hand the email to the queue.
+    notifRepo.findOne.mockResolvedValue(emailRow());
+    affectedQueue = [0];
+
+    await worker.deliverEmail(job());
+
+    expect(emailService.queue).not.toHaveBeenCalled();
+  });
+
+  it('gives the claim back and throws when the queue did not take it, so Bull tries the hand-off again', async () => {
+    notifRepo.findOne.mockResolvedValue(emailRow());
+    emailService.queue.mockResolvedValue({
+      id: null, status: 'NOT_QUEUED', to: 'ops@example.in', error: 'The email could not be queued. Hand the details over another way.',
+    });
+
+    await expect(worker.deliverEmail(job())).rejects.toThrow('could not be queued');
+
+    const putBack = builderCalls[1];
+    expect(putBack.set).toEqual({
+      emailStatus: NotificationStatus.PENDING,
+      emailFailureReason: 'The email could not be queued. Hand the details over another way.',
+    });
+    // Conditional: only a row this job still holds as SENT goes back to PENDING.
+    expect(putBack.where).toEqual({
+      'id = :id': { id: NOTIFICATION_ID },
+      'email_status = :handedOff': { handedOff: NotificationStatus.SENT },
+    });
+  });
+
+  it('settles FAILED on the last attempt instead of putting it back for the sweeper to re-queue for ever', async () => {
+    notifRepo.findOne.mockResolvedValue(emailRow());
+    emailService.queue.mockResolvedValue({ id: null, status: 'NOT_QUEUED', to: '', error: 'There is no email address to send to.' });
+
+    await expect(worker.deliverEmail(job({ attemptsMade: 4 }))).resolves.toBeUndefined();
+
+    const settle = builderCalls[1];
+    expect(settle.set.emailStatus).toBe(NotificationStatus.FAILED);
+    expect(settle.set.emailFailureReason).toMatch(/no email address.*after 5 attempts/);
+    expect(settle.where['email_status = :handedOff']).toEqual({ handedOff: NotificationStatus.SENT });
   });
 
   it('emails an assayer recipient when they have an email address on file', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow({ userId: null, assayerId: 'as-1' }));
     assayerRepo.findOne.mockResolvedValue({ id: 'as-1', email: 'assayer@example.in', displayName: 'Raj Assayer', status: 'ACTIVE' });
-    emailProvider.send.mockResolvedValue({ success: true });
     await worker.deliverEmail(job());
-    expect(emailProvider.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'assayer@example.in' }));
+    expect(queuedRequest()).toEqual(expect.objectContaining({ to: 'assayer@example.in' }));
   });
 
   it('suppresses, with the reason, when an assayer recipient has no email on file', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow({ userId: null, assayerId: 'as-1' }));
     assayerRepo.findOne.mockResolvedValue({ id: 'as-1', email: null, displayName: 'Raj Assayer', status: 'ACTIVE' });
     await worker.deliverEmail(job());
-    expect(emailProvider.send).not.toHaveBeenCalled();
+    expect(emailService.queue).not.toHaveBeenCalled();
     expect(lastEmailStatus()).toBe(NotificationStatus.SUPPRESSED);
     expect(lastReason()).toMatch(/Field assayer has no email address/);
   });
@@ -168,16 +257,15 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
     notifRepo.findOne.mockResolvedValue(emailRow());
     prefRepo.findOne.mockResolvedValue({ email: false });
     await worker.deliverEmail(job());
-    expect(emailProvider.send).not.toHaveBeenCalled();
+    expect(emailService.queue).not.toHaveBeenCalled();
     expect(lastEmailStatus()).toBe(NotificationStatus.SUPPRESSED);
   });
 
   it('treats a missing preference row as opted in — the house convention', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow());
     prefRepo.findOne.mockResolvedValue(null);
-    emailProvider.send.mockResolvedValue({ success: true });
     await worker.deliverEmail(job());
-    expect(emailProvider.send).toHaveBeenCalled();
+    expect(emailService.queue).toHaveBeenCalled();
   });
 
   it('suppresses rather than erroring when the recipient has no email address', async () => {
@@ -185,53 +273,15 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
     userRepo.findOne.mockResolvedValue({ id: 'u-1', email: null, isActive: true, status: 'ACTIVE' });
     await worker.deliverEmail(job());
     expect(lastEmailStatus()).toBe(NotificationStatus.SUPPRESSED);
+    expect(emailService.queue).not.toHaveBeenCalled();
   });
 
   it('does not email an account suspended since dispatch', async () => {
     notifRepo.findOne.mockResolvedValue(emailRow());
     userRepo.findOne.mockResolvedValue({ id: 'u-1', email: 'x@y.in', isActive: true, status: 'SUSPENDED' });
     await worker.deliverEmail(job());
-    expect(emailProvider.send).not.toHaveBeenCalled();
+    expect(emailService.queue).not.toHaveBeenCalled();
     expect(lastEmailStatus()).toBe(NotificationStatus.SUPPRESSED);
-  });
-
-  it('fails terminally on a permanent SMTP error instead of burning retries', async () => {
-    notifRepo.findOne.mockResolvedValue(emailRow());
-    emailProvider.send.mockResolvedValue({ success: false, error: 'Invalid login', permanent: true });
-    await worker.deliverEmail(job());
-    expect(lastEmailStatus()).toBe(NotificationStatus.FAILED);
-  });
-
-  it('throws a transient failure back to the queue for backoff', async () => {
-    notifRepo.findOne.mockResolvedValue(emailRow());
-    emailProvider.send.mockResolvedValue({ success: false, error: 'Connection timed out' });
-    await expect(worker.deliverEmail(job())).rejects.toThrow('Connection timed out');
-    // Recorded, and returned to PENDING rather than settled: the row is unclaimed again so the
-    // retry can take it, but it has reached no terminal state.
-    expect(lastEmailStatus()).toBe(NotificationStatus.PENDING);
-    expect(lastReason()).toBe('Connection timed out');
-  });
-
-  it('stops without sending when another job already claimed the row', async () => {
-    // The sweeper re-enqueues anything PENDING for five minutes, which a slow fan-out or a
-    // throttling provider produces routinely. Two jobs then race; exactly one may send.
-    notifRepo.findOne.mockResolvedValue(emailRow());
-    claimAffected = 0;
-
-    await worker.deliverEmail(job());
-
-    expect(emailProvider.send).not.toHaveBeenCalled();
-  });
-
-  it('releases the claim on a transient failure so the retry can take the row again', async () => {
-    notifRepo.findOne.mockResolvedValue(emailRow());
-    emailProvider.send.mockResolvedValue({ success: false, error: 'Connection timed out' });
-
-    await expect(worker.deliverEmail(job())).rejects.toThrow();
-
-    // Back to PENDING, not left at the SENT the claim set — otherwise the row is stranded
-    // until the abandoned-send sweep an hour later.
-    expect(lastEmailStatus()).toBe(NotificationStatus.PENDING);
   });
 
   it('still emails an account locked out by failed sign-ins', async () => {
@@ -239,18 +289,20 @@ describe('NotificationDeliveryWorker — deliver-email', () => {
     // if anything more useful to a colleague having a bad morning.
     notifRepo.findOne.mockResolvedValue(emailRow());
     userRepo.findOne.mockResolvedValue({ id: 'u-1', email: 'x@y.in', isActive: true, status: 'LOCKED' });
-    emailProvider.send.mockResolvedValue({ success: true });
 
     await worker.deliverEmail(job());
 
-    expect(emailProvider.send).toHaveBeenCalled();
+    expect(emailService.queue).toHaveBeenCalled();
   });
 
-  it('settles FAILED on the final attempt instead of leaving the row PENDING forever', async () => {
+  it('does not decide "email is not set up" itself — the sending worker does, and the notification lands SUPPRESSED', async () => {
+    // A replica without the credential must not silence a row a configured sender could deliver.
     notifRepo.findOne.mockResolvedValue(emailRow());
-    emailProvider.send.mockResolvedValue({ success: false, error: 'Connection timed out' });
-    await worker.deliverEmail(job({ attemptsMade: 4 }));
-    expect(lastEmailStatus()).toBe(NotificationStatus.FAILED);
-    expect(lastReason()).toMatch(/after 5 attempts/);
+    emailService.isEnabled.mockReturnValue(false);
+
+    await worker.deliverEmail(job());
+
+    expect(emailService.queue).toHaveBeenCalled();
+    expect(lastEmailStatus()).toBeUndefined();
   });
 });

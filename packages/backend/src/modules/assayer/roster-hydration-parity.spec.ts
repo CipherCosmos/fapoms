@@ -15,7 +15,6 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 
@@ -81,7 +80,6 @@ describe('roster hydration parity — AssayerService.hydrateRosterRows', () => {
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
-        { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
         { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
         { provide: CacheService, useValue: { del: jest.fn() } },

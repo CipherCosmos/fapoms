@@ -18,6 +18,15 @@
         "cd packages/frontend && VITE_API_URL=http://localhost:8080 npx vite --port 5175 --strictPort"
       ],
       "port": 5175
+    },
+    {
+      "name": "fapoms-web-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd packages/frontend && VITE_API_URL=http://localhost:3001 npx vite --port 5176 --strictPort"
+      ],
+      "port": 5176
     }
   ]
 }

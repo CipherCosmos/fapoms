@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AssayerInvoicesTab } from './AssayerInvoicesTab';
 import { ToastProvider } from '../../components/ui';
 import { billingApi } from '../../services/billing';
+import { api } from '../../services/api';
 import { AssayerInvoiceStatus } from '@fapoms/shared';
 import type { AssayerInvoiceSummary, AssayerInvoiceInvitation } from '@fapoms/shared';
 
@@ -20,6 +21,15 @@ import type { AssayerInvoiceSummary, AssayerInvoiceInvitation } from '@fapoms/sh
 // `services/billing.ts` imports `./api`, which pulls in a Vite-only `import.meta.env` that
 // ts-jest cannot parse. Stubbing `services/api` cuts that chain — nothing here calls the real API.
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
+// The real poller, with a short interval so a test is not waiting 1.5 s per read.
+jest.mock('../../services/queued-job', () => {
+  const actual = jest.requireActual('../../services/queued-job');
+  return {
+    ...actual,
+    waitForQueuedJob: jest.fn((path: string, opts: Record<string, unknown> = {}) =>
+      actual.waitForQueuedJob(path, { ...opts, pollMs: 5 })),
+  };
+});
 jest.mock('../../services/billing', () => {
   const actual = jest.requireActual('../../services/billing');
   return {
@@ -41,6 +51,8 @@ const mockList = billingApi.listAssayerInvoices as jest.Mock;
 const mockGet = billingApi.getAssayerInvoice as jest.Mock;
 const mockApprove = billingApi.approveAssayerInvoice as jest.Mock;
 const mockCancel = billingApi.cancelAssayerInvoice as jest.Mock;
+const mockInviteAll = billingApi.inviteAllAssayerInvoices as jest.Mock;
+const mockRequest = api.request as jest.Mock;
 
 const summary = (over: Partial<AssayerInvoiceSummary> = {}): AssayerInvoiceSummary => ({
   id: 'inv-1',
@@ -140,7 +152,7 @@ describe('AssayerInvoicesTab — SUBMITTED first', () => {
   it('explains the flow when there is nothing to show', async () => {
     mockList.mockResolvedValue(page([]));
     renderTab();
-    expect(await screen.findByText(/Invite assayers from Payouts; submitted invoices appear here for approval\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Send them with the button above; once an assayer confirms one, it comes back here for your approval\./)).toBeInTheDocument();
   });
 });
 
@@ -232,5 +244,80 @@ describe('AssayerInvoicesTab — cancel requires a reason', () => {
     fireEvent.click(panelCancelButton());
 
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('inv-1', 'Assayer left the panel this week.'));
+  });
+});
+
+/**
+ * The monthly bills round is about 1,200 assayers, a transaction and a notification each. Run inside
+ * the request it outlived this client's 30 s: the screen said it failed while the server carried on
+ * inviting, and the next press ran it again. The server now accepts the round and runs it on a
+ * queue; this proves the screen follows the run it started — the server's own progress while it
+ * runs, the same outcome summary when it is done, and the run's failure when it fails.
+ */
+describe('AssayerInvoicesTab — the monthly bills round runs on the server', () => {
+  const running = { jobId: '41', state: 'running', progress: { percent: 50, stage: 'Inviting assayers (600/1200)' } };
+
+  const startRound = async () => {
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /^Send bills$/ }));
+    // The confirm dialog's own button carries the same words as the one that opened it.
+    fireEvent.click((await screen.findAllByRole('button', { name: /^Send bills$/ })).at(-1)!);
+  };
+
+  beforeEach(() => {
+    mockInviteAll.mockReset().mockResolvedValue({ jobId: '41', deduplicated: false });
+    mockRequest.mockReset();
+  });
+
+  it('shows the server’s progress while the round runs, then the outcome it finished with', async () => {
+    let finished = false;
+    mockRequest.mockImplementation(async (path: string) => {
+      if (path !== '/billing-engine/bulk-jobs/41') throw new Error(`unexpected request ${path}`);
+      return finished
+        ? {
+          jobId: '41',
+          state: 'done',
+          progress: { percent: 100, stage: 'Complete' },
+          result: {
+            invited: 2,
+            skipped: 2,
+            outcomes: [
+              { assayerId: 'as-1', outcome: 'invited', invoiceId: 'i-1', invoiceNumber: 'AINV-9', lineCount: 3 },
+              { assayerId: 'as-2', outcome: 'invited', invoiceId: 'i-2', invoiceNumber: 'AINV-10', lineCount: 1 },
+              { assayerId: 'as-3', outcome: 'skipped-active-invoice' },
+              { assayerId: 'as-4', outcome: 'failed', error: 'database timed out' },
+            ],
+          },
+        }
+        : running;
+    });
+
+    await startRound();
+
+    expect(await screen.findByText('Inviting assayers (600/1200)…')).toBeInTheDocument();
+    // A second press while it runs would only join the same run; the button says it is busy instead.
+    expect(screen.getByRole('button', { name: /Sending…/ })).toBeDisabled();
+    expect(mockInviteAll).toHaveBeenCalledTimes(1);
+
+    finished = true;
+    // The outcome is a summary, not a toast line: the one assayer the round FAILED on is named
+    // and set apart, instead of being counted into "skipped" as though somebody decided it.
+    expect(await screen.findByText(/invited — each now sees their amounts/)).toBeInTheDocument();
+    expect(screen.getByText(/skipped — they already hold an active bill/)).toBeInTheDocument();
+    expect(screen.getByText(/1 failed — a system error, not a decision about their work/)).toBeInTheDocument();
+    expect(screen.getByText(/database timed out/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Inviting assayers (600/1200)…')).not.toBeInTheDocument());
+  });
+
+  it('reports the run’s own failure in the server’s words, not a generic one', async () => {
+    mockRequest.mockResolvedValue({
+      jobId: '41', state: 'failed', progress: { percent: 10, stage: 'Failed' },
+      error: 'Assayer invoicing is not enabled on this deployment.',
+    });
+
+    await startRound();
+
+    expect(await screen.findByText('Could not send the bills')).toBeInTheDocument();
+    expect(screen.getByText(/Assayer invoicing is not enabled on this deployment/)).toBeInTheDocument();
   });
 });

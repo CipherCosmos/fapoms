@@ -37,6 +37,9 @@ class UpdatePreferenceRequestDto {
 
   @IsOptional() @IsBoolean()
   email?: boolean;
+
+  @IsOptional() @IsBoolean()
+  sms?: boolean;
 }
 
 class RegisterDeviceTokenRequestDto {

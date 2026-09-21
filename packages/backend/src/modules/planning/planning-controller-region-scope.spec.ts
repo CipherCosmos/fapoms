@@ -71,7 +71,7 @@ describe('PlanningController region-scope fitness test', () => {
    * deliberate in review, not as a stray line dropped from a list.
    */
   const DIRECT_CALL_ROUTES = new Set([
-    'getProjectCoverage', 'createOrRegeneratePlan', 'transitionPlan', 'executePlan',
+    'getProjectCoverage', 'createOrRegeneratePlan', 'queueCreateOrRegeneratePlan', 'transitionPlan', 'executePlan',
     'optimizeProjectDeployment', 'simulateScenario', 'suggestAuditDate', 'getRecommendations',
     'getMultiProjectDayPlans', 'queueMultiProjectDayPlans', 'getDayPlans', 'queueDayPlans',
   ]);
@@ -86,6 +86,9 @@ describe('PlanningController region-scope fitness test', () => {
   const DELEGATES_TO_SERVICE = new Set([
     'getProjectCoveragePlan', 'queueProjectCoveragePlan', 'getProjectCandidates',
     'queueProjectCandidates', 'commandCenter',
+    // Branch ids arrive in the body, so there is nothing to assert at the request; the scope is
+    // frozen into the job and `PlanningWriteJobsWorker` asserts it per branch before each write.
+    'queueBulkOffers', 'queueBulkUnableToCover',
   ]);
 
   // The path regex is a safety net for a route nobody has classified yet, not the sole source of

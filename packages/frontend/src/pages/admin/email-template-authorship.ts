@@ -34,7 +34,11 @@ const STAMP_PATTERN = /<!--fapoms:simple-editor ([\s\S]*?) -->/;
 export function stampVisual(html: string, data: VisualTemplateData): string {
   const withoutOld = stripStamp(html);
   // The stamp goes first so that reading it never depends on how long the body is.
-  return `${STAMP_OPEN}${JSON.stringify(data)}${STAMP_CLOSE}\n${withoutOld}`;
+  // Angle brackets are written as JSON escapes, which parse back to the same text: a field holding
+  // `-->` would otherwise close the comment early, turning the rest of what was typed into live
+  // markup and the stamp into one that no longer reads back.
+  const fields = JSON.stringify(data).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+  return `${STAMP_OPEN}${fields}${STAMP_CLOSE}\n${withoutOld}`;
 }
 
 export function stripStamp(html: string): string {

@@ -429,10 +429,21 @@ describe('resolveFreely — refuses to guess when nothing can check the answer',
 
   it('still looks up a record that names a place, which is what its name is for', async () => {
     // A branch is looked up BY its name; this must not become null. The lookup itself is a network
-    // call the harness blocks, so the assertion is only that it was not short-circuited above.
-    await expect(resolveFreely(
-      { address: '1 Main Rd', name: 'Aundh Branch', brand: 'Karnataka Vikas Grameena Bank', city: 'Pune' },
-      null,
-    )).resolves.toBeDefined();
+    // call, so the assertion is only that it was not short-circuited above — and the network is
+    // refused here rather than left to whatever the machine does: where outbound traffic hangs
+    // instead of failing, the real call outlived the 5 s test timeout and the suite went red on an
+    // environment property, not on this rule.
+    const realFetch = global.fetch;
+    const fetchMock = jest.fn(async () => { throw new Error('network disabled in this test'); });
+    (global as any).fetch = fetchMock;
+    try {
+      await expect(resolveFreely(
+        { address: '1 Main Rd', name: 'Aundh Branch', brand: 'Karnataka Vikas Grameena Bank', city: 'Pune' },
+        null,
+      )).resolves.toBeDefined();
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      (global as any).fetch = realFetch;
+    }
   });
 });

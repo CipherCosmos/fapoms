@@ -23,11 +23,13 @@
  *               ALWAYS rolled back — docs/incident-2026-09-09-audit-truncate.md is why.
  * deletion    : attempts DELETE /assayers/:id expecting 403; asserts nothing moved.
  * teardown    : none needed.
- * gate        : none of its own — it does not use _lib.mjs. Read the rotation note above.
+ * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs
+ *               (postAndAwait), none of its gates. Read the rotation note above.
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
 import { createRequire } from 'node:module';
+import { postAndAwait, JOB_STATUS, describeJobOutcome } from './_lib.mjs';
 const require = createRequire(
   process.env.AC_REPO ? `${process.env.AC_REPO}/package.json`
     : '/Users/deepstacker/WorkSpace/dupcq/gssAutomation/package.json');
@@ -151,8 +153,25 @@ const signIn = async (username, seedPw, changePath) => {
     assignments: Number((await q(`SELECT count(*)::int c FROM assignments`))[0].c),
   };
 
+  /*
+    AZ-04/05 are routes that answer 202 and a job id when they ACCEPT (2026-09-17). The role gate is
+    still decided in the request, so the refusal asserted here is still an immediate 403 with nothing
+    queued, and the check reads the POST's status exactly as before. They go through postAndAwait so
+    that IF one were accepted, AZ-07 reads the payable after that run rather than before the worker
+    reached it — "nothing changed" read on a 202 is true of every write, allowed or not.
+  */
+  const QUEUED = new Set(['AZ-04', 'AZ-05']);
+  const acceptedRuns = [];
   for (const [id, method, path, body, what] of writes) {
-    const r = await call(validator.token, method, path, body);
+    let r;
+    if (QUEUED.has(id)) {
+      const run = await postAndAwait(path, body, JOB_STATUS.billingBulk,
+        { token: validator.token, api: API, send: (p, b) => call(validator.token, method, p, b) });
+      if (run.accepted) acceptedRuns.push(`${id} ${describeJobOutcome(run)}`);
+      r = run.r;
+    } else {
+      r = await call(validator.token, method, path, body);
+    }
     record(id, r.status === 403 || r.status === 401,
       `a DESK_OPERATOR cannot ${what} (${method} ${path.split('?')[0].slice(0, 46)} -> ${r.status})`);
   }
@@ -165,7 +184,8 @@ const signIn = async (username, seedPw, changePath) => {
   };
   record('AZ-07', JSON.stringify(before) === JSON.stringify(after),
     `and none of those refusals changed anything (lifecycle ${before.lifecycle}->${after.lifecycle}, `
-    + `payable ${before.payable}->${after.payable}, assignments ${before.assignments}->${after.assignments})`);
+    + `payable ${before.payable}->${after.payable}, assignments ${before.assignments}->${after.assignments})`
+    + (acceptedRuns.length ? `; ACCEPTED as queued runs: ${acceptedRuns.join(' | ')}` : ''));
 
   // ── 3. one assayer must not reach another's work ───────────────────────────────────────────
   const pair = await q(

@@ -45,11 +45,13 @@
  *               project_id / client_id and DELETEs matching rows, three passes deep. It is
  *               scoped to ids this run created and skips a FORBIDDEN set — but it is a
  *               schema-walking delete loop, and that is what it is.
- * gate        : none of its own — it does not use _lib.mjs.
+ * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs
+ *               (postAndAwait), none of its gates.
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
 import { createRequire } from 'node:module';
+import { postAndAwait, JOB_STATUS, describeJobOutcome } from './_lib.mjs';
 // `pg` lives in the workspace, not beside this script.
 const require = createRequire(
   (process.env.AC_REPO || '/Users/deepstacker/WorkSpace/dupcq/gssAutomation') + '/package.json');
@@ -112,6 +114,23 @@ const call = async (token, method, path, body, attempt = 0) => {
 /** The message a refusal actually put in front of the operator, wherever the envelope put it. */
 const msg = (r) => String(r?.body?.message ?? r?.body?.error ?? r?.body?.data?.message ?? '');
 const okish = (r) => r.status >= 200 && r.status < 300;
+
+/**
+ * Payout approve and pay answer 202 and a job id since 2026-09-17; the `{ done, refused }` body they
+ * used to answer with is the finished run's `result`. Sent through this file's own `call` (so a 429
+ * still surfaces as `throttled`) and then waited for, so the database reads that follow see what
+ * the run did rather than a payable the worker has not reached yet.
+ */
+const billingRun = (who, path, body) => postAndAwait(path, body, JOB_STATUS.billingBulk,
+  { token: who.token, api: API, send: (p, b) => call(who.token, 'POST', p, b) });
+/** Accepted runs among `runs` that did not come to done — a DB read after them proves nothing. */
+const unfinished = (runs) => runs.filter((x) => x.accepted && x.error);
+/** How a burst of identical presses was taken in: distinct runs, and how many joined one in flight. */
+const intake = (runs) => {
+  const ids = new Set(runs.filter((x) => x.accepted).map((x) => x.accepted.jobId));
+  const joined = runs.filter((x) => x.accepted?.deduplicated).length;
+  return `${ids.size} distinct run(s), ${joined} press(es) joined a run in flight`;
+};
 
 /**
  * `POST /auth/login` carries its own brake — 20 a minute per IP, far tighter than the 300 the rest
@@ -933,63 +952,84 @@ const created = { assayers: [], branches: [], projectBranches: [], projects: [],
 
   console.log('\nB4 — payable approve: twice, stale, and three at once');
   {
-    const probe = await call(admin.token, 'POST', '/billing-engine/payouts/approve',
+    // Validation is still decided in the request, so an unknown field is still an immediate 400
+    // with nothing queued. Waited for all the same: if it were accepted, the run would approve the
+    // payable and the burst below would be measuring no-ops.
+    const probe = await billingRun(admin, '/billing-engine/payouts/approve',
       { payableIds: [PAYABLE.id], expectedVersion: Number(PAYABLE.version) - 1 });
     const after = await one(`SELECT status, version FROM assayer_payables WHERE id=$1`, [PAYABLE.id]);
-    const rejectedTheField = probe.status === 400 && /expectedVersion/i.test(JSON.stringify(probe.body ?? {}));
+    const rejectedTheField = probe.status === 400 && /expectedVersion/i.test(JSON.stringify(probe.r.body ?? {}));
     check('B4-STALE', probe.throttled ? 'UNKNOWN' : rejectedTheField && after.status === 'PENDING',
       rejectedTheField
         ? `payout approval offers NO optimistic concurrency: expectedVersion is rejected as an unknown `
           + `property (HTTP ${probe.status}), so a stale approval cannot be expressed, let alone refused`
-        : `expectedVersion on approve answered HTTP ${probe.status} — "${clip(msg(probe), 70)}" (payable ${after.status})`);
+        : `expectedVersion on approve answered ${describeJobOutcome(probe)} — "${clip(msg(probe.r), 70)}" (payable ${after.status})`);
 
+    // CHANGED SHAPE (2026-09-17). Three presses at once no longer race three request-scoped loops:
+    // each is ACCEPTED, and a press by the same account while an identical run is still queued or
+    // running joins it (`deduplicated`). The queue then runs one approval at a time. The assertion
+    // is the same — one approval, one PAYABLE_APPROVED row — but it is read only after every run
+    // the burst started has FINISHED, and the late duplicate is pressed after they have, so it is a
+    // genuine repeat with its own run rather than another join.
     const fired = await Promise.all([1, 2, 3].map(() =>
-      call(admin.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id] })));
-    const dup = await call(admin.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id] });
+      billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id] })));
+    const dup = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [PAYABLE.id] });
     const approvals = await one(
       `SELECT count(*)::int c FROM audit_events WHERE entity_id=$1 AND event_type='PAYABLE_APPROVED' AND outcome='SUCCESS'`,
       [PAYABLE.id]);
     const after2 = await one(`SELECT status, approved_by, approved_at FROM assayer_payables WHERE id=$1`, [PAYABLE.id]);
-    check('B4-CONC', fired.some((r) => r.throttled) ? 'UNKNOWN' : after2.status === 'APPROVED' && approvals.c === 1,
+    const notDone = unfinished([...fired, dup]);
+    check('B4-CONC', fired.some((r) => r.throttled) ? 'UNKNOWN'
+      : after2.status === 'APPROVED' && approvals.c === 1 && notDone.length === 0,
       `three simultaneous approvals plus one duplicate are one approval `
-      + `(statuses ${fired.map((r) => r.status).join('/')}, then ${dup.status}, PAYABLE_APPROVED rows ${approvals.c}, DB ${after2.status})`);
-    note('B4-DUP-KEY', 'POST /billing-engine/payouts/approve accepts no idempotency key of any kind — '
-      + 'PayoutIdsDto is { payableIds } only. Duplicate suppression rests entirely on the payable\'s '
-      + 'own status transition, which is the right last line but the only one.');
+      + `(statuses ${fired.map((r) => r.status).join('/')} -> ${intake(fired)}; then ${describeJobOutcome(dup)}, `
+      + `PAYABLE_APPROVED rows ${approvals.c}, DB ${after2.status})`
+      + (notDone.length ? ` — ${notDone.length} run(s) did not finish: ${notDone.map(describeJobOutcome).join(' | ')}` : ''));
+    note('B4-DUP-KEY', 'POST /billing-engine/payouts/approve accepts no client idempotency key — '
+      + 'PayoutIdsDto is { payableIds } only. Since the route became a queued run, a repeat press by the SAME '
+      + 'account while an identical run is queued or running joins it (fingerprint: account + sorted ids). '
+      + 'A press by another account, or after the run has finished, is stopped only by the payable\'s own '
+      + 'status transition, which is the right last line but still the only one across accounts.');
   }
 
   console.log('\nB5 — payable pay: twice, with a second reference, and three at once');
   {
     const ref = `${PREFIX}-PAYREF`;
-    const probe = await call(admin2.token, 'POST', '/billing-engine/payouts/pay',
+    const probe = await billingRun(admin2, '/billing-engine/payouts/pay',
       { payableIds: [PAYABLE.id], paymentReference: ref, method: 'NEFT', expectedVersion: 1 });
-    const rejectedTheField = probe.status === 400 && /expectedVersion/i.test(JSON.stringify(probe.body ?? {}));
+    const rejectedTheField = probe.status === 400 && /expectedVersion/i.test(JSON.stringify(probe.r.body ?? {}));
     check('B5-STALE', probe.throttled ? 'UNKNOWN' : rejectedTheField,
       rejectedTheField
         ? `payout disbursement offers no optimistic concurrency either (HTTP ${probe.status}); the payment `
           + `reference is the only key, and it is chosen by the caller`
-        : `expectedVersion on pay answered HTTP ${probe.status} — "${clip(msg(probe), 70)}"`);
+        : `expectedVersion on pay answered ${describeJobOutcome(probe)} — "${clip(msg(probe.r), 70)}"`);
 
+    // Same change of shape as B4-CONC: accepted presses, joins while in flight, one run at a time on
+    // the queue; read only after every run has finished, and the late duplicate pressed after that.
     const fired = await Promise.all([1, 2, 3].map(() =>
-      call(admin2.token, 'POST', '/billing-engine/payouts/pay',
+      billingRun(admin2, '/billing-engine/payouts/pay',
         { payableIds: [PAYABLE.id], paymentReference: ref, method: 'NEFT' })));
-    const dup = await call(admin2.token, 'POST', '/billing-engine/payouts/pay',
+    const dup = await billingRun(admin2, '/billing-engine/payouts/pay',
       { payableIds: [PAYABLE.id], paymentReference: ref, method: 'NEFT' });
     const payments = await q(`SELECT id, amount FROM billing_payments WHERE payable_id=$1 AND is_active`, [PAYABLE.id]);
     const after = await one(`SELECT status, paid_amount FROM assayer_payables WHERE id=$1`, [PAYABLE.id]);
+    const notDone = unfinished([...fired, dup]);
     check('B5-CONC', fired.some((r) => r.throttled) ? 'UNKNOWN'
-      : after.status === 'PAID' && payments.length === 1,
+      : after.status === 'PAID' && payments.length === 1 && notDone.length === 0,
       `three simultaneous payments plus one duplicate are one payment `
-      + `(statuses ${fired.map((r) => r.status).join('/')}, then ${dup.status}, billing_payments ${payments.length}, `
-      + `paid ${after.paid_amount})`);
+      + `(statuses ${fired.map((r) => r.status).join('/')} -> ${intake(fired)}; then ${describeJobOutcome(dup)}, `
+      + `billing_payments ${payments.length}, paid ${after.paid_amount})`
+      + (notDone.length ? ` — ${notDone.length} run(s) did not finish: ${notDone.map(describeJobOutcome).join(' | ')}` : ''));
 
-    // The reference is caller-chosen, so the interesting duplicate is the one that changes it.
-    const second = await call(admin2.token, 'POST', '/billing-engine/payouts/pay',
+    // The reference is caller-chosen, so the interesting duplicate is the one that changes it. A new
+    // reference is a new fingerprint, so this is always its own run; the refusal is in its result.
+    const second = await billingRun(admin2, '/billing-engine/payouts/pay',
       { payableIds: [PAYABLE.id], paymentReference: `${ref}-AGAIN`, method: 'NEFT' });
     const paymentsAfter = await q(`SELECT id FROM billing_payments WHERE payable_id=$1 AND is_active`, [PAYABLE.id]);
-    check('B5-DUP-NEWREF', second.throttled ? 'UNKNOWN' : paymentsAfter.length === 1,
+    check('B5-DUP-NEWREF', second.throttled ? 'UNKNOWN' : paymentsAfter.length === 1 && !!second.result,
       `paying the same payable again under a NEW reference does not pay it twice `
-      + `(HTTP ${second.status}, billing_payments ${paymentsAfter.length}) — "${clip(msg(second), 60)}"`);
+      + `(${describeJobOutcome(second)}, billing_payments ${paymentsAfter.length}) — `
+      + `"${clip(second.result?.refused?.[0]?.reason ?? msg(second.r), 60)}"`);
   }
 
   console.log('\nB6 — assayer lifecycle transition: twice, stale, and three at once');
@@ -1133,13 +1173,14 @@ const created = { assayers: [], branches: [], projectBranches: [], projects: [],
       await drive(gN.id);
       const payables = await awaitPayable(gN.id);
       if (payables.length === 1) {
-        const approve = await call(admin.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [payables[0].id] });
+        // A missing-bank refusal is per row: it is in the finished run's `refused`, not an HTTP status.
+        const approve = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [payables[0].id] });
         const after = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [payables[0].id]);
-        const reason = String(approve.body?.data?.refused?.[0]?.reason ?? msg(approve));
+        const reason = String(approve.result?.refused?.[0]?.reason ?? msg(approve.r));
         check('A1b', approve.throttled ? 'UNKNOWN'
           : after.status === 'PENDING' && /bank|ifsc/i.test(reason),
           `a payout to somebody with no bank details is refused, naming what is missing, and the payable `
-          + `stays ${after.status} — "${clip(reason, 90)}"`);
+          + `stays ${after.status} — "${clip(reason, 90)}" (${describeJobOutcome(approve)})`);
       } else {
         check('A1b', 'UNKNOWN', `no payable appeared for the no-bank person within the budget`);
       }

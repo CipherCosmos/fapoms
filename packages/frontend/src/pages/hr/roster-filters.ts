@@ -1,8 +1,4 @@
-import {
-  AssayerEngagementType, AssayerLifecycleStatus, AssayerUnavailableReason, EmpanelmentStatus,
-  assayerLifecycleLabel, employmentTypeLabel, daysUntilExpiry, isPlaceholderPin,
-  PAYOUT_BLOCKING_KEYS,
-} from '@fapoms/shared';
+import { AssayerLifecycleStatus, assayerLifecycleLabel, employmentTypeLabel, daysUntilExpiry, isPlaceholderPin, PAYOUT_BLOCKING_KEYS, businessDateKey, EMPANELMENT_STANDING_LABELS, assayerEngagementLabel, assayerUnavailableLabel } from '@fapoms/shared';
 
 import {
   missingCriticalFields, stillWorkable, isOnboardingStage,
@@ -140,33 +136,14 @@ export function pinQuality(a: RosterPerson): PinQuality {
 /**
  * How they are engaged, and why they are not available.
  *
- * HANDOFF, and it is the one wart in this file: these two maps already exist twice, privately,
- * in `AssayerRecord.tsx` (ENGAGEMENT_LABELS / UNAVAILABLE_LABELS) and `AssayerForms.tsx`
- * (ENGAGEMENT_OPTIONS / UNAVAILABLE_OPTIONS). Neither is exported, so a filter that must show
- * the same words as the record it filters cannot borrow either. The words are copied exactly —
- * a clerk must not meet "Back-up" on the record and "Back up" in the filter — and all three
- * copies want collapsing into `@fapoms/shared/assayer-roster-vocabulary.ts`, beside the enums
- * that define the values.
+ * DONE (2026-09-19). These maps used to exist here, in `AssayerRecord.tsx` and — as option
+ * arrays — in `AssayerForms.tsx`, none of them exported, so a filter that must show the same
+ * words as the record it filters could not borrow them and copied them instead. They had
+ * drifted in five places, including a `BGV_FAILED` that one copy omitted entirely. They now
+ * live in `@fapoms/shared/assayer-roster-vocabulary.ts`, beside the enums that define the
+ * values, as total `Record`s so a new enum value cannot ship without a word.
  */
-export const ENGAGEMENT_LABELS: Record<string, string> = {
-  [AssayerEngagementType.REGULAR]: 'Regular',
-  [AssayerEngagementType.LOCAL]: 'Local',
-  [AssayerEngagementType.BACK_UP]: 'Back-up',
-  [AssayerEngagementType.AGENCY_AUDIT]: 'Agency audits',
-  [AssayerEngagementType.MYSTERY_AUDIT]: 'Mystery audits',
-};
-
-export const UNAVAILABLE_LABELS: Record<string, string> = {
-  [AssayerUnavailableReason.REJECTED_BY_US]: 'We rejected them',
-  [AssayerUnavailableReason.NOT_INTERESTED]: 'Not interested',
-  [AssayerUnavailableReason.DECEASED]: 'Deceased',
-  [AssayerUnavailableReason.NO_WORK_IN_AREA]: 'No work in their area',
-  [AssayerUnavailableReason.MOVED_ABROAD]: 'Moved out of India',
-  // The owner's "failed, not onboarded" outcome — stamped by the lifecycle service when an
-  // adverse background verdict parks somebody, so the roster says why instead of a bare Inactive.
-  [AssayerUnavailableReason.BGV_FAILED]: 'Background verification failed',
-  [AssayerUnavailableReason.MOVED_TO_COMPANY]: 'Now engaged through a company',
-};
+// The words live in `@fapoms/shared`, beside the enums — see the note above.
 
 /**
  * A FOURTH copy, for the same reason as the two above and with the same fix pending: the words
@@ -178,16 +155,7 @@ export const UNAVAILABLE_LABELS: Record<string, string> = {
  * rather than reworded, for the same reason the other three are: a clerk must not meet "Documents
  * pending" on the vetting tab and a different word for it in the filter panel.
  */
-export const EMPANELMENT_STANDING_LABELS: Record<string, string> = {
-  [EmpanelmentStatus.ACTIVE]: 'Active',
-  [EmpanelmentStatus.RECOMMENDED]: 'Recommended',
-  [EmpanelmentStatus.NOT_RECOMMENDED]: 'Not recommended',
-  [EmpanelmentStatus.DOCUMENTS_PENDING]: 'Documents pending',
-  [EmpanelmentStatus.REJECTED]: 'Rejected',
-  [EmpanelmentStatus.RESIGNED]: 'Resigned',
-  [EmpanelmentStatus.TERMINATED]: 'Terminated',
-  [EmpanelmentStatus.INACTIVE]: 'Empanelled before, dormant now',
-};
+// Also from `@fapoms/shared` now.
 
 /**
  * One-click views onto the questions HR ask most.
@@ -402,7 +370,7 @@ export const ROSTER_FILTERS: RosterFilter[] = [
     group: 'person',
     hint: 'Regular, local-only, back-up cover, agency or mystery audits.',
     valuesOf: one((a) => a.engagementType),
-    labelOf: (v) => ENGAGEMENT_LABELS[v] ?? v,
+    labelOf: (v) => assayerEngagementLabel(v),
     blankLabel: 'Not recorded',
   },
   {
@@ -420,7 +388,7 @@ export const ROSTER_FILTERS: RosterFilter[] = [
     label: 'Why they are unavailable',
     group: 'person',
     valuesOf: one((a) => a.unavailableReason),
-    labelOf: (v) => UNAVAILABLE_LABELS[v] ?? v,
+    labelOf: (v) => assayerUnavailableLabel(v),
     // Most of the roster is available, so "nothing recorded" here is not a gap to chase — it is
     // the ordinary case, and saying so stops the option reading as 1,100 missing values.
     blankLabel: 'No reason recorded',
@@ -661,7 +629,7 @@ export function activeFilterCount(state: RosterFilterState): number {
 const dayOf = (value?: string | null): string | null => {
   if (!value) return null;
   const at = new Date(value);
-  return Number.isNaN(at.getTime()) ? null : at.toISOString().slice(0, 10);
+  return Number.isNaN(at.getTime()) ? null : businessDateKey(at);
 };
 
 /** Does this person satisfy one filter's chosen values? Values within a filter are OR. */

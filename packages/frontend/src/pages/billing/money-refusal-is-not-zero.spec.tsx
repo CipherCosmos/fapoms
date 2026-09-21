@@ -13,6 +13,7 @@ import { AppError } from '../../services/errors';
  * The screens then said, with no hedging:
  *
  *   - Payouts:           "No payouts yet. They appear here the moment an assignment completes."
+ *                       (now "Nothing at this stage.", once the tab gained stages)
  *   - Assayer invoices:  "Nothing waiting for approval."
  *   - Ready to invoice:  "Nothing to invoice. Completed assignments appear here automatically."
  *   - Expense claims:    "No expense claims are awaiting review."
@@ -80,6 +81,9 @@ jest.mock('../../hooks/useBilling', () => {
   const idleMutation = () => ({ isPending: false, mutate: jest.fn(), mutateAsync: jest.fn() });
   return {
     usePayouts: jest.fn(),
+    // PayoutsTab reads the overview for its stage-chip counts. Unmocked it is `undefined` and
+    // the component throws before it can render the refusal these tests are about.
+    useBillingOverview: jest.fn(),
     useInvoiceable: jest.fn(),
     useBillingInvoices: jest.fn(),
     useAssayerInvoices: jest.fn(),
@@ -128,6 +132,7 @@ function expectRefusalNotEmptiness(emptySentence: RegExp) {
 beforeEach(() => {
   // Sensible non-failing defaults; each test overrides the one query it is about.
   billingHooks.usePayouts.mockReturnValue(ok({ items: [], total: 0 }));
+  billingHooks.useBillingOverview.mockReturnValue(ok(undefined));
   billingHooks.useInvoiceable.mockReturnValue(ok({ clients: [], total: 0 }));
   billingHooks.useBillingInvoices.mockReturnValue(ok({ items: [], total: 0 }));
   billingHooks.useAssayerInvoices.mockReturnValue(ok({ items: [], total: 0 }));
@@ -138,23 +143,23 @@ beforeEach(() => {
 
 describe('Payouts — a refused list is not an empty one', () => {
   it.each([['a settled 403', failing], ['a paused retry', paused]])(
-    'says it was refused rather than "No payouts yet" (%s)',
+    'says it was refused rather than "Nothing at this stage" (%s)',
     (_label, state) => {
       billingHooks.usePayouts.mockReturnValue(state());
-      draw(<PayoutsTab filter="ALL" onFilter={jest.fn()} canAct canReviewClaims />);
-      expectRefusalNotEmptiness(/No payouts yet/);
+      draw(<PayoutsTab stage="TO_PAY" onStage={jest.fn()} canAct />);
+      expectRefusalNotEmptiness(/Nothing at this stage/);
     },
   );
 
   it('offers no Retry for a refusal — the button could only fail identically', () => {
     billingHooks.usePayouts.mockReturnValue(failing());
-    draw(<PayoutsTab filter="ALL" onFilter={jest.fn()} canAct canReviewClaims />);
+    draw(<PayoutsTab stage="TO_PAY" onStage={jest.fn()} canAct />);
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('still shows the genuine empty state when the load actually succeeded', () => {
-    draw(<PayoutsTab filter="ALL" onFilter={jest.fn()} canAct canReviewClaims />);
-    expect(screen.getByText(/No payouts yet/)).toBeInTheDocument();
+    draw(<PayoutsTab stage="TO_PAY" onStage={jest.fn()} canAct />);
+    expect(screen.getByText(/Nothing at this stage/)).toBeInTheDocument();
     expect(screen.queryByText(/Could not load/)).not.toBeInTheDocument();
   });
 });

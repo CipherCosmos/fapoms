@@ -45,6 +45,10 @@ export * from './coverage';
 // Shared utilities
 export * from './utils';
 
+// A message (email or SMS) the system has promised to send, and where it has got to
+export * from './outbound-message';
+export * from './email-layout';
+
 // GST state-code resolution, tax-split labelling and amount-in-words for invoices
 export * from './gst';
 export * from './billing-liveness';
@@ -99,3 +103,5 @@ export * from './livekit-url';
 // since the mobile fix was ported to web verbatim — one object so the two cannot silently drift.
 export * from './socket-transport-config';
 export * from './registration-consent';
+export * from './identifier-entry';
+export * from './registration-form';

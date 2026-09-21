@@ -2631,7 +2631,7 @@ export class RecommendationEngine {
           if (leave) {
             const after = new Date(`${leave.endDate}T00:00:00`);
             after.setDate(after.getDate() + 1);
-            nextAvailableDate = after.toISOString().slice(0, 10);
+            nextAvailableDate = businessDateKey(after);
           }
         }
 

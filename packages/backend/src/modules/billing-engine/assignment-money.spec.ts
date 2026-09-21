@@ -63,6 +63,69 @@ describe('assignment money', () => {
       expect(m.assayer).toEqual({ base: 1700, travel: 300, gross: 2000, tds: 200, net: 1800 });
     });
 
+    /**
+     * The anchor, and which way it points.
+     *
+     * The desk types ONE total; the split is kept internally "based on the base fee set for an
+     * assayer" (owner, 2026-09-21). So the base holds at `quotedBaseFee` — that person's
+     * contracted audit fee, frozen when the offer was made — and the difference between the
+     * typed total and that base is travel.
+     *
+     * It used to point the other way: travel held at the quoted figure and every rupee the desk
+     * moved landed in the BASE. That made an assayer's audit fee a different number on every
+     * assignment, which is the one figure that should be stable — it belongs to the person, not
+     * to the journey. Nothing pinned the direction, which is why it could be changed without a
+     * single test objecting.
+     */
+    it('holds the base at the assayer\'s own fee and lets travel take the difference', () => {
+      // Quote was 1500 + 300. The desk agreed 2000 on the phone, so the journey was worth 500.
+      const m = assignmentMoney({ agreedFee: 2000, quotedBaseFee: 1500, quotedTravelFee: 300 }, rateCard);
+      expect(m.assayer).toEqual({ base: 1500, travel: 500, gross: 2000, tds: 200, net: 1800 });
+      // The old anchor would have produced base 1700 / travel 300 — the audit silently re-priced.
+      expect(m.assayer.base).not.toBe(1700);
+    });
+
+    it('does not re-price the audit when a far branch costs more to reach', () => {
+      const near = assignmentMoney({ agreedFee: 1800, quotedBaseFee: 1500, quotedTravelFee: 300 }, rateCard);
+      const far = assignmentMoney({ agreedFee: 4300, quotedBaseFee: 1500, quotedTravelFee: 2800 }, rateCard);
+      // Same person, same audit, very different journeys.
+      expect(near.assayer.base).toBe(far.assayer.base);
+      expect(far.assayer.travel).toBe(2800);
+    });
+
+    it('puts a hand-typed increase into travel, not into the audit fee', () => {
+      // Rate card suggested 1800; the desk agreed 2500 on the call.
+      const m = assignmentMoney({ agreedFee: 2500, quotedBaseFee: 1500, quotedTravelFee: 300 }, rateCard);
+      expect(m.assayer.base).toBe(1500);
+      expect(m.assayer.travel).toBe(1000);
+      expect(m.assayer.gross).toBe(2500);
+    });
+
+    it('clamps the base to the total so a low agreement never produces negative travel', () => {
+      // Agreed below this assayer's own base fee — the base cannot exceed what was agreed.
+      const m = assignmentMoney({ agreedFee: 1200, quotedBaseFee: 1500, quotedTravelFee: 300 }, rateCard);
+      expect(m.assayer).toMatchObject({ base: 1200, travel: 0, gross: 1200 });
+    });
+
+    it('keeps base + travel exactly equal to the typed total', () => {
+      for (const agreedFee of [1200, 1800, 2000, 4300, 9999]) {
+        const m = assignmentMoney({ agreedFee, quotedBaseFee: 1500, quotedTravelFee: 300 }, rateCard);
+        expect(m.assayer.base + m.assayer.travel).toBe(agreedFee);
+      }
+    });
+
+    it('still bills the client without doubling the journey under the new anchor', () => {
+      const m = assignmentMoney({ agreedFee: 2500, quotedBaseFee: 1500, quotedTravelFee: 300 }, passThrough);
+      expect(m.client.base + m.client.travel).toBe(2500);
+      expect(m.client.taxable).toBe(m.assayer.gross);
+    });
+
+    it('falls back to holding travel when no base is on file for that assayer', () => {
+      // Older offers carry only the travel figure; restating their history would be worse.
+      const m = assignmentMoney({ agreedFee: 2000, quotedTravelFee: 300 }, rateCard);
+      expect(m.assayer).toMatchObject({ base: 1700, travel: 300 });
+    });
+
     it('clamps travel to the fee so a hard negotiation can never produce a negative base', () => {
       const m = assignmentMoney({ agreedFee: 250, quotedTravelFee: 300 }, rateCard);
       expect(m.assayer).toEqual({ base: 0, travel: 250, gross: 250, tds: 25, net: 225 });

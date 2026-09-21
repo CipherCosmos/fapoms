@@ -12,7 +12,7 @@ import { Repository } from 'typeorm';
 import { HolidayEntity } from './holiday.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, canonicalState } from '@fapoms/shared';
+import { EventCategory, canonicalState, businessDateKey } from '@fapoms/shared';
 import { ClientConfigurationEntity } from '../client/client-configuration.entity';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 
@@ -59,7 +59,10 @@ export class HolidayService {
    * (a state event alongside a bank-specific one, say) are not duplicates and stay unblocked.
    */
   private async assertNotDuplicate(dto: CreateHolidayDto, holidayDate: Date, excludeId?: string): Promise<void> {
-    const formattedDate = holidayDate.toISOString().split('T')[0];
+    // India's calendar day, not the server's. A date picked in IST arrives as the previous
+    // day's 18:30 UTC, so `toISOString()` asked the duplicate check about 25 January while the
+    // operator was saving 26 January — and the clash it exists to catch went unseen.
+    const formattedDate = businessDateKey(holidayDate);
     const clash = await this.holidayRepository
       .createQueryBuilder('holiday')
       .where('holiday.is_active = :isActive', { isActive: true })
@@ -225,7 +228,17 @@ export class HolidayService {
       }
     }
 
-    const formattedDate = date.toISOString().split('T')[0];
+    /**
+     * The date this is asked about, in India's calendar — which is the only calendar the
+     * holiday table is keyed by.
+     *
+     * `toISOString()` yields the UTC day, still yesterday for any moment between 00:00 and
+     * 05:30 IST and for any date-picker value that arrived with an IST offset. Both the query
+     * below AND the cache key are built from this string, so they agreed with each other while
+     * both asked about the wrong day: a genuine public holiday read as an ordinary working day,
+     * and the wrong answer was then cached under a key nothing would invalidate.
+     */
+    const formattedDate = businessDateKey(date);
     // Scheduling checks the same dates repeatedly; cache the registered-holiday lookup for
     // this exact date + client. .length, .applicableStates and .clientId are read below, all of
     // which survive a JSON round-trip, so a cache hit behaves identically to a fresh query.

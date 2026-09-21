@@ -16,7 +16,7 @@ const useIsNarrow = (max = 900): boolean => {
   return narrow;
 };
 import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown, Zap } from 'lucide-react';
-import { ProjectStatus, Priority, projectStatusLabel, branchStatusLabel } from '@fapoms/shared';
+import { ProjectStatus, Priority, projectStatusLabel, branchStatusLabel, businessTodayDateKey } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
@@ -934,7 +934,7 @@ export const Projects: React.FC = () => {
               const csv = [header.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
               const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
               const url = URL.createObjectURL(blob);
-              const a = document.createElement('a'); a.href = url; a.download = `projects_export_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+              const a = document.createElement('a'); a.href = url; a.download = `projects_export_${businessTodayDateKey()}.csv`; a.click();
               URL.revokeObjectURL(url);
             } catch { setMessage({ type: 'error', text: 'Export failed' }); }
           }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>

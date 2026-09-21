@@ -20,6 +20,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsEmail, IsNotEmpty, IsOptional, MinLength, IsArray, IsEnum, IsUUID, MaxLength, Matches, IsIn,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
@@ -126,8 +127,16 @@ class AssignRolesDto {
   roleIds: string[];
 }
 
+/**
+ * Bounded, and ids checked as ids. `bulkSetStatus` walks the list one row at a time — a lookup, an
+ * update and an audit write each — inside one request, so an unbounded array was an unbounded
+ * request; and a non-UUID id reached the database as a query error per row instead of a 400 up
+ * front. Same cap and shape as the roster's `BulkIssueAppAccessDto`.
+ */
 class BulkSetStatusDto {
   @IsArray() @IsNotEmpty()
+  @ArrayMaxSize(500, { message: 'Change the status of at most 500 users at a time.' })
+  @IsUUID('4', { each: true })
   ids: string[];
 
   @IsEnum(UserStatus)

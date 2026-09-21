@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, TextInput, ScrollView, ActivityIndicator } from 'react-native';
+import { View, ScrollView, ActivityIndicator } from 'react-native';
 import Constants from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
 import { MAX_FEEDBACK_ATTACHMENTS } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, ChipSelector, Icon, IconButton, Card, ModalSheet, Tappable, Badge, EmptyState } from './ui/primitives';
+import { AppText, Button, ChipSelector, FieldLabel, Icon, IconButton, Input, Card, ModalSheet, Tappable, Badge, EmptyState } from './ui/primitives';
 import { MobileApiService } from '../services/api.service';
 
 import { FEEDBACK_STATUS_LABELS, feedbackCategoryLabel } from '@fapoms/shared';
@@ -230,7 +230,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
           {view === 'compose' && (
             <ScrollView contentContainerStyle={{ padding: t.space.xl, paddingTop: 0, gap: t.space.lg }} keyboardShouldPersistTaps="handled">
               <View style={{ gap: t.space.sm }}>
-                <AppText variant="overline" tone="faint">{tr('feedback.kindLabel')}</AppText>
+                <FieldLabel>{tr('feedback.kindLabel')}</FieldLabel>
                 <ChipSelector
                   options={categories().map((c) => ({ key: c.key || 'AUTO', label: c.label, icon: c.icon }))}
                   value={category || 'AUTO'}
@@ -238,22 +238,22 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                 />
               </View>
 
-              <View style={{ gap: t.space.sm }}>
-                <AppText variant="overline" tone="faint">{tr('feedback.titleLabel')}</AppText>
-                <View style={{ backgroundColor: t.colors.surface, borderRadius: t.radius.md, borderWidth: 1, borderColor: t.colors.border, paddingHorizontal: t.space.md }}>
-                  <TextInput value={title} onChangeText={setTitle} placeholder={tr('feedback.titlePlaceholder')} placeholderTextColor={t.colors.textFaint} maxLength={200}
-                    style={{ color: t.colors.text, paddingVertical: t.space.md, ...(t.type.body as object) }} />
-                </View>
-              </View>
+              <Input
+                label={tr('feedback.titleLabel')}
+                value={title}
+                onChangeText={setTitle}
+                placeholder={tr('feedback.titlePlaceholder')}
+                maxLength={200}
+              />
 
-              <View style={{ gap: t.space.sm }}>
-                <AppText variant="overline" tone="faint">{tr('feedback.detailsLabel')}</AppText>
-                <View style={{ backgroundColor: t.colors.surface, borderRadius: t.radius.md, borderWidth: 1, borderColor: t.colors.border, paddingHorizontal: t.space.md }}>
-                  <TextInput value={body} onChangeText={setBody} placeholder={tr('feedback.detailsPlaceholder')} placeholderTextColor={t.colors.textFaint}
-                    multiline numberOfLines={5} maxLength={4000}
-                    style={{ color: t.colors.text, paddingVertical: t.space.md, minHeight: 120, textAlignVertical: 'top', ...(t.type.body as object) }} />
-                </View>
-              </View>
+              <Input
+                label={tr('feedback.detailsLabel')}
+                value={body}
+                onChangeText={setBody}
+                placeholder={tr('feedback.detailsPlaceholder')}
+                multiline
+                maxLength={4000}
+              />
 
               {/*
                 * Attach a photo of the screen.
@@ -369,10 +369,16 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
 
               {activeThread?.status !== 'CLOSED' && (
                 <View style={{ flexDirection: 'row', gap: t.space.sm, padding: t.space.md, paddingBottom: t.space.xl, borderTopWidth: 1, borderTopColor: t.colors.border, alignItems: 'flex-end' }}>
-                  <View style={{ flex: 1, backgroundColor: t.colors.surface, borderRadius: t.radius.lg, borderWidth: 1, borderColor: t.colors.border, paddingHorizontal: t.space.md }}>
-                    <TextInput value={draft} onChangeText={setDraft} placeholder={tr('feedback.replyPlaceholder')} placeholderTextColor={t.colors.textFaint}
-                      multiline maxLength={4000} style={{ color: t.colors.text, paddingVertical: t.space.sm + 2, maxHeight: 100, ...(t.type.body as object) }} />
-                  </View>
+                  <Input
+                    size="sm"
+                    value={draft}
+                    onChangeText={setDraft}
+                    placeholder={tr('feedback.replyPlaceholder')}
+                    multiline
+                    maxHeight={100}
+                    maxLength={4000}
+                    style={{ flex: 1 }}
+                  />
                   <IconButton icon={replying ? 'hourglass-outline' : 'send'} onPress={sendReply} accessibilityLabel={tr('feedback.sendReply')} size={44} tone={draft.trim() && !replying ? 'primary' : 'default'} />
                 </View>
               )}

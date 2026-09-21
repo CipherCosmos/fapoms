@@ -11,13 +11,24 @@ export interface FkEdge {
 }
 
 /**
- * Reads the FK graph from Postgres itself rather than hand-transcribing the ~70 constraints in
+ * Reads the FK graph from Postgres itself rather than hand-transcribing the ~90 constraints in
  * `1784000000000-BaselineSchema.ts` into a parallel static file. A copy drifts the moment a later
  * migration adds or changes a constraint and nobody remembers the second place to update it; a
  * live query cannot drift, because it *is* the schema being asked about. `cascadeClosure`,
  * `restrictConflicts` and `setNullEffects` below are exactly the checks that must never run
  * against a stale picture of what cascades, blocks, or nulls — that's the whole safety property
  * this module exists for.
+ *
+ * READ FROM `pg_catalog`, NEVER `information_schema`. The information_schema views only show
+ * constraints whose table the current user OWNS ("only those columns are shown that are contained
+ * in a table owned by a currently enabled role"). Since the role split the API connects as
+ * `fapoms_runtime`, which owns nothing — every table belongs to `fapoms_migrator` — so the old
+ * query returned ZERO of the 89 foreign keys, in silence. Nothing failed loudly: the closure found
+ * no cascades, `restrictConflicts` found no blockers, and `topologicalOrder` had no edges to order
+ * by, so a wipe deleted tables in an arbitrary order and Postgres refused it partway through
+ * ("violates foreign key constraint ... on table billing_entries"). The preview was worse than the
+ * error — it told the admin a selection had no side effects at all. `pg_catalog` has no such
+ * ownership gate.
  */
 @Injectable()
 export class FkGraphService {
@@ -27,19 +38,39 @@ export class FkGraphService {
     const rows: Array<{ child: string; column: string; parent: string; on_delete: string }> =
       await this.dataSource.query(`
         SELECT
-          tc.table_name       AS child,
-          kcu.column_name     AS column,
-          ccu.table_name      AS parent,
-          rc.delete_rule      AS on_delete
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
-        JOIN information_schema.referential_constraints rc
-          ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema
-        JOIN information_schema.constraint_column_usage ccu
-          ON ccu.constraint_name = rc.unique_constraint_name AND ccu.table_schema = tc.table_schema
-        WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'
+          child.relname  AS child,
+          att.attname    AS column,
+          parent.relname AS parent,
+          CASE con.confdeltype
+            WHEN 'c' THEN 'CASCADE'
+            WHEN 'n' THEN 'SET NULL'
+            WHEN 'r' THEN 'RESTRICT'
+            -- 'a' (NO ACTION) and 'd' (SET DEFAULT). SET DEFAULT is read as NO ACTION on purpose:
+            -- this app has none, and treating an unknown rule as a blocker refuses a wipe rather
+            -- than running one whose effects are not understood.
+            ELSE 'NO ACTION'
+          END AS on_delete
+        FROM pg_constraint con
+        JOIN pg_class child ON child.oid = con.conrelid
+        JOIN pg_class parent ON parent.oid = con.confrelid
+        JOIN pg_namespace ns ON ns.oid = con.connamespace
+        JOIN LATERAL unnest(con.conkey) AS k(attnum) ON TRUE
+        JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+        WHERE con.contype = 'f' AND ns.nspname = 'public'
       `);
+
+    /**
+     * An empty graph is not a schema with no foreign keys — this one has ~90, and a deployment
+     * whose baseline migration ran has them too. It means the graph could not be read, and every
+     * safety check downstream degrades to "nothing to worry about" when that happens. Refusing here
+     * is what turns an unreadable graph into a stopped wipe instead of an unguarded one.
+     */
+    if (rows.length === 0) {
+      throw new Error(
+        'No foreign keys could be read from the database, so the effects of a wipe cannot be '
+        + 'determined. Refusing rather than guessing.',
+      );
+    }
 
     return rows.map((r) => ({
       child: r.child,

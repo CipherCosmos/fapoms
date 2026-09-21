@@ -58,6 +58,26 @@ export const CoveragePlanModal: React.FC<{
   const [busy, setBusy] = useState<null | 'generate' | 'approve' | 'deploy'>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CoveragePlanExecuteResult | null>(null);
+  /**
+   * Where the server-side job has got to ("Scoring branches (37/200)", "Creating offers (12/166)").
+   *
+   * The preview, the version and the deploy all run as jobs now. A deploy of a large plan takes
+   * minutes, and a spinner with no words for minutes reads as a hang — which is how the old
+   * synchronous deploy got pressed twice.
+   */
+  const [progress, setProgress] = useState<string | null>(null);
+  /** Stops polling when the modal closes. The job itself carries on, on the server. */
+  const watching = useRef({ cancelled: false });
+  useEffect(() => {
+    const watch = { cancelled: false };
+    watching.current = watch;
+    return () => { watch.cancelled = true; };
+  }, []);
+  /** Read at the moment a job starts, so it carries the live watch, not the one from a past render. */
+  const follow = () => ({
+    signal: watching.current,
+    onProgress: (p: { percent: number; stage: string }) => setProgress(p.stage),
+  });
 
   // The START of the campaign, not the date of every audit.
   //
@@ -74,14 +94,23 @@ export const CoveragePlanModal: React.FC<{
   const [scheduledDate, setScheduledDate] = useState<string>(tomorrow);
 
   const loadPreview = useCallback(async () => {
+    const watch = watching.current;
     setLoadingPreview(true);
     setPreviewError(null);
+    setProgress(null);
     try {
-      setPreview(await getCoveragePlanPreview<CoveragePreview>(projectId));
+      const loaded = await getCoveragePlanPreview<CoveragePreview>(projectId, {
+        signal: watch,
+        onProgress: (p) => setProgress(p.stage),
+      });
+      if (!watch.cancelled) setPreview(loaded);
     } catch (e: any) {
-      setPreviewError(e?.message || 'Could not load the coverage plan.');
+      if (!watch.cancelled) setPreviewError(e?.message || 'Could not load the coverage plan.');
     } finally {
-      setLoadingPreview(false);
+      if (!watch.cancelled) {
+        setLoadingPreview(false);
+        setProgress(null);
+      }
     }
   }, [projectId]);
 
@@ -106,23 +135,33 @@ export const CoveragePlanModal: React.FC<{
   ) => {
     setBusy(phase);
     setError(null);
+    setProgress(null);
     try {
       await fn();
     } catch (e: any) {
-      setError(e?.message || `Could not ${phase} the plan.`);
+      if (!watching.current.cancelled) setError(e?.message || `Could not ${phase} the plan.`);
     } finally {
-      setBusy(null);
+      if (!watching.current.cancelled) {
+        setBusy(null);
+        setProgress(null);
+      }
     }
   };
 
-  const doGenerate = () => run('generate', async () => { setPlan(await createCoveragePlan(projectId)); });
+  const doGenerate = () => run('generate', async () => { setPlan(await createCoveragePlan(projectId, {}, follow())); });
   const doApprove = () => run('approve', async () => {
     if (!plan) return;
     setPlan(await transitionCoveragePlan(plan.id, 'APPROVED'));
   });
   const doDeploy = () => run('deploy', async () => {
     if (!plan) return;
-    const res = await executeCoveragePlan(plan.id, scheduledDate);
+    const res = await executeCoveragePlan(plan.id, scheduledDate, {
+      ...follow(),
+      // A second press while the deploy runs joins it on the server; say so rather than implying
+      // a second deploy started.
+      onJoined: () => setProgress('Already deploying — following that run'),
+    });
+    if (watching.current.cancelled) return;
     setResult(res);
     onDeployed();
   });
@@ -157,6 +196,7 @@ export const CoveragePlanModal: React.FC<{
         {loadingPreview ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', padding: '20px', justifyContent: 'center' }}>
             <Loader2 size={16} className="spin" /> Analysing coverage…
+            {progress && <span data-testid="coverage-plan-progress" style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{progress}</span>}
           </div>
         ) : previewError ? (
           <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
@@ -221,6 +261,12 @@ export const CoveragePlanModal: React.FC<{
           </>
         ) : null}
 
+        {busy && progress && (
+          <div data-testid="coverage-plan-progress" role="status" style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
+            {progress} — this runs on the server; closing this window does not stop it.
+          </div>
+        )}
+
         {error && (
           <div style={{ padding: '8px 10px', background: 'var(--status-cancelled-bg)', borderRadius: '6px', fontSize: 'var(--text-xs)', color: 'var(--danger)' }} role="alert">{error}</div>
         )}
@@ -239,6 +285,11 @@ export const CoveragePlanModal: React.FC<{
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, color: 'var(--success)' }}>
                 <CheckCircle2 size={18} /> {result.deployedCount} assignment(s) deployed
                 {result.skippedCount > 0 && <span style={{ color: 'var(--warning)', fontWeight: 700 }}>· {result.skippedCount} skipped</span>}
+              </div>
+            )}
+            {(result.alreadyDeployedCount ?? 0) > 0 && (
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>
+                {result.alreadyDeployedCount} of these had already been booked by an earlier, interrupted deploy and were left as they were.
               </div>
             )}
             {result.dateRange && (

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApplicationStatus, ONBOARDING_DOCUMENT_LABELS, SCAN_UPLOAD_IMAGE_ACCEPT, scanMimeType,
   type OnboardingDocument, storedScanFileName,
+  type OutboundMessageReceipt,
 } from '@fapoms/shared';
 import { Eye, AlertTriangle, ShieldAlert, Check, Camera, Pencil } from 'lucide-react';
 
@@ -14,6 +15,7 @@ import { queryKeys } from '../../../hooks/queryKeys';
 import { loadFailed } from '../../../queryClient';
 import { LoadFailure } from '../../../components/LoadFailure';
 import { DetailDrawer, AlertBanner, StatusBadge, useConfirm, Modal } from '../../../components/ui';
+import { DeliveryNote } from '../../../components/DeliveryNote';
 import { humanizeStatus } from '../../../config/status-registry';
 import { Field, fmtDate, fmtWhen, InviteLinkBox } from '../hr-ui';
 import type { AssayerApplicationDetail, AssayerApplicationDocumentRow } from './application-types';
@@ -76,7 +78,7 @@ export const ApplicationDetailDrawer: React.FC<{
    * not: the desk still has to deliver the link, and the link only exists in this one response.
    * Closing the drawer on it would throw away the thing the action was for.
    */
-  const [resent, setResent] = useState<{ emailed: boolean; inviteLink: string } | null>(null);
+  const [resent, setResent] = useState<{ emailDelivery: OutboundMessageReceipt | null; inviteLink: string } | null>(null);
   /**
    * What the reviewer adds as they approve.
    *
@@ -331,11 +333,11 @@ export const ApplicationDetailDrawer: React.FC<{
     setActionError(null);
     setBusy(true);
     try {
-      const { emailed, inviteLink } = await api.request<{ emailed: boolean; inviteLink: string }>(
+      const { emailDelivery, inviteLink } = await api.request<{ emailDelivery: OutboundMessageReceipt | null; inviteLink: string }>(
         `/hr/applications/${id}/resend-invite`,
         { method: 'POST' },
       );
-      setResent({ emailed, inviteLink });
+      setResent({ emailDelivery, inviteLink });
       void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
     } catch (err) {
       setActionError(userMessage(err));
@@ -493,14 +495,16 @@ export const ApplicationDetailDrawer: React.FC<{
             {/* An undelivered invite is an action item, not a cheerful confirmation — the same
                 reading the interview screen gives it. AlertBanner has no warning tone. */}
             {resent && (
-              <AlertBanner type={resent.emailed ? 'success' : 'error'} onClose={() => setResent(null)}>
-                {resent.emailed
-                  ? `A fresh registration link was emailed to ${app.email}. Any earlier link has stopped working.`
-                  : app.email
-                    ? `A fresh link was minted but the email to ${app.email} did not go out — send it yourself, and check email delivery in Platform Settings.`
-                    : 'A fresh link was minted. There is no email address on this application, so send it to the candidate yourself.'}
+              <DeliveryNote
+                receipt={resent.emailDelivery}
+                lead="A fresh link was made, and any earlier link has stopped working."
+                what="the new link"
+                noAddress="There is no email address on this application, so send the link to the candidate yourself."
+                fallback="Send it yourself, and check email delivery in Platform Settings."
+                onClose={() => setResent(null)}
+              >
                 <InviteLinkBox link={resent.inviteLink} />
-              </AlertBanner>
+              </DeliveryNote>
             )}
 
             {isDraft && (

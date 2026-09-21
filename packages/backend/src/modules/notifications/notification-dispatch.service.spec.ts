@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bull';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { NotificationCategory, NotificationStatus } from '@fapoms/shared';
+import { NotificationCategory, NotificationChannel, NotificationStatus } from '@fapoms/shared';
 import { NotificationDispatchService } from './notification-dispatch.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { NotificationSettingsService } from './notification-settings.service';
@@ -14,6 +14,7 @@ import { NOTIFICATION_QUEUE } from './notification-delivery.worker';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { NotificationTenancyService } from './notification-tenancy';
+import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
 describe('NotificationDispatchService', () => {
   let service: NotificationDispatchService;
@@ -563,6 +564,122 @@ describe('NotificationDispatchService', () => {
       });
 
       expect(res.created).toBe(1);
+    });
+  });
+
+  /**
+   * SMS is a per-event channel an administrator switches on, and nothing ships with it on: a text
+   * costs money per message and lands on a personal phone. So the default has to be "no behaviour
+   * change" — every row born owing no text, no `deliver-sms` job — and switching it on for one event
+   * must give that event's rows exactly the email leg's treatment: bookkeeping at birth for staff
+   * and assayers alike, one job per recipient on the same retry terms, and the preference honoured.
+   */
+  describe('the SMS channel', () => {
+    /** The live definition an administrator produces by ticking SMS for one event. */
+    const withSms = (type: string) => {
+      const base = NOTIFICATION_CATALOG[type];
+      mockSettings.defFor.mockResolvedValue({
+        ...base, type, enabled: true, overridden: ['channels'], notes: null,
+        channels: [...base.channels, NotificationChannel.SMS],
+      } as any);
+    };
+
+    it('is off for every shipped catalog event — no event texts anyone until an administrator switches it on', () => {
+      const carrying = Object.entries(NOTIFICATION_CATALOG)
+        .filter(([, def]) => def.channels.includes(NotificationChannel.SMS))
+        .map(([name]) => name);
+      expect(carrying).toEqual([]);
+    });
+
+    it('births every row owing no text, and enqueues no text job, while the event is left at its default', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
+
+      await service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} });
+
+      expect(insertedRows).toHaveLength(2);
+      expect(insertedRows.every((r) => r.smsStatus === null)).toBe(true);
+      expect(queuedJobs.filter((j: any) => j.name === 'deliver-sms')).toHaveLength(0);
+    });
+
+    it('births staff rows owing a text, and enqueues one deliver-sms job each, once SMS is switched on for the event', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
+      withSms('ASSIGNMENT_ESCALATED');
+
+      await service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} });
+
+      expect(insertedRows.map((r) => r.smsStatus)).toEqual([NotificationStatus.PENDING, NotificationStatus.PENDING]);
+      const smsJobs = queuedJobs.filter((j: any) => j.name === 'deliver-sms');
+      expect(smsJobs).toHaveLength(2);
+      // Its own job, beside the email one, so a slow gateway cannot burn email's retries.
+      expect(queuedJobs.filter((j: any) => j.name === 'deliver-email')).toHaveLength(2);
+    });
+
+    it('births an assayer row owing a text too — an assayer has a mobile number, unlike an inbox', async () => {
+      mockUserQb.getMany.mockResolvedValue([]);
+      withSms('ASSIGNMENT_OFFERED');
+
+      await service.emit({ type: 'ASSIGNMENT_OFFERED', entityId: 'asn-1', assayerId: 'assayer-9', payload: {} });
+
+      expect(insertedRows).toHaveLength(1);
+      expect(insertedRows[0].assayerId).toBe('assayer-9');
+      expect(insertedRows[0].smsStatus).toBe(NotificationStatus.PENDING);
+      expect(queuedJobs.filter((j: any) => j.name === 'deliver-sms')).toHaveLength(1);
+    });
+
+    it('enqueues text jobs on exactly the email leg’s retry and retention terms', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
+      withSms('ASSIGNMENT_ESCALATED');
+
+      await service.emit({ type: 'ASSIGNMENT_ESCALATED', entityId: 'asn-1', payload: {} });
+
+      const bulkOf = (name: string) => mockQueue.addBulk.mock.calls
+        .map(([jobs]: any[]) => jobs)
+        .find((jobs: any[]) => jobs[0]?.name === name)[0];
+      expect(bulkOf('deliver-sms').opts).toEqual({
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: true,
+        removeOnFail: FAILED_JOB_RETENTION,
+      });
+      expect(bulkOf('deliver-sms').opts).toEqual(bulkOf('deliver-email').opts);
+    });
+
+    it('drops a recipient who muted in-app and SMS on an event that travels only on those two', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
+      withSms('ASSIGNMENT_ACCEPTED'); // in-app only by default, so the live channels are IN_APP + SMS
+      mockPreferences = [
+        { userId: 'ops-1', assayerId: null, category: NotificationCategory.ASSIGNMENT, inApp: false, push: true, email: true, sms: false },
+      ];
+
+      const res = await service.emit({ type: 'ASSIGNMENT_ACCEPTED', entityId: 'asn-1', payload: {} });
+
+      expect(res.recipients.userIds).toEqual(['ops-2']);
+    });
+
+    it('keeps a recipient whose SMS is still on, even with in-app muted — the text is sent from the row', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
+      withSms('ASSIGNMENT_ACCEPTED');
+      mockPreferences = [
+        { userId: 'ops-1', assayerId: null, category: NotificationCategory.ASSIGNMENT, inApp: false, push: true, email: true, sms: true },
+      ];
+
+      const res = await service.emit({ type: 'ASSIGNMENT_ACCEPTED', entityId: 'asn-1', payload: {} });
+
+      expect(res.created).toBe(1);
+      expect(insertedRows[0].smsStatus).toBe(NotificationStatus.PENDING);
+    });
+
+    it('drops an assayer who muted in-app, push and SMS on an SMS-carrying event', async () => {
+      mockUserQb.getMany.mockResolvedValue([]);
+      withSms('ASSIGNMENT_OFFERED');
+      mockPreferences = [
+        { userId: null, assayerId: 'assayer-9', category: NotificationCategory.ASSIGNMENT, inApp: false, push: false, email: true, sms: false },
+      ];
+
+      const res = await service.emit({ type: 'ASSIGNMENT_OFFERED', entityId: 'asn-1', assayerId: 'assayer-9', payload: {} });
+
+      expect(res.recipients.assayerIds).toEqual([]);
+      expect(insertedRows).toHaveLength(0);
     });
   });
 

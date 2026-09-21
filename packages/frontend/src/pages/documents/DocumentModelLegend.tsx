@@ -1,21 +1,30 @@
 import React, { useState } from 'react';
 import { HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  DOCUMENT_STAGE, DOCUMENT_STAGE_ORDER, DOCUMENT_TYPE, DOCUMENT_TYPE_ORDER, documentTypeLabel,
+} from './vocabulary';
 
-const TYPES: Array<{ type: string; who: string; purpose: string }> = [
-  { type: 'Customer Master Excel', who: 'Ops uploads', purpose: "The bank's customer account extract for this branch. Run through OCR/reconciliation before the audit." },
-  { type: 'Pre-Field Audit PDF', who: 'Ops uploads → sent to assayer', purpose: 'The packet the assayer needs to actually do the audit. Nothing downloads on the assayer\'s phone until this is dispatched.' },
-  { type: 'Audited Return PDF', who: 'Assayer uploads from the field', purpose: 'The completed paperwork, scanned and submitted after the visit. This is what data entry works from.' },
-  { type: 'Generated Excel', who: 'Data entry uploads', purpose: 'The structured output produced after external OCR processes the audited return.' },
-];
+/**
+ * Built FROM the words the badges use, never written out again.
+ *
+ * This list used to be its own prose copy, and it had already fallen behind: it collapsed
+ * "Excel ready" and "Completed" into one row while the badges showed them separately, and it
+ * named the first file type "Customer Master Excel" where the rest of the product says
+ * "Customer Master Data". An explainer that disagrees with the thing it explains leaves a
+ * reader worse off than no explainer at all — which matters here, because this panel exists
+ * precisely because the model is not obvious.
+ */
+const TYPES = DOCUMENT_TYPE_ORDER.map((t) => ({
+  type: documentTypeLabel(t),
+  who: DOCUMENT_TYPE[t].who,
+  purpose: DOCUMENT_TYPE[t].purpose,
+}));
 
-const STAGES: Array<{ stage: string; meaning: string }> = [
-  { stage: 'Prepared', meaning: 'Uploaded internally. Not visible to the assayer yet.' },
-  { stage: 'With assayer', meaning: 'Dispatched — the assayer can now see and download it.' },
-  { stage: 'Returned', meaning: 'The assayer submitted their completed paperwork.' },
-  { stage: 'Data entry', meaning: 'Handed to the Data Entry Head\'s queue for processing.' },
-  { stage: 'External OCR', meaning: 'Pushed to the outside OCR application manually.' },
-  { stage: 'Excel ready / Completed', meaning: 'The structured result is back and the file\'s journey is done.' },
-];
+const STAGES = DOCUMENT_STAGE_ORDER.map((s) => ({
+  stage: DOCUMENT_STAGE[s].label,
+  meaning: DOCUMENT_STAGE[s].meaning,
+}));
+
 
 /**
  * A compact, dismissible explainer for the document model — what each file type

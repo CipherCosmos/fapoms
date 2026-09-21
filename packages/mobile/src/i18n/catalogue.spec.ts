@@ -26,6 +26,9 @@ const EVERY_VARIABLE = {
   reason: 'r', recorded: 'Kerala', required: 2, round: 1, section: '194J', since: '', skills: 1,
   state: 'S', time: 'T', title: 't', total: 4, uploaded: 2, wait: 'w', what: 'w', who: 'W',
   actual: 'Sikkim', seconds: 5, phone: '9876543210',
+  bank: 'SBI', contact: 'hr@example.com', documents: 'PAN', email: 'a@b.in', index: 1, length: 201, min: 0,
+  note: 'n', now: '9876543211', pincode: '400001', place: 'Mumbai', ref: 'APP-1', sent: '9876543210',
+  step: 1, typed: 't', value: 'v', version: '2026-09',
 };
 
 function leafKeys(node: unknown, path: string[] = []): string[] {

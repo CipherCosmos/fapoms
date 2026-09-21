@@ -264,6 +264,22 @@ interface Exemption { kind: 'by-design' | 'open'; reason: string }
 
 const EXEMPT: Record<string, Exemption> = {
   // ── by design ───────────────────────────────────────────────────────────
+  'planning/planning.controller.ts::queueBulkOffers': {
+    kind: 'by-design',
+    reason:
+      'Accept-and-poll replacement for the browser sending one POST /assignments per ticked branch. ' +
+      'The ceiling is asserted per branch in PlanningWriteJobsWorker (assertProjectBranchInScope with ' +
+      'the scope captured at enqueue), so an out-of-region branch is refused and reported on its own, ' +
+      'exactly as each separate POST was — not silently created, and not a whole-batch refusal the old ' +
+      'flow never had.',
+  },
+  'planning/planning.controller.ts::queueBulkUnableToCover': {
+    kind: 'by-design',
+    reason:
+      'Accept-and-poll replacement for one browser POST per ticked branch. The worker asserts ' +
+      'assertProjectBranchInScope per branch with the scope captured at enqueue, and reports a refused ' +
+      'branch as a failure of its own — the same per-branch outcome the separate requests had.',
+  },
   'project/project.controller.ts::findOne': {
     kind: 'by-design',
     reason:

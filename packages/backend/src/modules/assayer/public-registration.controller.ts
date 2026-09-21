@@ -130,14 +130,16 @@ export class PublicRegistrationController {
 
   @Post(':token/otp/request')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Send a mobile verification code' })
+  @ApiOperation({ summary: 'Send a mobile verification code (by text when SMS is set up, else by email)' })
   async requestOtp(@Param('token') token: string, @Body() dto: RequestOtpDto) {
-    await this.registrationApplications.requestOtp(token, dto.phone);
-    return { sent: true };
+    // Which channel carried it and a masked destination, so the page says where to look.
+    // The code itself is NEVER returned to the caller or logged.
+    const result = await this.registrationApplications.requestOtp(token, dto.phone);
+    return { sent: true, ...result };
   }
 
   @Post(':token/otp/verify')
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Verify a mobile verification code' })
   async verifyOtp(@Param('token') token: string, @Body() dto: VerifyOtpDto) {
     await this.registrationApplications.verifyOtp(token, dto.phone, dto.code);

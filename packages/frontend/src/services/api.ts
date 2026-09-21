@@ -56,6 +56,8 @@ export interface NotificationPreference {
   inApp: boolean;
   push: boolean;
   email: boolean;
+  /** Only reaches events an administrator has switched SMS on for. An older server omits it: read as on. */
+  sms?: boolean;
 }
 
 class ApiClient {

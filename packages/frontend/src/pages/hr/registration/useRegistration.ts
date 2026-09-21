@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { REGISTRATION_RECORD_FIELD_KEYS } from '@fapoms/shared';
+import { REGISTRATION_RECORD_FIELD_KEYS, businessDateKey } from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { fieldErrorKeys, userMessage } from '../../../services/errors';
 import { stringifyList } from '../AssayerForms';
@@ -30,11 +30,15 @@ const TEL_KEYS = ['phone', 'alternatePhone', 'emergencyContactPhone'];
 
 const RECORD_KEYS = new Set<string>(REGISTRATION_RECORD_FIELD_KEYS as readonly string[]);
 
-const dateBox = (value: unknown): string => {
-  if (!value) return '';
-  const d = new Date(String(value));
-  return Number.isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
-};
+/**
+ * A stored date, as the `<input type="date">` box wants it.
+ *
+ * `toISOString()` reports the UTC day. For a date-only value that is midnight UTC, so any
+ * browser west of UTC read it as the day before — a candidate's date of birth shifted by one
+ * simply by opening the form. `businessDateKey` reads it in the operation's timezone, which
+ * is the timezone the value was entered in.
+ */
+const dateBox = (value: unknown): string => (value ? businessDateKey(String(value)) : '');
 
 /** One candidate's application, as `GET /hr/applications/:id` returns it. */
 export interface ApplicationRow {

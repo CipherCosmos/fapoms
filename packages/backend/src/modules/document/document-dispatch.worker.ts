@@ -8,9 +8,33 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { DocumentService } from './document.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod, businessDateKey } from '@fapoms/shared';
+import { progressReporter } from '../../infrastructure/queue/queued-job';
+import { runAsJobActor } from '../../infrastructure/queue/job-actor';
+import {
+  DOCUMENT_DISPATCH_JOB,
+  DOCUMENT_DISPATCH_QUEUE,
+  DispatchBatchJobData,
+  DispatchBatchResult,
+} from './document-dispatch-jobs.contract';
 
+/**
+ * The `document-dispatch` queue's one worker: the hourly auto-dispatch scan, and a desk's batch
+ * dispatch (see `document-dispatch-jobs.contract.ts` for why the batch left the request).
+ *
+ * ONE loop for the whole queue, dispatching on the job name — not a `@Process` per job.
+ *
+ * Bull does not reserve slots per job name: each `@Process({ name })` adds a loop to the queue, and
+ * every loop takes the next job of any name. A batch handler beside the auto-dispatch handler would
+ * have been two loops, so an operator's batch and the hourly scan — or two operators' batches over
+ * the same documents — could dispatch the same packet at the same moment. `dispatchDocument` checks
+ * the status and then sends before it writes the new one, so two concurrent calls can both pass the
+ * check and both email the branch. A single `'*'` loop makes "one dispatch at a time" true on a
+ * worker, and with it that status check becomes a real guard against a batch sending twice. (The
+ * synchronous single-document route runs in the API process and is outside this loop, as it always
+ * was.)
+ */
 @Injectable()
-@Processor('document-dispatch')
+@Processor(DOCUMENT_DISPATCH_QUEUE)
 export class DocumentDispatchWorker {
   private readonly logger = new Logger(DocumentDispatchWorker.name);
 
@@ -23,7 +47,36 @@ export class DocumentDispatchWorker {
     private readonly settings: PlatformSettingsService,
   ) {}
 
-  @Process('auto-dispatch')
+  @Process({ name: '*', concurrency: 1 })
+  async run(job: Job) {
+    switch (job.name) {
+      case DOCUMENT_DISPATCH_JOB.AUTO_DISPATCH:
+        return this.autoDispatch(job);
+      case DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH:
+        return this.dispatchBatch(job as Job<DispatchBatchJobData>);
+      default:
+        // A name nothing here knows would otherwise complete silently with no result.
+        throw new Error(`No handler for document dispatch job "${job.name}".`);
+    }
+  }
+
+  /**
+   * A desk's "Send N documents", one document at a time through the same `dispatchDocument` the
+   * single route uses — so a document is marked DISPATCHED only once its own email went, and one
+   * refused address or unreadable file is a line in `failed`, not the end of the batch.
+   *
+   * Runs as the person who pressed Send (see `JobActor`), and reports progress per
+   * document so the page can say "Emailing documents to the branch (12/40)" rather than spin.
+   */
+  async dispatchBatch(job: Job<DispatchBatchJobData>): Promise<DispatchBatchResult> {
+    const { documentIds, branchEmail, actor } = job.data;
+    this.logger.log(`Dispatch batch ${job.id}: ${documentIds.length} document(s)${branchEmail ? ', by email to a branch' : ''}.`);
+    return runAsJobActor(
+      actor,
+      () => this.documentService.dispatchMany(documentIds, actor.userId, branchEmail ?? undefined, progressReporter(job)),
+    );
+  }
+
   async autoDispatch(_job: Job) {
     this.logger.log('Running auto-dispatch scan...');
 

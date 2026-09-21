@@ -1,6 +1,6 @@
 import { SystemRole } from '@fapoms/shared';
 import { StartupChecksService } from './startup-checks.service';
-import { EmailProvider } from '../notifications/email-provider';
+import { EmailService } from '../../modules/notifications/email.service';
 import { FcmProvider } from '../notifications/fcm-provider';
 
 /**
@@ -39,7 +39,7 @@ function makeService(opts: {
 
   const moduleRef: any = {
     get: (type: any) => {
-      if (type === EmailProvider) {
+      if (type === EmailService) {
         if (opts.email === null) throw new Error('not registered');
         return { isEnabled: () => opts.email ?? true };
       }

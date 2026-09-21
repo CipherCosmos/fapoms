@@ -36,13 +36,15 @@
  * destructive : SQL probes that could remove data run inside a transaction that is ALWAYS rolled
  *               back, and audit_events is never TRUNCATEd or DELETEd from. That rule is the
  *               lesson of docs/incident-2026-09-09-audit-truncate.md.
- * gate        : none of its own — it does not use _lib.mjs. DO NOT run it against a deployment
+ * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs
+ *               (postAndAwait), none of its gates. DO NOT run it against a deployment
  *               anybody is using.
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
+import { postAndAwait, JOB_STATUS, describeJobOutcome } from './_lib.mjs';
 
 // `pg` lives in the workspace, not beside this script.
 const require = createRequire(
@@ -149,6 +151,17 @@ const callAs = async (who, method, path, body) => {
   who.token = fresh.token;
   return call(who.token, method, path, body);
 };
+
+/**
+ * Payout approve answers 202 and a job id since 2026-09-17, and the `{ done, refused }` body it used
+ * to answer with is the finished run's `result`. The POST goes through `callAs` (token renewal) and
+ * the run is waited for with the persona's CURRENT token — a job is readable only by the account
+ * that started it. Every database read after one of these therefore sees what the run did.
+ *
+ * The run happens on the WORKER, so these must only be used while it is up — CHECK 2 stops it.
+ */
+const billingRunAs = (who, path, body) => postAndAwait(path, body, JOB_STATUS.billingBulk,
+  { token: () => who.token, api: API, send: (p, b) => callAs(who, 'POST', p, b) });
 
 /**
  * Poll `probe` until it answers truthily or the budget runs out. Returns how long it took, which
@@ -481,15 +494,22 @@ const countsFor = async (assignmentId) => {
 
   // The refusal happens INSIDE the approval transaction, after the payable has been locked FOR
   // UPDATE — i.e. after work has been done. Everything that transaction did must unwind.
-  const refusedApproval = await callAs(exec, 'POST', '/billing-engine/payouts/approve',
+  // That transaction now runs on the worker, so the reads below wait for the run to FINISH: read
+  // on the 202, "untouched" would be true merely because the worker had not got there yet.
+  const refusedApproval = await billingRunAs(exec, '/billing-engine/payouts/approve',
     { payableIds: [payable.id] });
-  const reason = (refusedApproval.body?.data?.refused?.[0]?.reason
-    ?? refusedApproval.body?.message ?? '').toString();
+  const reason = (refusedApproval.result?.refused?.[0]?.reason
+    ?? refusedApproval.r.body?.message ?? '').toString();
+  if (!refusedApproval.result) {
+    note(`the refused approval's run did not finish (${describeJobOutcome(refusedApproval)}) — `
+      + 'REL-30..34 below read a payable no run has touched, and prove nothing about unwinding');
+  }
 
   const [p2] = await q(
     `SELECT status, approved_by, approved_at, destination_verified_at, destination_bank_account_number
        FROM assayer_payables WHERE id=$1`, [payable.id]);
-  record('REL-30', p2.status === 'PENDING' && p2.approved_by === null && p2.approved_at === null,
+  record('REL-30', !!refusedApproval.result
+    && p2.status === 'PENDING' && p2.approved_by === null && p2.approved_at === null,
     `the refused approval left the payable untouched (status ${payable.status}->${p2.status}, `
     + `approved_by=${p2.approved_by ?? 'NULL'}, approved_at=${p2.approved_at ?? 'NULL'})`);
   record('REL-31', p2.destination_verified_at === null && p2.destination_bank_account_number === null,
@@ -517,12 +537,12 @@ const countsFor = async (assignmentId) => {
 
   // A refusal only means something if the same call would otherwise have succeeded. Without this
   // the three checks above would pass just as well against a payable that was broken anyway.
-  const controlApprove = await callAs(admin, 'POST', '/billing-engine/payouts/approve',
+  const controlApprove = await billingRunAs(admin, '/billing-engine/payouts/approve',
     { payableIds: [payable.id] });
   const [p3] = await q(`SELECT status, approved_by FROM assayer_payables WHERE id=$1`, [payable.id]);
   record('REL-35', p3.status === 'APPROVED' && p3.approved_by === admin.id,
     `control: a DIFFERENT account approves the same payable, so the refusal was the duties rule `
-    + `and not a broken payable (HTTP ${controlApprove.status}, status ${p3.status})`);
+    + `and not a broken payable (${describeJobOutcome(controlApprove)}, status ${p3.status})`);
   if (!/approv|duti|booked|same (person|account|user)|segregation/i.test(reason) || /bank|ifsc|pan/i.test(reason)) {
     note(`the refusal message was "${reason}" — check it is about duties and not about banking`);
   }

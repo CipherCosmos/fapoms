@@ -23,7 +23,6 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { NotificationService } from '../notifications/notification.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
@@ -158,7 +157,6 @@ describe('Phase 3 — Assayer Lifecycle, KYC, Empanelment & Financial Integrity'
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
         { provide: EmailProvider, useValue: {} },
-        { provide: SmsProvider, useValue: {} },
         { provide: UnitOfWork, useValue: mockUow },
         { provide: DataSource, useValue: mockDataSource },
         { provide: CacheService, useValue: { wrap: jest.fn((k, fn) => fn()) } },

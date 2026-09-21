@@ -488,8 +488,16 @@ export function daysUntilExpiry(
   if (value == null || value === '') return null;
   const at = new Date(value);
   if (Number.isNaN(at.getTime())) return null;
-  // The stored calendar day, and today's, both as YYYY-MM-DD; then a plain day difference.
-  const storedDay = at.toISOString().slice(0, 10);
+  /**
+   * Both days on the SAME clock.
+   *
+   * `today` below is the business day in `timeZone`; this line read the stored day in UTC. A
+   * subtraction between two different calendars is wrong by a day whenever they disagree — for
+   * IST, any stored timestamp from the first 5.5 hours of the day — so a document expiring
+   * today could report as expiring tomorrow, in the helper that defines the rule for everyone
+   * else.
+   */
+  const storedDay = businessDateKey(at, timeZone);
   const today = businessTodayDateKey(timeZone);
   const MS_PER_DAY = 86_400_000;
   return Math.round((Date.parse(`${storedDay}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / MS_PER_DAY);

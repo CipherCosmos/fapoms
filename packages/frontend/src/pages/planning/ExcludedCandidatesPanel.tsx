@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { formatRouteDistance, type RouteSource } from '@fapoms/shared';
+import { formatRouteDistance, type RouteSource, businessDateKey } from '@fapoms/shared';
 
 export interface ExcludedCandidate {
   assayerId: string;
@@ -84,7 +84,7 @@ const nextOfferableDay = (holidayDates: ReadonlySet<string>) => {
   }
   const fallback = new Date();
   fallback.setDate(fallback.getDate() + 1);
-  return fallback.toISOString().slice(0, 10);
+  return businessDateKey(fallback);
 };
 
 /**

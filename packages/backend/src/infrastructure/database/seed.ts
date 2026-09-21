@@ -21,7 +21,7 @@ import { ProjectEntity } from '../../modules/project/project.entity';
 import { ProjectBranchEntity } from '../../modules/project/project-branch.entity';
 import { HolidayEntity } from '../../modules/holiday/holiday.entity';
 import { ValidationCaseEntity } from '../../modules/validation/validation-case.entity';
-import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority, Region } from '@fapoms/shared';
+import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority, Region, businessDateKey } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
 
 /**
@@ -1606,7 +1606,7 @@ async function seed() {
           updatedBy: 'system',
         });
         await holidayRepository.save(holiday);
-        console.log(`Seeded holiday: ${holiday.name} (${hd.date.toISOString().split('T')[0]})`);
+        console.log(`Seeded holiday: ${holiday.name} (${businessDateKey(hd.date)})`);
       }
     }
 

@@ -88,7 +88,9 @@ describe('audit write scope', () => {
               paren += (lines[k].match(/\(/g) ?? []).length - (lines[k].match(/\)/g) ?? []).length;
               if (lines[k].includes('(')) opened = true;
               if (opened && paren <= 0) {
-                if (!/\{\s*manager\s*\}/.test(lines[k])) {
+                // `{ manager }` or `{ manager: m }` — the transaction callback's own parameter under another
+                // name. A bare identifier only: `{ manager: this.dataSource.manager }` is not the transaction.
+                if (!/\{\s*manager(\s*:\s*[A-Za-z_$][\w$]*)?\s*\}/.test(lines[k])) {
                   offenders.push(`${path.relative(SRC, file)}:${j + 1}`);
                 }
                 break;

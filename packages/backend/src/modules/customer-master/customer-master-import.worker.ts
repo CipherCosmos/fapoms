@@ -12,14 +12,14 @@ import { Processor, Process } from '@nestjs/bull';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Job } from 'bull';
 
-import { IMPORT_QUEUE, CUSTOMER_MASTER_IMPORT_JOB } from '../import/import.constants';
+import { CUSTOMER_MASTER_IMPORT_QUEUE, CUSTOMER_MASTER_IMPORT_JOB } from '../import/import.constants';
 import type { CustomerMasterImportJobData } from '../import/import-job.service';
 import { CustomerMasterService } from './customer-master.service';
 
 type ReconciliationReport = Awaited<ReturnType<CustomerMasterService['uploadAndReconcile']>>;
 
 @Injectable()
-@Processor(IMPORT_QUEUE)
+@Processor(CUSTOMER_MASTER_IMPORT_QUEUE)
 export class CustomerMasterImportWorker {
   private readonly logger = new Logger(CustomerMasterImportWorker.name);
 
@@ -31,8 +31,15 @@ export class CustomerMasterImportWorker {
    * unprocessed forever with no error anywhere. `CUSTOMER_MASTER_IMPORT_JOB` is the one constant
    * both sides read.
    *
-   * `concurrency: 1` so two uploads for the same project cannot reconcile and register versions
-   * at the same time, each unaware of the other's version number.
+   * `concurrency: 1` on a queue of its own, so two uploads for the same project cannot reconcile
+   * and register versions at the same time, each unaware of the other's version number. On the
+   * shared `import-jobs` queue this did not hold — Bull's loops belong to the queue and take a job
+   * of any name, so the three import handlers there were three shared loops. With this the only
+   * handler on `CUSTOMER_MASTER_IMPORT_QUEUE`, the second upload waits for the first.
+   *
+   * A worker that dies mid-reconciliation is FAILED, not re-run: the queue is registered with
+   * `maxStalledCount: 0` (`import.module.ts`), because a second run registers the file as a second
+   * version.
    */
   @Process({ name: CUSTOMER_MASTER_IMPORT_JOB, concurrency: 1 })
   async runCustomerMasterImport(job: Job<CustomerMasterImportJobData>): Promise<ReconciliationReport> {

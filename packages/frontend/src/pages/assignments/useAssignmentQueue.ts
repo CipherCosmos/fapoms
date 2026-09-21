@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ProjectBranchStatus, SystemRole } from '@fapoms/shared';
+import { ProjectBranchStatus, SystemRole, businessTodayDateKey } from '@fapoms/shared';
 import { useUrlSelection } from '../../hooks/useUrlSelection';
 import { useCurrentRoles, hasAnyRole } from '../../hooks/useCurrentRoles';
 import { useScope, withScope } from '../../context/ScopeContext';
@@ -113,7 +113,7 @@ export const COMPLETE_WITHOUT_CHECK_IN_CONFIRM = {
  */
 export function computeAssignmentAttention(
   asn: Assignment,
-  todayStr: string = new Date().toISOString().slice(0, 10),
+  todayStr: string = businessTodayDateKey(),
   hasOpenIssue: boolean = false
 ): OperationalAttentionState {
   // Tier 1: Real operational blocker (open field issue or branch hold)
@@ -330,7 +330,7 @@ export function useAssignmentQueue() {
   }, [assignments, selectedAsnId, selectAssignment]);
 
   // Filter and sort assignments with derived attention calculation
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayStr = useMemo(() => businessTodayDateKey(), []);
 
   const filteredAssignments = useMemo(() => {
     return assignments

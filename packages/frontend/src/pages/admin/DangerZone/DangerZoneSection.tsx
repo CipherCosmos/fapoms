@@ -76,6 +76,14 @@ export const DangerZoneSection: React.FC = () => {
   const [modal, setModal] = useState<'request' | 'execute' | null>(null);
   /** A REJECTED/EXPIRED notice the developer has read and put away, so a new request can start. */
   const [dismissedId, setDismissedId] = useState<string | null>(null);
+  /**
+   * The approved request the execute modal was opened for, held apart from `activeRequest`.
+   *
+   * The modal used to render only while `activeRequest` existed — but a wipe that commits flips
+   * the request to EXECUTED, the 30 s poll below then clears `activeRequest`, and the modal
+   * vanished: mid-"Wiping…", or seconds into the result screen carrying the backup's file name.
+   */
+  const [executing, setExecuting] = useState<DestructiveActionRequest | null>(null);
 
   const domainsQuery = useQuery({
     queryKey: ['data-reset', 'domains'],
@@ -179,6 +187,7 @@ export const DangerZoneSection: React.FC = () => {
 
   const onWiped = () => {
     setModal(null);
+    setExecuting(null);
     setSelectedKeys([]);
     void queryClient.invalidateQueries({ queryKey: ['data-reset'] });
     // The rest of the app is reading data this may have just removed — a stale Clients list or
@@ -373,7 +382,7 @@ export const DangerZoneSection: React.FC = () => {
           {activeRequest?.status === DestructiveActionRequestStatus.APPROVED && (
             <button
               className="btn btn-primary"
-              onClick={() => setModal('execute')}
+              onClick={() => { setExecuting(activeRequest); setModal('execute'); }}
               style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px', padding: '9px 16px', fontSize: 'var(--text-xs)' }}
             >
               <Trash2 size={14} /> Execute approved wipe…
@@ -397,14 +406,15 @@ export const DangerZoneSection: React.FC = () => {
           onWiped={onWiped}
         />
       )}
-      {modal === 'execute' && activeRequest && (
+      {modal === 'execute' && executing && (
         <DataResetModal
           mode="execute"
           domains={domains}
-          initialSelectedKeys={activeRequest.domainKeys}
-          requestId={activeRequest.id}
-          onClose={() => setModal(null)}
+          initialSelectedKeys={executing.domainKeys}
+          requestId={executing.id}
+          onClose={() => { setModal(null); setExecuting(null); void refreshRequests(); }}
           onWiped={onWiped}
+          onWipeUnfinished={() => void refreshRequests()}
         />
       )}
     </>

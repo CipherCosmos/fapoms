@@ -788,7 +788,15 @@ export class TransportRateService {
       throw new BadRequestException('A rate of ₹0 would recommend free travel — set a per-km rate or base fare');
     }
 
-    // The regex admits "2026-13-45"; the round-trip through Date is what rejects it.
+    /**
+     * The regex admits "2026-13-45"; the round-trip through Date is what rejects it.
+     *
+     * Deliberately UTC on both sides, and therefore exempt from the `businessDateKey` rule: this
+     * asks "is this STRING a real calendar date", not "what day is it in India". The value is
+     * parsed as UTC midnight and compared against its own UTC serialisation, so the two sides
+     * cannot drift. Reading it back in another zone would compare a day to a different day's
+     * text and start rejecting valid input.
+     */
     const validDate = (s: string) => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
       const d = new Date(`${s}T00:00:00Z`);

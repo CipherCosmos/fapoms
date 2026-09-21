@@ -26,6 +26,7 @@ import { usersHoldingPermission } from './permission-audience';
 import { NotificationTenancy, NotificationTenancyService } from './notification-tenancy';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
+import { NOTIFICATION_MESSAGE_LEG_LIST } from './notification-message-legs';
 
 export interface EmitOptions {
   /** A key in `NOTIFICATION_CATALOG`. */
@@ -79,9 +80,9 @@ export interface EmitResult {
  *
  * Delivery is split by channel. In-app recipients are `DELIVERED` the moment the
  * row exists — for them the row *is* the delivery, already visible in their
- * bell. Push is handed to `NotificationDeliveryWorker` via the queue, so a slow
- * or unreachable FCM delays a push instead of slowing down, or failing, the
- * business action that raised it.
+ * bell. Push, email and SMS are each handed to `NotificationDeliveryWorker` via
+ * the queue as their own job, so a slow or unreachable provider delays that
+ * channel instead of slowing down, or failing, the business action that raised it.
  */
 @Injectable()
 export class NotificationDispatchService {
@@ -214,6 +215,7 @@ export class NotificationDispatchService {
     const usesInApp = channels.includes(NotificationChannel.IN_APP);
     const usesPush = channels.includes(NotificationChannel.PUSH);
     const usesEmail = channels.includes(NotificationChannel.EMAIL);
+    const usesSms = channels.includes(NotificationChannel.SMS);
 
     const prefs = await this.preferenceRepository.find({
       where: [
@@ -233,10 +235,13 @@ export class NotificationDispatchService {
       // the one keeping them audible — treating it as "on" for them would let an EMAIL-carrying
       // type resurrect an assayer who muted in-app and push.
       const emailSilent = pref.userId ? pref.email === false : true;
+      // A text reaches staff and assayers alike (both have a mobile number on file), so unlike
+      // email it is judged by the preference for either kind of recipient.
       const silent =
         (!usesInApp || pref.inApp === false) &&
         (!usesPush || pref.push === false) &&
-        (!usesEmail || emailSilent);
+        (!usesEmail || emailSilent) &&
+        (!usesSms || pref.sms === false);
       if (!silent) continue;
       if (pref.userId) result.userIds.add(pref.userId);
       if (pref.assayerId) result.assayerIds.add(pref.assayerId);
@@ -572,10 +577,22 @@ export class NotificationDispatchService {
       ? { emailStatus: NotificationStatus.PENDING }
       : { emailStatus: null };
 
+    /**
+     * The text leg's bookkeeping, stamped at birth on the same terms as email — for users AND
+     * assayers, since both have a mobile number on file — and for the same reason left undecided
+     * about whether a gateway is configured: that is the sending worker's to know, not this
+     * replica's. PENDING only when an administrator has put SMS among this event's channels; no
+     * shipped event carries it, so by default every row is born `sms_status` NULL.
+     */
+    const smsBirth = def.channels.includes(NotificationChannel.SMS)
+      ? { smsStatus: NotificationStatus.PENDING }
+      : { smsStatus: null };
+
     const rows: Partial<NotificationEntity>[] = [
       ...[...userIds].map((userId) => ({
         ...base,
         ...emailBirth,
+        ...smsBirth,
         userId,
         assayerId: null,
         // Dedupe is per recipient: one event reaching five people is five rows,
@@ -584,7 +601,8 @@ export class NotificationDispatchService {
       })),
       ...audienceAssayerIds.map((assayerId) => ({
         ...base,
-        emailStatus: null,
+        ...emailBirth,
+        ...smsBirth,
         userId: null,
         assayerId,
         dedupeKey: dedupeKey ? `${dedupeKey}:a:${assayerId}` : null,
@@ -700,15 +718,17 @@ export class NotificationDispatchService {
       }
     }
 
-    // ── Hand email delivery to the queue ──────────────────────────────────
+    // ── Hand email and text delivery to the queue ─────────────────────────
     // Same contract as push: the row is the source of truth, the queue is a cache of pending
-    // work, and the sweeper re-queues anything the enqueue missed.
-    const emailRows = createdRows.filter((row) => row.emailStatus === NotificationStatus.PENDING);
-    if (emailRows.length > 0) {
+    // work, and the sweeper re-queues anything the enqueue missed. One loop over the two legs
+    // rather than two copies: each owes a job exactly when its own status column was born PENDING.
+    for (const leg of NOTIFICATION_MESSAGE_LEG_LIST) {
+      const legRows = createdRows.filter((row) => row[leg.statusKey] === NotificationStatus.PENDING);
+      if (legRows.length === 0) continue;
       try {
         await this.deliveryQueue.addBulk(
-          emailRows.map((row) => ({
-            name: 'deliver-email',
+          legRows.map((row) => ({
+            name: leg.job,
             data: { notificationId: row.id },
             opts: {
               attempts: 5,
@@ -719,7 +739,7 @@ export class NotificationDispatchService {
           })),
         );
       } catch (err: any) {
-        this.logger.warn(`Could not bulk-enqueue email for ${emailRows.length} notification(s): ${err?.message}`);
+        this.logger.warn(`Could not bulk-enqueue ${leg.noun} for ${legRows.length} notification(s): ${err?.message}`);
       }
     }
 

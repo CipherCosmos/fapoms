@@ -30,10 +30,17 @@ export const Users: React.FC = () => {
 
   return (
     <Page>
+      {/*
+        One band, not three. The title, its explanation and the tabs used to stack into roughly a
+        third of the screen before a single account appeared — `compact` is the density the rest of
+        the product's consoles already use, and the subtitle says what this page is NOT (the
+        assayer workforce lives elsewhere), which is worth one short line rather than two.
+      */}
       <PageHeader
-        icon={<UsersRound size={20} />}
-        title="User Administration"
-        subtitle="Staff accounts, roles, and access — not the assayer workforce, which lives under Workforce."
+        compact
+        icon={<UsersRound size={18} />}
+        title="People & access"
+        subtitle="Staff accounts and what they can do. The assayer workforce lives under Workforce."
       />
 
       <nav style={{ display: 'flex', gap: '2px', borderBottom: '1px solid var(--border-color)' }}>

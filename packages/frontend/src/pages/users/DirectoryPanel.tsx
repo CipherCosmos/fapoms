@@ -1,16 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, KeyRound, Lock, LockOpen, Clock, Mail } from 'lucide-react';
+import { Shield, UserPlus, Users as UsersIcon, KeyRound, Lock, LockOpen, Clock, Mail } from 'lucide-react';
 import {
-  REGION_ORDER, REGION_LABELS, Region, roleLabel, userStatusLabel, ROLE_DESCRIPTIONS, SystemRole,
+  REGION_ORDER, REGION_LABELS, Region, roleLabel, ROLE_DESCRIPTIONS, SystemRole,
+  type OutboundMessageReceipt,
 } from '@fapoms/shared';
 import { api } from '../../services/api';
+import { inBatches } from '../../utils/batches';
 import { userMessage } from '../../services/errors';
 import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
-import { AddUserDialog, InviteResult } from './AddUserDialog';
-import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
+import { AddUserDialog, InviteResult, type InviteSummary } from './AddUserDialog';
+import { DataTable, type Column } from '../../components/ui/DataTable';
+import { FilterBar } from '../../components/ui/FilterBar';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { StatusBadge } from '../../components/ui/StatusBadge';
+import { Pill } from '../../components/ui/settings';
+import { FilterSelect, AlertBanner, PrimaryButton, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { useClientOptions } from '../../hooks/useClients';
 import { UserActivityList } from './ActivityFeed';
+import { StyledInput } from '../../components/ui/inputs';
 
 interface UserRole {
   id: string;
@@ -37,13 +45,12 @@ interface UserProfile {
   lockedUntil: string | null;
 }
 
+/** The server's per-call ceiling on `POST /users/bulk/status` (`BulkSetStatusDto`). */
+export const BULK_STATUS_BATCH = 500;
+
 /** `roles` here is the directory's canonical role list — always matched by id, never by name. */
 const CLIENT_USER_ROLE_NAME = 'CLIENT_USER';
 
-const STATUS_TONE: Record<string, string> = {
-  ACTIVE: 'var(--status-active)', INVITED: 'var(--accent)', SUSPENDED: 'var(--warning)',
-  LOCKED: 'var(--danger)', DISABLED: 'var(--text-muted)', ARCHIVED: 'var(--text-muted)',
-};
 
 const fmtRelative = (iso: string | null): string => {
   if (!iso) return 'Never';
@@ -92,6 +99,110 @@ export const DirectoryPanel: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'SUSPENDED' | 'LOCKED'>('ALL');
 
+  /**
+   * The columns, in the order somebody reads a row: who, what they can do, are they in, when were
+   * they last here — and then the one action.
+   *
+   * `sortValue` on each is the point of moving to `DataTable`: the old hand-rolled table could not
+   * be sorted at all, so finding "everybody who has never signed in" meant reading the whole list.
+   */
+  const columns: Column<UserProfile>[] = [
+    {
+      key: 'displayName',
+      header: 'Person',
+      sortValue: (u) => u.displayName.toLowerCase(),
+      render: (u) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+          <div style={{
+            width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
+            background: 'var(--bg-tertiary)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', color: 'var(--accent-primary)', fontWeight: 600,
+            fontSize: 'var(--text-xs)',
+          }}>
+            {u.firstName[0]}{u.lastName[0]}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {u.displayName}
+              {isSelf(u) && <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
+              {isLocked(u) && (
+                <span title={`${u.failedLoginAttempts} failed sign-in attempt(s)`}>
+                  <Lock size={12} style={{ color: 'var(--danger)' }} />
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {u.email}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'roles',
+      header: 'Can do',
+      sortValue: (u) => u.roles.map((r) => roleLabel(r.name)).sort().join(', '),
+      render: (u) => (
+        u.roles.length === 0
+          ? <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)' }}>No role — sees nothing</span>
+          : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+              {u.roles.map((r) => (
+                // The sentence as a tooltip: the chip names the role, hovering says what it means.
+                <span key={r.id} title={ROLE_DESCRIPTIONS[r.name as SystemRole]}>
+                  <Pill>{roleLabel(r.name)}</Pill>
+                </span>
+              ))}
+            </div>
+          )
+      ),
+    },
+    {
+      key: 'regions',
+      header: 'Where',
+      sortValue: (u) => (u.regions?.length ? u.regions.join(',') : ''),
+      render: (u) => (
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+          {u.regions?.length
+            ? u.regions.map((r) => REGION_LABELS[r as Region] ?? r).join(', ')
+            : <span style={{ color: 'var(--text-muted)' }}>All of India</span>}
+        </span>
+      ),
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortValue: (u) => u.status,
+      render: (u) => <StatusBadge domain="user" status={u.status} />,
+    },
+    {
+      key: 'lastLoginAt',
+      header: 'Last signed in',
+      sortValue: (u) => (u.lastLoginAt ? Date.parse(u.lastLoginAt) : 0),
+      render: (u) => (
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <Clock size={11} style={{ opacity: 0.6 }} />
+          {/* "Never" reads as a fault. It usually means the invite is still in their inbox. */}
+          {u.lastLoginAt ? fmtRelative(u.lastLoginAt) : <span style={{ color: 'var(--text-muted)' }}>Invited, not yet</span>}
+        </span>
+      ),
+    },
+    {
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (u) => (
+        <button
+          onClick={(e) => { e.stopPropagation(); startEditUser(u); }}
+          className="btn btn-secondary"
+          style={{ padding: '5px 12px', fontSize: 'var(--text-xs)' }}
+        >
+          Manage
+        </button>
+      ),
+    },
+  ];
+
   const filteredUsers = users.filter((u) => {
     if (searchText) {
       const q = searchText.toLowerCase();
@@ -103,9 +214,7 @@ export const DirectoryPanel: React.FC = () => {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   /** What to tell the administrator once the account exists — see `InviteResult`. */
-  const [inviteResult, setInviteResult] = useState<{
-    displayName: string; email: string; emailed: boolean; link: string;
-  } | null>(null);
+  const [inviteResult, setInviteResult] = useState<InviteSummary | null>(null);
   /*
     The add-user form's own state moved into `AddUserDialog` with the form itself. What is left
     here is the list: who exists, and what this panel does to them.
@@ -273,16 +382,36 @@ export const DirectoryPanel: React.FC = () => {
     setBulkBusy(true);
     setBulkReport(null);
     setError(null);
+    /*
+      The server takes at most BULK_STATUS_BATCH ids per call (a request that walked thousands of
+      rows outlived the browser's 30 s wait). A larger selection goes in consecutive batches, and
+      the report adds them up; a batch that fails stops the run and says how far it got, because
+      the batches before it really did change people.
+    */
+    const succeeded: { id: string }[] = [];
+    const skipped: { id: string; current: string; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
     try {
-      const res = await api.request<{ succeeded: { id: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>('/users/bulk/status', {
-        method: 'POST',
-        body: JSON.stringify({ ids: [...selectedIds], status: bulkStatus }),
+      await inBatches([...selectedIds], BULK_STATUS_BATCH, async (batch) => {
+        const res = await api.request<{ succeeded: { id: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>('/users/bulk/status', {
+          method: 'POST',
+          body: JSON.stringify({ ids: batch, status: bulkStatus }),
+        });
+        succeeded.push(...(res?.succeeded ?? []));
+        skipped.push(...(res?.skipped ?? []));
+        failed.push(...(res?.failed ?? []));
       });
-      const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
       setBulkReport({ target: bulkStatus, succeeded: succeeded.length, skipped, failed });
       setNotice(`${succeeded.length} user(s) ${bulkStatus === 'ACTIVE' ? 'activated' : 'suspended'}.`);
     } catch (err: any) {
-      setError(`Bulk status change failed. ${userMessage(err)}`);
+      if (succeeded.length || skipped.length || failed.length) {
+        setBulkReport({ target: bulkStatus, succeeded: succeeded.length, skipped, failed });
+      }
+      setError(
+        succeeded.length
+          ? `Stopped part-way: ${succeeded.length} user(s) were changed before this error. ${userMessage(err)}`
+          : `Bulk status change failed. ${userMessage(err)}`,
+      );
     } finally {
       setBulkBusy(false);
       setBulkStatus('');
@@ -311,20 +440,18 @@ export const DirectoryPanel: React.FC = () => {
     setSendingLink(true);
     setError(null);
     try {
-      const res = await api.request<{ emailed: boolean; link: string }>(
+      const res = await api.request<{ emailDelivery: OutboundMessageReceipt | null; link: string }>(
         `/users/${editingUser.id}/send-setup-link`,
         { method: 'POST', body: JSON.stringify({ reason: 'RESET' }) },
       );
-      if (res?.emailed) {
-        setNotice(`A password link is on its way to ${editingUser.email}. It expires in 48 hours.`);
-      } else {
-        setInviteResult({
-          displayName: editingUser.displayName,
-          email: editingUser.email ?? '',
-          emailed: false,
-          link: res?.link ?? '',
-        });
-      }
+      // The email is queued, so whether it went is followed in `InviteResult` rather than known here;
+      // it shows the link only if the email fails.
+      setInviteResult({
+        displayName: editingUser.displayName,
+        email: editingUser.email ?? '',
+        emailDelivery: res?.emailDelivery ?? null,
+        link: res?.link ?? '',
+      });
     } catch (err: any) {
       setError(`Could not send the link. ${userMessage(err)}`);
     } finally {
@@ -374,47 +501,12 @@ export const DirectoryPanel: React.FC = () => {
   const editingSelf = editingUser ? isSelf(editingUser) : false;
   const isLocked = (u: UserProfile) => u.status === 'LOCKED' || (!!u.lockedUntil && new Date(u.lockedUntil) > new Date());
 
-  /** The two counts the header line shows — see the comment there for why the tiles went. */
+  /** Shown beside the filters as a shortcut — the one part of the old KPI tiles that asked for an action. */
   const lockedCount = users.filter(isLocked).length;
-  const neverSignedIn = users.filter((u) => !u.lastLoginAt).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {confirmDialog}
-      {/*
-        FOUR TILES BECAME ONE LINE.
-
-        "Total Users", "Active (shown)", "Locked Out" and "Distinct Roles" filled the top of the
-        screen above the actual work, and two of them were answering questions nobody asks: the
-        number of DISTINCT ROLES in use is a fact about the permission model, not about people,
-        and "Active (shown)" counted whatever the search box happened to be filtering to.
-
-        What is left is the two things that make somebody act — how many accounts there are, and
-        who is stuck — and the second one is a button, because a locked-out colleague is a task.
-      */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-        <span><strong style={{ color: 'var(--text-primary)' }}>{usersTotal}</strong> {usersTotal === 1 ? 'account' : 'accounts'}</span>
-        {lockedCount > 0 && (
-          <button
-            type="button"
-            onClick={() => { setFilterStatus('LOCKED'); setSearchText(''); }}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer',
-              background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)',
-              borderRadius: 'var(--radius-full)', padding: '4px 12px',
-              color: 'var(--danger)', fontSize: 'var(--text-xs)', fontWeight: 600,
-            }}
-          >
-            <Lock size={13} /> {lockedCount} locked out — show {lockedCount === 1 ? 'them' : 'these'}
-          </button>
-        )}
-        {neverSignedIn > 0 && (
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            {neverSignedIn} {neverSignedIn === 1 ? 'person has' : 'people have'} not signed in yet
-          </span>
-        )}
-      </div>
-
       {error && <AlertBanner type="error">{error}</AlertBanner>}
       {usersLoadError != null && (
         <LoadFailure loads={[{ label: 'the user directory', query: caughtLoad(usersLoadError, () => void loadUsers()) }]} />
@@ -429,194 +521,129 @@ export const DirectoryPanel: React.FC = () => {
         </AlertBanner>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-        <SearchInput value={searchText} onChange={setSearchText} placeholder="Search by name, username, email..." style={{ minWidth: '200px' }} />
+      {/*
+        THE LIST IS THE APP'S LIST NOW.
+
+        This screen hand-rolled its own `<table>` — its own header cells, its own row padding, its
+        own checkbox column, its own empty state — while every other list in the product (clients,
+        the roster, deployments, pay) is a `DataTable`. It looked like a different application, and
+        it was missing what the shared one has: sortable columns, a proper empty state, and a
+        selection model that behaves the same way everywhere.
+      */}
+      <FilterBar
+        search={{ value: searchText, onChange: setSearchText, placeholder: 'Search by name, username or email…' }}
+        summary={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
+            <span>{filteredUsers.length === users.length
+              ? `${users.length} ${users.length === 1 ? 'account' : 'accounts'}`
+              : `${filteredUsers.length} of ${users.length}`}</span>
+            {/* The only part of the old tile row that asked for an action. */}
+            {lockedCount > 0 && filterStatus !== 'LOCKED' && (
+              <button
+                type="button"
+                onClick={() => { setFilterStatus('LOCKED'); setSearchText(''); }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '5px', cursor: 'pointer',
+                  background: 'transparent', border: 'none', padding: 0,
+                  color: 'var(--danger)', fontSize: 'var(--text-xs)', fontWeight: 600,
+                }}
+              >
+                <Lock size={12} /> {lockedCount} locked out
+              </button>
+            )}
+          </span>
+        }
+        activeCount={(searchText ? 1 : 0) + (filterStatus !== 'ALL' ? 1 : 0)}
+        onClearAll={() => { setSearchText(''); setFilterStatus('ALL'); }}
+      >
         <FilterSelect value={filterStatus} onChange={(v) => setFilterStatus(v as any)} options={[
-          { value: 'ALL', label: 'All Status' },
+          { value: 'ALL', label: 'Any status' },
           { value: 'ACTIVE', label: 'Active' },
           { value: 'SUSPENDED', label: 'Suspended' },
-          { value: 'LOCKED', label: 'Locked' },
+          { value: 'LOCKED', label: 'Locked out' },
         ]} />
-        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} shown</span>
         <div style={{ marginLeft: 'auto' }}>
           <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
-            <span>Add User</span>
+            <span>Add someone</span>
           </PrimaryButton>
         </div>
-      </div>
+      </FilterBar>
 
-      <div>
-        <div className="glass-card" style={{ padding: '0', overflow: 'hidden' }}>
-          <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 'var(--text-md)', fontWeight: 600 }}>Accounts</span>
-            <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length}</span>
-          </div>
-
-          {selectedIds.size > 0 && (
-            <div style={{
-              display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
-              padding: '10px 24px', borderBottom: '1px solid var(--border-color)',
-              background: 'var(--status-pending-bg)',
-            }}>
-              <strong style={{ fontSize: 'var(--text-sm)' }}>{selectedIds.size} selected</strong>
-              <ToggleRight size={13} style={{ color: 'var(--text-muted)' }} />
-              <Select
-                value={bulkStatus}
-                onChange={(v) => setBulkStatus(v as any)}
-                options={[
-                  { value: 'ACTIVE', label: 'Activate' },
-                  { value: 'SUSPENDED', label: 'Suspend' },
-                ]}
-                placeholder="Set status…"
-                compact
-              />
-              <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
-                {bulkBusy ? 'Applying…' : 'Apply'}
-              </button>
-              <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
-            </div>
-          )}
-
-          {bulkReport && (
-            <div style={{ margin: '10px 24px 0', padding: '12px 14px', borderRadius: '8px', fontSize: 'var(--text-xs)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)' }}>
-              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
-                <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
-                <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
-                {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
-                <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
-              </div>
-              {bulkReport.skipped.length > 0 && (
-                <div style={{ marginTop: '6px' }}>
-                  <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Already {userStatusLabel(bulkReport.target).toLowerCase()}:</div>
-                  {bulkReport.skipped.map((s) => (
-                    <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                      <span>{displayNameFor(s.id)}</span>
-                      <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>— {userStatusLabel(s.current)}: {s.reason}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {bulkReport.failed.length > 0 && (
-                <div style={{ marginTop: '6px' }}>
-                  <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
-                  {/* Was the first eight characters of the account's UUID — an identifier nobody
-                      can act on. The directory is already in memory, so name the person. */}
-                  {bulkReport.failed.map((f) => (
-                    <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                      <span>{displayNameFor(f.id)}</span><span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>— {f.reason}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {isLoading ? (
-            <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading users list...</div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-            <table className="planning-table" style={{ width: '100%', minWidth: '720px', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
-                  <th style={{ padding: '12px 6px 12px 24px', width: '28px' }}>
-                    <input type="checkbox" checked={selectedIds.size > 0 && selectedIds.size === filteredUsers.length}
-                      onChange={(e) => setSelectedIds(e.target.checked ? new Set(filteredUsers.map((u) => u.id)) : new Set())} style={{ cursor: 'pointer' }} />
-                  </th>
-                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'left', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>User</th>
-                  <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Roles</th>
-                  <th style={{ padding: '12px 24px', textAlign: 'left', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Last Login</th>
-                  <th style={{ padding: '12px 24px', textAlign: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Status</th>
-                  <th style={{ padding: '12px 24px 12px 6px', textAlign: 'right', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredUsers.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                      <UsersIcon size={30} style={{ opacity: 0.4 }} />
-                      {/* The banner above carries the reason; this only has to stop contradicting
-                          it. Offering "Add User" here would invite an administrator to create an
-                          account because the directory looked empty, when it was merely unread. */}
-                      <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-                        {usersLoadError != null
-                          ? 'The directory could not be loaded — see above.'
-                          : searchText || filterStatus !== 'ALL' ? 'No users match your filters' : 'No users yet'}
-                      </span>
-                      {usersLoadError == null && !(searchText || filterStatus !== 'ALL') && (
-                        <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ marginTop: 6, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <UserPlus size={13} /> Add User
-                        </button>
-                      )}
-                    </div>
-                  </td></tr>
-                ) : (filteredUsers.map((u) => {
-                  const self = isSelf(u);
-                  const locked = isLocked(u);
-                  return (
-                    <tr key={u.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                      <td style={{ padding: '14px 6px 14px 24px' }}>
-                        <input type="checkbox" checked={selectedIds.has(u.id)} disabled={self}
-                          onChange={() => toggleSelect(u.id)} title={self ? 'You cannot change your own account status' : undefined}
-                          style={{ cursor: self ? 'not-allowed' : 'pointer' }} />
-                      </td>
-                      <td style={{ padding: '14px 24px 14px 6px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--bg-tertiary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)', fontWeight: 600, flexShrink: 0 }}>
-                            {u.firstName[0]}{u.lastName[0]}
-                          </div>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 'var(--text-base)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              {u.displayName}
-                              {self && <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent-primary)', fontWeight: 700 }}>(you)</span>}
-                              {locked && <span title={`${u.failedLoginAttempts} failed attempt(s)`}><Lock size={12} style={{ color: 'var(--danger)' }} /></span>}
-                            </div>
-                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>@{u.username} · {u.email}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td style={{ padding: '14px 24px' }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                          {u.roles.map((r) => (
-                            <span key={r.id} style={{ fontSize: 'var(--text-3xs)', background: 'var(--status-pending-bg)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
-                              {roleLabel(r.name)}
-                            </span>
-                          ))}
-                          {u.roles.length === 0 && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>No roles assigned</span>}
-                        </div>
-                      </td>
-                      <td style={{ padding: '14px 24px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Clock size={11} style={{ opacity: 0.6 }} />
-                          {/* "Never" on its own reads as a fault. It usually means the invite is
-                              still sitting in their inbox, which is a different thing to do about. */}
-                          {u.lastLoginAt ? fmtRelative(u.lastLoginAt) : <span style={{ color: 'var(--text-muted)' }}>Invited — not signed in yet</span>}</span>
-                      </td>
-                      <td style={{ padding: '14px 24px', textAlign: 'center' }}>
-                        <button
-                          onClick={() => toggleUserStatus(u)}
-                          disabled={self}
-                          title={self ? 'You cannot change your own account status' : u.status === 'ACTIVE' ? 'Suspend this account' : 'Reactivate this account'}
-                          style={{ background: 'none', border: 'none', cursor: self ? 'not-allowed' : 'pointer', display: 'inline-flex', color: self ? 'var(--text-muted)' : (STATUS_TONE[u.status] ?? 'var(--text-muted)'), opacity: self ? 0.4 : 1 }}
-                        >
-                          {u.status === 'ACTIVE' ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
-                        </button>
-                        <div style={{ fontSize: 'var(--text-3xs)', color: STATUS_TONE[u.status] ?? 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>{userStatusLabel(u.status)}</div>
-                      </td>
-                      <td style={{ padding: '14px 24px', textAlign: 'right' }}>
-                        <button onClick={() => startEditUser(u)}
-                          style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', color: 'var(--accent-secondary)', padding: '6px 12px', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 500 }}>
-                          Manage
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                }))}
-              </tbody>
-            </table>
-            </div>
-          )}
+      {selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
+          padding: '10px 16px', borderRadius: 'var(--radius-md)',
+          background: 'var(--status-pending-bg)', border: '1px solid var(--border-hair)',
+        }}>
+          <strong style={{ fontSize: 'var(--text-sm)' }}>{selectedIds.size} selected</strong>
+          <Select
+            value={bulkStatus}
+            onChange={(v) => setBulkStatus(v as any)}
+            options={[
+              { value: 'ACTIVE', label: 'Activate' },
+              { value: 'SUSPENDED', label: 'Suspend' },
+            ]}
+            placeholder="Set status…"
+            style={{ minWidth: '160px' }}
+          />
+          <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary"
+            style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+            {bulkBusy ? 'Applying…' : 'Apply'}
+          </button>
+          <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary"
+            style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
         </div>
+      )}
 
-      </div>
+      {bulkReport && (
+        <AlertBanner type={bulkReport.failed.length > 0 ? 'error' : 'success'}>
+          <span>
+            {bulkReport.succeeded} changed to {bulkReport.target.toLowerCase()}
+            {bulkReport.skipped.length > 0 && `, ${bulkReport.skipped.length} already there`}
+            {bulkReport.failed.length > 0 && `, ${bulkReport.failed.length} refused`}
+            {bulkReport.failed.length > 0 && (
+              <span style={{ display: 'block', marginTop: '4px', fontSize: 'var(--text-xs)' }}>
+                {bulkReport.failed.map((f) => `${displayNameFor(f.id)}: ${f.reason}`).join('; ')}
+              </span>
+            )}
+          </span>
+        </AlertBanner>
+      )}
+
+      <DataTable
+        density="compact"
+        columns={columns}
+        rows={filteredUsers}
+        rowKey={(u) => u.id}
+        onRowClick={(u) => startEditUser(u)}
+        loading={isLoading}
+        selectable
+        selected={selectedIds}
+        onToggleSelect={toggleSelect}
+        onSelectAll={(checked) => setSelectedIds(() => {
+          const next = new Set<string>();
+          // Never the signed-in administrator: they cannot change their own status, so ticking
+          // them would offer an action that can only be refused.
+          if (checked) for (const u of filteredUsers) { if (!isSelf(u)) next.add(u.id); }
+          return next;
+        })}
+        emptyState={
+          usersLoadError != null ? undefined : (
+            <EmptyState
+              icon={<UsersIcon size={30} />}
+              title={searchText || filterStatus !== 'ALL' ? 'Nobody matches that' : 'No accounts yet'}
+              message={searchText || filterStatus !== 'ALL'
+                ? 'Try a different name, or clear the filters.'
+                : 'Add your colleagues and they will each get an email to set their own password.'}
+              action={searchText || filterStatus !== 'ALL' ? undefined : (
+                <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
+                  <span>Add someone</span>
+                </PrimaryButton>
+              )}
+            />
+          )
+        }
+      />
 
       {/* Edit / roles / reset / activity — a slide-in drawer instead of a side panel that used
           to squeeze the accounts table to half width. */}
@@ -634,6 +661,33 @@ export const DirectoryPanel: React.FC = () => {
         {editingUser && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
 
+              {/*
+                WHETHER THEY CAN SIGN IN AT ALL.
+
+                This was a toggle icon in the list — one mis-click away from suspending somebody,
+                in a column narrow enough that the icon had to carry the meaning on its own. It
+                belongs here, beside the person's name, as a button that says what it will do.
+              */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+                padding: '10px 12px', marginBottom: '16px', borderRadius: '8px',
+                background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)',
+              }}>
+                <StatusBadge domain="user" status={editingUser.status} />
+                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                  {editingUser.status === 'ACTIVE'
+                    ? 'Can sign in and work normally.'
+                    : 'Cannot sign in until somebody reactivates the account.'}
+                </span>
+                {!editingSelf && (
+                  <button type="button" onClick={() => void toggleUserStatus(editingUser)}
+                    className="btn btn-secondary"
+                    style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', padding: '6px 12px', whiteSpace: 'nowrap' }}>
+                    {editingUser.status === 'ACTIVE' ? 'Suspend this account' : 'Reactivate'}
+                  </button>
+                )}
+              </div>
+
               {isLocked(editingUser) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '16px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled)' }}>
                   <Lock size={15} style={{ color: 'var(--danger)', flexShrink: 0 }} />
@@ -649,10 +703,10 @@ export const DirectoryPanel: React.FC = () => {
 
               <form onSubmit={handleUpdateUser} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
-                  <div><label className="form-label">First Name</label><input type="text" className="form-input" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} required /></div>
-                  <div><label className="form-label">Last Name</label><input type="text" className="form-input" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} required /></div>
+                  <div><label className="form-label">First Name</label><StyledInput type="text" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} required /></div>
+                  <div><label className="form-label">Last Name</label><StyledInput type="text" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} required /></div>
                 </div>
-                <div><label className="form-label">Phone Number</label><input type="text" className="form-input" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} /></div>
+                <div><label className="form-label">Phone Number</label><StyledInput type="text" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} /></div>
 
                 <div>
                   {/*
@@ -793,7 +847,7 @@ export const DirectoryPanel: React.FC = () => {
                 </div>
                 {showManualReset && (
                   <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-                    <input type="text" className="form-input" placeholder="New password (min 10 characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ flex: 1 }} />
+                    <StyledInput type="text" placeholder="New password (min 10 characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ flex: 1 }} />
                     <button type="button" onClick={handleResetPassword} disabled={resetting || newPassword.length < 10}
                       className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
                       {resetting ? 'Resetting…' : 'Set it'}

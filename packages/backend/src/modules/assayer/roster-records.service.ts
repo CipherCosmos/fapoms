@@ -3,21 +3,12 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, IsNull, SelectQueryBuilder, DataSource } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { assertTenantOwns, tenantFilterId, tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
-import {
-  EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar,
-  DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS,
-  DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS,
-  DOCUMENT_REJECTION_GUIDANCE,
-  compareNames, type NameMatchGrade,
-  /**
+import { EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar, DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS, DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS, DOCUMENT_REJECTION_GUIDANCE, compareNames, type NameMatchGrade, /**
    * The deployability vocabulary, imported rather than restated. Every one of these is the exact
    * predicate a dispatch or payment gate already calls — see `deploymentVerdict`, which composes
    * them and writes no rule of its own.
    */
-  AssayerLifecycleStatus, assayerLifecycleLabel, operationalStatusFor, onboardingNextStep,
-  hasLeftWorkforce, stillWorkable, cannotBePaid, payoutBlockingGaps,
-  missingAssayerRecordFields, isPlaceholderPin, standingAllowsPlanning,
-} from '@fapoms/shared';
+  AssayerLifecycleStatus, assayerLifecycleLabel, operationalStatusFor, onboardingNextStep, hasLeftWorkforce, stillWorkable, cannotBePaid, payoutBlockingGaps, missingAssayerRecordFields, isPlaceholderPin, standingAllowsPlanning, businessDateKey } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 import { DataIntegrityService } from './data-integrity.service';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -380,7 +371,7 @@ export class RosterRecordsService {
        */
       const left = assayer.exitDate ?? assayer.terminationDate;
       blockers.push(
-        `a leaving date (${new Date(left as Date).toISOString().slice(0, 10)}) is recorded but their `
+        `a leaving date (${businessDateKey(left as Date)}) is recorded but their `
         + `stage still says ${assayerLifecycleLabel(lifecycle)} — close their record, or clear the `
         + 'leaving date if they never left',
       );
@@ -1030,6 +1021,34 @@ export class RosterRecordsService {
     // `assayerId` off the URL.
     await this.assertOwnedAssayer(assayerId);
     const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
+
+    /**
+     * A storage key this document already holds a version of has already been attached.
+     *
+     * Keys are minted per upload, so the same key is the same file, and the only caller that sends
+     * one twice is a repeated promotion — the scan loop sits between "the person exists" and "the
+     * application is closed", so a failure after it has the reviewer approving again. Filing it
+     * again made a new version of every scan, superseded the real one, withdrew any verification
+     * done in between and wrote the audit line twice. The file list alone could not say so: a
+     * photograph keeps only its latest key, so an application with two photographs looked
+     * un-attached on the retry.
+     *
+     * Where versions are not recorded (a service built without them) the file list is the only
+     * record there is, and it is what decides.
+     */
+    if (existing?.id) {
+      const alreadyFiled = this.docVersions
+        ? (await this.docVersions.findOne({ where: { documentId: existing.id, filePath: key } }))?.filePath === key
+        : (existing.filePaths ?? []).includes(key);
+      if (alreadyFiled) {
+        // The photograph's copy on the person is the one write that may not have landed last time.
+        if (requirement === OnboardingDocument.PHOTOGRAPH && (existing.filePaths ?? []).includes(key)) {
+          await this.assayers.update({ id: assayerId }, { photograph: key, updatedBy: actorId });
+        }
+        return existing;
+      }
+    }
+
     let row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId, filePaths: [] });
     if (!row.id) {
       row = await this.onboarding.save(row);

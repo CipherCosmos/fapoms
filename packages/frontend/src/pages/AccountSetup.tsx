@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ShieldCheck, Check, AlertCircle, Loader2, Eye, EyeOff } from 'lucide-react';
 import { PublicShell } from './registration/PublicShell';
 import PrimaryButton from './registration/PrimaryButton';
+import { StyledInput } from '../components/ui/inputs';
 
 /**
  * WHERE A NEW COLLEAGUE CHOOSES THEIR OWN PASSWORD.
@@ -130,8 +131,8 @@ export const AccountSetup: React.FC<{ token: string }> = ({ token }) => {
 
         <Field label="New password">
           <div style={{ display: 'flex', gap: '8px' }}>
-            <input
-              className="form-input"
+            <StyledInput
+              
               type={reveal ? 'text' : 'password'}
               value={password}
               autoFocus
@@ -156,8 +157,8 @@ export const AccountSetup: React.FC<{ token: string }> = ({ token }) => {
         </Field>
 
         <Field label="Type it again">
-          <input
-            className="form-input"
+          <StyledInput
+            
             type={reveal ? 'text' : 'password'}
             value={confirm}
             autoComplete="new-password"

@@ -31,8 +31,8 @@ describe('interview outcomes', () => {
       openApplicationForMobile: jest.fn(async () => null),
       createInviteRecord: jest.fn(async (_input: Record<string, any>) =>
         ({ application: { id: 'app-1' }, rawToken: 'raw' })),
-      deliverInvite: jest.fn(async () => ({ emailed: true, inviteLink: 'https://x/register/raw' })),
-      resendInvite: jest.fn(async () => ({ emailed: true, inviteLink: 'https://x/register/fresh' })),
+      deliverInvite: jest.fn(async () => ({ emailDelivery: { id: 'e1', status: 'QUEUED', to: 'c@example.com' } as any, inviteLink: 'https://x/register/raw' })),
+      resendInvite: jest.fn(async () => ({ emailDelivery: { id: 'e2', status: 'QUEUED', to: 'c@example.com' } as any, inviteLink: 'https://x/register/fresh' })),
       findApplicationForAmend: jest.fn(async () => null),
     };
     /*
@@ -76,30 +76,35 @@ describe('interview outcomes', () => {
     expect(interview.outcome).toBe(InterviewOutcome.FAIL);
   });
 
-  it('reports whether the invite actually reached the candidate, not merely that an address existed', async () => {
+  it('hands back the invite email\'s receipt to watch, not a claim that the candidate was reached', async () => {
     /**
-     * The screen announces "an invite has been emailed to …" off the back of this. With email
-     * switched off in a deployment, the send answers `{success:false}` and nothing leaves — so a
-     * flat `true` here would have HR believe a candidate was contacted who was not, and the
-     * application then sits in DRAFT forever with nobody looking for it.
+     * The screen used to announce "an invite has been emailed to …" off the back of a boolean, with
+     * the send happening inside this request (4.95 s measured). Now the email is queued and the
+     * screen watches the receipt reach SENT or FAILED; with email switched off it ends FAILED, so
+     * HR is still never told a candidate was contacted who was not.
      */
     const { service, registrationApplications } = setup();
-    registrationApplications.deliverInvite.mockResolvedValueOnce({ emailed: false, inviteLink: 'https://x/register/raw' });
+    registrationApplications.deliverInvite.mockResolvedValueOnce({
+      emailDelivery: { id: null, status: 'NOT_QUEUED', to: 'r@example.com', error: 'db down' } as any,
+      inviteLink: 'https://x/register/raw',
+    });
 
     const interview = await service.record(
       { candidateName: 'Ramesh', mobile: '9822014455', email: 'r@example.com', outcome: InterviewOutcome.PASS },
       'user-1', 'HR', 'org-1',
     );
-    expect(interview.inviteEmailed).toBe(false);
+    expect(interview.emailDelivery?.status).toBe('NOT_QUEUED');
+    expect(interview.inviteLink).toBe('https://x/register/raw');
   });
 
-  it('says an invite went out when it actually did', async () => {
-    const { service } = setup();
+  it('queues the invite under the interviewer, so they are the one allowed to watch it', async () => {
+    const { service, registrationApplications } = setup();
     const interview = await service.record(
       { candidateName: 'Ramesh', mobile: '9822014455', email: 'r@example.com', outcome: InterviewOutcome.PASS },
       'user-1', 'HR', 'org-1',
     );
-    expect(interview.inviteEmailed).toBe(true);
+    expect(interview.emailDelivery).toMatchObject({ id: 'e1', status: 'QUEUED' });
+    expect(registrationApplications.deliverInvite).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'user-1');
   });
 
   it('never claims an invite for a failed interview', async () => {
@@ -107,7 +112,7 @@ describe('interview outcomes', () => {
     const interview = await service.record(
       { candidateName: 'Suresh', mobile: '9811100033', outcome: InterviewOutcome.FAIL }, 'u', undefined,
     );
-    expect(interview.inviteEmailed).toBe(false);
+    expect(interview.emailDelivery).toBeNull();
   });
 
   it('keeps who decided it and when, because this is the record of a decision', async () => {

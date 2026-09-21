@@ -37,11 +37,13 @@
  *               raw-cancels their in-flight assignments. That is the bypass under test.
  * api writes  : drives lifecycle_status through all four writers that reach it outside the map,
  *               including the recovery reset-onboarding-stage and the empanelment upsert.
- * gate        : none of its own — it does not use _lib.mjs.
+ * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs
+ *               (postAndAwait), none of its gates.
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
 import { createRequire } from 'node:module';
+import { postAndAwait, JOB_STATUS, describeJobOutcome } from './_lib.mjs';
 const require = createRequire(
   process.env.AC_REPO ? `${process.env.AC_REPO}/package.json`
     : '/Users/deepstacker/WorkSpace/dupcq/gssAutomation/package.json');
@@ -183,9 +185,18 @@ const auditCount = async (entityId, eventType) => Number((await one(
   // ═══════════════════════════════════════════════════════════════════════════════════════════
   console.log('── 1. POST /assayers/bulk/lifecycle ──────────────────────────────────────────');
 
+  /**
+   * The route answers 202 and a job id now (2026-09-17); the buckets are the finished run's
+   * `result`, and a refusal decided in the request (validation, role, region) is still an
+   * immediate 4xx with nothing queued. `postAndAwait` waits for the run before any check below
+   * reads the database — read on the 202, the worker would not have reached the row yet and
+   * every "nothing moved" check would pass without having measured anything.
+   *
+   * Resolves to `{ status, result, accepted, error, r }`; `r` is this file's own `call` response.
+   */
   const bulk = (ids, targetStatus, reason) =>
-    call(admin.token, 'POST', '/assayers/bulk/lifecycle',
-      { ids, targetStatus, ...(reason === undefined ? {} : { reason }) });
+    postAndAwait('/assayers/bulk/lifecycle', { ids, targetStatus, ...(reason === undefined ? {} : { reason }) },
+      JOB_STATUS.assayerBulk, { token: admin.token, api: API, send: (p, b) => call(admin.token, 'POST', p, b) });
 
   /**
    * BLK-01/02 — THE REHIRE LAUNDERING PROBE.
@@ -202,19 +213,19 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const r = await bulk([a.id], 'ACTIVE');
     const after = await auditCount(a.id, 'ASSAYER_LIFECYCLE_TRANSITION');
     const db1 = await lifecycleOf(a.id);
-    const skipped = r.body?.data?.skipped?.[0];
+    const skipped = r.result?.skipped?.[0];
     record('BLK-01',
-      r.status === 201 && !!skipped && r.body.data.succeeded.length === 0
+      r.status === 202 && !!skipped && r.result.succeeded?.length === 0
         && db1.lifecycle_status === 'RESIGNED' && after === before,
-      `RESIGNED → ACTIVE in bulk, no reason: HTTP ${r.status}, `
-      + `${skipped ? `SKIPPED ("${skipped.reason}")` : JSON.stringify(r.body?.data ?? r.body)}, `
+      `RESIGNED → ACTIVE in bulk, no reason: ${describeJobOutcome(r)}, `
+      + `${skipped ? `SKIPPED ("${skipped.reason}")` : JSON.stringify(r.result ?? r.r.body)}, `
       + `db still ${db1.lifecycle_status}, ${after - before} lifecycle audit rows written`);
 
     const b = await seedAssayer('REHIRE-REASON', 'RESIGNED');
     const rb = await bulk([b.id], 'ACTIVE', 'Acceptance probe: rehire this leaver straight to active.');
     const db2 = await lifecycleOf(b.id);
     record('BLK-02',
-      rb.body?.data?.skipped?.length === 1 && rb.body?.data?.succeeded?.length === 0
+      rb.result?.skipped?.length === 1 && rb.result?.succeeded?.length === 0
         && db2.lifecycle_status === 'RESIGNED',
       `and supplying a reason does not unlock it — still skipped, db ${db2.lifecycle_status} `
       + `(so the refusal is the path-finder, not the reason gate)`);
@@ -234,7 +245,8 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const r = await bulk([probe.id], 'DOCUMENT_VERIFICATION');
     record('BLK-03', r.status === 400,
       `an md5-derived id (${probe.id}, version nibble '${version}') is refused by the bulk DTO `
-      + `before the service sees it: HTTP ${r.status} ${JSON.stringify(r.body?.message ?? '')}`);
+      + `before the service sees it — and before anything is queued: HTTP ${r.status} `
+      + `${JSON.stringify(r.r.body?.message ?? '')}`);
   }
 
   /**
@@ -258,9 +270,9 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const r = await bulk([a.id], 'ARCHIVED');
     const after = await auditCount(a.id, 'ASSAYER_LIFECYCLE_TRANSITION');
     const st = await lifecycleOf(a.id);
-    const refused = r.body?.data?.skipped?.[0];
+    const refused = r.result?.skipped?.[0];
     record('BLK-04',
-      !!refused && (r.body?.data?.failed?.length ?? 0) === 0
+      !!refused && (r.result?.failed?.length ?? 0) === 0
         && st.lifecycle_status === 'TRAINING' && after === before,
       `TRAINING → ARCHIVED (routes via INACTIVE) with NO reason: SKIPPED per-row `
       + `("${(refused?.reason ?? '').slice(0, 90)}"), db still ${st.lifecycle_status}, `
@@ -272,7 +284,7 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const afterB = await auditCount(b.id, 'ASSAYER_LIFECYCLE_TRANSITION');
     const stB = await lifecycleOf(b.id);
     record('BLK-05',
-      rb.body?.data?.succeeded?.length === 1 && stB.lifecycle_status === 'ARCHIVED'
+      rb.result?.succeeded?.length === 1 && stB.lifecycle_status === 'ARCHIVED'
         && stB.is_active === false && (afterB - beforeB) === 2,
       `the same walk WITH a reason completes both hops: db ${stB.lifecycle_status}/`
       + `is_active=${stB.is_active}, ${afterB - beforeB} audit rows (one per hop, not one per batch)`);
@@ -299,7 +311,7 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const r = await bulk([a.id], 'INACTIVE');
     const after = await auditCount(a.id, 'ASSAYER_LIFECYCLE_TRANSITION');
     const st = await lifecycleOf(a.id);
-    const d = r.body?.data ?? {};
+    const d = r.result ?? {};
     const refused = d.skipped?.[0];
     record('BLK-06',
       !!refused && (d.failed?.length ?? 0) === 0 && (d.partial?.length ?? 0) === 0
@@ -326,7 +338,7 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const bad = await seedAssayer('BATCH-NOPATH', 'ACTIVE');
     const gone = await seedAssayer('BATCH-ARCHIVED', 'ARCHIVED');
     const r = await bulk([good.id, gone.id, bad.id], 'DOCUMENT_VERIFICATION');
-    const d = r.body?.data ?? {};
+    const d = r.result ?? {};
     const sGood = await lifecycleOf(good.id);
     const sBad = await lifecycleOf(bad.id);
     const sGone = await lifecycleOf(gone.id);
@@ -341,7 +353,14 @@ const auditCount = async (entityId, eventType) => Number((await one(
       + `(one bad row did not abort the rest)`);
   }
 
-  /** BLK-08 — the same id twice in one batch must transition exactly once. */
+  /**
+   * BLK-08 — the same id twice in one batch must transition exactly once.
+   *
+   * Since 2026-09-17 the duplicate is absorbed when the batch is ACCEPTED (the ids are
+   * de-duplicated into the job's fingerprint), so the run reports the person once rather than
+   * walking a no-op self-path for the repeat. The assertion was always about the database — one
+   * transition — and is unchanged.
+   */
   {
     const a = await seedAssayer('DUPLICATE-ID', 'INVITED');
     const before = await auditCount(a.id, 'ASSAYER_LIFECYCLE_TRANSITION');
@@ -351,9 +370,9 @@ const auditCount = async (entityId, eventType) => Number((await one(
     const [v] = await q(`SELECT version FROM assayers WHERE id=$1`, [a.id]);
     record('BLK-08',
       st.lifecycle_status === 'DOCUMENT_VERIFICATION' && (after - before) === 1,
-      `the same id twice in one batch: HTTP ${r.status}, reported succeeded=`
-      + `${r.body?.data?.succeeded?.length}, but exactly ${after - before} transition audit row `
-      + `and db ${st.lifecycle_status} (version ${v?.version}) — the repeat is a no-op self-path`);
+      `the same id twice in one batch: ${describeJobOutcome(r)}, reported succeeded=`
+      + `${r.result?.succeeded?.length}, and exactly ${after - before} transition audit row `
+      + `and db ${st.lifecycle_status} (version ${v?.version}) — the repeat is absorbed on acceptance`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════════════════

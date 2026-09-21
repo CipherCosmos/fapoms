@@ -69,6 +69,32 @@ describe('a full toast stack', () => {
   });
 });
 
+describe('the card itself', () => {
+  /**
+   * It floats over the page. With the `--status-*-bg` tints it took before (16% opacity, made for
+   * rows inside a solid table) the page showed through the message — and six of the nineteen
+   * themes do not define them at all, so those fell back to the light palette and put a pale card
+   * on a dark screen.
+   */
+  it('is drawn on an opaque surface, not a see-through status tint', () => {
+    const { toast } = mount();
+    toast('error', 'Bank file rejected');
+
+    const card = screen.getByRole('alert');
+    expect(card).toHaveStyle({ background: 'color-mix(in srgb, var(--danger) 12%, var(--bg-surface))' });
+    expect(card.getAttribute('style')).not.toMatch(/--status-|rgba\(/);
+  });
+
+  it('lets clicks through the stack except on a message itself', () => {
+    const { toast } = mount();
+    toast('success', 'Saved');
+
+    const card = screen.getByRole('status');
+    expect(card).toHaveStyle({ pointerEvents: 'auto' });
+    expect(card.parentElement).toHaveStyle({ pointerEvents: 'none' });
+  });
+});
+
 describe('a message identical to one already on screen', () => {
   it('is collapsed rather than stacked', () => {
     const { toast } = mount();
@@ -99,15 +125,51 @@ describe('what dismisses itself', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  it('keeps an error up indefinitely, and lets a success go', () => {
+  /**
+   * Every message leaves on its own now. Pinning errors until they were clicked away left four
+   * unread cards covering the corner of the screen in any session with a few failures — the
+   * reading time is the protection instead, and it is generous.
+   */
+  it('lets a success go quickly and an error stay long enough to read — but both go', () => {
     const { toast } = mount();
 
     toast('error', 'Bank file rejected');
     toast('success', 'Assayer saved');
 
-    act(() => { jest.advanceTimersByTime(10_000); });
-
-    expect(screen.getByText('Bank file rejected')).toBeInTheDocument();
+    act(() => { jest.advanceTimersByTime(4_500); });
     expect(screen.queryByText('Assayer saved')).not.toBeInTheDocument();
+    expect(screen.getByText('Bank file rejected')).toBeInTheDocument();
+
+    act(() => { jest.advanceTimersByTime(6_000); });
+    expect(screen.queryByText('Bank file rejected')).not.toBeInTheDocument();
+  });
+
+  it('still pins a message whose caller asked for it, so an acknowledgement can be required', () => {
+    const { toast } = mount();
+
+    toast({ type: 'warning', message: 'Signed in as someone else in another tab', duration: 0 });
+    toast({ type: 'loading', message: 'Building the workbook' });
+
+    act(() => { jest.advanceTimersByTime(60_000); });
+
+    expect(screen.getByText('Signed in as someone else in another tab')).toBeInTheDocument();
+    expect(screen.getByText('Building the workbook')).toBeInTheDocument();
+  });
+
+  /**
+   * The countdown used to depend on a callback the provider re-created on every render, so each
+   * new message restarted every existing timer. On a busy screen messages simply stopped leaving.
+   */
+  it('is not restarted by other messages arriving', () => {
+    const { toast } = mount();
+
+    toast('success', 'Saved first');
+    // Four seconds of arrivals, faster than the 50ms tick — the old code reset the timer each time.
+    for (let i = 0; i < 5; i++) {
+      act(() => { jest.advanceTimersByTime(800); });
+      toast('info', `Something else ${i}`);
+    }
+
+    expect(screen.queryByText('Saved first')).not.toBeInTheDocument();
   });
 });

@@ -4,6 +4,7 @@ import {
   BillingState, InvoiceStatus, AssayerPayableStatus, AssayerInvoiceStatus,
   billingStateLabel, payableStatusLabel, invoiceStatusLabel,
 } from '@fapoms/shared';
+import { BILL_STATE_CHIP } from './vocabulary';
 
 /**
  * The few presentational pieces every billing tab shares: the status pills (one per state
@@ -41,18 +42,15 @@ const ASSAYER_INVOICE_TONE: Record<AssayerInvoiceStatus, string> = {
 };
 
 /**
- * Words for the assayer-invoice states. Simple, intuitive labels that non-technical
- * operators immediately understand.
+ * Words for the assayer-bill states, from `vocabulary.ts` rather than from a second list here.
+ *
+ * There were two: this one said "Waiting for Assayer" / "Needs Approval" in title case, and the
+ * filter chips beside it in the same toolbar said "Invited" / "Submitted" — the enum's own
+ * spelling — for exactly the same rows. Two vocabularies for one state machine, six inches
+ * apart. One list now, and it is not in this file, because this file is presentation and the
+ * words are the product's.
  */
-export const assayerInvoiceStatusLabel = (s: AssayerInvoiceStatus): string =>
-  ({
-    INVITED: 'Waiting for Assayer',
-    SUBMITTED: 'Needs Approval',
-    APPROVED: 'Approved',
-    PAID: 'Paid',
-    CANCELLED: 'Cancelled',
-    SUPERSEDED: 'Revised',
-  })[s] ?? s;
+export const assayerInvoiceStatusLabel = (s: AssayerInvoiceStatus): string => BILL_STATE_CHIP[s] ?? s;
 
 export const Pill: React.FC<{ tone: string; children: React.ReactNode; title?: string }> = ({ tone, children, title }) => (
   <span title={title} style={{
@@ -165,9 +163,16 @@ export const inputStyle: React.CSSProperties = {
 export const th: React.CSSProperties = {
   textAlign: 'left', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)',
   fontWeight: 700, padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap',
+  position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-secondary)',
 };
 export const td: React.CSSProperties = {
   padding: '9px 10px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-hair, var(--border-color))',
   verticalAlign: 'middle',
 };
 export const tdNum: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
+
+export const tableScrollStyle: React.CSSProperties = {
+  overflowX: 'auto',
+  maxHeight: 'calc(100vh - 290px)',
+  overflowY: 'auto',
+};

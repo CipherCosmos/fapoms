@@ -4,10 +4,11 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { MfaService } from './mfa.service';
 import { UserMfaEntity } from './user-mfa.entity';
 import { MfaRecoveryCodeEntity } from './mfa-recovery-code.entity';
+import { UserEntity } from '../user/user.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { CacheService } from '../../infrastructure/cache/cache.service';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
+import { EmailService } from '../notifications/email.service';
+import { SmsService } from '../notifications/sms.service';
 import { generateTotpSecret, totp, hashRecoveryCode } from './totp';
 
 /**
@@ -95,8 +96,26 @@ describe('MfaService', () => {
   let lastCode: string | null = null;
   let smsEnabled = true;
   const capture = (s: string | undefined) => { const m = /\b(\d{6})\b/.exec(s || ''); if (m) lastCode = m[1]; };
-  const email = { send: jest.fn(async (payload: any) => { capture(payload.text); return { success: true }; }) };
-  const sms = { isEnabled: jest.fn(() => smsEnabled), send: jest.fn(async (_to: string, msg: string) => { capture(msg); return true; }) };
+  /** The code rides only as template data; capture it there, the way a mailbox would receive it. */
+  const email = {
+    sendNow: jest.fn(async (req: any): Promise<{ sent: boolean; error?: string; receipt: any }> => {
+      capture(req.content?.data?.otpCode);
+      return { sent: true, receipt: { id: 'e-1', status: 'SENT', to: req.to } };
+    }),
+    queue: jest.fn(),
+  };
+  /** The SMS twin: `SmsService`, never the gateway. The code rides as template data here too. */
+  const sms = {
+    isEnabled: jest.fn(() => smsEnabled),
+    sendNow: jest.fn(async (req: any): Promise<{ sent: boolean; error?: string; receipt: any }> => {
+      capture(req.content?.data?.code);
+      return { sent: true, receipt: { id: 's-1', channel: 'SMS', status: 'SENT', to: req.to } };
+    }),
+    queue: jest.fn(),
+  };
+
+  /** Read for one thing only: the name a code is addressed to. */
+  const userRepo = { findOne: jest.fn(async () => ({ id: 'u1', displayName: 'Ramesh Kumar' })) };
 
   beforeEach(async () => {
     rows = []; codes = []; cacheStore = new Map(); lastCode = null; smsEnabled = true;
@@ -106,10 +125,11 @@ describe('MfaService', () => {
         MfaService,
         { provide: getRepositoryToken(UserMfaEntity), useValue: mfaRepo },
         { provide: getRepositoryToken(MfaRecoveryCodeEntity), useValue: recoveryRepo },
+        { provide: getRepositoryToken(UserEntity), useValue: userRepo },
         { provide: AuditService, useValue: audit },
         { provide: CacheService, useValue: cache },
-        { provide: EmailProvider, useValue: email },
-        { provide: SmsProvider, useValue: sms },
+        { provide: EmailService, useValue: email },
+        { provide: SmsService, useValue: sms },
       ],
     }).compile();
     service = module.get(MfaService);
@@ -170,7 +190,15 @@ describe('MfaService', () => {
   describe('email / SMS delivered-factor enrol', () => {
     it('email enrol sends a code, stores an unconfirmed row, and reports a masked destination', async () => {
       const res = await service.beginDeliveredEnrol(USER, 'EMAIL', 'alice@example.com');
-      expect(email.send).toHaveBeenCalledTimes(1);
+      expect(email.sendNow).toHaveBeenCalledTimes(1);
+      expect(email.sendNow).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'MFA_CODE', to: 'alice@example.com', requestedBy: USER,
+        content: {
+          template: 'mfa-code',
+          data: expect.objectContaining({ purpose: 'confirm your second factor', validMinutes: '5' }),
+        },
+      }));
+      expect(email.queue).not.toHaveBeenCalled();
       expect(res.sentTo).toBe('a****@example.com');
       expect(getRow('EMAIL').confirmedAt).toBeNull();
       expect(await service.isChallengeRequired(USER)).toBe(false); // dormant until confirmed
@@ -181,14 +209,53 @@ describe('MfaService', () => {
       smsEnabled = false;
       await expect(service.beginDeliveredEnrol(USER, 'SMS', '9876543210'))
         .rejects.toThrow(/SMS delivery is not configured/i);
-      expect(sms.send).not.toHaveBeenCalled();
+      expect(sms.sendNow).not.toHaveBeenCalled();
       expect(getRow('SMS')).toBeNull();
     });
 
-    it('SMS enrol sends when configured', async () => {
+    /** A code the person is waiting for that never left is a refusal, not "sent". */
+    it('email enrol refuses when the email did not go', async () => {
+      email.sendNow.mockResolvedValueOnce({ sent: false, error: 'transport off', receipt: { id: null, status: 'FAILED', to: 'x' } });
+      await expect(service.beginDeliveredEnrol(USER, 'EMAIL', 'alice@example.com'))
+        .rejects.toThrow(/Could not send the code/i);
+      expect(cacheStore.has(`mfa:enrol:${USER}:EMAIL`)).toBe(true); // stashed, but unusable without the email
+    });
+
+    /**
+     * Sent now, through `SmsService`, as the registered `mfa-code` template: under DLT a text that is
+     * not a registered template is refused by the operator, and a queued code would answer "sent"
+     * before anybody knew whether it would be.
+     */
+    it('SMS enrol sends the code now through the SMS service, as the registered template', async () => {
       const res = await service.beginDeliveredEnrol(USER, 'SMS', '9876543210');
-      expect(sms.send).toHaveBeenCalledTimes(1);
+      expect(sms.sendNow).toHaveBeenCalledTimes(1);
+      expect(sms.sendNow).toHaveBeenCalledWith({
+        kind: 'MFA_CODE', to: '9876543210', requestedBy: USER, entityType: 'USER', entityId: USER,
+        // Their name travels with the send, so `{{name}}` reads as a name in whatever wording is registered.
+        recipientName: 'Ramesh Kumar',
+        content: { template: 'mfa-code', data: { code: lastCode, validMinutes: '5' } },
+      });
+      expect(lastCode).toMatch(/^\d{6}$/);
+      expect(sms.queue).not.toHaveBeenCalled();
       expect(res.sentTo).toBe('********10');
+    });
+
+    /** `sendNow` answers `{ sent: false }` rather than throwing; that must read as a refusal. */
+    it('SMS enrol refuses when the text did not go', async () => {
+      sms.sendNow.mockResolvedValueOnce({ sent: false, error: 'gateway refused', receipt: { id: null, status: 'FAILED', to: 'x' } });
+      await expect(service.beginDeliveredEnrol(USER, 'SMS', '9876543210'))
+        .rejects.toThrow(/Could not send the code/i);
+    });
+
+    it('never writes the code into a log line, whichever channel carries it', async () => {
+      const warn = jest.spyOn((service as any).logger, 'warn');
+      sms.sendNow.mockRejectedValueOnce(new Error('socket hang up'));
+      await expect(service.beginDeliveredEnrol(USER, 'SMS', '9876543210')).rejects.toThrow(/Could not send the code/i);
+      const stashed = cacheStore.get(`mfa:enrol:${USER}:SMS`);
+      expect(stashed).toEqual({ hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      const code = sms.sendNow.mock.calls[0][0].content.data.code;
+      for (const call of warn.mock.calls) expect(call.join(' ')).not.toContain(code);
+      warn.mockRestore();
     });
 
     it('email confirm activates with the sent code and rejects a wrong one', async () => {
@@ -215,7 +282,11 @@ describe('MfaService', () => {
     it('sends and returns a hash + masked destination for a confirmed email factor', async () => {
       rows.push({ userId: USER, type: 'EMAIL', secret: 'bob@example.com', confirmedAt: new Date() });
       const res = await service.sendLoginCode(USER, 'EMAIL');
-      expect(email.send).toHaveBeenCalledTimes(1);
+      expect(email.sendNow).toHaveBeenCalledTimes(1);
+      expect(email.sendNow).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'MFA_CODE', to: 'bob@example.com',
+        content: { template: 'mfa-code', data: expect.objectContaining({ purpose: 'sign in' }) },
+      }));
       expect(res.sentTo).toBe('b**@example.com');
       expect(res.codeHash).toMatch(/^[0-9a-f]{64}$/); // opaque SHA-256, never the code itself
       expect(res.expiresAt).toBeGreaterThan(Date.now());
@@ -225,10 +296,47 @@ describe('MfaService', () => {
       await expect(service.sendLoginCode(USER, 'EMAIL')).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    it('refuses, and records no code sent, when the email did not go', async () => {
+      rows.push({ userId: USER, type: 'EMAIL', secret: 'bob@example.com', confirmedAt: new Date() });
+      email.sendNow.mockResolvedValueOnce({ sent: false, error: 'refused', receipt: { id: null, status: 'FAILED', to: 'x' } });
+      await expect(service.sendLoginCode(USER, 'EMAIL')).rejects.toThrow(/Could not send the code/i);
+      expect(audit.recordEventSafe).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'MFA_CODE_SENT' }));
+    });
+
     it('refuses SMS when the provider is not configured', async () => {
       rows.push({ userId: USER, type: 'SMS', secret: '9876543210', confirmedAt: new Date() });
       smsEnabled = false;
-      await expect(service.sendLoginCode(USER, 'SMS')).rejects.toThrow(/not configured/i);
+      await expect(service.sendLoginCode(USER, 'SMS')).rejects.toThrow('SMS delivery is not configured on this server.');
+      expect(sms.sendNow).not.toHaveBeenCalled();
+    });
+
+    it('sends an SMS login code now through the SMS service, and hands back only its hash', async () => {
+      rows.push({ userId: USER, type: 'SMS', secret: '9876543210', confirmedAt: new Date() });
+      const res = await service.sendLoginCode(USER, 'SMS');
+      expect(sms.sendNow).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'MFA_CODE', to: '9876543210', entityType: 'USER', entityId: USER,
+        content: { template: 'mfa-code', data: { code: lastCode, validMinutes: '5' } },
+      }));
+      expect(JSON.stringify(res)).not.toContain(lastCode as string);
+      expect(res.sentTo).toBe('********10');
+    });
+
+    it('refuses an SMS login code the gateway did not take', async () => {
+      rows.push({ userId: USER, type: 'SMS', secret: '9876543210', confirmedAt: new Date() });
+      sms.sendNow.mockResolvedValueOnce({ sent: false, error: 'refused', receipt: { id: null, status: 'FAILED', to: 'x' } });
+      await expect(service.sendLoginCode(USER, 'SMS')).rejects.toThrow(/Could not send the code/i);
+    });
+  });
+
+  /**
+   * The account screen offers "Text message (SMS)" from this. Without it the person could type a
+   * number and only then learn SMS was never possible here.
+   */
+  describe('status — whether SMS can be offered at all', () => {
+    it('reports smsAvailable from the SMS service', async () => {
+      expect((await service.status(USER)).smsAvailable).toBe(true);
+      smsEnabled = false;
+      expect((await service.status(USER)).smsAvailable).toBe(false);
     });
   });
 

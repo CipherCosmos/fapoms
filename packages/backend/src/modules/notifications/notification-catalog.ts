@@ -161,8 +161,13 @@ const IN_APP = [NotificationChannel.IN_APP];
  * google-services.json). Over-notification was a measured production bug twice; routine
  * flow-following events must never grow an EMAIL channel. Email reaches internal users only —
  * assayer recipients on these types are unaffected.
+ *
+ * Named for what they hold rather than "all": SMS is a channel too, and no set here includes it.
+ * Every shipped event starts with SMS off — a text costs money per message and arrives on a
+ * personal phone — so it reaches anyone only once an administrator ticks it for that one event in
+ * Notification Rules (an override in `notification_settings`, not a change to this file).
  */
-const ALL_CHANNELS = [NotificationChannel.IN_APP, NotificationChannel.PUSH, NotificationChannel.EMAIL];
+const IN_APP_PUSH_AND_EMAIL = [NotificationChannel.IN_APP, NotificationChannel.PUSH, NotificationChannel.EMAIL];
 const IN_APP_AND_EMAIL = [NotificationChannel.IN_APP, NotificationChannel.EMAIL];
 
 /**
@@ -300,7 +305,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.CRITICAL,
     roles: OPS,
     special: ['ASSIGNED_ASSAYER'],
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Assignment cancelled',
     body: 'Your audit at ${branchName} on ${scheduledDate} has been cancelled. Reason: ${reason}',
     link: '/assignments?id=${assignmentId}',
@@ -316,7 +321,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
    * This is the failure `ASSIGNMENT_CANCELLED` was written to prevent, in a path that had no
    * equivalent. Someone who accepted an audit and planned their day around it is told nothing,
    * keeps it on their schedule, and drives to a branch that is no longer expecting them. CRITICAL
-   * and every channel for exactly that reason: it has to reach a phone, not a bell nobody opens.
+   * and in-app, push and email for exactly that reason: it has to reach a phone, not a bell nobody opens.
    *
    * Addressed to the assayer alone. Operations gets `ASSIGNMENT_REASSIGNED` below, written in the
    * third person, because a desk reading "your audit" about somebody else's work is the defect
@@ -327,7 +332,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.CRITICAL,
     roles: [],
     special: ['ASSIGNED_ASSAYER'],
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Assignment reassigned',
     body: 'The audit at ${branchName} on ${scheduledDate} has been reassigned to another assayer and is no longer yours. Reason: ${reason}',
     link: '/assignments',
@@ -357,7 +362,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'SLA breached',
     body: '${branchName} has breached its ${slaType} SLA and needs attention.',
     link: '/assignments?id=${assignmentId}',
@@ -367,7 +372,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Assignment escalated',
     body: '${branchName} has been marked critical. ${reason}',
     link: '/assignments?id=${assignmentId}',
@@ -428,7 +433,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     roles: OPS,
     fallbackPermissions: ['PLANNING:VIEW:ORGANIZATION'],
     special: ['ASSIGNED_ASSAYER'],
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Offer expired',
     body: '${branchName} was not answered in time and has been withdrawn automatically.',
     link: '/planning',
@@ -653,7 +658,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Field incident reported',
     body: '${severity} incident at ${branchName}: ${description}',
     link: '/assignments?id=${assignmentId}',
@@ -677,7 +682,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
     fallbackPermissions: ['PLANNING:VIEW:ORGANIZATION'],
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Branch cannot be covered',
     body: '${branchName} has no available assayer and needs a decision.',
     link: '/planning',
@@ -767,7 +772,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.HIGH,
     roles: [],
     special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Ready to invoice',
     body: 'You have ${count} completed audits ready to invoice. Review and submit in the app.',
     link: '/earnings',
@@ -790,7 +795,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.HIGH,
     roles: [],
     special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Invoice approved',
     body: 'Your invoice ${invoiceNumber} (${count} audits) has been approved. Your earnings are updated in the app.',
     link: '/earnings',
@@ -1144,7 +1149,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.CRITICAL,
     scope: 'PLATFORM',
     roles: COMPLIANCE,
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Security incident raised',
     body: '${severity} ${category} incident raised: "${title}". The CERT-In 6-hour reporting clock is running.',
     link: '/admin/compliance',
@@ -1161,7 +1166,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.CRITICAL,
     scope: 'PLATFORM',
     roles: COMPLIANCE,
-    channels: ALL_CHANNELS,
+    channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Statutory reporting deadline missed',
     body: '"${title}" has missed its ${clockName} deadline and still has not been reported.',
     link: '/admin/compliance',

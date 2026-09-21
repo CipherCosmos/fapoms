@@ -20,11 +20,13 @@
  * api writes  : the full commercial loop — assignments, completion, payables, invoices.
  *               BOOKS REAL MONEY.
  * consumes    : project-branches, permanently.
- * gate        : none of its own — it does not use _lib.mjs.
+ * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs
+ *               (postAndAwait), none of its gates.
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
 import { createRequire } from 'node:module';
+import { postAndAwait, JOB_STATUS, describeJobOutcome } from './_lib.mjs';
 const require = createRequire(
   (process.env.AC_REPO || '/Users/deepstacker/WorkSpace/dupcq/gssAutomation') + '/package.json');
 const { Client } = require('pg');
@@ -51,6 +53,14 @@ const call = async (token, method, path, body) => {
   });
   return { status: res.status, body: await res.json().catch(() => null) };
 };
+
+/**
+ * Payout approve and pay answer 202 and a job id since 2026-09-17; the `{ done, refused }` body is
+ * the finished run's `result`. `postAndAwait` waits for the run, so the database reads that follow
+ * see what it did — on the 202 alone the payable would still read PENDING, whoever pressed.
+ */
+const billingRun = (who, path, body) => postAndAwait(path, body, JOB_STATUS.billingBulk,
+  { token: who.token, api: API, send: (p, b) => call(who.token, 'POST', p, b) });
 
 const signIn = async (username, seedPw, changePath) => {
   let r = await call(null, 'POST', '/auth/login', { username, password: PW });
@@ -250,27 +260,33 @@ const signIn = async (username, seedPw, changePath) => {
   rec('EXC-5', afterReplay.length === 1, `a redelivered worker event books nothing extra (${afterReplay.length} payable)`);
 
   // ── Finance under segregation of duties ─────────────────────────────────────────────────────
-  const bookerApprove = await call(exec.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const bookerApprove = await billingRun(exec, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
   let p = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [pay.id]);
-  const reason = (bookerApprove.body?.data?.refused?.[0]?.reason ?? bookerApprove.body?.message ?? '').toString();
+  // A duties refusal is a per-row outcome: it is in the finished run's `refused`, not an HTTP status.
+  const reason = (bookerApprove.result?.refused?.[0]?.reason ?? bookerApprove.r.body?.message ?? '').toString();
   rec('SOD-1', p.status === 'PENDING' && /duti|approve/i.test(reason),
-    `whoever booked it cannot approve it — "${reason.slice(0, 72)}"`);
+    `whoever booked it cannot approve it — "${reason.slice(0, 72)}" (${describeJobOutcome(bookerApprove)})`);
 
-  await call(admin.token, 'POST', '/billing-engine/payouts/approve', { payableIds: [pay.id] });
+  const approved = await billingRun(admin, '/billing-engine/payouts/approve', { payableIds: [pay.id] });
   p = await one(`SELECT status, destination_verified_source FROM assayer_payables WHERE id=$1`, [pay.id]);
-  rec('SOD-2', p.status === 'APPROVED', `a second person approves it (${p.status})`);
+  rec('SOD-2', p.status === 'APPROVED', `a second person approves it (${p.status}; ${describeJobOutcome(approved)})`);
 
   const ref = `FINAL-${stamp}`;
-  const approverPays = await call(admin.token, 'POST', '/billing-engine/payouts/pay', { payableIds: [pay.id], paymentReference: ref, method: 'NEFT' });
+  const approverPays = await billingRun(admin, '/billing-engine/payouts/pay', { payableIds: [pay.id], paymentReference: ref, method: 'NEFT' });
   p = await one(`SELECT status FROM assayer_payables WHERE id=$1`, [pay.id]);
-  rec('SOD-3', p.status !== 'PAID', `the approver cannot also pay (${approverPays.status}, still ${p.status})`);
+  // `result` required: a run that failed or never finished also leaves the payable unpaid.
+  rec('SOD-3', p.status !== 'PAID' && !!approverPays.result,
+    `the approver cannot also pay (${describeJobOutcome(approverPays)}, still ${p.status})`);
 
-  await call(admin2.token, 'POST', '/billing-engine/payouts/pay', { payableIds: [pay.id], paymentReference: ref, method: 'NEFT' });
-  await call(admin2.token, 'POST', '/billing-engine/payouts/pay', { payableIds: [pay.id], paymentReference: ref, method: 'NEFT' });
+  // The second press goes in only after the first run has FINISHED (billingRun waits), so it is a
+  // real repeat with its own job rather than a join onto the first run while it is in flight.
+  const pay1 = await billingRun(admin2, '/billing-engine/payouts/pay', { payableIds: [pay.id], paymentReference: ref, method: 'NEFT' });
+  const pay2 = await billingRun(admin2, '/billing-engine/payouts/pay', { payableIds: [pay.id], paymentReference: ref, method: 'NEFT' });
   p = await one(`SELECT status, paid_amount FROM assayer_payables WHERE id=$1`, [pay.id]);
   const payments = await one(`SELECT count(*)::int c FROM billing_payments WHERE payment_reference=$1 AND is_active`, [ref]);
-  rec('SOD-4', p.status === 'PAID' && payments.c === 1,
-    `a third person pays it, and paying twice is one payment (${p.status}, ${payments.c} payment row, ${p.paid_amount})`);
+  rec('SOD-4', p.status === 'PAID' && payments.c === 1 && !!pay2.result && pay2.accepted?.deduplicated === false,
+    `a third person pays it, and paying twice is one payment (${p.status}, ${payments.c} payment row, ${p.paid_amount}; `
+    + `first ${describeJobOutcome(pay1)}; second ${describeJobOutcome(pay2)})`);
 
   // The money, recomputed rather than read back from what wrote it.
   const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;

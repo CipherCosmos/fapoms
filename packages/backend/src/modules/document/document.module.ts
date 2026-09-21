@@ -7,6 +7,8 @@ import { DocumentController } from './document.controller';
 import { DocumentDispatchWorker } from './document-dispatch.worker';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
+import { DocumentDispatchJobsService } from './document-dispatch-jobs.service';
+import { DOCUMENT_DISPATCH_JOB, DOCUMENT_DISPATCH_QUEUE } from './document-dispatch-jobs.contract';
 import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable-schedules';
 import { DocumentEntity } from './document.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
@@ -24,7 +26,17 @@ import { AssignmentModule } from '../assignment/assignment.module';
   imports: [
     // BranchEntity: dispatching to a branch writes the address back so the desk types it once.
     TypeOrmModule.forFeature([DocumentEntity, AssessmentEntity, ProjectBranchEntity, AssignmentEntity, BranchEntity]),
-    BullModule.registerQueue({ name: 'document-dispatch' }),
+    BullModule.registerQueue({
+      name: DOCUMENT_DISPATCH_QUEUE,
+      /*
+        A job whose worker died mid-run (deploy, out-of-memory, lost lock) is FAILED, not restarted.
+        Bull's default re-runs a stalled job once from the top, and a batch restarted from the top
+        re-sends whatever mail had gone out before the status write that would have stopped it.
+        `attempts: 1` alone does not stop that — stalled recovery is a separate counter. The hourly
+        auto-dispatch loses nothing by it: the next tick re-scans everything still UPLOADED.
+      */
+      settings: { maxStalledCount: 0 },
+    }),
     NotificationsModule,
     StorageModule,
     OcrModule,
@@ -32,13 +44,19 @@ import { AssignmentModule } from '../assignment/assignment.module';
     forwardRef(() => AssignmentModule),
   ],
   controllers: [DocumentController],
-  providers: [DocumentService, DocumentDispatchWorker, DocumentAccessTokenService, ChunkedUploadService],
+  providers: [
+    DocumentService,
+    DocumentDispatchWorker,
+    DocumentDispatchJobsService,
+    DocumentAccessTokenService,
+    ChunkedUploadService,
+  ],
   exports: [DocumentService, DocumentAccessTokenService],
 })
 export class DocumentModule implements OnModuleInit {
   private readonly logger = new Logger(DocumentModule.name);
 
-  constructor(@InjectQueue('document-dispatch') private readonly dispatchQueue: Queue) {}
+  constructor(@InjectQueue(DOCUMENT_DISPATCH_QUEUE) private readonly dispatchQueue: Queue) {}
 
   // Hourly rather than once a day. The worker dispatches anything whose audit date is on or
   // before tomorrow (spec §12.6), so an hourly sweep still honours the "1 day before" rule
@@ -53,6 +71,6 @@ export class DocumentModule implements OnModuleInit {
     // DocumentDispatchWorker has existed and been correct for some time, but nothing ever
     // enqueued to this queue — so auto-dispatch had never once run. This is the missing
     // producer. Non-blocking and non-fatal: see ensureRepeatableSchedules.
-    ensureRepeatableSchedules(this.dispatchQueue, [{ name: 'auto-dispatch', cron: DocumentModule.CRON }], this.logger);
+    ensureRepeatableSchedules(this.dispatchQueue, [{ name: DOCUMENT_DISPATCH_JOB.AUTO_DISPATCH, cron: DocumentModule.CRON }], this.logger);
   }
 }

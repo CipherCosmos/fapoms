@@ -98,6 +98,32 @@ describe('RegionGuardService', () => {
   });
 
   /**
+   * The bulk roster routes asked `assertAssayerInScope` once per id — 500 round trips before a batch
+   * was accepted. The batch form must give every id the same verdict in one statement, and still
+   * refuse the whole batch for a single out-of-region person.
+   */
+  describe('a whole selection of assayers at once', () => {
+    it('refuses the batch when any one person is in another region, in a single query', async () => {
+      dataSource.query.mockResolvedValue([{ id: 'a1', region: Region.WEST }, { id: 'a2', region: Region.SOUTH }]);
+      await expect(guard.assertAssayersInScope(['a1', 'a2'], west)).rejects.toThrow(ForbiddenException);
+      expect(dataSource.query).toHaveBeenCalledTimes(1);
+      expect(dataSource.query.mock.calls[0][1]).toEqual([['a1', 'a2']]);
+    });
+
+    it('allows a batch wholly in the held region', async () => {
+      dataSource.query.mockResolvedValue([{ id: 'a1', region: Region.WEST }, { id: 'a2', region: Region.WEST }]);
+      await expect(guard.assertAssayersInScope(['a1', 'a2'], west)).resolves.toBeUndefined();
+    });
+
+    it('judges an id with no row exactly as the single check does', async () => {
+      dataSource.query.mockResolvedValue([]);
+      const single = guard.assertAssayerInScope('00000000-0000-4000-8000-000000000001', west).then(() => 'ok', (e) => e.constructor.name);
+      const batch = guard.assertAssayersInScope(['00000000-0000-4000-8000-000000000001'], west).then(() => 'ok', (e) => e.constructor.name);
+      expect(await batch).toBe(await single);
+    });
+  });
+
+  /**
    * The assayer's child rows.
    *
    * Sixteen routes on `assayer.controller.ts` were keyed on one of these ids — a commercial

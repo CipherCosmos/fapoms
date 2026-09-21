@@ -1,5 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
-import { memoryStorage } from 'multer';
+import { diskStorage, memoryStorage } from 'multer';
+import { promises as fsp } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { DEFAULT_MAX_UPLOAD_MB, MAX_RESUMABLE_UPLOAD_MB, SCAN_UPLOAD_MIME_TYPES } from '@fapoms/shared';
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
@@ -95,13 +98,50 @@ export const MAX_RESUMABLE_UPLOAD_BYTES =
  * pattern actually drifting apart, not staying in sync). One factory, called with the ceiling that
  * differs per route, replaces the hand-copied object literal.
  *
- * `memoryStorage()` — never disk — is the one thing every call site agreed on regardless: nothing
- * in this codebase should let multer buffer an upload to the container's local filesystem, since
- * `assertUploadAllowed` and the malware scanner both expect an in-memory `Buffer`.
+ * `memoryStorage()` is the default because `FileScanInterceptor`, the shared malware scan every
+ * multipart route relies on, scans `file.buffer` — a disk-backed file has none, and would pass that
+ * interceptor unscanned. The one exception is `diskUploadMulterOptions` below, which must be paired
+ * with `DiskUploadScanInterceptor` for exactly that reason.
  */
 export function uploadMulterOptions(opts: { maxBytes: number; maxFiles?: number }) {
   return {
     storage: memoryStorage(),
+    limits: {
+      fileSize: opts.maxBytes,
+      ...(opts.maxFiles !== undefined ? { files: opts.maxFiles } : {}),
+    },
+  };
+}
+
+/**
+ * Where a disk-backed upload waits while its request runs. Its own directory, so a stray file is
+ * recognisably ours, and owner-only, because these are bank customer packets before encryption.
+ */
+export const DISK_UPLOAD_TMP_DIR = join(tmpdir(), 'fapoms-upload-batches');
+
+/**
+ * Multer options that write each file to a temp file instead of holding it in memory.
+ *
+ * For a route whose worst case does not fit in the API's memory: `POST /documents/upload-generated-batch`
+ * takes up to 100 files of up to 50 MB, which in memory is up to 5 GB against a 1.5 GB container
+ * limit — one large batch could get the API killed for every user. On disk the batch costs disk, and
+ * memory stays at one file at a time.
+ *
+ * MUST be used with `DiskUploadScanInterceptor` directly after the multer interceptor. That
+ * interceptor is what scans these files (the shared `FileScanInterceptor` cannot see them) and what
+ * deletes them once the request ends. Multer's default file name is 32 random hex characters, so the
+ * uploader's own file name — often a customer's name — never reaches the disk.
+ */
+export function diskUploadMulterOptions(opts: { maxBytes: number; maxFiles?: number }) {
+  return {
+    storage: diskStorage({
+      // Created on first use rather than at boot, so a missing temp directory is one refused upload,
+      // not an API that will not start.
+      destination: (_req, _file, cb) => {
+        fsp.mkdir(DISK_UPLOAD_TMP_DIR, { recursive: true, mode: 0o700 })
+          .then(() => cb(null, DISK_UPLOAD_TMP_DIR), (err: Error) => cb(err, DISK_UPLOAD_TMP_DIR));
+      },
+    }),
     limits: {
       fileSize: opts.maxBytes,
       ...(opts.maxFiles !== undefined ? { files: opts.maxFiles } : {}),

@@ -55,12 +55,21 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
       center,
       zoom,
       zoomControl: true,
-      attributionControl: false,
       scrollWheelZoom: true,
     });
 
+    /**
+     * The attribution is not decoration — it is the licence.
+     *
+     * These tiles and the data behind them are OpenStreetMap, carried under ODbL, which requires
+     * the credit to be visible wherever the data is shown. This map had `attributionControl:
+     * false` and a tile layer with no `attribution`, so it displayed OSM data with the credit
+     * suppressed. `InteractivePlanningMap` already credits it the same way; this is the one
+     * surface that did not.
+     */
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
     }).addTo(map);
 
     if (latitude != null && longitude != null) {

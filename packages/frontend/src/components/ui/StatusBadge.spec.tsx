@@ -22,6 +22,13 @@ import {
   UserStatus,
 } from '@fapoms/shared';
 
+/**
+ * These expectations were updated when the registry stopped keeping its own spelling of each
+ * status. They asserted the SECOND copy — "Issued (Sent)", "Approved (Frozen)", "Checked In on
+ * Site", "Document Check", "Validation Approved" — none of which any other screen or the mobile
+ * app ever showed. The words now come from `@fapoms/shared`, so what a badge renders is what a
+ * user reads everywhere else for that same row.
+ */
 describe('StatusBadge', () => {
   it('renders the label it is given', () => {
     render(<StatusBadge color="#fff" bg="#333" label="Scheduled" />);
@@ -64,13 +71,13 @@ describe('StatusBadge', () => {
       expect(screen.getByText('Invited')).toBeInTheDocument();
 
       rerender(<StatusBadge domain="assayerLifecycle" status={AssayerLifecycleStatus.DOCUMENT_VERIFICATION} />);
-      expect(screen.getByText('Document Check')).toBeInTheDocument();
+      expect(screen.getByText('Document Verification')).toBeInTheDocument();
 
       rerender(<StatusBadge domain="assayerLifecycle" status={AssayerLifecycleStatus.BACKGROUND_VERIFICATION} />);
-      expect(screen.getByText('Background Check')).toBeInTheDocument();
+      expect(screen.getByText('Background Verification')).toBeInTheDocument();
 
       rerender(<StatusBadge domain="assayerLifecycle" status={AssayerLifecycleStatus.TRAINING} />);
-      expect(screen.getByText('In Training')).toBeInTheDocument();
+      expect(screen.getByText('Training')).toBeInTheDocument();
     });
 
     it('resolves assayerOperational status', () => {
@@ -90,7 +97,7 @@ describe('StatusBadge', () => {
 
     it('resolves assignment domain status automatically', () => {
       render(<StatusBadge domain="assignment" status={AssignmentStatus.CHECKED_IN} />);
-      expect(screen.getByText('Checked In on Site')).toBeInTheDocument();
+      expect(screen.getByText('Checked In')).toBeInTheDocument();
     });
 
     it('resolves empanelment domain status automatically', () => {
@@ -125,10 +132,10 @@ describe('StatusBadge', () => {
       expect(screen.getByText('Unbilled')).toBeInTheDocument();
 
       rerender(<StatusBadge domain="invoice" status={InvoiceStatus.ISSUED} />);
-      expect(screen.getByText('Issued (Sent)')).toBeInTheDocument();
+      expect(screen.getByText('Sent')).toBeInTheDocument();
 
       rerender(<StatusBadge domain="assayerPayable" status={AssayerPayableStatus.APPROVED} />);
-      expect(screen.getByText('Approved (Frozen)')).toBeInTheDocument();
+      expect(screen.getByText('Approved')).toBeInTheDocument();
 
       rerender(<StatusBadge domain="assayerInvoice" status={AssayerInvoiceStatus.SUBMITTED} />);
       expect(screen.getByText('Submitted')).toBeInTheDocument();
@@ -151,7 +158,7 @@ describe('StatusBadge', () => {
 
     it('resolves validation status', () => {
       render(<StatusBadge domain="validation" status={ValidationStatus.APPROVED} />);
-      expect(screen.getByText('Validation Approved')).toBeInTheDocument();
+      expect(screen.getByText('Approved')).toBeInTheDocument();
     });
 
     it('resolves schedule status', () => {

@@ -1,16 +1,19 @@
 import {
   Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe,
-  ForbiddenException, BadRequestException, HttpCode, HttpStatus,
+  ForbiddenException, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsString, IsNotEmpty, IsOptional, IsNumber, IsEnum, IsArray, IsUUID, IsBoolean, IsBooleanString,
-  ArrayNotEmpty, Min,
+  ArrayNotEmpty, ArrayMaxSize, Min, MaxLength,
 } from 'class-validator';
 import { BillingEngineService } from './billing-engine.service';
 import { AssayerInvoiceService } from './assayer-invoice.service';
 import { BillingJobsService } from './billing-jobs.service';
+import { BillingBulkJobsService } from './billing-bulk-jobs.service';
+import { BILLING_BULK_MAX_PAYOUTS } from './billing-bulk-jobs.contract';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback, hasAnyRole } from '../auth/guards';
@@ -19,9 +22,29 @@ import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableS
 
 // ---- DTOs ---------------------------------------------------------------
 
+/**
+ * The ceiling is the size one queued approve or pay run is sized for (`BILLING_BULK_MAX_PAYOUTS`,
+ * whose note says why the web never reaches it). Refused here, by validation, so an oversized
+ * batch is a 400 in the request rather than a run that times out on the queue.
+ */
 class PayoutIdsDto {
-  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
+  @IsArray() @ArrayNotEmpty()
+  @ArrayMaxSize(BILLING_BULK_MAX_PAYOUTS, { message: `Act on at most ${BILLING_BULK_MAX_PAYOUTS} payouts at a time.` })
+  @IsUUID('4', { each: true })
   payableIds: string[];
+
+  /**
+   * Why a payout is being approved without the assayer having confirmed it.
+   *
+   * The normal road is that the assayer is sent a bill, confirms the amounts, and approving THAT
+   * bill approves its payouts — one gesture, with the assayer's agreement on the record. Some
+   * assayers cannot walk it: no smartphone, an app that will not install, someone who has left.
+   * Approving their payouts directly stays possible, because refusing to would mean refusing to
+   * pay people who did the work — but it is the exception, and an exception with no recorded
+   * reason is indistinguishable from the rule six months later. Optional, because a payout that
+   * came off an approved bill was already consented to and needs no excuse.
+   */
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
 class PayPayoutsDto extends PayoutIdsDto {
@@ -82,6 +105,18 @@ class PayoutsQuery {
   @IsOptional() @IsEnum(AssayerPayableStatus) status?: AssayerPayableStatus;
   /** `?onHold=true` narrows to held payouts; omit for both. */
   @IsOptional() @IsBooleanString() onHold?: string;
+  /**
+   * `?onBill=true` narrows to payouts riding an assayer bill, `false` to those on none; omit for
+   * both.
+   *
+   * Status alone cannot answer the question the desk actually asks. "Due" covers two piles that
+   * call for opposite handling: work the assayer has been asked to confirm (approving it per-row
+   * is REFUSED — `approveOne` throws "awaiting assayer invoice …") and work no bill has reached
+   * yet. The overview has reported them apart as `inClaimReview` / `unbilled` since it was
+   * written; this is the filter that lets a list do the same, so the pay screen can offer the
+   * approve button on exactly the rows the server will accept it for.
+   */
+  @IsOptional() @IsBooleanString() onBill?: string;
   @IsOptional() @Type(() => Number) @IsNumber() page?: number;
   @IsOptional() @Type(() => Number) @IsNumber() limit?: number;
 }
@@ -118,10 +153,9 @@ class TdsReportQuery {
   @IsOptional() @IsString() to?: string;
 }
 
-/** `{assayerId}` invites one assayer; `{all: true}` runs the bulk cadence round. */
+/** Invites one assayer. The bulk cadence round is its own queued route, `assayer-invoices/invite-all`. */
 class InviteAssayerInvoiceDto {
-  @IsOptional() @IsUUID() assayerId?: string;
-  @IsOptional() @IsBoolean() all?: boolean;
+  @IsUUID() assayerId: string;
 }
 
 class AssayerInvoicesQuery {
@@ -171,6 +205,7 @@ export class BillingEngineController {
     private readonly assayerInvoices: AssayerInvoiceService,
     private readonly jobs: BillingJobsService,
     private readonly regionGuard: RegionGuardService,
+    private readonly bulkJobs: BillingBulkJobsService,
   ) {}
 
   private userId(req: any): string {
@@ -209,6 +244,7 @@ export class BillingEngineController {
       clientId: q.clientId,
       status: q.status,
       onHold: q.onHold === undefined ? undefined : q.onHold === 'true',
+      onBill: q.onBill === undefined ? undefined : q.onBill === 'true',
       page: q.page,
       limit: q.limit,
     }, scope);
@@ -239,20 +275,47 @@ export class BillingEngineController {
   @Post('payouts/approve')
   @Roles(...DISBURSEMENT_ROLES)
   @RequirePermissions('billing:approve:organization')
-  @ApiOperation({ summary: 'Approve payouts (the one gate before payment)' })
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Start approving payouts (the one gate before payment); poll bulk-jobs/:jobId' })
   async approvePayouts(@Body() dto: PayoutIdsDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertPayablesInScope(dto.payableIds, scope);
-    return await this.service.approvePayouts(dto.payableIds, this.userId(req));
+    /*
+      Accepted, not performed. The per-payable loop used to run here — a transaction each — and at
+      realistic batch sizes it outlived the web client's 30 s: the screen said the approval failed
+      while the server kept approving, and a second press queued the same approvals again. The
+      validation and the region ceiling above still run in the request, so a batch with one
+      out-of-region payable is still refused whole, with nothing queued.
+    */
+    return await this.bulkJobs.enqueueApprovePayouts(dto.payableIds, jobActorFrom(req), dto.reason);
   }
 
   @Post('payouts/pay')
   @Roles(...DISBURSEMENT_ROLES)
   @RequirePermissions('billing:approve:organization')
-  @ApiOperation({ summary: 'Pay approved payouts in full, each as a recorded disbursement' })
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Start paying approved payouts in full, each as a recorded disbursement; poll bulk-jobs/:jobId' })
   async payPayouts(@Body() dto: PayPayoutsDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     const { payableIds, ...payment } = dto;
     await this.regionGuard.assertPayablesInScope(payableIds, scope);
-    return await this.service.payPayouts(payableIds, payment, this.userId(req));
+    // Accepted, not performed — same reason as `approvePayouts` above, and the same ceiling first.
+    return await this.bulkJobs.enqueuePayPayouts(payableIds, payment, jobActorFrom(req));
+  }
+
+  /**
+   * Where an approve, pay or invite-all run has got to, and its result once it is done — the same
+   * `done`/`refused` lists and per-assayer outcomes those routes used to answer with directly.
+   *
+   * Readable only by the person who started it (`assertJobVisibleTo`): Bull's job ids are a
+   * per-queue counter, and the result names payables and assayers. A separate route from
+   * `jobs/:jobId` because this is a separate queue with its own counter — job "3" here is not
+   * job "3" there.
+   */
+  @Get('bulk-jobs/:jobId')
+  @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:view:organization')
+  @ApiOperation({ summary: 'State, progress and result of a billing bulk run (approve, pay, invite-all)' })
+  async bulkJobStatus(@Param('jobId') jobId: string, @Req() req: any) {
+    return await this.bulkJobs.status(jobId, req.user?.id);
   }
 
   @Post('payouts/bank-file')
@@ -347,9 +410,9 @@ export class BillingEngineController {
 
   // ── Assayer invoices (the consent wrapper over payables) ─────────────────
   //
-  // The rollout gate: the feature ships dark behind `billing.assayerInvoicingEnabled`, and
-  // while the flag is off, `assertEnabled()` makes the gated routes answer 404 as if they did
-  // not exist. Gated: the INVITE route (nothing may start a reveal while dark) and BOTH
+  // The gate: `billing.assayerInvoicingEnabled` is ON by default — this is the payment flow —
+  // but where a deployment has switched it off, `assertEnabled()` makes the gated routes answer
+  // 404 as if they did not exist. Gated: the INVITE route (nothing may start a reveal) and BOTH
   // assayer-facing invitation routes (the reveal itself, and submit). Deliberately NOT gated:
   // the ops reads (an empty list is harmless) and approve/cancel — if the flag is ever turned
   // OFF with invoices in flight, ops must still be able to land or cancel them; a gate there
@@ -358,20 +421,35 @@ export class BillingEngineController {
   @Post('assayer-invoices/invite')
   @Roles(...BILLING_ROLES)
   @RequirePermissions('billing:create:organization')
-  @ApiOperation({ summary: 'Invite one assayer ({assayerId}) or every assayer with eligible work ({all: true}) to submit an invoice' })
+  @ApiOperation({ summary: 'Invite one assayer to submit an invoice' })
   async inviteAssayerInvoices(@Body() dto: InviteAssayerInvoiceDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.assayerInvoices.assertEnabled();
-    if (dto.all) {
-      // No single-assayer scope assert here — the SERVICE filters the round to the caller's
-      // regions (assayers.region IN …), so a region desk's "invite everyone" means everyone
-      // they can see, and the per-assayer outcomes never name anyone outside their scope.
-      return await this.assayerInvoices.inviteAll(this.userId(req), scope);
-    }
-    if (!dto.assayerId) {
-      throw new BadRequestException('Pass an assayerId, or {all: true} for the bulk round.');
-    }
     await this.regionGuard.assertAssayerInScope(dto.assayerId, scope);
     return await this.assayerInvoices.invite(dto.assayerId, this.userId(req));
+  }
+
+  /**
+   * The bulk cadence round: one invitation per assayer with eligible work.
+   *
+   * It was `{all: true}` on the route above and ran inside the request — about 1,200 assayers, a
+   * transaction and a notification each, far past the web client's 30 s. It is its own route now
+   * because it answers differently: 202 and a job id, where inviting one assayer is one
+   * transaction and still answers with the invoice.
+   *
+   * The rollout gate is checked here, so a dark deployment is still an immediate 404 with nothing
+   * queued (and the worker checks it again when the run starts). There is no per-assayer region
+   * assertion because there is no assayer id: the ceiling resolved here is carried into the job,
+   * and the round's own query narrows to it (assayers.region), so a region desk's "invite
+   * everyone" means everyone they can see and the outcomes never name anyone outside it.
+   */
+  @Post('assayer-invoices/invite-all')
+  @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:create:organization')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Start inviting every assayer with eligible work to submit an invoice; poll bulk-jobs/:jobId' })
+  async inviteAllAssayerInvoices(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.assayerInvoices.assertEnabled();
+    return await this.bulkJobs.enqueueInviteAllAssayerInvoices(scope, jobActorFrom(req));
   }
 
   @Get('assayer-invoices')

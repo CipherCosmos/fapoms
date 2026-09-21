@@ -219,14 +219,14 @@ export const one = async (q, p) => (await sql(q, p))[0] ?? null;
  *   attempts   how many times the request was made. > 1 means the sample was taken under
  *              contention, which is worth knowing even though requestMs is clean.
  */
-export async function req(path, { method = 'GET', token, body, budgetMs = 90_000 } = {}) {
+export async function req(path, { method = 'GET', token, body, budgetMs = 90_000, api = API } = {}) {
   const deadline = Date.now() + budgetMs;
   let waitedMs = 0;
   let attempts = 0;
   for (;;) {
     attempts++;
     const sent = Date.now();
-    const r = await fetch(API + path, {
+    const r = await fetch(api + path, {
       method,
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: body ? JSON.stringify(body) : undefined,
@@ -249,6 +249,180 @@ export async function req(path, { method = 'GET', token, body, budgetMs = 90_000
     let j = null; try { j = await r.json(); } catch {}
     return { status: r.status, body: j, msg: j?.message ?? j?.error ?? null, requestMs, waitedMs, attempts };
   }
+}
+
+// ── accepted-then-polled routes ───────────────────────────────────────────────────────────────
+
+/**
+ * Where to poll each route that answers 202 and a job id instead of its result.
+ *
+ * On 2026-09-17 the slow bulk writes stopped doing their work inside the request. The web client
+ * gives up at 30 s and the server did not, so the screen reported a failure for work still under
+ * way, and a second press started it again. Those routes now answer 202 `{ jobId, deduplicated }`
+ * (inside the usual `{ success, data }` envelope), and the body they used to answer with is the
+ * finished job's `result`.
+ *
+ * What moved and what did not, because a probe asserting a refusal has to know which it is:
+ *
+ *   still immediate   validation (bad target status, over-long reason, > 500 ids, unknown fields),
+ *                     the role gate, the region ceiling. 400/403/404, and NOTHING is queued.
+ *   inside the result per-row refusals — a duties conflict, a held payout, a reason-gated hop.
+ *                     The POST says 202; the refusal is in `result.refused` / `result.skipped`.
+ *
+ * A job is readable ONLY by the account that started it (`assertJobVisibleTo`: anyone else gets a
+ * 404, administrators included), so poll with the same account's token.
+ *
+ * `deduplicated: true` means an identical run by the same account was still queued or running and
+ * this press joined it — its result IS that run's result. A probe that means "press it again" must
+ * let the first run finish before pressing, or it measures the join rather than the repeat.
+ */
+export const JOB_STATUS = {
+  /** POST /assayers/app-access/bulk, /assayers/bulk/notify, /assayers/bulk/lifecycle */
+  assayerBulk: (jobId) => `/assayers/bulk-jobs/${encodeURIComponent(jobId)}`,
+  /** POST /billing-engine/payouts/approve, /billing-engine/payouts/pay, /billing-engine/assayer-invoices/invite-all */
+  billingBulk: (jobId) => `/billing-engine/bulk-jobs/${encodeURIComponent(jobId)}`,
+  /**
+   * POST /planning/coverage-plans/:planId/execute (result: the old deploy body plus
+   * `alreadyDeployedCount`), /planning/bulk-offers/jobs, /planning/unable-to-cover/jobs,
+   * /planning/projects/:projectId/coverage-plan/versions/jobs
+   */
+  planningWrite: (jobId) => `/planning/write-jobs/${encodeURIComponent(jobId)}`,
+  /** POST /documents/dispatch-batch (result: `{ dispatched, failed: [{ documentId, reason }] }`) */
+  documentDispatch: (jobId) => `/documents/dispatch-batch/${encodeURIComponent(jobId)}`,
+  /** POST /assayers/roster/import, the `dryRun` rehearsal included. Reports Bull's raw state names. */
+  rosterImport: (jobId) => `/assayers/roster/import-jobs/${encodeURIComponent(jobId)}`,
+  /** POST /admin/data-reset/execute. Run in-process, not on a queue: a restart loses it (404). */
+  dataReset: (jobId) => `/admin/data-reset/runs/${encodeURIComponent(jobId)}`,
+};
+
+/** A job that did not come to `done`: it failed, ran out of time, or could not be read back. */
+export class JobError extends Error {
+  constructor(message, { jobId = null, statusPath = null, state = null, serverError = null, httpStatus = null } = {}) {
+    super(message);
+    this.name = 'JobError';
+    /** 'failed' | 'timeout' | 'unreadable' | 'not-accepted' — or the last state seen. */
+    this.state = state;
+    this.jobId = jobId;
+    this.statusPath = statusPath;
+    /** The server's own `error` for a failed run — the operator-facing reason, never a stack. */
+    this.serverError = serverError;
+    this.httpStatus = httpStatus;
+  }
+}
+
+/** `awaitJob`'s default patience. A run waits behind other runs on its queue (concurrency 1). */
+export const JOB_TIMEOUT_MS = Number(env.AC_JOB_TIMEOUT_MS) > 0 ? Number(env.AC_JOB_TIMEOUT_MS) : 120_000;
+
+/** Both vocabularies: `describeJob`'s four states, and the roster import's raw Bull states. */
+const JOB_DONE = new Set(['done', 'completed']);
+const JOB_FAILED = new Set(['failed', 'stuck']);
+
+/** The `{ success, data }` envelope, removed once — the same unwrap `login()` does inline. */
+const unwrap = (body) => (
+  body && typeof body === 'object' && typeof body.success === 'boolean' && 'data' in body ? body.data : body);
+/** A token, or a function returning the current one (for probes that renew a session mid-run). */
+const tokenOf = (token) => (typeof token === 'function' ? token() : token);
+const pause = (ms) => new Promise((s) => setTimeout(s, ms));
+
+/**
+ * Poll a job's status route until it is `done` (returns its `result`) or `failed` (throws a
+ * JobError carrying the server's reason). Also throws — as a JobError — when the budget runs out,
+ * or when the status route itself refuses (404: not this account's job, or no longer retained;
+ * 429 for the whole budget: throttled, UNKNOWN).
+ *
+ * The one polling loop in this directory. Probes do not write their own.
+ *
+ *   token      the token of the account that STARTED the job (or a function returning it)
+ *   timeoutMs  overall budget, default JOB_TIMEOUT_MS (env AC_JOB_TIMEOUT_MS, else 120 s)
+ *   pollMs     first interval, growing by half each poll to at most maxPollMs (default 3 s), so a
+ *              quick run answers quickly and a slow one does not eat the per-IP request budget
+ *   api        base URL, for probes that carry their own AC_API rather than this file's
+ */
+export async function awaitJob(statusPath, {
+  token, api = API, timeoutMs = JOB_TIMEOUT_MS, pollMs = 500, maxPollMs = 3_000,
+} = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let interval = pollMs;
+  for (;;) {
+    const r = await req(statusPath, { token: tokenOf(token), api, budgetMs: Math.max(1_000, deadline - Date.now()) });
+    const s = unwrap(r.body);
+    if (r.status < 200 || r.status >= 300 || !s || typeof s.state !== 'string') {
+      throw new JobError(
+        `could not read the job at ${statusPath}: HTTP ${r.status} ${String(r.msg ?? '').slice(0, 160)}`
+        + (r.status === 404 ? ' — a job is readable only by the account that started it, and only while retained' : ''),
+        { statusPath, state: 'unreadable', httpStatus: r.status });
+    }
+    const meta = { jobId: s.jobId ?? null, statusPath, httpStatus: r.status };
+    if (JOB_DONE.has(s.state)) return s.result ?? null;
+    if (JOB_FAILED.has(s.state)) {
+      const why = s.error ?? 'the server reported no reason';
+      throw new JobError(`job ${s.jobId ?? '?'} failed: ${why}`, { ...meta, state: 'failed', serverError: why });
+    }
+    if (Date.now() >= deadline) {
+      const at = s.progress ? ` at "${s.progress.stage ?? ''}" ${s.progress.percent ?? '?'}%` : '';
+      throw new JobError(`job ${s.jobId ?? '?'} was still ${s.state}${at} after ${timeoutMs} ms`,
+        { ...meta, state: 'timeout' });
+    }
+    await pause(Math.min(interval, Math.max(0, deadline - Date.now())));
+    interval = Math.min(Math.round(interval * 1.5), maxPollMs);
+  }
+}
+
+/**
+ * POST to an accepted-then-polled route and wait for the run. Never throws for an OUTCOME — a
+ * request-level refusal and a failed run are both things a probe asserts on — only for a broken
+ * harness (the network, a bad argument). Resolves to:
+ *
+ *   r          the POST's response, exactly as `req` (or `send`) returned it
+ *   status     its HTTP status — 202 when accepted
+ *   accepted   `{ jobId, deduplicated }` when accepted, else null. A 400/403/404 refusal lands
+ *              here as null: it was decided in the request and nothing was queued, so nothing
+ *              is awaited, and the refusal is read from `r` as it always was.
+ *   result     the finished run's result — the body the route used to answer with — else null
+ *   error      a JobError when the run failed, timed out or could not be read back, or when a 2xx
+ *              came back without a job id (a build older than this contract); else null
+ *   throttled  the POST itself was throttled out: UNKNOWN, not a refusal
+ *
+ * `statusPathFor` is a JOB_STATUS entry, or any `(jobId) => path`. `send(path, body)` replaces the
+ * POST for probes with their own request plumbing (re-auth, traffic accounting, throttle markers)
+ * and must resolve to `{ status, body }`; `token` is still what the poll uses, so pass the same
+ * account's. Remaining options go to `awaitJob`.
+ */
+export async function postAndAwait(path, body, statusPathFor, { token, send, api = API, ...wait } = {}) {
+  const r = send ? await send(path, body) : await req(path, { method: 'POST', token: tokenOf(token), body, api });
+  const out = {
+    r, status: r.status, accepted: null, result: null, error: null,
+    throttled: r.status === 429 || r.throttled === true,
+  };
+  if (r.status < 200 || r.status >= 300) return out;
+  const data = unwrap(r.body);
+  if (r.status !== 202 || data?.jobId === undefined || data?.jobId === null) {
+    out.error = new JobError(
+      `${path} answered HTTP ${r.status} without a job id — expected 202 { jobId, deduplicated }; `
+      + 'is this deployment older than the accepted-then-polled contract?',
+      { statusPath: null, state: 'not-accepted', httpStatus: r.status });
+    return out;
+  }
+  out.accepted = { jobId: String(data.jobId), deduplicated: data.deduplicated === true };
+  try {
+    out.result = await awaitJob(statusPathFor(out.accepted.jobId), { token, api, ...wait });
+  } catch (e) {
+    if (!(e instanceof JobError)) throw e;
+    out.error = e;
+  }
+  return out;
+}
+
+/** One line for a check's detail: what the POST answered, and what the run came to. */
+export function describeJobOutcome(o) {
+  if (!o) return 'no outcome';
+  if (o.throttled) return `HTTP ${o.status} (throttled — UNKNOWN, not a refusal)`;
+  if (!o.accepted) {
+    const said = o.error?.message ?? o.r?.msg ?? o.r?.body?.message ?? '';
+    return `HTTP ${o.status}${said ? ` "${String(said).slice(0, 140)}"` : ''}`;
+  }
+  const head = `HTTP ${o.status}, job ${o.accepted.jobId}${o.accepted.deduplicated ? ' (joined a run already in flight)' : ''}`;
+  return o.error ? `${head} -> ${o.error.state}: ${o.error.serverError ?? o.error.message}` : `${head} -> done`;
 }
 
 /**

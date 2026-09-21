@@ -4,8 +4,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bull';
 import { LessThan, Repository } from 'typeorm';
 import { NotificationChannel, NotificationStatus } from '@fapoms/shared';
+import type { MessageChannel } from '@fapoms/shared';
 import { NotificationEntity } from './notification.entity';
 import { NOTIFICATION_QUEUE } from './notification.constants';
+import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
+import { NOTIFICATION_MESSAGE_ENTITY } from './outbound-message.service';
+import { NOTIFICATION_MESSAGE_LEGS, NOTIFICATION_MESSAGE_LEG_LIST } from './notification-message-legs';
 
 /**
  * Catches notifications the queue never heard about.
@@ -64,7 +68,11 @@ export class NotificationSweeper {
         await this.deliveryQueue.add(
           'deliver',
           { notificationId: n.id },
-          { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true },
+          // Bounded failed-job retention, the same terms the original enqueue in
+          // NotificationDispatchService uses. Without it every job that exhausted its five
+          // attempts stayed in Redis forever, and the sweeper re-queues exactly the rows most
+          // likely to be failing — see FAILED_JOB_RETENTION.
+          { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true, removeOnFail: FAILED_JOB_RETENTION },
         );
         requeued++;
       } catch (err: any) {
@@ -81,16 +89,21 @@ export class NotificationSweeper {
   }
 
   /**
-   * The email leg of the same guarantee. It needs its own query because email's lifecycle is a
-   * separate column: an IN_APP+EMAIL row is born with row-status DELIVERED (the bell already
-   * has it), so the push-oriented sweep above never sees it — only `email_status` knows an
-   * email is still owed.
+   * The email and text legs of the same guarantee, one channel per call. Each needs its own query
+   * because its lifecycle is a separate column: an IN_APP+EMAIL (or IN_APP+SMS) row is born with
+   * row-status DELIVERED (the bell already has it), so the push-oriented sweep above never sees it —
+   * only `email_status` / `sms_status` knows a message is still owed.
+   *
+   * Only PENDING: a message that has not yet been handed to the message queue. Once handed over
+   * (status SENT) that queue's own sweep (`OutboundMessageService.sweep`) owns it — re-queueing,
+   * giving up, and writing the outcome back here.
    */
-  async requeueStrandedEmails(): Promise<number> {
+  async requeueStrandedMessages(channel: MessageChannel): Promise<number> {
+    const leg = NOTIFICATION_MESSAGE_LEGS[channel];
     const cutoff = new Date(Date.now() - NotificationSweeper.STRANDED_AFTER_MINUTES * 60_000);
 
     const stranded = await this.notificationRepo.find({
-      where: { emailStatus: NotificationStatus.PENDING, createdAt: LessThan(cutoff) },
+      where: { [leg.statusKey]: NotificationStatus.PENDING, createdAt: LessThan(cutoff) },
       take: NotificationSweeper.BATCH,
       order: { createdAt: 'ASC' },
     });
@@ -100,18 +113,19 @@ export class NotificationSweeper {
     for (const n of stranded) {
       try {
         await this.deliveryQueue.add(
-          'deliver-email',
+          leg.job,
           { notificationId: n.id },
-          { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true },
+          // Same bounded retention as the push leg above, for the same reason.
+          { attempts: 5, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: true, removeOnFail: FAILED_JOB_RETENTION },
         );
         requeued++;
       } catch (err: any) {
-        this.logger.warn(`Sweeper could not re-queue email ${n.id}: ${err?.message}`);
+        this.logger.warn(`Sweeper could not re-queue ${leg.noun} ${n.id}: ${err?.message}`);
         break;
       }
     }
 
-    if (requeued) this.logger.log(`Re-queued ${requeued} stranded email(s).`);
+    if (requeued) this.logger.log(`Re-queued ${requeued} stranded ${leg.noun}(s).`);
     return requeued;
   }
 
@@ -141,31 +155,40 @@ export class NotificationSweeper {
     if (n) this.logger.warn(`Marked ${n} abandoned send(s) as failed.`);
 
     /**
-     * The same rescue for the email leg.
+     * The email and text legs, narrowed to the one case the message queue cannot see.
      *
-     * `deliver-email` claims a row by flipping it PENDING → SENT before calling the provider,
-     * which is what stops two jobs sending the same message. The cost of that claim is this
-     * case: a process killed mid-send leaves the row SENT forever, invisible to the
-     * stranded-email sweep (which only looks for PENDING). An hour is far longer than any SMTP
-     * round trip, so anything still SENT by then plainly did not finish — and it is recorded as
-     * failed rather than left looking like a success nobody received.
+     * `deliver-email` / `deliver-sms` claims a row (PENDING → SENT) and then hands the message to the
+     * message queue. From the moment the queue has its `outbound_messages` row, that queue's sweep
+     * settles it and writes the outcome back — a stuck send, a day-old queued message, all of it.
+     * What it cannot see is a process killed between the claim and the hand-off: SENT, and no
+     * message row of that channel for it anywhere. Anything in that state an hour on never reached
+     * the queue, and is recorded as failed rather than left reading "with the queue" for ever. The
+     * leg's own timestamp (`emailed_at` / `texted_at`) is stamped by the claim; `updated_at` would be
+     * reset by any unrelated write to the row, such as the push settle above.
+     *
+     * The guard matches on channel as well as entity: an email row for this notification says
+     * nothing about whether its text reached the queue, and vice versa.
      */
-    const emailResult = await this.notificationRepo
-      .createQueryBuilder()
-      .update(NotificationEntity)
-      .set({
-        emailStatus: NotificationStatus.FAILED,
-        emailFailureReason: 'Email delivery did not complete; the sender stopped before confirming.',
-      })
-      .where('email_status = :sent', { sent: NotificationStatus.SENT })
-      // `emailed_at` is stamped by the claim and belongs to this send alone. `updated_at` is
-      // bumped by every write to the row — including the push settle two statements above —
-      // so keying off it let an unrelated write hide a stranded email for another hour.
-      .andWhere('emailed_at < :cutoff', { cutoff })
-      .execute();
+    let legs = 0;
+    for (const leg of NOTIFICATION_MESSAGE_LEG_LIST) {
+      const legResult = await this.notificationRepo
+        .createQueryBuilder()
+        .update(NotificationEntity)
+        .set(leg.patch(NotificationStatus.FAILED, {
+          reason: `The ${leg.noun} never reached the message queue; the sender stopped before handing it over.`,
+        }))
+        .where(`${leg.statusColumn} = :sent`, { sent: NotificationStatus.SENT })
+        .andWhere(`${leg.atColumn} < :cutoff`, { cutoff })
+        .andWhere(
+          'NOT EXISTS (SELECT 1 FROM outbound_messages o WHERE o.channel = :channel AND o.entity_type = :entityType AND o.entity_id = "notifications"."id"::text)',
+          { channel: leg.channel, entityType: NOTIFICATION_MESSAGE_ENTITY },
+        )
+        .execute();
 
-    const e = emailResult.affected ?? 0;
-    if (e) this.logger.warn(`Marked ${e} abandoned email send(s) as failed.`);
-    return n + e;
+      const affected = legResult.affected ?? 0;
+      if (affected) this.logger.warn(`Marked ${affected} ${leg.noun}(s) that never reached the message queue as failed.`);
+      legs += affected;
+    }
+    return n + legs;
   }
 }

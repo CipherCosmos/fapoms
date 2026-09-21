@@ -1,5 +1,6 @@
-import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
+import { DEFAULT_EMAIL_BRAND, renderEmailLayout, type EmailLayoutTone } from '@fapoms/shared';
 
 /**
  * Outbound email, finally.
@@ -26,10 +27,14 @@ import { PlatformSettingsService } from '../settings/platform-settings.service';
  * notification still reaches the bell, and its row records that the email was suppressed.
  */
 
+import { getSumeruLogoBuffer, SUMERU_LOGO_CID } from './sumeru-logo.asset';
+
 export interface EmailAttachment {
   filename: string;
   content: Buffer;
   contentType?: string;
+  cid?: string;
+  contentDisposition?: string;
 }
 
 export interface EmailPayload {
@@ -70,8 +75,41 @@ export interface EmailResult {
 const PERMANENT_CODES = new Set(['EAUTH', 'EENVELOPE', 'EMESSAGE']);
 const PERMANENT_RESPONSE_CODES = new Set([530, 535, 550, 551, 553]);
 
+/**
+ * How the mail connection is held, for every transport.
+ *
+ * ## Pooled, because a fresh connection per message was most of the wait
+ *
+ * Every `sendMail` used to open its own connection: DNS, TCP, TLS, EHLO, AUTH, then the message,
+ * then QUIT. Against Gmail that handshake is the bulk of a send — measured on this deployment,
+ * scheduling an interview (one invite) took 4.95 s and sending a colleague a setup link took
+ * 2.82 s, while ordinary requests answered in well under 0.1 s. A pool keeps a few authenticated
+ * connections open and reuses them, so only the first message after an idle spell pays for the
+ * handshake.
+ *
+ * ## Bounded, because nodemailer's defaults are minutes
+ *
+ * Out of the box nodemailer waits 2 minutes to connect, 30 s for the greeting and **10 minutes**
+ * on an idle socket. Whatever holds the send waits that long too — before this change, a person's
+ * HTTP request. A mail server that stops answering must become a quick, retryable failure, not a
+ * page that spins until the browser gives up while the server carries on.
+ *
+ * The socket limit is the generous one on purpose: a branch audit packet goes out as an
+ * attachment of up to several megabytes, and a slow upload of a real message is not a hang.
+ */
+export const MAIL_CONNECTION_OPTIONS = {
+  pool: true,
+  /** Gmail allows a handful of concurrent sessions per account; three is well inside that. */
+  maxConnections: 3,
+  /** Recycle a connection after this many messages, before a provider does it for us mid-send. */
+  maxMessages: 100,
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 60_000,
+} as const;
+
 @Injectable()
-export class EmailProvider implements OnModuleInit {
+export class EmailProvider implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(EmailProvider.name);
   private transporter: any | null = null;
   private from = '';
@@ -102,7 +140,9 @@ export class EmailProvider implements OnModuleInit {
    */
   async reconfigure(): Promise<void> {
     const cfg = await this.resolveConfig();
-    this.transporter = null;
+    // A pooled transport holds open connections, so replacing it without closing it would leave
+    // the old mailbox's sessions logged in until the server dropped them.
+    this.closeTransport();
     this.from = '';
 
     const gmailUser = cfg.gmailUser;
@@ -130,6 +170,7 @@ export class EmailProvider implements OnModuleInit {
 
     if (cfg.transport === 'GMAIL' && gmailUser && gmailAppPassword) {
       this.transporter = nodemailer.createTransport({
+        ...MAIL_CONNECTION_OPTIONS,
         service: 'gmail',
         auth: { user: gmailUser, pass: gmailAppPassword },
       });
@@ -141,6 +182,7 @@ export class EmailProvider implements OnModuleInit {
     if (cfg.transport === 'SMTP' && smtpHost) {
       const port = Number(cfg.smtpPort) || 587;
       this.transporter = nodemailer.createTransport({
+        ...MAIL_CONNECTION_OPTIONS,
         host: smtpHost,
         port,
         secure: cfg.smtpSecure === true || port === 465,
@@ -222,9 +264,45 @@ export class EmailProvider implements OnModuleInit {
     return this.transporter !== null;
   }
 
+  /** Releases the pooled connections on shutdown, so a rolling deploy does not strand sessions. */
+  onModuleDestroy(): void {
+    this.closeTransport();
+  }
+
+  private closeTransport(): void {
+    const previous = this.transporter;
+    this.transporter = null;
+    try {
+      previous?.close?.();
+    } catch {
+      // Closing is courtesy to the mail server; failing to do it must never break a reconfigure.
+    }
+  }
+
   async send(payload: EmailPayload): Promise<EmailResult> {
     if (!this.transporter) {
       return { success: false, error: 'Email is not configured.', permanent: true };
+    }
+
+    let html = payload.html;
+    const attachments: EmailAttachment[] = payload.attachments ? [...payload.attachments] : [];
+
+    if (html && (html.includes('sumeru-logo') || html.includes('{{logoUrl}}') || html.includes(`cid:${SUMERU_LOGO_CID}`))) {
+      // Normalize any HTTP/relative sumeru-logo references or {{logoUrl}} tokens to cid:sumeru-logo
+      html = html
+        .replace(/src=["'][^"']*sumeru-logo[^"']*["']/gi, `src="cid:${SUMERU_LOGO_CID}"`)
+        .replace(/src=["']\{\{\s*logoUrl\s*\}\}["']/gi, `src="cid:${SUMERU_LOGO_CID}"`)
+        .replace(/\{\{\s*logoUrl\s*\}\}/gi, `cid:${SUMERU_LOGO_CID}`);
+
+      if (!attachments.some((a) => a.cid === SUMERU_LOGO_CID)) {
+        attachments.push({
+          filename: 'sumeru-logo.png',
+          content: getSumeruLogoBuffer(),
+          contentType: 'image/png',
+          cid: SUMERU_LOGO_CID,
+          contentDisposition: 'inline',
+        });
+      }
     }
 
     try {
@@ -233,11 +311,13 @@ export class EmailProvider implements OnModuleInit {
         to: payload.to,
         subject: payload.subject,
         text: payload.text,
-        html: payload.html,
-        attachments: payload.attachments?.map((a) => ({
+        html,
+        attachments: attachments.map((a) => ({
           filename: a.filename,
           content: a.content,
           contentType: a.contentType,
+          cid: a.cid,
+          contentDisposition: a.contentDisposition ?? (a.cid ? 'inline' : 'attachment'),
         })),
       });
       return { success: true, messageId: info?.messageId };
@@ -272,7 +352,7 @@ export function appPublicUrl(): string {
   return raw.replace(/\/+$/, '');
 }
 
-export type EmailTone = 'gold' | 'flame' | 'emerald' | 'crimson' | 'slate';
+export type EmailTone = EmailLayoutTone;
 
 export interface EmailBadge {
   text: string;
@@ -304,264 +384,35 @@ export interface EmailRenderOptions {
   securityNotice?: string;
 }
 
-const TONE_STYLES: Record<
-  EmailTone,
-  {
-    badgeBg: string;
-    badgeText: string;
-    badgeBorder: string;
-    calloutBg: string;
-    calloutBorder: string;
-    calloutText: string;
-  }
-> = {
-  gold: {
-    badgeBg: '#FEF9E7',
-    badgeText: '#8D6809',
-    badgeBorder: '#F8E7A2',
-    calloutBg: '#FFFDF5',
-    calloutBorder: '#D8AE47',
-    calloutText: '#382F26',
-  },
-  flame: {
-    badgeBg: '#FFF3EB',
-    badgeText: '#B8460D',
-    badgeBorder: '#FFD0B5',
-    calloutBg: '#FFF8F5',
-    calloutBorder: '#ED6714',
-    calloutText: '#382F26',
-  },
-  emerald: {
-    badgeBg: '#EBF8F2',
-    badgeText: '#136C45',
-    badgeBorder: '#BCE6D2',
-    calloutBg: '#F4FBF7',
-    calloutBorder: '#10B981',
-    calloutText: '#382F26',
-  },
-  crimson: {
-    badgeBg: '#FDF2F2',
-    badgeText: '#A82222',
-    badgeBorder: '#F9C8C8',
-    calloutBg: '#FEF7F7',
-    calloutBorder: '#EF4444',
-    calloutText: '#382F26',
-  },
-  slate: {
-    badgeBg: '#F1F5F9',
-    badgeText: '#475569',
-    badgeBorder: '#CBD5E1',
-    calloutBg: '#F8FAFC',
-    calloutBorder: '#64748B',
-    calloutText: '#382F26',
-  },
-};
+const DEFAULT_EMAIL_FOOTER =
+  'You are receiving this communication regarding your role in FAPOMS. Update preferences under Notifications → Preferences.';
 
 /**
- * The clean, authoritative HTML shell for all Sumeru Global & FAPOMS emails.
+ * A Sumeru Global & FAPOMS system email, drawn by the one shared layout.
  *
- * Implements an executive, uncluttered aesthetic:
- *  - Authentic corporate mark (sumeru-logo@2x.png) with flame tips and wordmark
- *  - Spacious white card on a subtle neutral ground (#F8F9FA)
- *  - Clear typographic hierarchy with high contrast readability
- *  - Minimal, context-specific components without visual clutter
- *  - Full compatibility across email clients (Gmail, Apple Mail, Outlook)
+ * The shell itself — header, code box, table, callout, button, footer, and the escaping and
+ * safe-link rules — lives in `renderEmailLayout` in `@fapoms/shared`, which the administrators'
+ * template editor also draws through, so a built-in email and an edited template are the same
+ * design. This is only the server's default brand and its option names. Every string is escaped;
+ * a link that is not http(s) or relative is dropped along with its button.
  */
 export function renderEmailHtml(opts: EmailRenderOptions): string {
-  const esc = (s: string) =>
-    s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-
-  const safeUrl = (url: string | null | undefined): string | null => {
-    if (!url) return null;
-    try {
-      const parsed = new URL(url, 'http://localhost');
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? esc(url) : null;
-    } catch {
-      return null;
-    }
-  };
-  const href = safeUrl(opts.linkUrl);
-  const logoUrl = `${appPublicUrl()}/sumeru-logo@2x.png`;
-
-  // Badge HTML (only rendered if badge is explicitly provided)
-  let badgeHtml = '';
-  if (opts.badge?.text) {
-    const tone = opts.badge.tone && TONE_STYLES[opts.badge.tone] ? opts.badge.tone : 'gold';
-    const style = TONE_STYLES[tone];
-    badgeHtml = `
-      <div style="margin-bottom:12px;">
-        <span style="display:inline-block;padding:2px 8px;border-radius:4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10.5px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;background-color:${style.badgeBg};color:${style.badgeText};border:1px solid ${style.badgeBorder};">
-          ${esc(opts.badge.text)}
-        </span>
-      </div>`;
-  }
-
-  // Subtitle HTML
-  const subtitleHtml = opts.subtitle
-    ? `<p style="margin:0 0 16px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;color:#6B7280;line-height:1.5;">${esc(opts.subtitle)}</p>`
-    : '';
-
-  // Body paragraphs
-  const paragraphs = opts.bodyLines
-    .map(
-      (line) =>
-        `<p style="margin:0 0 12px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;line-height:1.65;color:#374151;">${esc(line)}</p>`,
-    )
-    .join('\n');
-
-  // Key-Value Table HTML
-  let kvTableHtml = '';
-  if (opts.kvTable && opts.kvTable.length > 0) {
-    const rows = opts.kvTable
-      .map(
-        (item, idx) => `
-        <tr>
-          <td valign="top" style="padding:10px 14px;border-bottom:${idx === opts.kvTable!.length - 1 ? 'none' : '1px solid #E5E7EB'};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:500;color:#6B7280;width:38%;">
-            ${esc(item.label)}
-          </td>
-          <td valign="top" style="padding:10px 14px;border-bottom:${idx === opts.kvTable!.length - 1 ? 'none' : '1px solid #E5E7EB'};font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:13px;font-weight:600;color:#111827;">
-            ${esc(item.value)}
-          </td>
-        </tr>`,
-      )
-      .join('\n');
-
-    kvTableHtml = `
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:18px 0 20px 0;border:1px solid #E5E7EB;border-radius:8px;overflow:hidden;background-color:#F9FAFB;">
-        ${rows}
-      </table>`;
-  }
-
-  // OTP Code Box HTML (sleek, warm, clean)
-  let otpCodeHtml = '';
-  if (opts.otpCode) {
-    otpCodeHtml = `
-      <div style="margin:20px 0 22px 0;padding:20px 16px;background-color:#FFF7ED;border:1px solid #FED7AA;border-radius:8px;text-align:center;">
-        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;color:#C2410C;text-transform:uppercase;margin-bottom:6px;">
-          One-Time Verification Code
-        </div>
-        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono',monospace;font-size:34px;font-weight:700;letter-spacing:8px;color:#9A3412;padding:2px 0;">
-          ${esc(opts.otpCode)}
-        </div>
-        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;color:#9A3412;opacity:0.85;margin-top:6px;">
-          Valid for 10 minutes &bull; Strictly confidential
-        </div>
-      </div>`;
-  }
-
-  // Callout HTML (light alert box with left accent)
-  let calloutHtml = '';
-  if (opts.callout?.text) {
-    const tone = opts.callout.tone && TONE_STYLES[opts.callout.tone] ? opts.callout.tone : 'flame';
-    const style = TONE_STYLES[tone];
-    const calloutTitle = opts.callout.title
-      ? `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:600;color:#111827;margin-bottom:3px;">${esc(opts.callout.title)}</div>`
-      : '';
-    calloutHtml = `
-      <div style="margin:16px 0 18px 0;padding:12px 14px;background-color:${style.calloutBg};border-left:3px solid ${style.calloutBorder};border-radius:0 6px 6px 0;">
-        ${calloutTitle}
-        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;color:${style.calloutText};">
-          ${esc(opts.callout.text)}
-        </div>
-      </div>`;
-  }
-
-  // Action Button HTML (solid Sumeru flame orange)
-  let buttonHtml = '';
-  if (href) {
-    buttonHtml = `
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 8px 0;">
-        <tr>
-          <td align="center" style="border-radius:6px;background-color:#ED6714;">
-            <a href="${href}" target="_blank" style="display:inline-block;padding:11px 26px;background-color:#ED6714;color:#FFFFFF;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:0.2px;text-decoration:none;border-radius:6px;">
-              ${esc(opts.linkLabel ?? 'Open in FAPOMS')}
-            </a>
-          </td>
-        </tr>
-      </table>
-      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;color:#9CA3AF;margin-top:8px;word-break:break-all;line-height:1.4;">
-        Direct link: <a href="${href}" style="color:#ED6714;text-decoration:underline;">${href}</a>
-      </div>`;
-  }
-
-  // Security Notice HTML
-  const securityNoticeHtml = opts.securityNotice
-    ? `<div style="margin-top:16px;padding-top:12px;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;color:#6B7280;line-height:1.45;">
-        <strong style="color:#374151;">Note:</strong> ${esc(opts.securityNotice)}
-      </div>`
-    : '';
-
-  // Footer HTML
-  const footerText = esc(
-    opts.footer ??
-      'You are receiving this communication regarding your role in FAPOMS. Update preferences under Notifications → Preferences.',
-  );
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${esc(opts.title)}</title>
-</head>
-<body style="margin:0;padding:0;background-color:#F8F9FA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#F8F9FA;padding:32px 12px;">
-    <tr>
-      <td align="center">
-        <!--[if (gte mso 9)|(IE)]>
-        <table role="presentation" width="560" align="center" cellpadding="0" cellspacing="0" border="0">
-          <tr>
-            <td>
-        <![endif]-->
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;background-color:#FFFFFF;border-radius:10px;overflow:hidden;border:1px solid #E5E7EB;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-          <!-- Header with Authentic Logo -->
-          <tr>
-            <td align="center" style="padding:28px 32px 20px 32px;border-bottom:1px solid #F3F4F6;">
-              <img src="${esc(logoUrl)}" alt="Sumeru Global" width="65" height="50" style="display:block;margin:0 auto;border:0;outline:none;" />
-            </td>
-          </tr>
-          <!-- Content Body -->
-          <tr>
-            <td style="padding:28px 32px 24px 32px;background-color:#FFFFFF;">
-              ${badgeHtml}
-              <h1 style="margin:0 0 ${opts.subtitle ? '6px' : '14px'} 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;font-weight:700;color:#111827;line-height:1.35;letter-spacing:-0.2px;">
-                ${esc(opts.title)}
-              </h1>
-              ${subtitleHtml}
-              ${paragraphs}
-              ${otpCodeHtml}
-              ${kvTableHtml}
-              ${calloutHtml}
-              ${buttonHtml}
-              ${securityNoticeHtml}
-            </td>
-          </tr>
-          <!-- Clean Footer -->
-          <tr>
-            <td align="center" style="padding:20px 32px;background-color:#F9FAFB;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-              <div style="font-size:12px;font-weight:600;color:#4B5563;">
-                Sumeru Global &bull; Field Audit Operations Management
-              </div>
-              <div style="font-size:11.5px;color:#9CA3AF;margin-top:4px;line-height:1.5;">
-                ${footerText}
-              </div>
-            </td>
-          </tr>
-        </table>
-        <!--[if (gte mso 9)|(IE)]>
-            </td>
-          </tr>
-        </table>
-        <![endif]-->
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
+  return renderEmailLayout({
+    brand: { ...DEFAULT_EMAIL_BRAND, logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png` },
+    title: opts.title,
+    subtitle: opts.subtitle,
+    badge: opts.badge,
+    bodyLines: opts.bodyLines,
+    // The expiry is the caller's to state (in the security notice): the box used to promise
+    // "10 minutes" whatever the code's real lifetime was, and registration codes last five.
+    codeBox: opts.otpCode
+      ? { code: opts.otpCode, label: 'One-Time Verification Code', note: 'Strictly confidential' }
+      : undefined,
+    kvTable: opts.kvTable,
+    callout: opts.callout,
+    button: opts.linkUrl ? { href: opts.linkUrl, label: opts.linkLabel ?? 'Open in FAPOMS' } : undefined,
+    securityNotice: opts.securityNotice,
+    footer: opts.footer ?? DEFAULT_EMAIL_FOOTER,
+  });
 }
 

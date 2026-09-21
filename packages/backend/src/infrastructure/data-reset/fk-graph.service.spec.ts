@@ -1,4 +1,5 @@
-import { cascadeClosure, restrictConflicts, setNullEffects, topologicalOrder, FkEdge } from './fk-graph.service';
+import { DataSource } from 'typeorm';
+import { cascadeClosure, restrictConflicts, setNullEffects, topologicalOrder, FkEdge, FkGraphService } from './fk-graph.service';
 
 /**
  * A small fabricated graph, not the live schema — these three functions are pure and the cases
@@ -91,8 +92,55 @@ describe('topologicalOrder', () => {
 });
 
 /**
- * Not asserted here: that `FkGraphService.loadEdges()` matches production. That's an integration
- * concern (it needs a live Postgres to query `information_schema` against), which is why the
- * design deliberately reads the graph fresh from the database rather than keeping a hand-written
- * copy that a unit test would have to diff against reality to keep honest.
+ * WHERE THE GRAPH IS READ FROM, WHICH IS NOT A DETAIL.
+ *
+ * `loadEdges` used to query `information_schema`, whose views only show constraints on tables the
+ * connected user OWNS. Since the role split the API connects as `fapoms_runtime`, which owns
+ * nothing, so it read 0 of the database's 89 foreign keys and said so to nobody: the preview
+ * reported no cascades and no blockers, and a wipe then deleted tables in an arbitrary order until
+ * Postgres refused one. These are the two properties that stop that happening again — the source
+ * it reads, and its refusal to treat "no edges" as "no constraints".
  */
+describe('FkGraphService.loadEdges', () => {
+  const serviceWith = (rows: unknown[]) => {
+    const query = jest.fn().mockResolvedValue(rows);
+    return { service: new FkGraphService({ query } as unknown as DataSource), query };
+  };
+
+  it('reads pg_catalog, never the ownership-gated information_schema views', async () => {
+    const { service, query } = serviceWith([
+      { child: 'billing_entries', column: 'assignment_id', parent: 'assignments', on_delete: 'RESTRICT' },
+    ]);
+    await service.loadEdges();
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).toMatch(/pg_constraint/);
+    expect(sql).not.toMatch(/information_schema/);
+  });
+
+  it('refuses rather than reporting a database with no foreign keys', async () => {
+    const { service } = serviceWith([]);
+    await expect(service.loadEdges()).rejects.toThrow(/no foreign keys/i);
+  });
+
+  it('carries each delete rule through as the closure and conflict checks expect it', async () => {
+    const { service } = serviceWith([
+      { child: 'project_branches', column: 'branch_id', parent: 'branches', on_delete: 'CASCADE' },
+      { child: 'billing_entries', column: 'assignment_id', parent: 'assignments', on_delete: 'RESTRICT' },
+      { child: 'branches', column: 'client_id', parent: 'clients', on_delete: 'SET NULL' },
+    ]);
+    const edges = await service.loadEdges();
+
+    expect(edges).toEqual([
+      { child: 'project_branches', column: 'branch_id', parent: 'branches', onDelete: 'CASCADE' },
+      { child: 'billing_entries', column: 'assignment_id', parent: 'assignments', onDelete: 'RESTRICT' },
+      { child: 'branches', column: 'client_id', parent: 'clients', onDelete: 'SET NULL' },
+    ]);
+    // The wipe that failed: assignments selected without billing must be refused, not attempted.
+    expect(restrictConflicts(new Set(['assignments']), edges)).toEqual([
+      { child: 'billing_entries', column: 'assignment_id', parent: 'assignments', onDelete: 'RESTRICT' },
+    ]);
+    // And with both selected, the child has to be deleted first.
+    const order = topologicalOrder(new Set(['assignments', 'billing_entries']), edges);
+    expect(order).toEqual(['billing_entries', 'assignments']);
+  });
+});

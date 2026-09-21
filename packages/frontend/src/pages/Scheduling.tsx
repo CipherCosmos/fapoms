@@ -7,7 +7,7 @@ import {
   X, Sun, Landmark, Umbrella, Filter, List, Grid,
   MapPin, User, Check
 } from 'lucide-react';
-import { ScheduleStatus, SystemRole, formatRupees, businessTodayDateKey } from '@fapoms/shared';
+import { ScheduleStatus, SystemRole, formatRupees, businessTodayDateKey, businessDateKey } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { scheduleStatusLabel, localDateKey, todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { api } from '../services/api';
@@ -894,7 +894,7 @@ export const Scheduling: React.FC = () => {
 
                   const daySchedules = getSchedulesForDate(dateStr);
                   const dayHolidays = holidays.filter((h: any) => {
-                    const hd = typeof h.date === 'string' ? h.date.slice(0, 10) : new Date(h.date).toISOString().slice(0, 10);
+                    const hd = typeof h.date === 'string' ? h.date.slice(0, 10) : businessDateKey(h.date);
                     return hd === dateStr;
                   });
                   const isToday = dateStr === todayDateKey();

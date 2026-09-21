@@ -183,6 +183,87 @@ describe('useImportJob — a large file the server queues', () => {
   });
 });
 
+/**
+ * `run` — for a caller that has to act on how an import ENDED, not on the upload being accepted.
+ *
+ * The roster page asks for a rehearsal and may only offer the real import once the rehearsal's
+ * answer is in. The rehearsal used to be an awaited request; now that it is queued, awaiting
+ * `start` would hand back control the moment the server said "accepted", and the page would offer
+ * an import on the strength of a check that had not run yet.
+ */
+describe('useImportJob — run', () => {
+  const queued = {
+    queued: true, jobId: 'r-1', statusUrl: '/assayers/roster/import-jobs/r-1',
+    totalRows: 1155, message: 'Checking what importing it would do.',
+  };
+
+  const RunHarness: React.FC<{ onEnd: (phase: { phase: string }) => void }> = ({ onEnd }) => {
+    const job = useImportJob();
+    return (
+      <div>
+        <button onClick={() => void job.run('/assayers/roster/import', file(), { dryRun: 'true' }).then(onEnd)}>upload</button>
+        <button onClick={job.reset}>dismiss</button>
+        <ImportProgressPanel state={job.state} onDismiss={job.reset} mode="rehearsal" />
+      </div>
+    );
+  };
+
+  it('resolves with the report once the queued job completes, not when the upload is accepted', async () => {
+    mockRequest
+      .mockResolvedValueOnce(queued)
+      .mockResolvedValueOnce({ state: 'active', progress: null, result: null, error: null, totalRows: 1155 })
+      .mockResolvedValue({ state: 'completed', progress: null, result: REPORT, error: null, totalRows: 1155 });
+    const onEnd = jest.fn();
+    render(<RunHarness onEnd={onEnd} />);
+    await click();
+
+    // Accepted and polled once: still running, so nothing has resolved.
+    expect(onEnd).not.toHaveBeenCalled();
+
+    await act(async () => { jest.advanceTimersByTime(2100); });
+    await waitFor(() => expect(onEnd).toHaveBeenCalledWith({ phase: 'done', fileName: 'branches.xlsx', report: REPORT }));
+  });
+
+  it('resolves with the error, and its reason, when the queued job fails', async () => {
+    mockRequest.mockResolvedValueOnce(queued).mockResolvedValue({
+      state: 'failed', progress: null, result: null, error: 'This does not look like the appraiser roster.', totalRows: 1155,
+    });
+    const onEnd = jest.fn();
+    render(<RunHarness onEnd={onEnd} />);
+    await click();
+
+    await waitFor(() => expect(onEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'error', error: 'This does not look like the appraiser roster.' }),
+    ));
+  });
+
+  /** A caller left awaiting a job nobody is watching any more would hold its "busy" state forever. */
+  it('resolves as idle when the import is dismissed before it finishes', async () => {
+    mockRequest.mockResolvedValueOnce(queued).mockResolvedValue({
+      state: 'active', progress: null, result: null, error: null, totalRows: 1155,
+    });
+    const onEnd = jest.fn();
+    render(<RunHarness onEnd={onEnd} />);
+    await click();
+
+    await act(async () => { screen.getByText('dismiss').click(); });
+
+    await waitFor(() => expect(onEnd).toHaveBeenCalledWith({ phase: 'idle' }));
+  });
+
+  /** "Importing" on a run that saves nothing is how an operator comes to believe the file already landed. */
+  it('words a running rehearsal as checking the file, not importing it', async () => {
+    mockRequest.mockResolvedValueOnce(queued).mockResolvedValue({
+      state: 'active', progress: null, result: null, error: null, totalRows: 1155,
+    });
+    render(<RunHarness onEnd={jest.fn()} />);
+    await click();
+
+    expect(screen.getByText(/Checking branches\.xlsx/)).toBeInTheDocument();
+    expect(screen.queryByText(/Importing branches\.xlsx/)).not.toBeInTheDocument();
+  });
+});
+
 describe('summariseImport', () => {
   /**
    * A file whose headers do not match parses fine and imports nothing. Both pages used to report

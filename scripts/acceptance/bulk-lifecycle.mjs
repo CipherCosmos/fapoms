@@ -47,7 +47,9 @@
  *
  * The full table for every script here is in scripts/acceptance/README.md.
  */
-import { env, req, sql, one, login, tally, pool, declareMutating } from './_lib.mjs';
+import {
+  env, req, sql, one, login, tally, pool, declareMutating, postAndAwait, JOB_STATUS, describeJobOutcome,
+} from './_lib.mjs';
 
 const PREFIX = 'ACBL-';
 const { check, done } = tally();
@@ -107,9 +109,17 @@ const brief = (o) => JSON.stringify(o ?? null).slice(0, 240);
 
 /** Every disagreement between a response and the row it described, across the whole run. */
 const contradictions = [];
+/** Every accepted run that did not come to `done` — failed, timed out, or unreadable. */
+const unfinishedRuns = [];
 
 /**
  * A bulk call, with the contract checked on the way through.
+ *
+ * The route answers 202 and a job id now (2026-09-17), and the buckets below are the finished
+ * job's result rather than the POST's body — see `postAndAwait` in `_lib.mjs`. "After" is read
+ * once the run is DONE, never on the 202: reading the database on acceptance would compare the
+ * buckets with a row the worker has not reached yet. `data` is the job's result (or `{}` when the
+ * call was refused at the request, or the run did not finish), `run` is the whole outcome.
  *
  * Reads each id's state and audit count before and after, then asks of every id: does the bucket
  * the response put it in match what the database now says?
@@ -126,16 +136,17 @@ const bulk = async (token, people, targetStatus, reason) => {
   const before = Object.fromEntries(await Promise.all(
     unique.map(async (id) => [id, { state: await lifecycleOf(id), hops: await hops(id) }])));
 
-  const r = await req('/assayers/bulk/lifecycle', {
-    method: 'POST', token,
-    body: { ids, targetStatus, ...(reason === undefined ? {} : { reason }) },
-  });
-  const data = r.body?.data ?? {};
+  const run = await postAndAwait('/assayers/bulk/lifecycle',
+    { ids, targetStatus, ...(reason === undefined ? {} : { reason }) },
+    JOB_STATUS.assayerBulk, { token });
+  const { r } = run;
+  const data = run.result ?? {};
+  if (run.accepted && run.error) unfinishedRuns.push(`${targetStatus} for ${unique.length} id(s): ${describeJobOutcome(run)}`);
 
   const after = Object.fromEntries(await Promise.all(
     unique.map(async (id) => [id, { state: await lifecycleOf(id), hops: await hops(id) }])));
 
-  if (r.status === 201) {
+  if (run.result) {
     for (const id of unique) {
       const { bucket, row } = bucketOf(data, id);
       const was = before[id].state;
@@ -158,7 +169,7 @@ const bulk = async (token, people, targetStatus, reason) => {
     }
   }
 
-  return { r, data, before, after };
+  return { r, run, data, before, after };
 };
 
 (async () => {
@@ -183,13 +194,13 @@ const bulk = async (token, people, targetStatus, reason) => {
 
   {
     const a = await seedAssayer('PARTIAL-WALK', 'INVITED');
-    const { r, data, before, after } = await bulk(admin.token, [a], 'INACTIVE');
+    const { run, data, before, after } = await bulk(admin.token, [a], 'INACTIVE');
     const { bucket, row } = bucketOf(data, a.id);
 
     check('BL-01  INVITED → INACTIVE with no reason: nobody moves, and it is not called "failed"',
       bucket === 'skipped' && after[a.id].state === 'INVITED'
         && after[a.id].hops === before[a.id].hops,
-      `HTTP ${r.status}, reported ${bucket} ${brief(row)}; db ${after[a.id].state}, `
+      `${describeJobOutcome(run)}, reported ${bucket} ${brief(row)}; db ${after[a.id].state}, `
       + `+${after[a.id].hops - before[a.id].hops} lifecycle audit rows`);
 
     check('BL-02  …and the refusal names the hop that needs the sentence',
@@ -261,12 +272,15 @@ const bulk = async (token, people, targetStatus, reason) => {
       await seedAssayer('ALLBAD', 'ON_LEAVE'),
       await seedAssayer('ALLBAD', 'ARCHIVED'),
     ];
-    const { r, data, after } = await bulk(admin.token, people, 'DOCUMENT_VERIFICATION');
-    check('BL-07  all invalid: HTTP 201, nobody moves, every row reported and none as succeeded',
-      r.status === 201 && (data.succeeded?.length ?? 0) === 0 && (data.partial?.length ?? 0) === 0
+    const { run, data, after } = await bulk(admin.token, people, 'DOCUMENT_VERIFICATION');
+    // Was "HTTP 201" when the walk ran in the request. Per-row isolation is unchanged: an all-bad
+    // batch is still ACCEPTED (202) and its run still finishes `done`, with every row refused
+    // inside the result rather than the whole call refused.
+    check('BL-07  all invalid: accepted (202) and the run finishes, nobody moves, every row reported and none as succeeded',
+      run.status === 202 && !!run.result && (data.succeeded?.length ?? 0) === 0 && (data.partial?.length ?? 0) === 0
         && ((data.skipped?.length ?? 0) + (data.failed?.length ?? 0)) === 3
         && people.map((p) => after[p.id].state).join(',') === 'ACTIVE,ON_LEAVE,ARCHIVED',
-      `HTTP ${r.status}, skipped=${data.skipped?.length} failed=${data.failed?.length}; `
+      `${describeJobOutcome(run)}, skipped=${data.skipped?.length} failed=${data.failed?.length}; `
       + `db ${people.map((p) => after[p.id].state).join(', ')}`);
   }
 
@@ -294,8 +308,8 @@ const bulk = async (token, people, targetStatus, reason) => {
 
   {
     // A one-hop reason-gated move, refused by both routes for the same reason and in the same
-    // words. The single route answers 400; the bulk route answers 201 with the row refused,
-    // because per-row isolation is the point of the batch endpoint.
+    // words. The single route answers 400; the bulk route accepts (202) and its finished run
+    // reports the row refused, because per-row isolation is the point of the batch endpoint.
     const a = await seedAssayer('REASON-SINGLE', 'ACTIVE');
     const b = await seedAssayer('REASON-BULK', 'ACTIVE');
     const single = await req(`/assayers/${a.id}/lifecycle`, {
@@ -313,17 +327,17 @@ const bulk = async (token, people, targetStatus, reason) => {
   }
 
   if (auditor) {
+    // Still refused IN the request — the role gate runs before anything is queued. Sent through
+    // postAndAwait all the same, so that if it were (wrongly) accepted the database is read after
+    // the run it started rather than before the worker reached it.
     const a = await seedAssayer('UNAUTH', 'INVITED');
     const before = await hops(a.id);
-    const r = await req('/assayers/bulk/lifecycle', {
-      method: 'POST', token: auditor.token,
-      body: { ids: [a.id], targetStatus: 'DOCUMENT_VERIFICATION' },
-    });
+    const run = await postAndAwait('/assayers/bulk/lifecycle',
+      { ids: [a.id], targetStatus: 'DOCUMENT_VERIFICATION' }, JOB_STATUS.assayerBulk, { token: auditor.token });
     check('BL-10  an unauthorized role is refused outright, and moves nobody',
-      (r.status === 401 || r.status === 403) && (await lifecycleOf(a.id)) === 'INVITED'
+      (run.status === 401 || run.status === 403) && (await lifecycleOf(a.id)) === 'INVITED'
         && (await hops(a.id)) === before,
-      `cert_auditor: HTTP ${r.status} "${String(r.msg ?? '').slice(0, 80)}"; `
-      + `db ${await lifecycleOf(a.id)}`);
+      `cert_auditor: ${describeJobOutcome(run)}; db ${await lifecycleOf(a.id)}`);
   } else {
     check('BL-10  an unauthorized role is refused outright', false, 'could not sign in cert_auditor');
   }
@@ -331,24 +345,24 @@ const bulk = async (token, people, targetStatus, reason) => {
   if (east) {
     // The region ceiling is per id and asserted BEFORE any transition, so a batch containing one
     // out-of-scope record is refused whole rather than half-applied.
+    // The ceiling is still asserted IN the request, before anything is queued: a 403 here means
+    // no job exists. (Sent through postAndAwait so a wrongly-accepted batch is read after its run.)
     const inScope = await seedAssayer('REGION-EAST', 'INVITED', 'EAST');
     const outOfScope = await seedAssayer('REGION-WEST', 'INVITED', 'WEST');
     const before = [await hops(inScope.id), await hops(outOfScope.id)];
-    const r = await req('/assayers/bulk/lifecycle', {
-      method: 'POST', token: east.token,
-      body: { ids: [inScope.id, outOfScope.id], targetStatus: 'DOCUMENT_VERIFICATION' },
-    });
+    const run = await postAndAwait('/assayers/bulk/lifecycle',
+      { ids: [inScope.id, outOfScope.id], targetStatus: 'DOCUMENT_VERIFICATION' },
+      JOB_STATUS.assayerBulk, { token: east.token });
     const s = [await lifecycleOf(inScope.id), await lifecycleOf(outOfScope.id)];
     check('BL-11  one out-of-region id refuses the WHOLE batch — the in-region row does not move either',
-      r.status === 403 && s.every((x) => x === 'INVITED')
+      run.status === 403 && !run.accepted && s.every((x) => x === 'INVITED')
         && (await hops(inScope.id)) === before[0] && (await hops(outOfScope.id)) === before[1],
-      `cert_ops_east (EAST) sending [EAST, WEST]: HTTP ${r.status} `
-      + `"${String(r.msg ?? '').slice(0, 90)}"; db ${s.join(', ')}`);
+      `cert_ops_east (EAST) sending [EAST, WEST]: ${describeJobOutcome(run)}; db ${s.join(', ')}`);
 
-    const { r: solo } = await bulk(east.token, [inScope], 'DOCUMENT_VERIFICATION');
+    const { run: solo } = await bulk(east.token, [inScope], 'DOCUMENT_VERIFICATION');
     check('BL-12  …and it is a ceiling, not a wall: the in-region id alone still moves',
-      solo.status === 201 && (await lifecycleOf(inScope.id)) === 'DOCUMENT_VERIFICATION',
-      `HTTP ${solo.status}; db ${await lifecycleOf(inScope.id)}`);
+      solo.status === 202 && !!solo.result && (await lifecycleOf(inScope.id)) === 'DOCUMENT_VERIFICATION',
+      `${describeJobOutcome(solo)}; db ${await lifecycleOf(inScope.id)}`);
   } else {
     check('BL-11  one out-of-region id refuses the whole batch', false, 'could not sign in cert_ops_east');
   }
@@ -358,17 +372,26 @@ const bulk = async (token, people, targetStatus, reason) => {
   // ═════════════════════════════════════════════════════════════════════════════════════════
 
   {
+    // CHANGED MEANING (2026-09-17). The walk used to see [a, a] and report the repeat as a second
+    // `succeeded` row with via: [] — a no-op self-path. Accepting the batch now de-duplicates the
+    // ids before the job is queued (they are sorted into its fingerprint), so the run never sees
+    // the repeat and reports the person ONCE. The substance is unchanged and still asserted: one
+    // transition, one audit row. What changed is where the duplicate is absorbed.
     const a = await seedAssayer('DUP-ID', 'INVITED');
     const { data, before, after } = await bulk(admin.token, [a, a], 'DOCUMENT_VERIFICATION');
-    const secondVia = data.succeeded?.[1]?.via;
-    check('BL-13  the same id twice in one batch transitions once, and the repeat reports via: []',
+    const via = data.succeeded?.[0]?.via;
+    check('BL-13  the same id twice in one batch transitions once, and is reported once',
       (after[a.id].hops - before[a.id].hops) === 1 && after[a.id].state === 'DOCUMENT_VERIFICATION'
-        && data.succeeded?.length === 2 && Array.isArray(secondVia) && secondVia.length === 0,
-      `succeeded=${data.succeeded?.length} (second via=${brief(secondVia)}); `
+        && data.succeeded?.length === 1 && data.succeeded[0].id === a.id
+        && Array.isArray(via) && via.length === 1,
+      `succeeded=${data.succeeded?.length} (via=${brief(via)}); `
       + `+${after[a.id].hops - before[a.id].hops} audit row; db ${after[a.id].state}`);
   }
 
   {
+    // `bulk()` waits for the first run to finish before the second press, so the second is a
+    // genuine repeat with its own job — not a press that joined the first run while it was in
+    // flight (`deduplicated`), which would hand back the FIRST run's result and prove nothing.
     const a = await seedAssayer('REPEAT', 'INVITED');
     const first = await bulk(admin.token, [a], 'TRAINING');
     const second = await bulk(admin.token, [a], 'TRAINING');
@@ -378,8 +401,11 @@ const bulk = async (token, people, targetStatus, reason) => {
     const walkedAgain = second.after[a.id].hops - second.before[a.id].hops;
     check('BL-14  the same request twice: the second writes nothing and reports arrival, not a move',
       walked === 3 && walkedAgain === 0 && second.after[a.id].state === 'TRAINING'
+        && second.run.accepted?.deduplicated === false
+        && second.run.accepted?.jobId !== first.run.accepted?.jobId
         && Array.isArray(v1) && v1.length === 3 && Array.isArray(v2) && v2.length === 0,
-      `first via=${brief(v1)} (+${walked} audit rows), second via=${brief(v2)} `
+      `first ${describeJobOutcome(first.run)} via=${brief(v1)} (+${walked} audit rows), `
+      + `second ${describeJobOutcome(second.run)} via=${brief(v2)} `
       + `(+${walkedAgain} audit rows); db ${second.after[a.id].state}`);
   }
 
@@ -393,13 +419,17 @@ const bulk = async (token, people, targetStatus, reason) => {
     // so a part-moved row has somewhere truthful to be reported.
     const a = await seedAssayer('SHAPE', 'INVITED');
     const { data } = await bulk(admin.token, [a], 'DOCUMENT_VERIFICATION');
-    check('BL-15  the response carries all four buckets, so a part-moved row has somewhere to go',
+    check('BL-15  the run\'s result carries all four buckets, so a part-moved row has somewhere to go',
       ['succeeded', 'partial', 'skipped', 'failed'].every((k) => Array.isArray(data[k])),
       `keys: ${Object.keys(data).join(', ')}`);
     check('BL-16  a clean walk leaves no abandonment row behind',
       (await abandonments(a.id)) === 0,
       `${await abandonments(a.id)} ASSAYER_LIFECYCLE_WALK_ABANDONED rows`);
   }
+
+  check('BL-RUNS  every batch this run had accepted finished its job (done), none failed or timed out',
+    unfinishedRuns.length === 0,
+    unfinishedRuns.length ? unfinishedRuns.join('\n        ') : 'every 202 in this run came to done');
 
   check('BL-CONTRACT  no response in this run contradicted the database',
     contradictions.length === 0,

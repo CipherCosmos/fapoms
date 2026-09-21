@@ -35,8 +35,9 @@
  *
  * It does **not** mean the pool is exhausted today, and this module is not a claim that it is.
  * Most of those slots are idle most of the time, several are cron-driven at staggered minutes, and
- * the eight notification-delivery slots spend most of their wall-clock in HTTP to push and SMTP
- * providers rather than holding a connection. TypeORM acquires and releases per query; only work
+ * the notification-delivery slots spend most of their wall-clock in HTTP to the push provider or
+ * handing a message to the outbound queues, whose own slots wait on SMTP and the SMS gateway,
+ * rather than holding a connection. TypeORM acquires and releases per query; only work
  * inside an explicit transaction pins a connection for its duration.
  *
  * It does mean the system has **no mechanism that prevents** worker demand from exceeding the
@@ -63,9 +64,10 @@ import { Logger } from '@nestjs/common';
 /**
  * Slots per worker, one key per `@Processor` class.
  *
- * Usually that is also one key per queue, but not always: `imports` and `rosterImports` are two
- * classes serving the same `import-jobs` queue. The key is the class because the class is what the
- * fitness test can count from the source.
+ * That is also one key per queue: `imports`, `rosterImports` and `customerMasterImports` used to be
+ * three classes on the one `import-jobs` queue, until 2026-09-17 showed that three handlers on a
+ * queue are three shared loops, not three one-at-a-time lanes (see their rows below). The key is
+ * the class because the class is what the fitness test can count from the source.
  *
  * **This is a mirror, not the definition.** The running values are the `@Process` decorators in
  * the worker classes, where each sits next to the comment explaining why it is what it is;
@@ -81,8 +83,40 @@ export const WORKER_CONCURRENCY = {
    * Notification delivery. The largest single consumer, and deliberately so: `deliver` and
    * `deliver-email` are dominated by waiting on push and SMTP providers, not by database work, so
    * serialising them would make a broadcast crawl for no gain in database pressure.
+   *
+   * `deliver-sms` (two slots, joined 2026-09-17) only decides and hands a text to the `outbound-sms`
+   * queue — a few short reads and two updates, no gateway call — and only for events an
+   * administrator has switched SMS on for, so it is idle on a default deployment.
    */
-  notifications: { deliver: 5, deliverEmail: 3, sweep: 1, failAbandoned: 1, markExhausted: 1 },
+  notifications: { deliver: 5, deliverEmail: 3, deliverSms: 2, sweep: 1, failAbandoned: 1, markExhausted: 1 },
+
+  /**
+   * The emails an action asks for — invites, setup links, approval letters, bulk credentials —
+   * sent from `outbound_emails` rather than inside the request (see `OutboundEmailWorker`). Its own
+   * QUEUE, not just its own class: Bull's loops are per queue and take jobs of any name, so on the
+   * notification queue a 540-person credential run would have held the loops that push offers and
+   * alert emails need. Three sending slots matches the mail pool's three connections
+   * (`MAIL_CONNECTION_OPTIONS.maxConnections`); a fourth would only wait for a connection. Each
+   * holds a database connection for two short updates, not across the SMTP conversation.
+   *
+   * NOTE for every multi-handler row in this table: a queue's slots are the SUM of its handlers'
+   * concurrency, shared by all of its job names — not a per-name reservation.
+   */
+  outboundEmail: { send: 3, sweep: 1 },
+  /**
+   * Texts (`OutboundSmsWorker`, queue `outbound-sms`): the same ledger and delivery routine as email on
+   * a queue of its own, so a slow SMS gateway holds only texts. Two slots — a gateway answers in well
+   * under a second and texts are not bursty; the one sweep on the email queue covers both channels.
+   */
+  outboundSms: { send: 2 },
+
+  /**
+   * Roster bulk actions — "issue app access" and "notify" over a selection (see
+   * `workforce-bulk-jobs.contract.ts`). ONE slot for the whole queue, through a single `'*'`
+   * handler: two named handlers would have been two shared loops, letting two credential runs over
+   * the same people rotate passwords concurrently. Idle except when HR presses the button.
+   */
+  workforceBulk: { run: 1 },
 
   /**
    * Report exports. One per report kind, so a slow roster export cannot block a billing export.
@@ -102,8 +136,20 @@ export const WORKER_CONCURRENCY = {
   /** OCR. Bounded by CPU on the host rather than by the pool. */
   ocr: { extract: 3 },
 
-  /** Planning. Each of these walks a project's worth of branches; one at a time each. */
+  /**
+   * Planning reads. Each walks a project's worth of branches. Three handlers are three loops SHARED
+   * by all three job names — up to three reads at once of any mix, not one of each kind.
+   */
   planning: { coveragePlan: 1, projectCandidates: 1, dayPlans: 1 },
+
+  /**
+   * Planning writes — deploy an approved plan, generate a version, bulk offer, bulk unable-to-cover
+   * (see `planning-write-jobs.contract.ts`). Their own queue with ONE `'*'` loop: a named handler on
+   * the read queue would have been a fourth shared loop, letting two deploys of one plan run side by
+   * side. Idle except when the desk presses one of those buttons, and the work it replaced ran inside
+   * API requests on the same pool.
+   */
+  planningWrites: { run: 1 },
 
   /** Scheduled scans. */
   slaScanner: { scan: 1, digest: 1 },
@@ -112,38 +158,51 @@ export const WORKER_CONCURRENCY = {
   retention: { purge: 1 },
   outbox: { drain: 1 },
   billing: { reconcile: 1, bookAssignment: 1 },
+  /**
+   * Billing bulk writes — approve or pay a selection of payouts, and the invite-all assayer invoice
+   * round (see `billing-bulk-jobs.contract.ts`). Their own queue with ONE `'*'` loop: a handler on
+   * `billing-jobs` would have shared the reconcile/booking loops, letting two payout runs go at once
+   * and parking a 1,200-assayer round in the slot completion booking needs. Idle except when finance
+   * presses one of those buttons, and it replaced work that ran inside API requests on the same pool.
+   */
+  billingBulk: { run: 1 },
   documents: { autoDispatch: 1 },
+  /**
+   * Branch imports, alone on `import-jobs`. One slot, and one handler on the queue, so a
+   * re-upload queues behind the first attempt instead of racing it into the same rows.
+   */
   imports: { branchImport: 1 },
   /**
-   * The appraiser roster, on the *same* `import-jobs` queue as the branch import but in its own
-   * `@Processor` class — which is why it is its own key here rather than another slot under
-   * `imports`. This table is keyed per class, because that is what can be counted from the source.
+   * The appraiser roster, on its own `roster-import-jobs` queue with a single handler.
    *
    * It joined on 2026-09-02, when the roster stopped running inside its upload request; the web
    * client had been holding that request open for **fifteen minutes** to accommodate it.
    *
-   * Two handlers on one queue means a branch import and a roster import **can** run at the same
-   * time — Bull's concurrency is per handler, not per queue. That is safe for the reason the
+   * It first joined as a second class on `import-jobs`, with a note here claiming its one slot
+   * stopped two roster imports running at once. It did not: Bull's loops belong to the queue and
+   * pop the next job of any name, so the three import handlers on that queue were three shared
+   * loops, and two roster uploads could run side by side writing the same people. Moved to a queue
+   * of its own on 2026-09-17, which is the only shape in which one slot means one at a time.
+   *
+   * Running alongside a branch import is still possible and still safe, for the reason the
    * `geoPrecision` note below gives: `politely()` chains calls per host across the whole process,
    * so two concurrent importers still produce one geocode per second at the provider, not two.
-   * What the single slots buy is that neither import can run two copies of *itself*, which is what
-   * would double the database work, and that a re-upload queues behind the first attempt instead
-   * of racing it.
    */
   rosterImports: { rosterImport: 1 },
   /**
-   * The customer master, the third `@Processor` class on that same `import-jobs` queue — its own
-   * key here for the same reason as `rosterImports`: this table is keyed per class, because that
-   * is what the fitness test can count from the source.
+   * The customer master, on its own `customer-master-import-jobs` queue with a single handler.
    *
    * It joined on 2026-09-05, when reconciliation stopped running inside its upload request: a
    * daily file is walked row by row against the client's branches by SOL ID and then registered as
    * a version, and a socket timeout on that made a still-running import look like a failed one.
    *
    * One slot, so two uploads for the same project cannot reconcile and register versions at the
-   * same time, each unaware of the other's version number. It spends its time on database reads
-   * rather than on a rate-limited provider, so unlike the geocoding workers the slot is a
-   * correctness bound, not a politeness one.
+   * same time, each unaware of the other's version number. That was claimed while this sat as the
+   * third class on `import-jobs`, where it was false (three shared loops, as above); it is true
+   * since the 2026-09-17 move to its own queue. It spends its time on database reads rather than on
+   * a rate-limited provider, so unlike the geocoding workers the slot is a correctness bound, not a
+   * politeness one — which is also why that queue fails a stalled job instead of re-running it
+   * (`maxStalledCount: 0`, see `import.module.ts`).
    */
   customerMasterImports: { customerMasterImport: 1 },
   /**
@@ -180,11 +239,11 @@ export const WORKER_CONCURRENCY = {
  * Which Bull queue each `WORKER_CONCURRENCY` key actually processes.
  *
  * The table above is keyed per `@Processor` class, because that is what the fitness test can
- * count from the source (one class can watch a queue another class also watches — see
- * `rosterImports`/`imports` below). Pausing, dead-letter monitoring and the Bull Board dashboard
- * all care about the *queue*, not the class, so this is the one place that maps class-key to
- * queue name. Two class-keys are deliberately allowed to point at the same queue name
- * (`imports` and `rosterImports` both process `import-jobs`); everything else is 1:1.
+ * count from the source. Pausing, dead-letter monitoring and the Bull Board dashboard all care
+ * about the *queue*, not the class, so this is the one place that maps class-key to queue name.
+ * The mapping is 1:1. Two class-keys on one queue name is possible but is not a way to give each
+ * class its own slots — they would share every loop — which is why the three import kinds, which
+ * once did exactly that, now each have a queue of their own.
  *
  * This mapping, plus `WORKER_CONCURRENCY`'s own keys, is the single source every consumer
  * (`pauseLocalQueues` in main.ts, the job-failure monitor, Bull Board) derives its queue list
@@ -193,17 +252,22 @@ export const WORKER_CONCURRENCY = {
  */
 const QUEUE_NAME_BY_WORKER_KEY: Record<keyof typeof WORKER_CONCURRENCY, string> = {
   notifications: 'notification-delivery',
+  outboundEmail: 'outbound-email',
+  outboundSms: 'outbound-sms',
+  workforceBulk: 'workforce-bulk-jobs',
   reports: 'report-jobs',
   ocr: 'ocr',
   planning: 'planning-jobs',
+  planningWrites: 'planning-write-jobs',
   slaScanner: 'sla-scanner',
   retention: 'retention',
   outbox: 'outbox',
   billing: 'billing-jobs',
+  billingBulk: 'billing-bulk-jobs',
   documents: 'document-dispatch',
   imports: 'import-jobs',
-  rosterImports: 'import-jobs',
-  customerMasterImports: 'import-jobs',
+  rosterImports: 'roster-import-jobs',
+  customerMasterImports: 'customer-master-import-jobs',
   auditSeal: 'audit-seal',
   generic: 'background-jobs',
   geoPrecision: 'geo-precision',

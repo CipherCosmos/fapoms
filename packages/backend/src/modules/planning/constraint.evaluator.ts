@@ -157,7 +157,7 @@ export class ConstraintEvaluator {
       }
       return {
         passed: false,
-        reason: `Assayer double booking: already committed to assignment ${doubleBooked.assignmentNumber} on ${scheduledDate.toISOString().split('T')[0]}.`,
+        reason: `Assayer double booking: already committed to assignment ${doubleBooked.assignmentNumber} on ${businessDateKey(scheduledDate)}.`,
       };
     }
 
@@ -187,7 +187,7 @@ export class ConstraintEvaluator {
         }
         return {
           passed: false,
-          reason: `Assayer Unavailable: Assayer is on leave on ${scheduledDate.toISOString().split('T')[0]}.`,
+          reason: `Assayer Unavailable: Assayer is on leave on ${businessDateKey(scheduledDate)}.`,
         };
       }
     }
@@ -207,7 +207,7 @@ export class ConstraintEvaluator {
       if (outside) {
         return this.allowBypassed(
           BypassableRule.PROJECT_TIMELINE,
-          `${scheduledDate.toISOString().slice(0, 10)} is outside ${project.startDate ?? '—'}..${project.endDate ?? '—'}`,
+          `${businessDateKey(scheduledDate)} is outside ${project.startDate ?? '—'}..${project.endDate ?? '—'}`,
         );
       }
     }
@@ -242,7 +242,7 @@ export class ConstraintEvaluator {
     const isHoliday = await this.holidayService.isHoliday(scheduledDate, state, clientId);
     if (isHoliday) {
       if (this.ruleBypass.isBypassedSync(BypassableRule.HOLIDAY_CALENDAR)) {
-        return this.allowBypassed(BypassableRule.HOLIDAY_CALENDAR, `${scheduledDate.toISOString().slice(0, 10)} is a holiday in ${state}`);
+        return this.allowBypassed(BypassableRule.HOLIDAY_CALENDAR, `${businessDateKey(scheduledDate)} is a holiday in ${state}`);
       }
       return {
         passed: false,

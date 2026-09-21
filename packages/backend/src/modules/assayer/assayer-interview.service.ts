@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ApplicationStatus, EventCategory, InterviewOutcome } from '@fapoms/shared';
+import { ApplicationStatus, EventCategory, InterviewOutcome, type OutboundMessageReceipt } from '@fapoms/shared';
 import { AssayerInterviewEntity } from './assayer-interview.entity';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { RegistrationApplicationService } from './registration-application.service';
@@ -48,8 +48,9 @@ export class AssayerInterviewService {
   ) {}
 
   /**
-   * `inviteEmailed` says whether the candidate was actually reached, not whether an address was
-   * on file — the screen announces one of those and must not announce the other.
+   * `emailDelivery` is a receipt the screen watches until the email is sent or has failed, not a
+   * claim that the candidate was reached because an address was on file — the screen must not
+   * announce one of those as the other.
    *
    * ## Two writes and a send, in that order
    *
@@ -65,7 +66,11 @@ export class AssayerInterviewService {
     userName: string | undefined,
     organizationId?: string | null,
   ): Promise<AssayerInterviewEntity & {
-    inviteEmailed: boolean;
+    /**
+     * The invite email's receipt: queued now, sent moments later by a worker. Null when nothing was
+     * sent (a FAIL, or no address). The screen watches it rather than assuming delivery.
+     */
+    emailDelivery: OutboundMessageReceipt | null;
     inviteLink?: string;
     /** True when the PASS joined an application this candidate already had. See below. */
     joinedExistingApplication?: boolean;
@@ -133,19 +138,19 @@ export class AssayerInterviewService {
     });
 
     // ── After the commit ──────────────────────────────────────────────────
-    let inviteEmailed = false;
+    let emailDelivery: OutboundMessageReceipt | null = null;
     // Handed back to the interviewer on a PASS so the desk can deliver the link itself when the
-    // email did not go — see `RegistrationApplicationService.inviteLink`.
+    // email does not go — see `RegistrationApplicationService.inviteLink`.
     let inviteLink: string | undefined;
     if (invite) {
-      const delivered = await this.registrationApplications.deliverInvite(invite.application, invite.rawToken);
-      inviteEmailed = delivered.emailed;
+      const delivered = await this.registrationApplications.deliverInvite(invite.application, invite.rawToken, userId);
+      emailDelivery = delivered.emailDelivery;
       inviteLink = delivered.inviteLink;
     } else if (existing) {
       // The same link-handing the Applications screen offers, so a repeat PASS ends the way a
       // first one does: with something the desk can read out.
       const resent = await this.registrationApplications.resendInvite(existing.id, userId);
-      inviteEmailed = resent.emailed;
+      emailDelivery = resent.emailDelivery;
       inviteLink = resent.inviteLink;
     }
 
@@ -166,12 +171,13 @@ export class AssayerInterviewService {
       remarks: isPass
         ? existing
           ? `${interview.candidateName} passed; joined their open application rather than starting a second.`
-          : `${interview.candidateName} passed; a registration invite was ${inviteEmailed ? 'emailed' : 'minted and handed to the desk'}.`
+          : `${interview.candidateName} passed; a registration invite was minted and handed to the desk`
+            + `${emailDelivery?.status === 'QUEUED' ? ', and an email with it was queued' : ''}.`
         : `${interview.candidateName} was not taken forward. No registration invite was created.`,
     });
 
     return Object.assign(interview, {
-      inviteEmailed,
+      emailDelivery,
       inviteLink,
       joinedExistingApplication: Boolean(existing),
     });

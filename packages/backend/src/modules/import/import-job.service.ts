@@ -21,7 +21,14 @@ import { Injectable, Logger, NotFoundException, PayloadTooLargeException } from 
 import { InjectQueue } from '@nestjs/bull';
 import type { JobOptions, Queue } from 'bull';
 
-import { IMPORT_QUEUE, BRANCH_IMPORT_JOB, ROSTER_IMPORT_JOB, CUSTOMER_MASTER_IMPORT_JOB } from './import.constants';
+import {
+  IMPORT_QUEUE,
+  ROSTER_IMPORT_QUEUE,
+  CUSTOMER_MASTER_IMPORT_QUEUE,
+  BRANCH_IMPORT_JOB,
+  ROSTER_IMPORT_JOB,
+  CUSTOMER_MASTER_IMPORT_JOB,
+} from './import.constants';
 import {
   BranchImportOutcome,
   BranchImportProgress,
@@ -86,6 +93,15 @@ export interface RosterImportJobData {
    * unchanged.
    */
   overwrite: boolean;
+  /**
+   * A rehearsal: run the whole import inside its transaction, roll it back, and return what it
+   * would have done.
+   *
+   * On the same queue and the same handler as the real import, deliberately — see
+   * `enqueueRosterImport`. Optional because a job queued before rehearsals were queued has no
+   * such field, and it was a real import.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -141,7 +157,19 @@ export interface ImportJobStatus<TProgress = BranchImportProgress, TResult = Bra
 export class ImportJobService {
   private readonly logger = new Logger(ImportJobService.name);
 
-  constructor(@InjectQueue(IMPORT_QUEUE) private readonly queue: Queue) {}
+  /**
+   * One queue per import kind, and each method below touches only its own kind's queue.
+   *
+   * They shared one queue, which ran nothing one at a time (see `import.constants.ts`). Bull job ids
+   * are a per-queue counter, so a status lookup must read the queue the job was added to: roster job
+   * 7 and branch job 7 are now two different jobs, and reading the wrong queue would answer "not
+   * found" for a job that exists — or, worse, find some other kind's job under that number.
+   */
+  constructor(
+    @InjectQueue(IMPORT_QUEUE) private readonly branchQueue: Queue,
+    @InjectQueue(ROSTER_IMPORT_QUEUE) private readonly rosterQueue: Queue,
+    @InjectQueue(CUSTOMER_MASTER_IMPORT_QUEUE) private readonly customerMasterQueue: Queue,
+  ) {}
 
   /**
    * Above this many geocoded rows, the import goes to the queue.
@@ -205,12 +233,72 @@ export class ImportJobService {
      * them.
      *
      * Note this does not cover a worker that dies mid-job: Bull's stalled-job detection will
-     * re-deliver that one independently of `attempts`.
+     * re-deliver that one independently of `attempts`. Whether it may is decided per queue in
+     * `import.module.ts` — branch and roster imports converge on a re-run, a customer-master
+     * reconciliation does not and is failed instead.
      */
     attempts: 1,
     removeOnComplete: { age: 24 * 60 * 60, count: 200 },
     removeOnFail: { age: 7 * 24 * 60 * 60, count: 200 },
   };
+
+  /**
+   * How long an import may run before Bull fails it — per kind, sized well past the slowest real
+   * run, because this is for a job that has HUNG, not one that is slow.
+   *
+   * Know what Bull's `timeout` does and does not do: it races the handler's promise and, when the
+   * clock wins, marks the job failed and frees the queue's loop. It does NOT stop the handler, which
+   * keeps running. So a timeout shorter than a real run does not cancel a slow import — it lets the
+   * NEXT import of that kind start beside it, which is exactly the overlap one-queue-per-kind exists
+   * to prevent. The only safe value is one a live import cannot reach; below that, all it can do is
+   * release a slot held by a promise that will never settle (a socket with no timeout of its own).
+   *
+   * - **branch — 6 h.** The largest real file is the 3,759-row client branch list. The worst
+   *   per-row cost is a geocode on the public providers: `politely()` spaces Nominatim at 1.1 s,
+   *   with fallbacks, and this service's own header puts a 2,000-branch file at up to two and a
+   *   half hours — about 4.5 s a row. 3,759 x 4.5 s = 16,900 s, about 4.7 h. Six hours clears it
+   *   by a quarter.
+   * - **roster — 2 h.** The real roster is 1,155 rows. Geocoding is handed to the precision queue
+   *   after the commit, so the in-run cost is database writes (~10 a row: 11,550 statements at a
+   *   few milliseconds, about a minute) plus the IFSC cross-check, capped at 3 s and now asked once
+   *   per distinct code. Worst case, every row a different code and every lookup timing out:
+   *   1,155 x 3 s = 3,465 s, about 58 min, plus the minute of writes — just under an hour. Two
+   *   hours doubles it, which also covers a roster that grows by half again. A rehearsal does the
+   *   same work, so it gets the same bound.
+   * - **customer master — 30 min.** Database only, no network. A 10 MB workbook
+   *   (`MAX_QUEUED_FILE_BYTES`) is at most ~200,000 rows: ~200 chunked reads of 1,000 accounts and
+   *   ~200 batched inserts of 1,000 records, each well under 2 s — under 7 min, plus a minute to
+   *   parse. Thirty minutes is three times that, and short enough that a hung reconciliation does
+   *   not hold the next day's upload for hours.
+   */
+  static readonly TIMEOUT_MS = {
+    branch: 6 * 60 * 60 * 1000,
+    roster: 2 * 60 * 60 * 1000,
+    customerMaster: 30 * 60 * 1000,
+  } as const;
+
+  /** `JOB_OPTIONS` plus the timeout for one kind of import. */
+  static jobOptions(kind: keyof typeof ImportJobService.TIMEOUT_MS): JobOptions {
+    return { ...ImportJobService.JOB_OPTIONS, timeout: ImportJobService.TIMEOUT_MS[kind] };
+  }
+
+  /**
+   * The `failedReason` Bull writes when it fails a stalled job instead of re-running it.
+   *
+   * Only the customer-master queue can produce it (`maxStalledCount: 0`, see `import.module.ts`),
+   * and Bull's own words mean nothing to the person who uploaded the file.
+   */
+  static readonly BULL_STALLED_REASON = 'job stalled more than allowable limit';
+
+  /**
+   * What the operator reads instead. It cannot say whether the batch landed — the worker may have
+   * died before its transaction committed or just after — so it sends them to where the answer is,
+   * rather than inviting a blind re-upload that could register the same file twice.
+   */
+  static readonly CUSTOMER_MASTER_INTERRUPTED =
+    'This import was interrupted before it could report back (usually a server restart), and was not ' +
+    'run again automatically because reconciling the same file twice registers it twice. Check this ' +
+    "project's customer-master versions for the file before uploading it again.";
 
   /**
    * Whether a file of this shape should be queued rather than run in the request.
@@ -262,7 +350,7 @@ export class ImportJobService {
       rowsNeedingGeocode: params.rowsNeedingGeocode,
     };
 
-    const job = await this.queue.add(BRANCH_IMPORT_JOB, data, ImportJobService.JOB_OPTIONS);
+    const job = await this.branchQueue.add(BRANCH_IMPORT_JOB, data, ImportJobService.jobOptions('branch'));
     this.logger.log(
       `Queued branch import job ${job.id} for ${params.scope.kind.toLowerCase()} ${params.scope.id}: ` +
         `${params.totalRows} row(s), ${params.rowsNeedingGeocode} needing a geocode.`,
@@ -290,10 +378,26 @@ export class ImportJobService {
    * empanelments — thousands of rows for a full roster — and geocodes each home address. It ran
    * inside the request, and the web client compensated with a **fifteen-minute** upload timeout: a
    * page held open for a quarter of an hour, with nothing to look at and no way to tell a slow
-   * import from a dead one. Same queue, same reasoning as the branch import.
+   * import from a dead one. Queued for the same reason as the branch import, on a queue of its own
+   * so that two roster uploads run one after the other rather than side by side.
    *
    * There is no size threshold here, unlike branches: a roster row is expensive whatever the row
-   * count, and the rehearsal (`dryRun`) is what the operator waits for interactively.
+   * count.
+   *
+   * ## The rehearsal is queued too (`dryRun`)
+   *
+   * It stayed in the request on the belief that a rehearsal is a quick look. It is not: it performs
+   * the entire import — every row's ~10 writes and its IFSC cross-check — inside one transaction and
+   * rolls it back. The real 1,155-person roster was about seven minutes of an upload request
+   * holding a pool connection and row locks on `assayers`, against a web timeout of three.
+   *
+   * It goes on the roster queue, through the same handler, rather than a queue of its own, so a
+   * rehearsal and a real import run one after the other and never side by side. Beside a real
+   * import it would take the same row locks and wait on them inside its own open transaction (and
+   * trip its 300 s statement timeout), and even where it got through, its answer — "N new, M
+   * updated" — would describe a roster that a half-committed import is in the middle of changing.
+   * Queued behind it, the rehearsal reads the state the next real import will actually meet. Bull's
+   * stalled re-run is harmless for a rehearsal: it writes nothing.
    */
   async enqueueRosterImport(params: {
     actorId: string;
@@ -302,6 +406,8 @@ export class ImportJobService {
     totalRows: number;
     sheetName?: string | null;
     overwrite?: boolean;
+    /** Rehearse rather than import. Defaults to a real import, as before. */
+    dryRun?: boolean;
   }): Promise<ImportJobStatus<never, unknown>> {
     if (params.fileBuffer.length > ImportJobService.MAX_QUEUED_FILE_BYTES) {
       throw new PayloadTooLargeException(
@@ -317,10 +423,13 @@ export class ImportJobService {
       totalRows: params.totalRows,
       sheetName: params.sheetName ?? null,
       overwrite: params.overwrite ?? false,
+      dryRun: params.dryRun === true,
     };
 
-    const job = await this.queue.add(ROSTER_IMPORT_JOB, data, ImportJobService.JOB_OPTIONS);
-    this.logger.log(`Queued roster import job ${job.id}: ${params.totalRows} row(s).`);
+    const job = await this.rosterQueue.add(ROSTER_IMPORT_JOB, data, ImportJobService.jobOptions('roster'));
+    this.logger.log(
+      `Queued roster ${data.dryRun ? 'rehearsal' : 'import'} job ${job.id}: ${params.totalRows} row(s).`,
+    );
 
     return {
       jobId: String(job.id),
@@ -346,7 +455,7 @@ export class ImportJobService {
    *   any other import's result, which names real people, their PANs and their addresses.
    */
   async getRosterImportStatus(actorId: string, jobId: string): Promise<ImportJobStatus<never, unknown>> {
-    const job = await this.queue.getJob(jobId);
+    const job = await this.rosterQueue.getJob(jobId);
     const data = job?.data as RosterImportJobData | undefined;
 
     if (!job || !data || data.actorId !== actorId) {
@@ -409,7 +518,7 @@ export class ImportJobService {
       auditDate: params.auditDate ?? null,
     };
 
-    const job = await this.queue.add(CUSTOMER_MASTER_IMPORT_JOB, data, ImportJobService.JOB_OPTIONS);
+    const job = await this.customerMasterQueue.add(CUSTOMER_MASTER_IMPORT_JOB, data, ImportJobService.jobOptions('customerMaster'));
     this.logger.log(`Queued customer-master import job ${job.id} for project ${params.projectId}.`);
 
     return {
@@ -435,7 +544,7 @@ export class ImportJobService {
    * otherwise let anyone who may upload a file read someone else's result.
    */
   async getCustomerMasterImportStatus(actorId: string, jobId: string): Promise<ImportJobStatus<never, unknown>> {
-    const job = await this.queue.getJob(jobId);
+    const job = await this.customerMasterQueue.getJob(jobId);
     const data = job?.data as CustomerMasterImportJobData | undefined;
 
     if (!job || !data || data.actorId !== actorId) {
@@ -454,7 +563,11 @@ export class ImportJobService {
       // partial count that means anything until it lands.
       progress: null,
       result: state === 'completed' ? ((job.returnvalue as unknown) ?? null) : null,
-      error: state === 'failed' ? (job.failedReason ?? 'The import failed without recording a reason.') : null,
+      error: state === 'failed'
+        ? job.failedReason === ImportJobService.BULL_STALLED_REASON
+          ? ImportJobService.CUSTOMER_MASTER_INTERRUPTED
+          : (job.failedReason ?? 'The import failed without recording a reason.')
+        : null,
       fileName: data.fileName,
       totalRows: 0,
       rowsNeedingGeocode: 0,
@@ -478,7 +591,7 @@ export class ImportJobService {
    *   scope's job id exists.
    */
   async getBranchImportStatus(scope: ImportScope, jobId: string): Promise<ImportJobStatus> {
-    const job = await this.queue.getJob(jobId);
+    const job = await this.branchQueue.getJob(jobId);
     const data = job?.data as BranchImportJobData | undefined;
     const jobScope = ImportJobService.scopeOf(data);
 

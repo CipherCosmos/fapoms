@@ -1,9 +1,12 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as bcrypt from 'bcrypt'; import { randomInt, randomUUID, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
 import { buildWorkbook } from '../reports/excel-export';
+import { EmailService } from '../notifications/email.service';
+import { SmsService } from '../notifications/sms.service';
+import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider'; import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { appPublicUrl } from '../../infrastructure/notifications/email-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
   IDEMPOTENCY_ERROR_CODES, payoutBlockingGaps,
@@ -29,6 +32,7 @@ import { fieldFingerprint } from '../../infrastructure/security/field-encryption
 import { pincodeAuthority } from '../geo/india-geocoder';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from '../geo/coordinate-resolution';
 import { reverseFreely } from '../geo/osm-geocoder';
+import { isAddressUsable } from '../geo/indian-address';
 
 /**
  * Returns the authoritative state and district a 6-digit Indian pincode belongs
@@ -684,8 +688,6 @@ export class AssayerService implements OnModuleInit {
     // `NotificationService.notifyAssayer` already exists to do: addressed straight at a list of
     // assayer ids, not roles.
     private readonly notificationService: NotificationService,
-    private readonly emailProvider: EmailProvider,
-    private readonly smsProvider: SmsProvider,
     private readonly uow: UnitOfWork,
     @InjectDataSource()
     private readonly dataSource: DataSource,
@@ -712,8 +714,26 @@ export class AssayerService implements OnModuleInit {
      * spec builds the service without one.
      */
     @Optional() private readonly platformSettings?: PlatformSettingsService,
-    @Optional() private readonly templateRenderer?: EmailTemplateRenderer,
+    /**
+     * Email, for the bulk credential and message runs — always queued. Optional and last for the
+     * same positional-spec reason as the two above; the bulk methods refuse to run without it rather
+     * than fall back to sending inside the loop, which is the slow path this replaced.
+     */
+    @Optional() private readonly emailService?: EmailService,
+    /**
+     * Texts, for the bulk credential run — always queued, on the same outbound ledger as the email.
+     * Optional and last for the same positional-spec reason as the three above. Unlike email, a
+     * missing one refuses only the SMS leg: the email still carries the credential.
+     */
+    @Optional() private readonly smsService?: SmsService,
   ) {}
+
+  private emailQueue(): EmailService {
+    if (!this.emailService) {
+      throw new Error('The email queue is not wired into AssayerService; bulk emails cannot be sent.');
+    }
+    return this.emailService;
+  }
 
   onModuleInit() {
     // Derived from the one table, not typed out again. The engine gates
@@ -729,7 +749,7 @@ export class AssayerService implements OnModuleInit {
     (assayer as any).skills = attrs.filter(a => a.type === 'SKILL').map(a => a.name);
     (assayer as any).certifications = attrs.filter(a => a.type === 'CERTIFICATION').map(a => ({
       name: a.name,
-      expiryDate: a.expiryDate ? a.expiryDate.toISOString().split('T')[0] : null,
+      expiryDate: a.expiryDate ? businessDateKey(a.expiryDate) : null,
     }));
     (assayer as any).languages = attrs.filter(a => a.type === 'LANGUAGE').map(a => a.name);
     (assayer as any).specializations = attrs.filter(a => a.type === 'SPECIALIZATION').map(a => a.name);
@@ -751,7 +771,7 @@ export class AssayerService implements OnModuleInit {
       (assayer as any).skills = attrs.filter(a => a.type === 'SKILL').map(a => a.name);
       (assayer as any).certifications = attrs.filter(a => a.type === 'CERTIFICATION').map(a => ({
         name: a.name,
-        expiryDate: a.expiryDate ? a.expiryDate.toISOString().split('T')[0] : null,
+        expiryDate: a.expiryDate ? businessDateKey(a.expiryDate) : null,
       }));
       (assayer as any).languages = attrs.filter(a => a.type === 'LANGUAGE').map(a => a.name);
       (assayer as any).specializations = attrs.filter(a => a.type === 'SPECIALIZATION').map(a => a.name);
@@ -1578,17 +1598,38 @@ export class AssayerService implements OnModuleInit {
      * appears on the map somewhere they have never been, and every distance filter silently
      * uses the fiction. An unknown location is visible and fixable; a plausible wrong one is
      * neither — which is exactly what `geoAccuracyMeters` now makes legible.
+     *
+     * NOT INSIDE THE REQUEST ANY MORE, FOR AN ADDRESS A MAP CAN READ.
+     *
+     * With no Google key the chain walks India Post, the self-hosted Nominatim and public Photon —
+     * the last spaced 1.1 s apart process-wide with a 12 s timeout — so admitting one person took
+     * 2–6 s and could pass the web client's 30 s timeout, which is what made approvers press
+     * Approve twice. Such a row is now saved with no coordinate and placed by the background
+     * precision worker (`GeoPrecisionService.enqueueBackfill`, handed over by the caller once its
+     * own writes are done), exactly as the roster import does.
+     *
+     * Two cases still resolve here, because nothing afterwards would do it for them:
+     *  - a coordinate the caller supplied. Rule 1 answers it without a lookup, and it is a pin a
+     *    person placed, which no worker may overwrite.
+     *  - an address that names no place. The worker declines those (`isAddressUsable`), so
+     *    deferring would leave them unplaced for good and unactivatable. They take the coarse
+     *    tiers only (`precise: false`: never the rate-limited OSM ones) — a pincode, district or
+     *    state centroid, which is as far as such an address can get.
      */
-    const geo = await resolveCoordinates({
-      address: dto.address,
-      city: dto.city,
-      district: dto.district,
-      state: dto.state,
-      pincode: dto.pincode,
-      suppliedLat: dto.latitude,
-      suppliedLng: dto.longitude,
-      suppliedIsManual: dto.latitude != null && dto.longitude != null,
-    });
+    const suppliedPair = isPlausibleIndianCoord(dto.latitude, dto.longitude);
+    const geo = suppliedPair || !isAddressUsable(dto.address)
+      ? await resolveCoordinates({
+        address: dto.address,
+        city: dto.city,
+        district: dto.district,
+        state: dto.state,
+        pincode: dto.pincode,
+        suppliedLat: dto.latitude,
+        suppliedLng: dto.longitude,
+        suppliedIsManual: dto.latitude != null && dto.longitude != null,
+        precise: false,
+      })
+      : null;
     if (geo && needsBetterFix(geo.geoSource, geo.geoAccuracyMeters)) {
       this.logger.warn(
         `Assayer ${dto.assayerCode}: could only place them to ±${geo.geoAccuracyMeters}m ` +
@@ -2690,34 +2731,18 @@ export class AssayerService implements OnModuleInit {
     targetStatus: string,
     userId: string,
     reason?: string,
+    /** Supplied by the background job (`WorkforceBulkJobsWorker`) so the screen can show progress. */
+    onProgress?: ProgressCallback,
   ): Promise<BulkLifecycleResult> {
-    const validTargets = Object.values(AssayerLifecycleStatus);
-    if (!validTargets.includes(targetStatus as AssayerLifecycleStatus)) {
-      throw new BadRequestException(`Invalid target status: ${targetStatus}`);
-    }
-
-    /**
-     * The ceiling, once for the request rather than once per row.
-     *
-     * `doTransitionLifecycle` enforces it too and is the authority; checking it here as well is
-     * what keeps an over-long reason from being a per-row failure on every id in the batch after
-     * the first row has already moved. Nothing has been touched at this point, so a throw here
-     * is honest about having changed nothing — which is exactly what the single-transition route
-     * does with the same input.
-     */
-    if (reason && reason.length > LIFECYCLE_REASON_MAX_LENGTH) {
-      throw new BadRequestException(
-        `That reason is ${reason.length} characters. Keep it under ${LIFECYCLE_REASON_MAX_LENGTH} — `
-        + 'it goes onto the employment record and into the audit trail, which cannot be edited later.',
-      );
-    }
+    this.assertBulkLifecycleRequest(targetStatus, reason);
 
     const succeeded: BulkLifecycleResult['succeeded'] = [];
     const partial: BulkLifecycleResult['partial'] = [];
     const skipped: BulkLifecycleResult['skipped'] = [];
     const failed: BulkLifecycleResult['failed'] = [];
 
-    for (const id of ids) {
+    for (const [index, id] of ids.entries()) {
+      await onProgress?.(index, ids.length, 'Moving people');
       let from: string | undefined;
       /** Hops this walk actually committed, pushed the instant `executeCommand` resolves. */
       const completed: AssayerLifecycleStatus[] = [];
@@ -2816,7 +2841,38 @@ export class AssayerService implements OnModuleInit {
       }
     }
 
+    await onProgress?.(ids.length, ids.length, 'Moving people');
     return { succeeded, partial, skipped, failed };
+  }
+
+  /**
+   * The request-level refusals for a bulk lifecycle walk, callable before the walk is queued.
+   *
+   * The walk runs in a background job now, and a job cannot answer 400 — so the controller calls
+   * this first, and a bad target or an over-long reason is refused in the request exactly as before,
+   * with nothing queued and nothing touched.
+   */
+  assertBulkLifecycleRequest(targetStatus: string, reason?: string): void {
+    const validTargets = Object.values(AssayerLifecycleStatus);
+    if (!validTargets.includes(targetStatus as AssayerLifecycleStatus)) {
+      throw new BadRequestException(`Invalid target status: ${targetStatus}`);
+    }
+
+    /**
+     * The ceiling, once for the request rather than once per row.
+     *
+     * `doTransitionLifecycle` enforces it too and is the authority; checking it here as well is
+     * what keeps an over-long reason from being a per-row failure on every id in the batch after
+     * the first row has already moved. Nothing has been touched at this point, so a throw here
+     * is honest about having changed nothing — which is exactly what the single-transition route
+     * does with the same input.
+     */
+    if (reason && reason.length > LIFECYCLE_REASON_MAX_LENGTH) {
+      throw new BadRequestException(
+        `That reason is ${reason.length} characters. Keep it under ${LIFECYCLE_REASON_MAX_LENGTH} — `
+        + 'it goes onto the employment record and into the audit trail, which cannot be edited later.',
+      );
+    }
   }
 
   /**
@@ -5077,7 +5133,7 @@ export class AssayerService implements OnModuleInit {
 
   /**
    * Issue app access to a batch of assayers in one operation, delivered by email and SMS
-   * instead of read off a screen one person at a time.
+   * instead of read off a screen one person at a time. Both are queued on the outbound ledger.
    *
    * 540 of 548 active assayers were imported with a lifecycle record and no password at all,
    * and the only way to give one out was `issueAppAccess` above from `AssayerRecord.tsx` —
@@ -5090,17 +5146,25 @@ export class AssayerService implements OnModuleInit {
    * without aborting the rest, and a `{ succeeded, skipped, failed }` summary instead of a
    * thrown error for anything short of the whole request being malformed.
    *
-   * The temporary password exists in memory only for the two delivery calls below. It is never
-   * put into `succeeded`/`skipped`/`failed`, never interpolated into a log line, and never added
-   * to the per-person audit metadata that `issueAppAccessCore` already writes — the entire point
-   * of a bulk tool handling 540 credentials unattended is that nothing durable holds them in the
-   * clear.
+   * The temporary password exists in memory only for the two delivery calls below, where it travels
+   * as template data (both queues encrypt the rendered message at rest and erase it once sent). It
+   * is never put into `succeeded`/`skipped`/`failed`, never interpolated into a log line, and never
+   * added to the per-person audit metadata that `issueAppAccessCore` already writes — the entire
+   * point of a bulk tool handling 540 credentials unattended is that nothing durable holds them in
+   * the clear.
    */
   async bulkIssueAppAccess(
     ids: string[],
     actorId: string,
+    /** Supplied by the background job (`WorkforceBulkJobsWorker`) so the screen can show "37 of 540". */
+    onProgress?: ProgressCallback,
   ): Promise<{
-    succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[];
+    /**
+     * `EMAIL` means the credential email was QUEUED, and `emailId` is its receipt to watch; `SMS`
+     * means the credential text was QUEUED, and `smsId` is its receipt. Neither means delivered —
+     * the screen watches the receipts for that.
+     */
+    succeeded: { id: string; channels: ('EMAIL' | 'SMS')[]; emailId?: string; smsId?: string }[];
     skipped: { id: string; reason: string }[];
     failed: { id: string; reason: string }[];
   }> {
@@ -5112,11 +5176,19 @@ export class AssayerService implements OnModuleInit {
       throw new BadRequestException('Issue app access to at most 500 assayers at a time.');
     }
 
-    const succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[] = [];
+    const succeeded: { id: string; channels: ('EMAIL' | 'SMS')[]; emailId?: string; smsId?: string }[] = [];
     const skipped: { id: string; reason: string }[] = [];
     const failed: { id: string; reason: string }[] = [];
+    const emails = this.emailQueue();
+    // A missing SMS service refuses the SMS leg for the whole run, said once, not the run itself:
+    // email still carries every credential, and `channels` shows HR who got no text.
+    const texts = this.smsService ?? null;
+    if (!texts) {
+      this.logger.warn('The SMS queue is not wired into AssayerService; this app-access run sends email only.');
+    }
 
-    for (const id of ids) {
+    for (const [index, id] of ids.entries()) {
+      await onProgress?.(index, ids.length, 'Issuing app access');
       try {
         const assayer = await this.findOne(id);
         if (!assayer.email && !assayer.phone) {
@@ -5126,37 +5198,19 @@ export class AssayerService implements OnModuleInit {
 
         const issued = await this.issueAppAccessCore(assayer, actorId);
         const channels: ('EMAIL' | 'SMS')[] = [];
-
-        // Built once and handed to both channels — reused, not logged, and gone once this
-        // iteration ends.
-        const message =
-          `Your FAPOMS sign-in is ${issued.username} and your temporary password is ` +
-          `${issued.temporaryPassword}. It works for 7 days and you will be asked to choose ` +
-          'your own password the first time you sign in.';
+        let emailId: string | undefined;
+        let smsId: string | undefined;
 
         if (assayer.email) {
-          let subject = 'Your FAPOMS app access';
-          let text = message;
-          let html = renderEmailHtml({
-            title: 'Your FAPOMS App Access Credentials',
-            bodyLines: [
-              `Hello ${assayer.displayName || 'Appraiser'},`,
-              'Your authorized account for the Sumeru Global Field Assayer & Portfolio Operations Management mobile application has been provisioned.',
-              'Use the temporary credentials below to sign in. You will be asked to set your own password upon first login.',
-            ],
-            kvTable: [
-              { label: 'Username / Appraiser ID', value: issued.username },
-              { label: 'Temporary Password', value: issued.temporaryPassword },
-              { label: 'Validity Period', value: '7 calendar days' },
-            ],
-            linkUrl: appPublicUrl(),
-            linkLabel: 'Access FAPOMS Portal',
-            securityNotice: 'Do not share your temporary credentials with anyone. Sumeru Global personnel will never ask for your password.',
-          });
-
-          if (this.templateRenderer) {
-            try {
-              const rendered = await this.templateRenderer.render('app-credentials', {
+          // Queued, not sent in this loop: an SMTP conversation per person was most of what made a
+          // 540-person run take half an hour. The message is encrypted at rest and erased once sent.
+          const receipt = await emails.queue({
+            kind: 'APP_ACCESS_CREDENTIALS',
+            to: assayer.email,
+            recipientName: assayer.displayName,
+            content: {
+              template: 'app-credentials',
+              data: {
                 displayName: assayer.displayName || 'Appraiser',
                 username: issued.username,
                 temporaryPassword: issued.temporaryPassword,
@@ -5164,33 +5218,47 @@ export class AssayerService implements OnModuleInit {
                 loginUrl: appPublicUrl(),
                 logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
                 companyName: 'Sumeru Global',
-              });
-              subject = rendered.subject;
-              text = rendered.text;
-              html = rendered.html;
-            } catch (err: any) {
-              this.logger.warn(`Template render failed for app-credentials: ${err.message}`);
-            }
-          }
-
-          const emailResult = await this.emailProvider.send({
-            to: assayer.email,
-            subject,
-            text,
-            html,
+              },
+            },
+            entityType: 'ASSAYER',
+            entityId: assayer.id,
+            requestedBy: actorId,
           });
-          if (emailResult.success) channels.push('EMAIL');
+          if (receipt.status === 'QUEUED' && receipt.id) {
+            channels.push('EMAIL');
+            emailId = receipt.id;
+          }
         }
-        if (assayer.phone) {
-          const smsSent = await this.smsProvider.send(assayer.phone, message);
-          if (smsSent) channels.push('SMS');
+        if (assayer.phone && texts) {
+          // Queued for the same reason as the email, and as the registered DLT template: the
+          // wording lives in `sms-template-registry.ts`, not here.
+          const receipt = await texts.queue({
+            kind: 'APP_ACCESS_CREDENTIALS',
+            to: assayer.phone,
+            recipientName: assayer.displayName,
+            content: {
+              template: 'app-credentials',
+              data: {
+                username: issued.username,
+                temporaryPassword: issued.temporaryPassword,
+                validDays: '7',
+              },
+            },
+            entityType: 'ASSAYER',
+            entityId: assayer.id,
+            requestedBy: actorId,
+          });
+          if (receipt.status === 'QUEUED' && receipt.id) {
+            channels.push('SMS');
+            smsId = receipt.id;
+          }
         }
 
-        // A person with neither channel reporting success is not moved to `failed`: the
-        // credential is live either way (issueAppAccessCore already committed it, and already
-        // wrote its own audit row), and `channels: []` is how HR sees that nothing actually
-        // reached this person and a manual follow-up is needed.
-        succeeded.push({ id, channels });
+        // A person with neither channel queued is not moved to `failed`: the credential is live
+        // either way (issueAppAccessCore already committed it, and already wrote its own audit
+        // row), and `channels: []` is how HR sees that nothing is on its way to this person and a
+        // manual follow-up is needed.
+        succeeded.push({ id, channels, ...(emailId ? { emailId } : {}), ...(smsId ? { smsId } : {}) });
       } catch (e) {
         failed.push({ id, reason: (e as Error).message });
       }
@@ -5213,11 +5281,12 @@ export class AssayerService implements OnModuleInit {
         succeeded: succeeded.length,
         skipped: skipped.length,
         failed: failed.length,
-        emailed: succeeded.filter((s) => s.channels.includes('EMAIL')).length,
-        texted: succeeded.filter((s) => s.channels.includes('SMS')).length,
+        emailsQueued: succeeded.filter((s) => s.channels.includes('EMAIL')).length,
+        smsQueued: succeeded.filter((s) => s.channels.includes('SMS')).length,
       },
     });
 
+    await onProgress?.(ids.length, ids.length, 'Issuing app access');
     return { succeeded, skipped, failed };
   }
 
@@ -5235,8 +5304,10 @@ export class AssayerService implements OnModuleInit {
     body: string,
     sendEmail: boolean,
     actorId: string,
+    onProgress?: ProgressCallback,
   ): Promise<{
-    succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[] }[];
+    /** `EMAIL` means the message was queued for email; `emailId` is its receipt. */
+    succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[]; emailId?: string }[];
     skipped: { id: string; reason: string }[];
     failed: { id: string; reason: string }[];
   }> {
@@ -5247,14 +5318,17 @@ export class AssayerService implements OnModuleInit {
       throw new BadRequestException('A subject and a message are required.');
     }
 
-    const succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[] }[] = [];
+    const succeeded: { id: string; channels: ('IN_APP' | 'EMAIL')[]; emailId?: string }[] = [];
     const skipped: { id: string; reason: string }[] = [];
     const failed: { id: string; reason: string }[] = [];
+    const emails = sendEmail ? this.emailQueue() : null;
 
-    for (const id of ids) {
+    for (const [index, id] of ids.entries()) {
+      await onProgress?.(index, ids.length, 'Sending the message');
       try {
         const assayer = await this.findOne(id);
         const channels: ('IN_APP' | 'EMAIL')[] = [];
+        let emailId: string | undefined;
 
         const { inAppDelivered } = await this.notificationService.notifyAssayer(
           id,
@@ -5264,25 +5338,36 @@ export class AssayerService implements OnModuleInit {
         );
         if (inAppDelivered) channels.push('IN_APP');
 
-        if (sendEmail && assayer.email) {
-          const emailResult = await this.emailProvider.send({
+        if (emails && assayer.email) {
+          // The desk wrote every word of this, so it is a branded layout rather than a template:
+          // there is no default wording for an administrator to edit.
+          const receipt = await emails.queue({
+            kind: 'ROSTER_MESSAGE',
             to: assayer.email,
-            subject: subject.trim(),
-            text: body.trim(),
-            html: renderEmailHtml({
-              title: subject.trim(),
-              bodyLines: body.trim().split('\n').filter(Boolean),
-              linkUrl: appPublicUrl(),
-              linkLabel: 'Open FAPOMS Portal',
-            }),
+            content: {
+              subject: subject.trim(),
+              text: body.trim(),
+              layout: {
+                title: subject.trim(),
+                bodyLines: body.trim().split('\n').filter(Boolean),
+                linkUrl: appPublicUrl(),
+                linkLabel: 'Open FAPOMS Portal',
+              },
+            },
+            entityType: 'ASSAYER',
+            entityId: assayer.id,
+            requestedBy: actorId,
           });
-          if (emailResult.success) channels.push('EMAIL');
+          if (receipt.status === 'QUEUED' && receipt.id) {
+            channels.push('EMAIL');
+            emailId = receipt.id;
+          }
         } else if (sendEmail && !assayer.email) {
           skipped.push({ id, reason: 'No email on file — only the in-app notification was sent.' });
           continue;
         }
 
-        succeeded.push({ id, channels });
+        succeeded.push(emailId ? { id, channels, emailId } : { id, channels });
       } catch (e) {
         failed.push({ id, reason: (e as Error).message });
       }
@@ -5298,6 +5383,7 @@ export class AssayerService implements OnModuleInit {
       metadata: { requested: ids.length, succeeded: succeeded.length, skipped: skipped.length, failed: failed.length },
     });
 
+    await onProgress?.(ids.length, ids.length, 'Sending the message');
     return { succeeded, skipped, failed };
   }
 

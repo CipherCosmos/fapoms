@@ -107,7 +107,6 @@ export interface CreateAssignmentDto {
    * Distinct from omitting `proposedFee`, which means "quote it from the rate card". Without
    * this the two intentions were indistinguishable and the no-fee button silently sent a fee.
    */
-  noFee?: boolean;
   scheduledDate?: string;
   remarks?: string;
   autoSchedule?: boolean;
@@ -378,6 +377,49 @@ export class AssignmentService {
    * consulted `overrideReason`, so the planning panel offered "Assign anyway", the operator typed
    * a justification, and a rule that had never read the field refused them.
    */
+  /**
+   * Every dispatched job carries a price. There is no "no fee" any more.
+   *
+   * `dto.noFee` used to force this to null, and the reason was sound at the time: omitting the
+   * fee meant "quote it for me", so a button promising "No fee is agreed or recorded" quietly
+   * attached base + travel and **the assayer saw a fee nobody had agreed**.
+   *
+   * Both halves of that reasoning have since gone. The assayer cannot see an assignment's fee at
+   * all — `AssayerMoneyRedactionInterceptor` strips `proposedFee`/`agreedFee`/`quotedBaseFee`/
+   * `quotedTravelFee` from every response an assayer-only principal receives — and the money
+   * model is explicit: the fee is ours, held on our side, and the assayer first sees it on the
+   * monthly bill, which they confirm before anything is approved or paid.
+   *
+   * What `noFee` left behind was not a supported state but a hole. An assignment with no fee
+   * completes and `bookAssignment` answers NO_FEE: no payout, no client line. Measured on a
+   * walk-through — one assignment dispatched that way completed with zero payouts and zero client
+   * lines, while the calculator's own answer sat unread in `quotedBaseFee`. Work that can be
+   * neither billed nor paid is not a price the desk chose; it is money falling on the floor.
+   *
+   * A supplied fee is an operator override, not a free-form number: the Day Plan screen sends its
+   * own, and accepting it verbatim is how two divergent formulas both reached the database. The
+   * override is honoured — ops genuinely negotiate on the phone — but bounded at twice the quote,
+   * so a mistyped extra digit is refused rather than becoming the price.
+   *
+   * Static and pure for the same reason `applyOverridePolicy` is: it is one decision with no
+   * collaborators, and `create()` is far too large to reach into for a test.
+   */
+  static resolveProposedFee(supplied: number | null | undefined, quoteTotal: number): number {
+    if (supplied === undefined || supplied === null) return quoteTotal;
+    const override = Number(supplied);
+    if (!Number.isFinite(override) || override < 0) {
+      throw new BadRequestException('Proposed fee must be a non-negative number.');
+    }
+    const ceiling = quoteTotal * 2;
+    if (override > ceiling) {
+      throw new BadRequestException(
+        `Proposed fee ₹${override} exceeds twice the contracted quote (₹${quoteTotal}) for this branch and assayer. `
+        + `Raise the client's rate card if this is intended.`,
+      );
+    }
+    return override;
+  }
+
   static applyOverridePolicy(
     rule: AssignmentRule,
     barredReason: string,
@@ -547,9 +589,9 @@ export class AssignmentService {
     const targetDateStr = dto.scheduledDate || branchDate || businessTodayDateKey();
     const scheduledDateObj = new Date(targetDateStr);
 
-    // Dynamic Proposed Fee Calculation based on Assayer Base Fee + Calculated Travel Distance Allowance
-    // `null` is a real, distinct outcome here — see the `dto.noFee` branch below — so the
-    // variable has to be able to hold it rather than only a number or 'not decided yet'.
+    // The assayer's base fee plus the calculated travel allowance. `null` still arrives from a
+    // caller that sends the field explicitly empty; it is resolved to the quote below, because a
+    // dispatched job always carries a price.
     let resolvedProposedFee: number | null | undefined = dto.proposedFee;
     let distanceKm = 0;
     /**
@@ -715,43 +757,7 @@ export class AssignmentService {
         : null,
     });
 
-    if (dto.noFee) {
-      /**
-       * Dispatched without a price, because that is what the desk asked for.
-       *
-       * "Send to app (no fee)" sends no `proposedFee`, and an absent fee used to mean "quote it
-       * for me" — so the button, its tooltip and its confirmation dialog all promised "No fee is
-       * agreed or recorded" while the server quietly attached base + travel. The assayer then saw
-       * a fee nobody had agreed, and the desk had no idea one had been sent.
-       *
-       * Absent and "none" are different intentions and now say so separately: omit the field to
-       * be quoted, pass `noFee` to mean there is no price yet. Billing already understands an
-       * assignment with no fee — AssignmentMoneyCard says "Completed with no fee on the
-       * assignment — nothing to book" — so this is a state the system supports, not a hole.
-       */
-      resolvedProposedFee = null;
-    } else if (resolvedProposedFee === undefined || resolvedProposedFee === null) {
-      resolvedProposedFee = quote.total;
-    } else {
-      // A client-supplied fee is an operator override, not a free-form number. The Day Plan
-      // screen sends its own `proposedFee`, and this branch used to accept it verbatim —
-      // which is precisely how the two divergent formulas both reached the database. The
-      // override is still honoured (ops genuinely negotiate), but it is now bounded, and
-      // anything above the computed quote is recorded as a deliberate deviation rather
-      // than silently becoming the price.
-      const override = Number(resolvedProposedFee);
-      if (!Number.isFinite(override) || override < 0) {
-        throw new BadRequestException('Proposed fee must be a non-negative number.');
-      }
-      const ceiling = quote.total * 2;
-      if (override > ceiling) {
-        throw new BadRequestException(
-          `Proposed fee ₹${override} exceeds twice the contracted quote (₹${quote.total}) for this branch and assayer. ` +
-          `Raise the client's rate card if this is intended.`,
-        );
-      }
-      resolvedProposedFee = override;
-    }
+    resolvedProposedFee = AssignmentService.resolveProposedFee(resolvedProposedFee, quote.total);
 
     /**
      * The same date check every other caller makes.
@@ -812,8 +818,29 @@ export class AssignmentService {
       assignment = reusableExisting;
       assignment.assayerId = dto.assayerId;
       assignment.status = AssignmentStatus.PENDING;
+      /**
+       * ONE way a fee is recorded, whichever button produced the assignment.
+       *
+       * `agreedFee` used to be left null here and set only when the desk ticked "agreed on this
+       * call" (`acceptOnBehalf`). That made "settled" a statement about the CHANNEL, not about
+       * the money — and it had a consequence nobody could clear: `assignmentFee()` reads an
+       * absent `agreedFee` as PROPOSED, `bookAssignment` stamps `rate_snapshot.settled = false`,
+       * and the billing attention query turns every such payable into a red "Fee never agreed"
+       * item with no action that resolves it. Both "Send to app" AND an unticked "Call &
+       * Assign" landed there, permanently.
+       *
+       * Under the owner's model there is nothing for a fee to become. Negotiation is gone, the
+       * assayer is never shown money, and the accept route IGNORES any fee an assayer-caller
+       * sends (see the security note in assignment.controller.ts — otherwise they could
+       * re-accept upward via the ACCEPTED self-loop). The desk is the only party that can put a
+       * number on an assignment, so the number the desk records IS the fee.
+       *
+       * Acceptance stays a separate fact: `acceptOnBehalf` still decides PENDING vs ACCEPTED.
+       * Whether somebody has said yes and what they are paid are different questions, and
+       * conflating them is what produced the queue above.
+       */
       assignment.proposedFee = resolvedProposedFee ?? null;
-      assignment.agreedFee = null;
+      assignment.agreedFee = resolvedProposedFee ?? null;
       assignment.scheduledDate = scheduledDateObj;
       assignment.cancelReason = null;
       assignment.rejectReason = null;
@@ -873,7 +900,8 @@ export class AssignmentService {
         status: AssignmentStatus.PENDING,
         priority: projectBranch.priority,
         proposedFee: resolvedProposedFee,
-        agreedFee: null,
+        // The same rule as the reuse branch above: the desk's number is the fee. See there.
+        agreedFee: resolvedProposedFee ?? null,
         // What the calculator said this job should cost, kept alongside what was actually
         // offered. Negotiation moves proposedFee/agreedFee; these stay put, so "what did we
         // recommend vs what did we agree" remains answerable forever — and the travel figure
@@ -1798,7 +1826,7 @@ export class AssignmentService {
           branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
           reason: reason ?? 'No reason given',
           scheduledDate: saved.scheduledDate
-            ? new Date(saved.scheduledDate).toISOString().slice(0, 10)
+            ? businessDateKey(saved.scheduledDate)
             : 'the scheduled date',
         },
       });
@@ -2159,6 +2187,75 @@ export class AssignmentService {
     return saved;
   }
 
+  /**
+   * Price the job for whoever is doing it NOW — the one re-pricing, used when an assignment
+   * changes hands.
+   *
+   * `create()` already re-prices when it reuses a cancelled row, with the note "the previous
+   * assayer's breakdown must not survive the reuse — their home, their distance, their rate
+   * card." `reassignAssignment` had the same problem and did none of it: it moved the work to a
+   * new person, nulled `agreedFee`, and left `proposedFee`, `quotedBaseFee`, `quotedTravelFee`
+   * and `quotedDistanceKm` describing the PREVIOUS assayer. A replacement living 200 km further
+   * out inherited the original price, and since nothing re-recorded an agreed fee the payable
+   * was booked unsettled from a figure quoted for somebody else.
+   *
+   * Same calculator as every other price in the product (`FeePolicyService.quote`) — this
+   * assembles its inputs for one pairing, it does not compute money.
+   *
+   * A pricing failure is thrown, not swallowed: the README rule is that a failed pricing read
+   * must never quietly book at a default, and the default here would be the outgoing assayer's
+   * number, which is the specific fault this exists to remove.
+   */
+  private async repriceForAssayer(
+    assignment: AssignmentEntity,
+    assayer: { id: string; homeLatitude?: any; homeLongitude?: any },
+  ): Promise<{
+    total: number; baseFee: number; travelFee: number;
+    distanceKm: number; distanceSource: 'OSRM' | 'ESTIMATE' | null; transportMode: string | null;
+  }> {
+    const branch = assignment.projectBranch?.branch;
+    const project = assignment.projectBranch?.project as any;
+
+    let route: RouteResult | null = null;
+    let distanceKm = 0;
+    // Home, not the live fix — the same rule create() states: a fee that moves with where
+    // somebody's phone was that morning is not auditable.
+    if (branch?.latitude && branch?.longitude && assayer.homeLatitude && assayer.homeLongitude) {
+      try {
+        route = await this.routingService.calculateRoute(
+          { latitude: Number(branch.latitude), longitude: Number(branch.longitude) },
+          { latitude: Number(assayer.homeLatitude), longitude: Number(assayer.homeLongitude) },
+        );
+        distanceKm = route?.distanceKm || 0;
+      } catch {
+        // Routing unavailable — quote base only rather than inventing an allowance, exactly as
+        // create() does. This is a missing TRAVEL figure, not a missing price.
+        route = null;
+      }
+    }
+
+    const quote = await this.feePolicyService.quote({
+      assayerId: assayer.id,
+      clientId: project?.clientId ?? null,
+      configuration: project?.client?.configuration ?? undefined,
+      distanceKm,
+      onDate: assignment.scheduledDate ? new Date(assignment.scheduledDate) : new Date(),
+      place: { state: branch?.state ?? null, region: branch?.region ?? null },
+      road: route && route.durationMinutes > 0
+        ? { distanceKm: route.distanceKm, durationMinutes: route.durationMinutes, source: route.source ?? 'ESTIMATE' }
+        : null,
+    });
+
+    return {
+      total: quote.total,
+      baseFee: quote.baseFee,
+      travelFee: quote.travelFee,
+      distanceKm,
+      distanceSource: route ? (route.source ?? 'ESTIMATE') : null,
+      transportMode: quote.transport?.recommended?.mode ?? null,
+    };
+  }
+
   async reassignAssignment(
     id: string,
     newAssayerId: string,
@@ -2199,6 +2296,21 @@ export class AssignmentService {
     }
 
     const newAssayer = await this.assayerService.findOne(newAssayerId);
+
+    /**
+     * Re-priced BEFORE the transaction opens, for the same reason `create()` routes before its
+     * own: this reaches an outside road router, and holding a database connection open across a
+     * network call is how a slow dependency becomes a pool exhaustion.
+     *
+     * A failure here propagates and the reassignment does not happen. That is deliberate — see
+     * `repriceForAssayer`. Reassigning at the outgoing assayer's price is the fault being fixed,
+     * so falling back to it on error would reintroduce it under a different name.
+     */
+    const forPricing = await this.assignmentRepository.findOne({
+      where: { id },
+      relations: ['projectBranch', 'projectBranch.branch', 'projectBranch.project', 'projectBranch.project.client'],
+    });
+    const repriced = forPricing ? await this.repriceForAssayer(forPricing, newAssayer) : null;
     if (!newAssayer) {
       throw new NotFoundException(`New assayer ${newAssayerId} not found.`);
     }
@@ -2403,7 +2515,7 @@ export class AssignmentService {
         });
         if (doubleBooked && doubleBooked.id !== id) {
           throw new ConflictException(
-            `Assayer double booking: ${newAssayer.displayName} already holds assignment ${doubleBooked.assignmentNumber} (${doubleBooked.status}) on ${new Date(assignment.scheduledDate).toISOString().slice(0, 10)}.`,
+            `Assayer double booking: ${newAssayer.displayName} already holds assignment ${doubleBooked.assignmentNumber} (${doubleBooked.status}) on ${businessDateKey(assignment.scheduledDate)}.`,
           );
         }
       }
@@ -2460,7 +2572,24 @@ export class AssignmentService {
       assignment.assayer = newAssayer as any;
       assignment.currentOwnershipStartedAt = ownershipStartedAt;
       assignment.status = AssignmentStatus.PENDING;
-      assignment.agreedFee = null;
+      /**
+       * The new assayer's price, recorded the same way creation records one.
+       *
+       * This line used to be `assignment.agreedFee = null` and nothing else — so the work moved
+       * to a different person while `proposedFee`, `quotedBaseFee`, `quotedTravelFee` and
+       * `quotedDistanceKm` still described the one who left. Both fee columns are written from
+       * one expression here, exactly as in `create()`, so a reassigned job is priced for whoever
+       * is actually doing it and is never left unsettled.
+       */
+      if (repriced) {
+        assignment.proposedFee = repriced.total;
+        assignment.agreedFee = repriced.total;
+        assignment.quotedBaseFee = repriced.baseFee;
+        assignment.quotedTravelFee = repriced.travelFee;
+        assignment.quotedDistanceKm = repriced.distanceKm > 0 ? Number(repriced.distanceKm.toFixed(2)) : null;
+        assignment.quotedDistanceSource = repriced.distanceKm > 0 ? repriced.distanceSource : null;
+        assignment.quotedTransportMode = repriced.transportMode as any;
+      }
       assignment.cancelReason = null;
       assignment.rejectReason = null;
       assignment.completionDate = null;
@@ -2626,7 +2755,7 @@ export class AssignmentService {
        */
       const reassignBranchName = assignment.projectBranch?.branch?.name ?? 'the branch';
       const reassignDateLabel = assignment.scheduledDate
-        ? new Date(assignment.scheduledDate).toISOString().slice(0, 10)
+        ? businessDateKey(assignment.scheduledDate)
         : 'a date to be confirmed';
 
       // 1. The assayer who lost it. Critical, and on every channel — this one has to reach a phone.
@@ -3057,7 +3186,7 @@ export class AssignmentService {
       // convention `scheduling.service.ts`'s own `fmt()` helper already uses for
       // SCHEDULE_RESCHEDULED/SCHEDULE_CANCELLED's date fields, and what `dto.scheduledDate`
       // naturally is when a schedule is created directly through that service instead of here.
-      scheduledDate: scheduledDateObj.toISOString().slice(0, 10),
+      scheduledDate: businessDateKey(scheduledDateObj),
     };
   }
 

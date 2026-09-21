@@ -1,5 +1,6 @@
 import { DataSource } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
+import { businessDateKey } from '@fapoms/shared';
 
 /**
  * Deterministic Benchmark Harness for Phase 1 Database & Query Scalability
@@ -175,8 +176,8 @@ export async function seedBenchmarkDataset(ds: DataSource, targetAssignments = 1
 
       // Completion & Scheduled Dates
       const daysAgo = Math.floor(rand() * 180); // within last 180 days
-      const scheduledDate = new Date(nowMs - (daysAgo + 2) * dayMs).toISOString().split('T')[0];
-      const completionDate = status === 'COMPLETED' ? new Date(nowMs - daysAgo * dayMs).toISOString().split('T')[0] : null;
+      const scheduledDate = businessDateKey(new Date(nowMs - (daysAgo + 2) * dayMs));
+      const completionDate = status === 'COMPLETED' ? businessDateKey(new Date(nowMs - daysAgo * dayMs)) : null;
       const createdAt = new Date(nowMs - (daysAgo + 5) * dayMs);
       const updatedAt = new Date(nowMs - daysAgo * dayMs);
 

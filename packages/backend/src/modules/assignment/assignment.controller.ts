@@ -53,10 +53,6 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
   @IsOptional() @IsNumber() @Min(0)
   proposedFee?: number;
 
-  /** Send the job with no price. See CreateAssignmentDto.noFee. */
-  @IsOptional() @IsBoolean()
-  noFee?: boolean;
-
   @IsOptional() @IsDateString()
   scheduledDate?: string;
 

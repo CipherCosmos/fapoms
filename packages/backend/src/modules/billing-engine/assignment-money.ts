@@ -14,6 +14,8 @@
  * this file and nowhere else.
  */
 
+import { describeAssignmentFee, type AssignmentFeeInput, type FeeSource } from '@fapoms/shared';
+
 /** Money arithmetic is done in paise and rounded once. One `round2`, no epsilon variants. */
 export const round2 = (n: number): number => Math.round(n * 100) / 100;
 
@@ -31,7 +33,8 @@ const num = (v: unknown): number => {
 
 type AssignmentFeeLike = { agreedFee?: unknown; proposedFee?: unknown };
 
-export type FeeSource = 'AGREED' | 'PROPOSED' | 'NONE';
+// Re-exported, not redeclared: a second copy of the union is how the words drift apart.
+export type { FeeSource };
 
 export interface ResolvedAssignmentFee {
   /** The figure to book. Zero when no fee exists at all. */
@@ -51,20 +54,46 @@ export interface ResolvedAssignmentFee {
  * Both sides read the same figure on purpose. The previous engine booked the assayer from
  * `agreed ?? proposed` and refused the client line unless the fee was agreed — so a completed
  * assignment with no agreed fee paid the assayer and never billed the client, and margin was
- * quietly short by the whole job. Every accept path writes `agreedFee`, so an unsettled booking is
- * a data fault, not a workflow; it is booked symmetrically and surfaced in the attention list
- * rather than silently half-booked.
+ * quietly short by the whole job. It is booked symmetrically now, and anything unsettled is
+ * surfaced in the attention list rather than silently half-booked.
+ *
+ * **`agreedFee` is NOT always written, and this comment used to say it was.** It claimed "every
+ * accept path writes `agreedFee`, so an unsettled booking is a data fault, not a workflow",
+ * which sent the next reader looking for a bug in the data. Walking the product from the
+ * planning screen shows otherwise — there are three outcomes, and two of them are ordinary:
+ *
+ *   Call & Assign, "agreed on this call"  → the desk supplies the number; `agreedFee` is set
+ *                                           and the booking is AGREED / settled.
+ *   the assayer accepts in their app      → any fee in the request is IGNORED (see the security
+ *                                           note on the accept route — otherwise an assayer
+ *                                           could accept their own work at any amount), so
+ *                                           `agreedFee` stays null and the booking is PROPOSED.
+ *   "Send to app"                         → the desk names no number, so the frozen quote is
+ *                                           proposed: `AssignmentService.resolveProposedFee`
+ *                                           falls back to `quote.total`. Booking is PROPOSED.
+ *
+ * So PROPOSED is a workflow, not a fault. NONE now means genuinely no fee data — it used to be
+ * reachable from ordinary use: the button said "Send to app (no fee)" and wrote neither fee, so
+ * a completed audit booked NOTHING while the calculator's answer sat unread in `quotedBaseFee`.
+ * That hole was closed (2026-09-19) by defaulting the proposal to the quote.
+ *
+ * ── Where this rule lives ──────────────────────────────────────────────────────────────────
+ * Not here. `@fapoms/shared`'s `describeAssignmentFee` is the one precedence for the whole
+ * product, and its own header names THIS file as one of the three copies it was written to
+ * absorb — a job it never finished, so the two sat side by side. They agreed, which is the
+ * dangerous kind of duplicate: nothing would have failed on the day they stopped agreeing.
+ * This function is now a thin adapter over it, differing only in shape — billing books a
+ * number, so `NONE` is `0` here where the view layer says `null`.
  */
 export function assignmentFee(a: AssignmentFeeLike): ResolvedAssignmentFee {
-  const agreed = num(a.agreedFee);
-  if (a.agreedFee !== null && a.agreedFee !== undefined && agreed > 0) {
-    return { amount: round2(agreed), settled: true, source: 'AGREED' };
-  }
-  const proposed = num(a.proposedFee);
-  if (a.proposedFee !== null && a.proposedFee !== undefined && proposed > 0) {
-    return { amount: round2(proposed), settled: false, source: 'PROPOSED' };
-  }
-  return { amount: 0, settled: false, source: 'NONE' };
+  /**
+   * `unknown` in, because these arrive straight from raw SQL as `string | Decimal | null`.
+   * `describeAssignmentFee` coerces every field through its own `num()` before reading it, so
+   * the cast asserts nothing the callee does not already check. Widening the shared input type
+   * to `unknown` instead would push that looseness onto every web and mobile caller.
+   */
+  const { total, settled, source } = describeAssignmentFee(a as AssignmentFeeInput);
+  return { amount: total ?? 0, settled, source };
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +137,13 @@ export interface AssignmentMoneyInput extends AssignmentFeeLike {
    * (`FeePolicyService.quote`). Billing never re-prices travel; it only reads this.
    */
   quotedTravelFee?: unknown;
+  /**
+   * The audit fee set for this assayer, frozen at offer time by the one calculator
+   * (`FeePolicyService.resolveBaseFee`, from their commercial profile). This is the carve's
+   * anchor: it is a property of the PERSON, so it must not move when the desk agrees a
+   * different total — the difference is what the journey cost, not a re-pricing of the audit.
+   */
+  quotedBaseFee?: unknown;
   /**
    * What a counter-offer settled the travel at, when one was made.
    *
@@ -208,15 +244,42 @@ export function assignmentMoney(a: AssignmentMoneyInput, ctx: MoneyContext): Ass
       : a.quotedTravelFee !== null && a.quotedTravelFee !== undefined
         ? num(a.quotedTravelFee)
         : null;
+  /** The audit fee set for this assayer, frozen when the offer was made. The carve's anchor. */
+  const quotedBase =
+    a.quotedBaseFee !== null && a.quotedBaseFee !== undefined ? num(a.quotedBaseFee) : null;
 
+  /**
+   * The base is the anchor — the audit fee set for THIS assayer — and travel takes the rest.
+   *
+   * This used to anchor the other way: travel stayed at the quoted figure and every rupee the
+   * desk moved landed in the base. That made an assayer's audit fee a different number on every
+   * assignment, which is exactly the figure that is supposed to be stable: it is a property of
+   * the person (their contracted rate), not of the journey.
+   *
+   * The owner's rule (2026-09-21) — the desk types ONE total, and internally the split is kept
+   * "based on the base fee set for an assayer". So the base holds at `quotedBaseFee`, which
+   * `FeePolicyService.resolveBaseFee` read from that assayer's commercial profile when the offer
+   * was made, and the difference between the typed total and that base is what it cost to get
+   * there. A longer journey, a harder one, a number agreed on the phone — all of it is travel,
+   * and none of it silently re-prices the audit itself.
+   *
+   * Clamped so a total BELOW the assayer's base never produces negative travel: the base cannot
+   * exceed what was actually agreed.
+   */
   let assayerBase: number;
   let assayerTravel: number;
-  if (quotedTravel !== null) {
+  const carved = quotedBase !== null || quotedTravel !== null;
+  if (quotedBase !== null) {
+    assayerBase = round2(Math.min(Math.max(0, quotedBase), amount));
+    assayerTravel = round2(amount - assayerBase);
+  } else if (quotedTravel !== null) {
+    // No base on file for this assayer — hold travel instead, which is the older behaviour and
+    // still keeps base + travel === the agreed total.
     assayerTravel = round2(Math.min(Math.max(0, quotedTravel), amount));
     assayerBase = round2(amount - assayerTravel);
   } else {
     // Legacy offer: fee whole, profile reimbursement on top. Restating history is worse than the
-    // known flaw; new offers always carry `quotedTravelFee`.
+    // known flaw; new offers always carry both quoted figures.
     assayerTravel = round2(Math.max(0, num(ctx.legacyTravelReimbursement)));
     assayerBase = round2(amount);
   }
@@ -227,7 +290,7 @@ export function assignmentMoney(a: AssignmentMoneyInput, ctx: MoneyContext): Ass
   const clientBase =
     pricedFrom === 'CLIENT_RATE'
       ? round2(ctx.clientRate as number)
-      : quotedTravel !== null
+      : carved
         ? round2(Math.max(0, amount - assayerTravel))
         : round2(amount);
   const clientTravel = ctx.rechargeTravel ? assayerTravel : 0;

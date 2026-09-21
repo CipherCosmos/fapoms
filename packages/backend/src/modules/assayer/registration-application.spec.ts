@@ -6,12 +6,18 @@ import {
   ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource, ASSAYER_ERROR_CODES,
 } from '@fapoms/shared';
 
-import { RegistrationApplicationService, documentsRequestedFor } from './registration-application.service';
+import {
+  RegistrationApplicationService, documentsRequestedFor, maskedMobile, maskedEmail,
+} from './registration-application.service';
 import { __resetPincodeCache } from '../geo/pincode-lookup.helper';
 import { OpenWithoutInterviewDto } from './hr-applications.controller';
 import { runWithRequestContext } from '../../core/context/request-context';
 import { __resetKeyCacheForTests } from '../../infrastructure/security/field-encryption';
 import { CURRENT_CONSENT_VERSION, CURRENT_CONSENT_NOTICE } from '@fapoms/shared';
+import { EMAIL_TEMPLATE_REGISTRY, REGISTRATION_INVITE_INTRO } from '../../infrastructure/notifications/email-template-registry';
+import type { EmailContent, EmailRequest } from '../notifications/email.service';
+import type { SmsRequest } from '../notifications/sms.service';
+import { SMS_TEMPLATE_REGISTRY } from '../../infrastructure/notifications/sms-template-registry';
 
 /**
  * The self-registration application layer.
@@ -32,26 +38,29 @@ const TOKEN_HASH = require('crypto').createHash('sha256').update(RAW_TOKEN).dige
 
 type Row = Record<string, any>;
 
-function makeService(overrides: { application?: Row | null; cache?: Record<string, any> } = {}) {
+/** The harness's default application: a draft, consented, with a mobile and an email on it. */
+const baseApplication = (): Row => ({
+  id: 'app-1',
+  mobile: '9822014455',
+  email: 'candidate@example.com',
+  fullName: 'Ramesh Kulkarni',
+  status: ApplicationStatus.DRAFT,
+  tokenHash: TOKEN_HASH,
+  tokenExpiresAt: new Date(Date.now() + 3_600_000),
+  tokenConsumedAt: null,
+  employmentCategory: null,
+  // A candidate who is filling the form in has, by definition, already agreed to the notice —
+  // the server refuses every write until they have. Tests about that gate build their own
+  // un-consented fixture; see "what a candidate agrees to, and when".
+  consentAcceptedAt: new Date(),
+  consentWithdrawnAt: null,
+  organizationId: 'org-1',
+});
+
+function makeService(overrides: { application?: Row | null; cache?: Record<string, any>; smsEnabled?: boolean } = {}) {
   const application: Row | null =
     overrides.application === undefined
-      ? {
-        id: 'app-1',
-        mobile: '9822014455',
-        email: 'candidate@example.com',
-        fullName: 'Ramesh Kulkarni',
-        status: ApplicationStatus.DRAFT,
-        tokenHash: TOKEN_HASH,
-        tokenExpiresAt: new Date(Date.now() + 3_600_000),
-        tokenConsumedAt: null,
-        employmentCategory: null,
-        // A candidate who is filling the form in has, by definition, already agreed to the notice —
-        // the server refuses every write until they have. Tests about that gate build their own
-        // un-consented fixture; see "what a candidate agrees to, and when".
-        consentAcceptedAt: new Date(),
-        consentWithdrawnAt: null,
-        organizationId: 'org-1',
-      }
+      ? baseApplication()
         /*
           A fixture that says nothing about consent is a candidate who agreed — that is the ordinary
           state of an application now, and the server refuses every write until it is true. Tests
@@ -92,13 +101,57 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
   const rosterRecords = { attachFile: jest.fn(async () => ({})) };
   const auditService = { recordEventSafe: jest.fn(async () => undefined) };
   const notificationDispatch = { emitSafe: jest.fn(async () => undefined) };
-  const emailProvider = {
-    send: jest.fn(async (_payload: { to: string; subject: string; text: string; html?: string }) =>
-      ({ success: true } as { success: boolean; error?: string })),
+  /**
+   * Where a composed message lands, so the assertions about a message's wording read one place.
+   *
+   * Composed from the registry's built-in letter, never from anything the service wrote: the
+   * service passes data, and the wording a recipient reads is the registry's. A sentence that only
+   * the service knows (a resend's "any earlier link has stopped working") is therefore only here if
+   * it went through as a token the template renders.
+   */
+  const mailbox = {
+    send: jest.fn(async (_message: { to: string; subject: string; text: string; html?: string }) => undefined),
+  };
+  const compose = (content: EmailContent) => {
+    if ('template' in content) return EMAIL_TEMPLATE_REGISTRY[content.template].fallbackRenderer(content.data);
+    if ('rendered' in content) return content.rendered;
+    throw new Error('This service sends only registered templates.');
+  };
+  type Receipt = { id: string | null; status: string; to: string; error?: string | null };
+  /** The one email service. `queue` answers QUEUED — the service cannot know more than that. */
+  const emailService = {
+    queue: jest.fn(async (req: EmailRequest): Promise<Receipt> => {
+      await mailbox.send({ to: req.to, ...compose(req.content) });
+      return { id: 'email-1', status: 'QUEUED', to: req.to };
+    }),
+    sendNow: jest.fn(async (req: EmailRequest): Promise<{ sent: boolean; error?: string; receipt: Receipt }> => {
+      await mailbox.send({ to: req.to, ...compose(req.content) });
+      return { sent: true, receipt: { id: 'email-2', status: 'SENT', to: req.to } };
+    }),
+    isEnabled: jest.fn(() => true),
+  };
+  /**
+   * The one SMS service. Off unless a test says otherwise — SMS is built but not configured, so
+   * "off" is what every other test in this file is describing. `phone` is the handset: what a text
+   * sent to a number says, so a test can read the code off it the way the candidate would.
+   */
+  const phone = {
+    receive: jest.fn((_message: { to: string; text: string }) => undefined),
+  };
+  const smsService = {
+    isEnabled: jest.fn(() => overrides.smsEnabled ?? false),
+    sendNow: jest.fn(async (req: SmsRequest): Promise<{ sent: boolean; error?: string; receipt: Receipt }> => {
+      const words = SMS_TEMPLATE_REGISTRY[req.content.template].defaultText
+        .replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k: string) => String(req.content.data[k] ?? ''));
+      phone.receive({ to: req.to, text: words });
+      return { sent: true, receipt: { id: 'sms-1', status: 'SENT', to: req.to } };
+    }),
+    queue: jest.fn(),
   };
   const cache = {
     getJson: jest.fn(async (k: string) => (k in cacheData ? cacheData[k] : null)),
     setJson: jest.fn(async (k: string, v: unknown) => { cacheData[k] = v; }),
+    del: jest.fn(async (...keys: string[]) => { for (const k of keys) delete cacheData[k]; }),
   };
   const settings = {
     getNumber: jest.fn(async (_k: string, fallback?: number) => fallback ?? 0),
@@ -116,16 +169,47 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
   /** Written to only for the consent carry-over — see the service's own note on why. */
   const assayers = { update: jest.fn(async () => ({ affected: 1 })), findOne: jest.fn(async () => null) };
 
+  /**
+   * The approval claim, kept the way Postgres keeps it: `pg_try_advisory_xact_lock` says yes to
+   * the first holder of a key and no to everybody else until that holder's transaction ends —
+   * however it ends, which is the property the retry tests lean on. One set per harness, so two
+   * approvals on one service contend exactly as two requests would.
+   */
+  const heldClaims = new Set<string>();
+  const uow = {
+    run: jest.fn(async (work: (manager: unknown, emit: () => void) => Promise<unknown>) => {
+      const taken: string[] = [];
+      const manager = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          if (!sql.includes('pg_try_advisory_xact_lock')) throw new Error(`Unexpected query in the claim: ${sql}`);
+          const key = params.join(':');
+          if (heldClaims.has(key)) return [{ claimed: false }];
+          heldClaims.add(key);
+          taken.push(key);
+          return [{ claimed: true }];
+        }),
+      };
+      try {
+        return await work(manager, () => undefined);
+      } finally {
+        taken.forEach((key) => heldClaims.delete(key));
+      }
+    }),
+  };
+  const geoPrecision = { enqueueBackfill: jest.fn(async (_target: string, _ids: string[], _reason?: string) => undefined) };
+
   const service = new RegistrationApplicationService(
     applications as any, applicationDocuments as any, interviews as any, assayers as any,
     assayerService as any, rosterRecords as any,
-    auditService as any, notificationDispatch as any, emailProvider as any,
+    auditService as any, notificationDispatch as any, emailService as any,
     cache as any, settings as any, storage as any,
+    uow as any, geoPrecision as any, smsService as any,
   );
 
   return {
     service, application, applications, applicationDocuments, interviews, assayers, assayerService, rosterRecords,
-    auditService, notificationDispatch, emailProvider, cache, settings, storage, cacheData,
+    auditService, notificationDispatch, mailbox, emailService, cache, settings, storage, cacheData,
+    uow, heldClaims, geoPrecision, smsService, phone,
   };
 }
 
@@ -153,6 +237,23 @@ describe('registration invite tokens', () => {
     expect(saved.tokenHash).toBe(createHash('sha256').update(rawToken).digest('hex'));
     expect(JSON.stringify(saved)).not.toContain(rawToken);
     expect(saved).not.toHaveProperty('token');
+  });
+
+  /** Only the requester (or an administrator) may read an email's receipt; without one it is a 404. */
+  it('queues the invite against the person who asked for it, so their screen can watch it go', async () => {
+    const { service, emailService } = makeService({ application: null });
+    const { emailDelivery } = await service.createInvite({
+      mobile: '9822014455', email: 'x@example.com', fullName: 'X', requestedBy: 'user-7',
+    });
+
+    expect(emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'REGISTRATION_INVITE', to: 'x@example.com', entityType: 'ASSAYER_APPLICATION', requestedBy: 'user-7',
+      content: {
+        template: 'registration-invite',
+        data: expect.objectContaining({ fullName: 'X', intro: REGISTRATION_INVITE_INTRO }),
+      },
+    }));
+    expect(emailDelivery).toMatchObject({ id: 'email-1', status: 'QUEUED' });
   });
 
   it('refuses a token nobody holds', async () => {
@@ -237,12 +338,12 @@ describe('the registration link after the form is submitted', () => {
 
 describe('pre-account OTP', () => {
   it('never stores the code itself — only its hash, beside the phone it is bound to', async () => {
-    const { service, cacheData, emailProvider } = makeService();
+    const { service, cacheData, mailbox } = makeService();
     await service.requestOtp(RAW_TOKEN, '9822014455');
 
     const entry = cacheData[`regotp:code:${TOKEN_HASH}`];
     expect(entry.hash).toMatch(/^[0-9a-f]{64}$/);
-    const sent = emailProvider.send.mock.calls[0][0].text;
+    const sent = mailbox.send.mock.calls[0][0].text;
     const code = sent.match(/\b(\d{6})\b/)![1];
     expect(entry).not.toMatchObject({ code });
   });
@@ -261,25 +362,225 @@ describe('pre-account OTP', () => {
 
   it('tells the candidate when the code could not be sent, instead of answering "sent"', async () => {
     /**
-     * `EmailProvider.send` answers `{success:false}` — it does not throw — when the transport is
-     * off. This used to log a warning and return success, so the page said a code was on its way
-     * and the candidate waited for a message nobody had sent.
+     * `sendNow` answers `{sent:false}` — it does not throw — when the transport is off. This used
+     * to log a warning and return success, so the page said a code was on its way and the
+     * candidate waited for a message nobody had sent.
      */
     const ctx = makeService();
-    ctx.emailProvider.send.mockResolvedValueOnce({ success: false, error: 'transport off' });
-    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/could not email you a verification code/i);
+    ctx.emailService.sendNow.mockResolvedValueOnce({
+      sent: false, error: 'transport off', receipt: { id: null, status: 'FAILED', to: 'x' },
+    });
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/could not send you a verification code/i);
+  });
+
+  /**
+   * Sent while the candidate waits, not queued: a queued code answers "on its way" before anybody
+   * knows whether it will be, which is the lie the refusal above exists to prevent.
+   */
+  it('sends the code now, as the registration code template, and never through the queue', async () => {
+    const ctx = makeService();
+    await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+      .resolves.toEqual({ channel: 'EMAIL', sentTo: 'c•••@example.com', cooldownSeconds: 60, expiresInSeconds: 300 });
+
+    expect(ctx.emailService.queue).not.toHaveBeenCalled();
+    expect(ctx.emailService.sendNow).toHaveBeenCalledTimes(1);
+    const request = ctx.emailService.sendNow.mock.calls[0][0];
+    expect(request).toMatchObject({
+      kind: 'REGISTRATION_OTP',
+      content: { template: 'otp-verification', data: { validMinutes: '5' } },
+      entityType: 'ASSAYER_APPLICATION',
+    });
+    expect((request.content as unknown as { data: { otpCode: string } }).data.otpCode).toMatch(/^\d{6}$/);
+  });
+
+  /**
+   * The owner's decision: the code goes by text to the number being verified when SMS is set up,
+   * and by email only as the fallback. A texted code is what actually proves the number is theirs.
+   */
+  describe('which channel carries the code', () => {
+    it('texts the code to the number being verified when SMS is set up, and sends no email', async () => {
+      const ctx = makeService({ smsEnabled: true });
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+        .resolves.toEqual({ channel: 'SMS', sentTo: '••••• 4455', cooldownSeconds: 60, expiresInSeconds: 300 });
+
+      expect(ctx.emailService.sendNow).not.toHaveBeenCalled();
+      expect(ctx.smsService.queue).not.toHaveBeenCalled();
+      expect(ctx.smsService.sendNow).toHaveBeenCalledTimes(1);
+      const request = ctx.smsService.sendNow.mock.calls[0][0];
+      expect(request).toEqual({
+        kind: 'REGISTRATION_OTP',
+        to: '9822014455',
+        // The candidate's own name, so a text may address them by it.
+        recipientName: 'Ramesh Kulkarni',
+        content: { template: 'registration-otp', data: { code: expect.stringMatching(/^\d{6}$/), validMinutes: '5' } },
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: 'app-1',
+      });
+      // The texted code is the one the cache holds for this phone — verifying with it works.
+      const code = ctx.phone.receive.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
+      await expect(ctx.service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
+    });
+
+    /** A gateway that refuses one text must not strand the candidate when their mailbox works. */
+    it('falls back to email when the text did not go', async () => {
+      const ctx = makeService({ smsEnabled: true });
+      ctx.smsService.sendNow.mockResolvedValueOnce({
+        sent: false, error: 'DLT template not approved', receipt: { id: null, status: 'FAILED', to: '9822014455' },
+      });
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+        .resolves.toEqual({ channel: 'EMAIL', sentTo: 'c•••@example.com', cooldownSeconds: 60, expiresInSeconds: 300 });
+
+      expect(ctx.smsService.sendNow).toHaveBeenCalledTimes(1);
+      expect(ctx.emailService.sendNow).toHaveBeenCalledTimes(1);
+      // One code for the attempt: the email carries the same code the cache is waiting for.
+      const texted = ctx.smsService.sendNow.mock.calls[0][0].content.data.code;
+      const emailed = (ctx.emailService.sendNow.mock.calls[0][0].content as unknown as { data: { otpCode: string } }).data.otpCode;
+      expect(emailed).toBe(texted);
+    });
+
+    it('falls back to email when sending the text throws', async () => {
+      const ctx = makeService({ smsEnabled: true });
+      ctx.smsService.sendNow.mockRejectedValueOnce(new Error('ledger unavailable'));
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+        .resolves.toEqual({ channel: 'EMAIL', sentTo: 'c•••@example.com', cooldownSeconds: 60, expiresInSeconds: 300 });
+    });
+
+    /** Today's state: SMS built but not configured. Everything keeps working exactly as before. */
+    it('emails the code, and never tries a text, when SMS is not set up', async () => {
+      const ctx = makeService({ smsEnabled: false });
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+        .resolves.toEqual({ channel: 'EMAIL', sentTo: 'c•••@example.com', cooldownSeconds: 60, expiresInSeconds: 300 });
+
+      expect(ctx.smsService.sendNow).not.toHaveBeenCalled();
+      expect(ctx.emailService.sendNow).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses only when neither the text nor the email went', async () => {
+      const ctx = makeService({ smsEnabled: true });
+      ctx.smsService.sendNow.mockResolvedValueOnce({ sent: false, error: 'x', receipt: { id: null, status: 'FAILED', to: 'x' } });
+      ctx.emailService.sendNow.mockResolvedValueOnce({ sent: false, error: 'y', receipt: { id: null, status: 'FAILED', to: 'x' } });
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+        .rejects.toThrow('We could not send you a verification code just now. Contact HR — they can help you finish registering.');
+    });
+
+    /** With SMS set up the mailbox is only the fallback, so a missing address is no reason to refuse. */
+    it('texts a candidate whose application has no email, when SMS is set up', async () => {
+      const ctx = makeService({ smsEnabled: true, application: { ...baseApplication(), email: null } });
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455'))
+        .resolves.toEqual({ channel: 'SMS', sentTo: '••••• 4455', cooldownSeconds: 60, expiresInSeconds: 300 });
+    });
+
+    it('refuses a candidate with no email only when SMS is not set up, before counting a send', async () => {
+      const ctx = makeService({ smsEnabled: false, application: { ...baseApplication(), email: null } });
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/no email address on this application/i);
+      expect(ctx.cacheData[`regotp:sent:${TOKEN_HASH}`]).toBeUndefined();
+    });
+
+    it('refuses a candidate with no email when the text did not go, rather than answering "sent"', async () => {
+      const ctx = makeService({ smsEnabled: true, application: { ...baseApplication(), email: null } });
+      ctx.smsService.sendNow.mockResolvedValueOnce({ sent: false, error: 'x', receipt: { id: null, status: 'FAILED', to: 'x' } });
+
+      await expect(ctx.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/could not send you a verification code/i);
+      expect(ctx.emailService.sendNow).not.toHaveBeenCalled();
+    });
+
+    /** The send cap, cooldown and consent gates are the same whichever channel would carry the code. */
+    it('keeps the send cap, the cooldown and the consent gate in front of a text too', async () => {
+      const capped = makeService({ smsEnabled: true, cache: { [`regotp:sent:${TOKEN_HASH}`]: { count: 5 } } });
+      await expect(capped.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/Too many verification codes/i);
+      const cooling = makeService({ smsEnabled: true, cache: { [`regotp:lastsent:${TOKEN_HASH}`]: Date.now() } });
+      await expect(cooling.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/wait/i);
+      const unconsented = makeService({ smsEnabled: true, application: { ...baseApplication(), consentAcceptedAt: null } });
+      await expect(unconsented.service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/agree to it before/i);
+      for (const ctx of [capped, cooling, unconsented]) expect(ctx.smsService.sendNow).not.toHaveBeenCalled();
+    });
+
+    /** Enough for the candidate to recognise where to look; not enough to read the number or address off the page. */
+    it('masks the destination: the last four digits of a mobile, the first letter of a mailbox', () => {
+      expect(maskedMobile('9822014455')).toBe('••••• 4455');
+      expect(maskedMobile('+91 98220 14455')).toBe('••••• 4455');
+      expect(maskedEmail('ramesh.k@example.com')).toBe('r•••@example.com');
+      expect(maskedEmail('not-an-address')).toBe('•••');
+    });
+
+    /** The destination is repeated back masked, and never written whole into a log line. */
+    it('never logs the code or the whole number when a text fails', async () => {
+      const ctx = makeService({ smsEnabled: true });
+      const warn = jest.spyOn((ctx.service as any).logger, 'warn').mockImplementation(() => undefined);
+      ctx.smsService.sendNow.mockResolvedValueOnce({ sent: false, error: 'x', receipt: { id: null, status: 'FAILED', to: 'x' } });
+
+      await ctx.service.requestOtp(RAW_TOKEN, '9822014455');
+
+      const code = ctx.smsService.sendNow.mock.calls[0][0].content.data.code as string;
+      const logged = warn.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(logged).toContain('4455');
+      expect(logged).not.toContain('9822014455');
+      expect(logged).not.toContain(code);
+      warn.mockRestore();
+    });
   });
 
   it('rejects a wrong code, and a right code offered for a different phone', async () => {
-    const { service, cacheData, emailProvider } = makeService();
+    const { service, cacheData, mailbox } = makeService();
     await service.requestOtp(RAW_TOKEN, '9822014455');
-    const code = emailProvider.send.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
+    const code = mailbox.send.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
 
     await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000000')).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.verifyOtp(RAW_TOKEN, '9999999999', code)).rejects.toBeInstanceOf(BadRequestException);
 
     await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
     expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455' });
+  });
+
+  it('caps how many codes one phone number may receive across tokens to prevent SMS bombing', async () => {
+    const { service } = makeService({ cache: { [`regotp:phonesent:9822014455`]: { count: 5 } } });
+    await expect(service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/Too many verification codes have been requested for this mobile number/i);
+  });
+
+  it('reports the exact remaining seconds during cooldown', async () => {
+    // 25 seconds ago, with 60 second cooldown => 35 seconds remaining
+    const { service } = makeService({ cache: { [`regotp:lastsent:${TOKEN_HASH}`]: Date.now() - 25_000 } });
+    await expect(service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/Please wait 35 seconds before requesting another code/i);
+  });
+
+  it('invalidates the code after 5 failed verification attempts to prevent brute-forcing', async () => {
+    const { service, cacheData, mailbox } = makeService();
+    await service.requestOtp(RAW_TOKEN, '9822014455');
+    const code = mailbox.send.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
+
+    // Attempts 1 to 4 should state remaining attempts
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000001')).rejects.toThrow(/4 attempts remaining/i);
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000002')).rejects.toThrow(/3 attempts remaining/i);
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000003')).rejects.toThrow(/2 attempts remaining/i);
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000004')).rejects.toThrow(/1 attempt remaining/i);
+
+    // 5th attempt invalidates the code
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000005')).rejects.toThrow(/This code has been invalidated. Please request a new code/i);
+    expect(cacheData[`regotp:code:${TOKEN_HASH}`]).toBeUndefined();
+
+    // Even with the original correct code, it cannot be verified anymore
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).rejects.toThrow(/That code has expired or has not been requested/i);
+  });
+
+  it('consumes the code on successful verification to prevent replay attacks', async () => {
+    const { service, cacheData, mailbox } = makeService();
+    await service.requestOtp(RAW_TOKEN, '9822014455');
+    const code = mailbox.send.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
+
+    // Verification succeeds
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
+    expect(cacheData[`regotp:code:${TOKEN_HASH}`]).toBeUndefined();
+    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455' });
+
+    // Attempting to reuse the exact same code again fails immediately
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).rejects.toThrow(/That code has expired or has not been requested/i);
   });
 
   /**
@@ -410,13 +711,47 @@ describe('HR review', () => {
   });
 
   it('requires a reason to reject, and sends that reason to the candidate', async () => {
-    const { service, emailProvider, application } = makeService({ application: submitted() });
+    const { service, mailbox, application } = makeService({ application: submitted() });
     await expect(service.reject('app-1', 'user-1', '   ')).rejects.toBeInstanceOf(BadRequestException);
 
     await service.reject('app-1', 'user-1', 'Shop proof did not match the Aadhaar address.');
     expect(application!.status).toBe(ApplicationStatus.REJECTED);
-    expect(emailProvider.send).toHaveBeenCalledWith(
+    expect(mailbox.send).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('Shop proof did not match') }),
+    );
+  });
+
+  it('queues the rejection letter rather than holding the reviewer on the mail server', async () => {
+    const { service, emailService } = makeService({ application: submitted() });
+    await service.reject('app-1', 'user-1', 'Shop proof did not match the Aadhaar address.');
+    expect(emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'APPLICATION_REJECTED', entityId: 'app-1', requestedBy: 'user-1',
+      content: {
+        template: 'application-rejected',
+        data: expect.objectContaining({ reviewNotes: 'Shop proof did not match the Aadhaar address.' }),
+      },
+    }));
+    expect(emailService.sendNow).not.toHaveBeenCalled();
+  });
+
+  /**
+   * HR's note is the whole point of this email. It used to be written only into the call site's own
+   * copy of the letter, which the template renderer then replaced — so the candidate got a fresh
+   * link and no word of what was wanted.
+   */
+  it('tells the candidate what HR asked for, in the invite that carries the fresh link', async () => {
+    const { service, emailService, mailbox } = makeService({ application: submitted() });
+    await service.requestMoreInfo('app-1', 'user-1', 'Attach the shop entity proof.');
+
+    expect(emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'REGISTRATION_INVITE',
+      content: {
+        template: 'registration-invite',
+        data: expect.objectContaining({ intro: expect.stringContaining('Attach the shop entity proof.') }),
+      },
+    }));
+    expect(mailbox.send).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('Attach the shop entity proof.') }),
     );
   });
 
@@ -440,32 +775,47 @@ describe('HR review', () => {
     it('mints a fresh link and kills the old one', async () => {
       // Both the candidate's "Ask HR to resend it" and the interview screen's advice pointed at
       // this; until it existed an undelivered invite was a dead end.
-      const { service, application, emailProvider } = makeService({ application: submitted({ status: ApplicationStatus.DRAFT }) });
-      const { emailed } = await service.resendInvite('app-1', 'user-1');
+      const { service, application, mailbox } = makeService({ application: submitted({ status: ApplicationStatus.DRAFT }) });
+      const { emailDelivery } = await service.resendInvite('app-1', 'user-1');
 
       expect(application!.tokenHash).not.toBe(TOKEN_HASH);
       expect(application!.tokenConsumedAt).toBeNull();
-      expect(emailed).toBe(true);
-      expect(emailProvider.send).toHaveBeenCalledWith(
+      expect(emailDelivery).toMatchObject({ id: 'email-1', status: 'QUEUED' });
+      expect(mailbox.send).toHaveBeenCalledWith(
         expect.objectContaining({ text: expect.stringContaining('earlier link has stopped working') }),
       );
     });
 
-    it('reports honestly when the resend itself did not go out', async () => {
+    it('reports honestly when the resend could not even be queued', async () => {
       const ctx = makeService({ application: submitted({ status: ApplicationStatus.DRAFT }) });
-      ctx.emailProvider.send.mockResolvedValueOnce({ success: false, error: 'transport off' } as any);
-      const { emailed } = await ctx.service.resendInvite('app-1', 'user-1');
-      expect(emailed).toBe(false);
+      ctx.emailService.queue.mockResolvedValueOnce({ id: null, status: 'NOT_QUEUED', to: 'x', error: 'db down' });
+      const { emailDelivery, inviteLink } = await ctx.service.resendInvite('app-1', 'user-1');
+      expect(emailDelivery?.status).toBe('NOT_QUEUED');
+      expect(inviteLink).toMatch(/\/register\/[0-9a-f]{16,}$/);
+    });
+
+    it('queues the email instead of making the desk wait on the mail server', async () => {
+      const ctx = makeService({ application: submitted({ status: ApplicationStatus.DRAFT }) });
+      await ctx.service.resendInvite('app-1', 'user-1');
+      expect(ctx.emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'REGISTRATION_INVITE', entityType: 'ASSAYER_APPLICATION', requestedBy: 'user-1',
+        content: {
+          template: 'registration-invite',
+          data: expect.objectContaining({
+            intro: 'Here is a fresh link to complete your Appraiser registration. Any earlier link has stopped working.',
+          }),
+        },
+      }));
     });
 
     it('still mints a link when there is no address to send to — the desk delivers it', async () => {
       const noEmail = makeService({ application: submitted({ status: ApplicationStatus.DRAFT, email: null }) });
-      const { emailed, inviteLink } = await noEmail.service.resendInvite('app-1', 'user-1');
+      const { emailDelivery, inviteLink } = await noEmail.service.resendInvite('app-1', 'user-1');
 
       // No mailbox is not a refusal. The link is the deliverable; email is one way to deliver it,
       // and on a deployment with email switched off it is not a way at all.
-      expect(emailed).toBe(false);
-      expect(noEmail.emailProvider.send).not.toHaveBeenCalled();
+      expect(emailDelivery).toBeNull();
+      expect(noEmail.emailService.queue).not.toHaveBeenCalled();
       expect(inviteLink).toMatch(/\/register\/[0-9a-f]{16,}$/);
     });
 
@@ -543,12 +893,27 @@ describe('promotion to a real assayer', () => {
   });
 
   it('tells the candidate their appraiser code', async () => {
-    const { service, emailProvider } = makeService({ application: approved() });
+    const { service, mailbox } = makeService({ application: approved() });
     await service.approve('app-1', 'user-1', ['ADMIN']);
-    expect(emailProvider.send).toHaveBeenCalledWith(
+    expect(mailbox.send).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('AS0009') }),
     );
   });
+
+  it('queues the approval letter, so approving does not wait on the mail server', async () => {
+    const { service, emailService } = makeService({ application: approved() });
+    await service.approve('app-1', 'user-1', ['ADMIN']);
+    expect(emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'APPLICATION_APPROVED', entityType: 'ASSAYER_APPLICATION', entityId: 'app-1', requestedBy: 'user-1',
+      content: {
+        template: 'application-approved',
+        // `fullName` too: the shipped HTML greets and names the person by it.
+        data: expect.objectContaining({ assayerCode: 'AS0009', fullName: expect.any(String) }),
+      },
+    }));
+    expect(emailService.sendNow).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('which documents a candidate is asked for', () => {
@@ -780,6 +1145,22 @@ describe('the extended profile the wizard collects', () => {
 
       expect(result.assayer.id).toBe('assayer-1');
       expect(result.gaps).toEqual([expect.stringContaining('identity numbers (That PAN is already on Ramesh Iyer (AS-77))')]);
+    });
+
+    /**
+     * The refusal names somebody else's record. It is for the desk (the audit row carries it), and
+     * it once rode into the approval email's data as `remarks` — unrendered only by luck of the
+     * shipped HTML, and one template edit away from a candidate reading another person's name.
+     */
+    it("keeps the desk's refusal messages out of the candidate's approval email", async () => {
+      const { ctx } = refusingIdentity(arm(makeService({ application: { ...fullProfile(), email: 'c@example.com' } })));
+
+      const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+      expect(result.gaps).toHaveLength(1);
+      const approval = ctx.emailService.queue.mock.calls.find(([r]) => r.kind === 'APPLICATION_APPROVED');
+      expect(approval).toBeDefined();
+      expect(JSON.stringify(approval![0])).not.toMatch(/Ramesh Iyer|AS-77|remarks/);
     });
 
     /** Coordinates are only taken when both arrive, and the district is checked against the pincode. */
@@ -1014,6 +1395,41 @@ describe('the candidate owns their own phone number', () => {
       eventType: 'ASSAYER_APPLICATION_MOBILE_UPDATED',
     }));
   });
+
+  it('does not report conflict for soft-deleted or terminal applications', async () => {
+    const ctx = makeService();
+    ctx.assayers.findOne = jest.fn(async () => null);
+
+    // Soft-deleted application
+    ctx.applications.findOne = jest.fn(async () => ({
+      id: 'app-old-1',
+      mobile: '9822014455',
+      fullName: 'Old Candidate',
+      isActive: false,
+      status: ApplicationStatus.DRAFT,
+    } as any));
+    expect(await ctx.service.checkMobileConflict('9822014455', null, 'app-new')).toBeNull();
+
+    // Approved application (roster is already checked separately)
+    ctx.applications.findOne = jest.fn(async () => ({
+      id: 'app-old-2',
+      mobile: '9822014455',
+      fullName: 'Priya Sharma',
+      isActive: true,
+      status: ApplicationStatus.APPROVED,
+    } as any));
+    expect(await ctx.service.checkMobileConflict('9822014455', null, 'app-new')).toBeNull();
+
+    // Withdrawn application
+    ctx.applications.findOne = jest.fn(async () => ({
+      id: 'app-old-3',
+      mobile: '9822014455',
+      fullName: 'Withdrawn Candidate',
+      isActive: true,
+      status: ApplicationStatus.WITHDRAWN,
+    } as any));
+    expect(await ctx.service.checkMobileConflict('9822014455', null, 'app-new')).toBeNull();
+  });
 });
 
 describe('a face on file', () => {
@@ -1203,6 +1619,135 @@ describe('approving is safe to repeat', () => {
       expect.objectContaining({ clientRequestId: 'application:app-77' }),
       'hr-1', 'org-1', ['ADMIN'],
     );
+  });
+
+  /** Lets the event loop run until `done` is true — how a test gets one approval part way in. */
+  const until = async (done: () => boolean) => {
+    for (let i = 0; i < 100 && !done(); i++) await new Promise((r) => setImmediate(r));
+    expect(done()).toBe(true);
+  };
+
+  /**
+   * The double click, and the client's 30 s timeout followed by its retry.
+   *
+   * `create` answered the second request with the same person, so nothing LOOKED wrong — but every
+   * step after it ran twice while the first was still going: each scan filed as a second version,
+   * each profile group applied again, the letter queued twice. The second caller is now told the
+   * application is already being approved, and nothing it would have done happens.
+   */
+  it('refuses a second approval of the same application while the first is still going through', async () => {
+    const ctx = makeService({ application: ready() });
+    let finishCreating!: () => void;
+    const creating = new Promise<void>((resolve) => { finishCreating = resolve; });
+    ctx.assayerService.create.mockImplementationOnce(async () => {
+      await creating;
+      return { id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Candidate' };
+    });
+
+    const first = ctx.service.approve('app-77', 'hr-1', ['ADMIN']);
+    await until(() => ctx.assayerService.create.mock.calls.length === 1);
+
+    const second = ctx.service.approve('app-77', 'hr-2', ['ADMIN']);
+    await expect(second).rejects.toBeInstanceOf(ConflictException);
+    await expect(second).rejects.toThrow(/already being approved/);
+
+    finishCreating();
+    await expect(first).resolves.toMatchObject({ assayer: { id: 'assayer-1' } });
+    expect(ctx.assayerService.create).toHaveBeenCalledTimes(1);
+    expect(ctx.rosterRecords.attachFile).toHaveBeenCalledTimes(1);
+    expect(ctx.emailService.queue).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The claim must not outlive the attempt that took it.
+   *
+   * A promotion that fails part way has already made the person; the only way to finish it is to
+   * approve again. A claim that stayed held — or a failure reported as a success — would leave the
+   * application stuck with a person on the roster and nobody able to close it.
+   */
+  it('lets the desk approve again after an attempt that failed part way', async () => {
+    const ctx = makeService({ application: ready() });
+    ctx.rosterRecords.attachFile.mockRejectedValueOnce(new Error('could not file the scan'));
+
+    await expect(ctx.service.approve('app-77', 'hr-1', ['ADMIN'])).rejects.toThrow('could not file the scan');
+    expect(ctx.application!.status).toBe(ApplicationStatus.PENDING_VALIDATION);
+    expect(ctx.heldClaims.size).toBe(0);
+
+    await expect(ctx.service.approve('app-77', 'hr-1', ['ADMIN'])).resolves.toMatchObject({ assayer: { id: 'assayer-1' } });
+    expect(ctx.application!.status).toBe(ApplicationStatus.APPROVED);
+    // The same key both times, so the create path returns the person the first attempt made.
+    expect(ctx.assayerService.create.mock.calls.map(([dto]) => dto.clientRequestId))
+      .toEqual(['application:app-77', 'application:app-77']);
+  });
+
+  /** The application is judged as it stands once the claim is held, not as it stood before. */
+  it('reads the application only after it holds the claim', async () => {
+    const ctx = makeService({ application: ready() });
+    await ctx.service.approve('app-77', 'hr-1', ['ADMIN']);
+
+    const claimedAt = ctx.uow.run.mock.invocationCallOrder[0];
+    expect(ctx.applications.findOne.mock.invocationCallOrder[0]).toBeGreaterThan(claimedAt);
+  });
+});
+
+/**
+ * Approving used to wait on the free geocoders.
+ *
+ * With no Google key, `AssayerService.create` walked India Post, Nominatim and the public Photon
+ * inside the request — 2–6 s typically, past the web client's 30 s timeout at worst, which is what
+ * sent reviewers back to press Approve again. Placement is now the precision worker's, handed the
+ * person once approval's own writes are done.
+ */
+describe('where an approved person is placed on the map', () => {
+  const ready = () => ({
+    id: 'app-88', mobile: '9822014455', email: 'c@example.com', fullName: 'Candidate',
+    state: 'Maharashtra', status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+  });
+
+  it('hands an unplaced person to the precision worker, after everything approval writes', async () => {
+    const ctx = makeService({ application: ready() });
+    await ctx.service.approve('app-88', 'hr-1', ['ADMIN']);
+
+    expect(ctx.geoPrecision.enqueueBackfill).toHaveBeenCalledWith('assayer', ['assayer-1'], expect.any(String));
+    // After the application is closed: the worker saves the whole row, and running it while the
+    // profile groups were still landing could put back what they had just written.
+    const closedAt = Math.max(...ctx.applications.save.mock.invocationCallOrder);
+    expect(ctx.geoPrecision.enqueueBackfill.mock.invocationCallOrder[0]).toBeGreaterThan(closedAt);
+  });
+
+  it('leaves a person pinned by hand alone — there is nothing for the worker to improve', async () => {
+    const ctx = makeService({ application: ready() });
+    ctx.assayerService.create.mockResolvedValueOnce({
+      id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Candidate',
+      latitude: 18.5204, longitude: 73.8567, geoSource: 'manual', geoAccuracyMeters: 10,
+    } as any);
+
+    await ctx.service.approve('app-88', 'hr-1', ['ADMIN']);
+    expect(ctx.geoPrecision.enqueueBackfill).not.toHaveBeenCalled();
+  });
+
+  it('passes a pin the application carries through to the person as it was placed', async () => {
+    const ctx = makeService({
+      application: {
+        ...ready(),
+        extendedProfile: { fields: { latitude: '18.5204', longitude: '73.8567', district: 'Pune' } },
+      },
+    });
+    await ctx.service.approve('app-88', 'hr-1', ['ADMIN']);
+
+    const [dto] = ctx.assayerService.create.mock.calls[0];
+    expect(dto).toMatchObject({ latitude: 18.5204, longitude: 73.8567, district: 'Pune' });
+  });
+
+  it('does not wait for the hand-off to be accepted', async () => {
+    const ctx = makeService({ application: ready() });
+    ctx.geoPrecision.enqueueBackfill.mockImplementationOnce(() => new Promise(() => undefined));
+
+    const outcome = await Promise.race([
+      ctx.service.approve('app-88', 'hr-1', ['ADMIN']).then(() => 'approved'),
+      new Promise((resolve) => setTimeout(() => resolve('still waiting on the queue'), 300)),
+    ]);
+    expect(outcome).toBe('approved');
   });
 });
 
@@ -1617,7 +2162,7 @@ describe('a candidate admitted without an interview', () => {
     // Always returned, whatever the email did — a deployment with no mailbox still has to be able
     // to get a candidate in. The raw token lives only here and in the email.
     expect(result.inviteLink).toMatch(/\/register\/[0-9a-f]{64}$/);
-    expect(result.emailed).toBe(true);
+    expect(result.emailDelivery).toMatchObject({ status: 'QUEUED', to: 'ramesh@example.com' });
   });
 
   it('stamps the reason and the person who decided it onto the application', async () => {
@@ -1670,15 +2215,24 @@ describe('a candidate admitted without an interview', () => {
     await ctx.service.openWithoutInterview(INPUT, ACTOR);
 
     const lastSave = ctx.applications.save.mock.invocationCallOrder.at(-1)!;
-    expect(ctx.emailProvider.send.mock.invocationCallOrder[0]).toBeGreaterThan(lastSave);
+    expect(ctx.mailbox.send.mock.invocationCallOrder[0]).toBeGreaterThan(lastSave);
   });
 
-  it('still hands back the link when the email did not go, and says so', async () => {
+  it('queues the invite against the desk member who admitted the candidate, so their screen can watch it', async () => {
     const ctx = emptyQueue();
-    ctx.emailProvider.send.mockResolvedValueOnce({ success: false, error: 'transport off' });
+    await ctx.service.openWithoutInterview(INPUT, ACTOR);
+
+    expect(ctx.emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'REGISTRATION_INVITE', to: 'ramesh@example.com', entityId: 'app-new', requestedBy: 'hr-1',
+    }));
+  });
+
+  it('still hands back the link when the email could not be queued, and says so', async () => {
+    const ctx = emptyQueue();
+    ctx.emailService.queue.mockResolvedValueOnce({ id: null, status: 'NOT_QUEUED', to: INPUT.email, error: 'db down' });
     const result = await ctx.service.openWithoutInterview(INPUT, ACTOR);
 
-    expect(result.emailed).toBe(false);
+    expect(result.emailDelivery?.status).toBe('NOT_QUEUED');
     expect(result.inviteLink).toMatch(/\/register\/[0-9a-f]{64}$/);
   });
 
@@ -1690,7 +2244,7 @@ describe('a candidate admitted without an interview', () => {
       .rejects.toBeInstanceOf(ConflictException);
     // Nothing minted, nothing sent: the refusal is before the first write.
     expect(ctx.applications.save).not.toHaveBeenCalled();
-    expect(ctx.emailProvider.send).not.toHaveBeenCalled();
+    expect(ctx.mailbox.send).not.toHaveBeenCalled();
   });
 
   /**
@@ -1713,7 +2267,7 @@ describe('a candidate admitted without an interview', () => {
     // back to the queue to search for a name it has just been told.
     expect(thrown.getResponse()).toMatchObject({ applicationId: 'app-open' });
     expect(ctx.applications.save).not.toHaveBeenCalled();
-    expect(ctx.emailProvider.send).not.toHaveBeenCalled();
+    expect(ctx.mailbox.send).not.toHaveBeenCalled();
   });
 
   it('treats a decided application as no obstacle — that is a new candidate', async () => {

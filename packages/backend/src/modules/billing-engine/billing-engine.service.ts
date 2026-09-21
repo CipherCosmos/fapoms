@@ -47,36 +47,7 @@ import {
   NotificationDispatchService,
   EmitOptions,
 } from '../notifications/notification-dispatch.service';
-import {
-  BillingState,
-  DEAD_BILLING_STATES,
-  DEAD_PAYABLE_STATUSES,
-  isLiveBillingEntry,
-  isLivePayable,
-  liveBillingEntrySql,
-  livePayableSql,
-  andLivePayableSql,
-  InvoiceStatus,
-  PaymentMethod,
-  PaymentDirection,
-  AssayerPayableStatus,
-  AssayerInvoiceStatus,
-  BillingEntityType,
-  AssignmentStatus,
-  BillingAttentionItem,
-  BillingOverview,
-  AssignmentMoneyLine,
-  EventCategory,
-  businessTodayDateKey,
-  BUSINESS_TODAY_SQL,
-  gstinStateCode,
-  gstStateCodeToName,
-  resolveGstStateCode,
-  numberToIndianWords,
-  OnboardingDocument,
-  maskTail,
-  SystemRole,
-} from '@fapoms/shared';
+import { BillingState, DEAD_BILLING_STATES, DEAD_PAYABLE_STATUSES, isLiveBillingEntry, isLivePayable, liveBillingEntrySql, livePayableSql, andLivePayableSql, InvoiceStatus, PaymentMethod, PaymentDirection, AssayerPayableStatus, AssayerInvoiceStatus, BillingEntityType, AssignmentStatus, BillingAttentionItem, BillingOverview, AssignmentMoneyLine, EventCategory, businessTodayDateKey, BUSINESS_TODAY_SQL, gstinStateCode, gstStateCodeToName, resolveGstStateCode, numberToIndianWords, OnboardingDocument, maskTail, SystemRole, businessDateKey } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY, SEGREGATION_OF_DUTIES_SETTING_KEY } from '../../infrastructure/settings/settings.registry';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
@@ -1021,7 +992,7 @@ export class BillingEngineService implements OnModuleInit {
     emit: (event: string, payload: Record<string, unknown>) => void,
     payableId: string,
     userId: string,
-    opts: { suppressNotification: boolean; bypassInvoiceGuard?: boolean },
+    opts: { suppressNotification: boolean; bypassInvoiceGuard?: boolean; reason?: string },
   ): Promise<AssayerPayableEntity | null> {
     const p = await this.lockPayable(m, payableId);
     if (p.status === AssayerPayableStatus.APPROVED) return null;
@@ -1052,7 +1023,16 @@ export class BillingEngineService implements OnModuleInit {
       await this.assertSegregationOfDuties(
         userId,
         assignment?.createdBy,
-        `book assignment ${p.assignmentId} and also approve its payout`,
+        /**
+         * The assignment's NUMBER, not its id.
+         *
+         * This read `book assignment 587b06a6-6224-42e7-abe0-087b29c61dec and also approve its
+         * payout` — a refusal a clerk cannot act on, because nothing else in the product is
+         * searchable by that string. The row is already loaded for `createdBy`, so naming it
+         * `ASN-2026-000018` costs nothing and turns the message into an instruction: go and find
+         * somebody else to approve that one.
+         */
+        `book assignment ${assignment?.assignmentNumber ?? p.assignmentId} and also approve its payout`,
         { entityType: 'PAYABLE', entityId: p.id, payableNumber: p.payableNumber },
       );
     }
@@ -1106,6 +1086,14 @@ export class BillingEngineService implements OnModuleInit {
       clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
       entityType: BillingEntityType.PAYABLE, entityId: saved.id, action: 'PAYABLE_STATUS_CHANGED',
       fromState: AssayerPayableStatus.PENDING, toState: AssayerPayableStatus.APPROVED,
+      /**
+       * Why, when the desk approved without the assayer's confirmation.
+       *
+       * Null on the normal road — a payout approved as part of ITS bill carries the assayer's
+       * agreement, which needs no excuse. Present only where the desk stepped around that,
+       * which is exactly the case somebody will ask about later.
+       */
+      reason: opts.reason ?? null,
     }, m);
     // Compliance trail, alongside — not instead of — the reconciliation history row above.
     // On the same manager so the audit event commits or rolls back with the approval itself.
@@ -1118,7 +1106,8 @@ export class BillingEngineService implements OnModuleInit {
       previousState: AssayerPayableStatus.PENDING,
       newState: AssayerPayableStatus.APPROVED,
       userId,
-      remarks: `Approved payout ${saved.payableNumber} (₹${Number(saved.totalAmount)}) for assayer ${saved.assayerId}`,
+      remarks: `Approved payout ${saved.payableNumber} (₹${Number(saved.totalAmount)}) for assayer ${saved.assayerId}`
+        + (opts.reason ? ` — approved without assayer confirmation: ${opts.reason}` : ''),
       metadata: {
         payableId: saved.id,
         payableNumber: saved.payableNumber,
@@ -1137,14 +1126,18 @@ export class BillingEngineService implements OnModuleInit {
    * The one approval gate. Each id gets its own transaction, so one refused payable does not
    * undo the others; the result says exactly which were approved and which were refused, and why.
    * An already-approved payable is a no-op, not an error — the bulk button may be pressed twice.
+   *
+   * Runs in `BillingBulkJobsWorker`, not in the request (see `billing-bulk-jobs.contract.ts`), so
+   * `onProgress` is told after every payable, approved or refused, for the screen waiting on it.
    */
-  async approvePayouts(payableIds: string[], userId: string): Promise<PayoutActionResult> {
+  async approvePayouts(payableIds: string[], userId: string, onProgress?: ProgressCallback, reason?: string): Promise<PayoutActionResult> {
     const done: string[] = [];
     const refused: Array<{ id: string; reason: string }> = [];
-    for (const id of [...new Set(payableIds)]) {
+    const ids = [...new Set(payableIds)];
+    for (const [index, id] of ids.entries()) {
       try {
         const approved = await this.inTx((m, emit) =>
-          this.approvePayableInTx(m, emit, id, userId, { suppressNotification: false }),
+          this.approvePayableInTx(m, emit, id, userId, { suppressNotification: false, reason }),
         );
         done.push(id);
         if (approved) {
@@ -1161,6 +1154,7 @@ export class BillingEngineService implements OnModuleInit {
       } catch (err) {
         refused.push({ id, reason: (err as Error).message });
       }
+      await onProgress?.(index + 1, ids.length, 'Approving payouts');
     }
     return { done, refused };
   }
@@ -1170,21 +1164,26 @@ export class BillingEngineService implements OnModuleInit {
    *
    * One bank reference may settle many payables (a batch transfer), so the same reference is
    * allowed across payables; per payable it is the idempotency key.
+   *
+   * Runs in `BillingBulkJobsWorker`, like `approvePayouts`, reporting after every payable.
    */
   async payPayouts(
     payableIds: string[],
     dto: { paymentReference: string; method: PaymentMethod; paidDate?: string; notes?: string },
     userId: string,
+    onProgress?: ProgressCallback,
   ): Promise<{ done: Array<{ payableId: string; paymentId: string }>; refused: Array<{ id: string; reason: string }> }> {
     const done: Array<{ payableId: string; paymentId: string }> = [];
     const refused: Array<{ id: string; reason: string }> = [];
-    for (const id of [...new Set(payableIds)]) {
+    const ids = [...new Set(payableIds)];
+    for (const [index, id] of ids.entries()) {
       try {
         const payment = await this.recordDisbursement({ payableId: id, ...dto }, userId);
         done.push({ payableId: id, paymentId: payment.id });
       } catch (err) {
         refused.push({ id, reason: (err as Error).message });
       }
+      await onProgress?.(index + 1, ids.length, 'Paying payouts');
     }
     return { done, refused };
   }
@@ -2254,9 +2253,10 @@ export class BillingEngineService implements OnModuleInit {
    *    leak in disguise), and a counts-only `invoicing` block says what is pending without a
    *    single rupee — the reveal happens on the invitation, never on the statement's teaser.
    *
-   * Rollout gate: while `billing.assayerInvoicingEnabled` is off (or unreadable — the registry
-   * key ships with the coordinator's settings change), the assayer audience keeps TODAY'S full
-   * shape. Deploying this code dark must change nothing for the field app until the flag flips.
+   * Gate: `billing.assayerInvoicingEnabled` is ON by default, so this redacted shape is the
+   * normal one. Where a deployment has switched it off — or the key cannot be read — the assayer
+   * audience falls back to the pre-invoicing full shape, which is the safe direction: a field
+   * app that predates the invoicing round still shows its user something coherent.
    */
   async assayerStatement(
     assayerId: string,
@@ -2415,6 +2415,8 @@ export class BillingEngineService implements OnModuleInit {
    */
   async listPayouts(filters: {
     assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean;
+    /** True = riding an assayer bill, false = on none, undefined = both. See `PayoutsQuery`. */
+    onBill?: boolean;
     page?: number | string; limit?: number | string;
   } = {}, scope?: Partial<GlobalScope>): Promise<BillingPage<any>> {
     const w = billingPageWindow(filters.page, filters.limit);
@@ -2427,6 +2429,7 @@ export class BillingEngineService implements OnModuleInit {
       if (filters.clientId) where.clientId = filters.clientId;
       if (filters.status) where.status = filters.status;
       if (filters.onHold !== undefined) where.onHold = filters.onHold;
+      if (filters.onBill !== undefined) where.assayerInvoiceId = filters.onBill ? Not(IsNull()) : IsNull();
       const [payables, total] = await this.payableRepository.findAndCount({
         where, order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
       });
@@ -2439,6 +2442,9 @@ export class BillingEngineService implements OnModuleInit {
       if (filters.clientId) qb.andWhere('p.client_id = :clientId', { clientId: filters.clientId });
       if (filters.status) qb.andWhere('p.status = :status', { status: filters.status });
       if (filters.onHold !== undefined) qb.andWhere('p.on_hold = :onHold', { onHold: filters.onHold });
+      if (filters.onBill !== undefined) {
+        qb.andWhere(filters.onBill ? 'p.assayer_invoice_id IS NOT NULL' : 'p.assayer_invoice_id IS NULL');
+      }
       qb.leftJoin('assignments', 'rg_a', 'rg_a.id = p.assignment_id')
         .leftJoin('project_branches', 'rg_pb', 'rg_pb.id = rg_a.project_branch_id')
         .leftJoin('branches', 'rg_b', 'rg_b.id = rg_pb.branch_id');
@@ -3252,6 +3258,10 @@ export class BillingEngineService implements OnModuleInit {
                COUNT(*) FILTER (WHERE status = 'PENDING'  AND on_hold = false)::int                              AS due_count,
                COUNT(*) FILTER (WHERE status = 'APPROVED' AND on_hold = false)::int                              AS approved_count,
                COUNT(*) FILTER (WHERE on_hold = true)::int                                                       AS held_count,
+               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NULL), 0) AS unbilled,
+               COUNT(*) FILTER (WHERE status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NULL)::int AS unbilled_count,
+               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NOT NULL), 0) AS in_claim,
+               COUNT(*) FILTER (WHERE status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NOT NULL)::int AS in_claim_count,
                COALESCE(SUM(base_amount + travel_amount) FILTER (WHERE ${livePayableSql(payableRef)}), 0) AS gross_cost,
                COALESCE(SUM(tds_amount) FILTER (WHERE ${livePayableSql(payableRef)}), 0)                     AS tds_from_assayers
           FROM assayer_payables${rg.as('p')} WHERE is_active = true${rg.payable('p')}`, rgp),
@@ -3321,6 +3331,8 @@ export class BillingEngineService implements OnModuleInit {
       payouts: {
         due: n(p.due), approved: n(p.approved), paid: n(p.paid), held: n(p.held),
         dueCount: Number(p.due_count ?? 0), approvedCount: Number(p.approved_count ?? 0), heldCount: Number(p.held_count ?? 0),
+        unbilled: n(p.unbilled), unbilledCount: Number(p.unbilled_count ?? 0),
+        inClaimReview: n(p.in_claim), inClaimReviewCount: Number(p.in_claim_count ?? 0),
       },
       receivables: {
         unbilled: n(e.unbilled), invoiced: n(inv.invoiced), collected: n(inv.collected), outstanding: n(inv.outstanding), held: n(e.held),
@@ -3500,7 +3512,21 @@ export class BillingEngineService implements OnModuleInit {
     for (const r of unsettled) {
       items.push({
         kind: 'UNSETTLED_FEE', payableId: r.id, assignmentId: r.assignment_id, assignmentNumber: r.assignment_number, assayerName: r.assayer_name,
-        amount: Number(r.total_amount), detail: 'Booked from the proposed fee — no fee was ever agreed.',
+        /**
+         * Kept, but no longer an accusation.
+         *
+         * This said "no fee was ever agreed", which under the old negotiation model meant
+         * somebody was about to be paid a number nobody had committed to. That model is gone:
+         * since 2026-09-20 BOTH creation paths write the desk's number to `agreedFee`, so new
+         * work cannot land here. It read as a permanent red item with no action that clears it
+         * — and it caught every "Send to app" job and every unticked "Call & Assign".
+         *
+         * A row here is now one of two things, and the wording says so rather than picking:
+         * a payable booked before that change, or a genuine fault worth reporting.
+         */
+        amount: Number(r.total_amount),
+        detail: 'Booked without a fee recorded as agreed. Every assignment now records one when '
+          + 'it is created, so this is either a payable from before that change or a fault worth reporting.',
       });
     }
     for (const r of feeChanged) {
@@ -3713,7 +3739,7 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   private toISO(d: Date | string): string {
-    if (d instanceof Date) return d.toISOString().slice(0, 10);
+    if (d instanceof Date) return businessDateKey(d);
     return String(d).slice(0, 10);
   }
 
@@ -3742,7 +3768,7 @@ export class BillingEngineService implements OnModuleInit {
     const days = terms ? Number(/net\s*(\d+)/i.exec(terms)?.[1] ?? 0) : 0;
     const d = new Date(`${issueDate}T00:00:00Z`);
     d.setUTCDate(d.getUTCDate() + days);
-    return d.toISOString().slice(0, 10);
+    return businessDateKey(d);
   }
 
   /** Small cache: the same operator writes many history rows per request. */

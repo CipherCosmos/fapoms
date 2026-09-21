@@ -290,7 +290,7 @@ describe('the overview route resolves the caller scope server-side', () => {
 
   it('passes what the decorator resolved straight to the service', async () => {
     const overview = jest.fn(async () => ({ currency: 'INR' }));
-    const controller = new BillingEngineController({ overview } as any, {} as any, {} as any, {} as any);
+    const controller = new BillingEngineController({ overview } as any, {} as any, {} as any, {} as any, {} as any);
     const scope: any = { regions: [Region.NORTH] };
     await controller.overview(scope);
     expect(overview).toHaveBeenCalledWith(scope);

@@ -1,5 +1,6 @@
 import {
-  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { lookupIfsc } from '../geo/ifsc-lookup.helper'; import * as xlsx from 'xlsx'; import {   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, stateFromAddressAndPincode, canonicalStateName, canonicalState, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked, canTransitionAssayerLifecycle, EventCategory,
+  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { lookupIfsc, type IfscLookupResult } from '../geo/ifsc-lookup.helper'; import * as xlsx from 'xlsx'; import {   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, stateFromAddressAndPincode, canonicalStateName, canonicalState, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked, canTransitionAssayerLifecycle, EventCategory,
+  businessDateKey,
 } from '@fapoms/shared';
 import {
   rowReader, parseSheet, describeMissingColumn, normaliseHeader, BLANK_HEADER, ParsedSheet,
@@ -329,6 +330,20 @@ export class RosterImportService {
     const importedIds: string[] = [];
 
     /**
+     * One IFSC lookup per distinct code, for the length of this run.
+     *
+     * The cross-check in `applyContact` asked the directory once per ROW, uncached, inside the
+     * import's one transaction (holding it open while it waited) — about 0.37 s each measured, up to
+     * its 3 s cap on a bad network. A roster repeats codes heavily (a branch's appraisers bank at that branch),
+     * so most of those were the same question asked again. The promise is kept, not the answer, so
+     * a code's second row waits on the first lookup rather than starting another; a failed or
+     * timed-out lookup is remembered as "no answer" too, which is exactly how every row with that
+     * code would have ended anyway. Per run, not process-wide: a directory's answer can change, and
+     * nothing else here outlives the import.
+     */
+    const ifscLookups = new Map<string, Promise<IfscLookupResult | null>>();
+
+    /**
      * Legal lifecycle moves the sheet implies for existing records, run through
      * `bulkTransitionLifecycle` after this transaction commits — see the constructor's
      * `assayerService` docblock for why that has to happen outside this transaction rather
@@ -490,7 +505,7 @@ export class RosterImportService {
         const isNew = !existing;
 
         this.applyIdentity(assayer, read, sourceRow, sheetName, issues, overwrite);
-        await this.applyContact(assayer, read, sourceRow, sheetName, code, issues, overwrite);
+        await this.applyContact(assayer, read, sourceRow, sheetName, code, issues, overwrite, ifscLookups);
         this.applyEmployment(
           assayer, read, sourceRow, sheetName, code, issues, isNew, overwrite, hasAvailabilityColumn,
           pendingTransitions,
@@ -947,6 +962,8 @@ export class RosterImportService {
     a: AssayerEntity, read: ReturnType<typeof rowReader>,
     sourceRow: number, sheet: string, code: string, issues: Partial<AssayerImportIssueEntity>[],
     overwrite: boolean,
+    /** This run's IFSC answers, keyed by code — see `importAssayerSheet`. */
+    ifscLookups: Map<string, Promise<IfscLookupResult | null>>,
   ): Promise<void> {
     // The two phone columns hold up to three numbers between them, several per cell.
     const phones = readPhoneNumbers(read('Phone Number 1'), read('Phone Number 2'));
@@ -1140,10 +1157,16 @@ export class RosterImportService {
      * exactly as before this change, never blocking or skipping the row.
      */
     if (rawIfsc && rawBankName) {
-      const resolved = await Promise.race([
-        lookupIfsc(rawIfsc).catch(() => null),
-        new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3000); }),
-      ]);
+      const ifscKey = rawIfsc.trim().toUpperCase();
+      let lookup = ifscLookups.get(ifscKey);
+      if (!lookup) {
+        lookup = Promise.race([
+          lookupIfsc(ifscKey).catch(() => null),
+          new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3000); }),
+        ]);
+        ifscLookups.set(ifscKey, lookup);
+      }
+      const resolved = await lookup;
       if (resolved?.bankName && !this.bankNamesAgree(resolved.bankName, rawBankName)) {
         incomingBankName = resolved.bankName;
         issues.push({
@@ -1551,7 +1574,7 @@ export class RosterImportService {
     if (existing?.checkedOn && sheetCheckedOn && new Date(existing.checkedOn) > new Date(sheetCheckedOn)) {
       issues.push({
         sourceSheet: sheet, sourceRow, sourceColumn: 'CIBIL  date', rawValue: String(sheetCheckedOn),
-        reason: `A background check dated ${new Date(existing.checkedOn).toISOString().slice(0, 10)} is already on file — `
+        reason: `A background check dated ${businessDateKey(existing.checkedOn)} is already on file — `
           + 'this older row from the sheet was not applied. Record a new check on the Background tab of their record instead.',
       });
       return 0;
@@ -1841,7 +1864,7 @@ export class RosterImportService {
     if (s == null) return null;
 
     const parsed = this.parseDateShape(s);
-    const shown = s instanceof Date ? s.toISOString().slice(0, 10) : String(s).slice(0, 100);
+    const shown = s instanceof Date ? businessDateKey(s) : String(s).slice(0, 100);
 
     if (parsed == null) {
       // A silent null here loses a fact forever ("sanjayk" sits in a DOB cell on the real file);

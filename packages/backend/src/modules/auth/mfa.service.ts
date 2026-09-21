@@ -4,14 +4,16 @@ import { IsNull, Not, Repository } from 'typeorm';
 import { EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
 import { CacheService } from '../../infrastructure/cache/cache.service';
-import { EmailProvider } from '../../infrastructure/notifications/email-provider';
-import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
+import { appPublicUrl } from '../../infrastructure/notifications/email-provider';
+import { UserEntity } from '../user/user.entity';
 import { UserMfaEntity } from './user-mfa.entity';
 import { MfaRecoveryCodeEntity } from './mfa-recovery-code.entity';
 import {
   generateTotpSecret, verifyTotp, otpauthUri, generateRecoveryCodes, hashRecoveryCode,
 } from './totp';
 import { hashCode, numericCode, hashesEqual } from './otp-codes';
+import { EmailService } from '../notifications/email.service';
+import { SmsService } from '../notifications/sms.service';
 
 const MAX_MFA_ATTEMPTS = 5;
 const MFA_LOCK_MS = 15 * 60_000;
@@ -53,10 +55,13 @@ export class MfaService {
   constructor(
     @InjectRepository(UserMfaEntity) private readonly mfa: Repository<UserMfaEntity>,
     @InjectRepository(MfaRecoveryCodeEntity) private readonly recovery: Repository<MfaRecoveryCodeEntity>,
+    /** Only ever read for the recipient's name, so a code can be addressed to the person. */
+    @InjectRepository(UserEntity) private readonly users: Repository<UserEntity>,
     private readonly audit: AuditService,
     private readonly cache: CacheService,
-    private readonly email: EmailProvider,
-    private readonly sms: SmsProvider,
+    private readonly emails: EmailService,
+    /** Texts go through the one SMS door, like email through `EmailService` — never the gateway itself. */
+    private readonly sms: SmsService,
   ) {}
 
   /** Login asks this: does the user have ANY confirmed factor (TOTP, email, or SMS) to satisfy? */
@@ -73,6 +78,11 @@ export class MfaService {
 
   async status(userId: string): Promise<{
     enrolled: boolean; confirmed: boolean; factors: MfaFactorType[]; recoveryCodesRemaining: number;
+    /**
+     * Whether a text message can be set up as a factor on this server at all. The screen asks so it
+     * can say so before the person types a number, rather than after enrolment is refused.
+     */
+    smsAvailable: boolean;
   }> {
     const rows = await this.mfa.find({ where: { userId } });
     const confirmed = rows.filter((r) => r.confirmedAt);
@@ -86,6 +96,7 @@ export class MfaService {
       confirmed: confirmed.length > 0,
       factors,
       recoveryCodesRemaining: remaining,
+      smsAvailable: this.sms.isEnabled(),
     };
   }
 
@@ -151,7 +162,7 @@ export class MfaService {
 
     const code = numericCode();
     await this.cache.setJson(`mfa:enrol:${userId}:${type}`, { hash: hashCode(code) }, DELIVERED_CODE_TTL_S);
-    const delivered = await this.deliver(type, dest, code, 'confirm your second factor');
+    const delivered = await this.deliver(userId, type, dest, code, 'confirm your second factor');
     if (!delivered) {
       throw new BadRequestException('Could not send the code right now. Check the address/number and try again.');
     }
@@ -215,7 +226,7 @@ export class MfaService {
       throw new BadRequestException('SMS delivery is not configured on this server.');
     }
     const code = numericCode();
-    const delivered = await this.deliver(type, row.secret, code, 'sign in');
+    const delivered = await this.deliver(userId, type, row.secret, code, 'sign in');
     if (!delivered) throw new BadRequestException('Could not send the code right now. Try again, or use a different method.');
     await this.audit.recordEventSafe({
       category: EventCategory.USER, eventType: 'MFA_CODE_SENT', entityType: 'USER_MFA',
@@ -224,18 +235,70 @@ export class MfaService {
     return { codeHash: hashCode(code), expiresAt: Date.now() + DELIVERED_CODE_TTL_S * 1000, sentTo: maskDestination(type, row.secret) };
   }
 
-  /** Deliver a code over the chosen channel. Returns whether it went out; never throws. */
-  private async deliver(type: 'EMAIL' | 'SMS', dest: string, code: string, purpose: string): Promise<boolean> {
-    const body = `Your FAPOMS verification code is ${code}. It expires in 5 minutes. Use it to ${purpose}. If you did not request this, ignore this message.`;
+  /**
+   * Deliver a code over the chosen channel. Returns whether it went out; never throws.
+   *
+   * Both channels send now rather than queue — the person is on the sign-in screen waiting for it —
+   * and the code travels only as template data: `sendNow` records the send without its body, so the
+   * code is in no log and no table.
+   */
+  private async deliver(
+    userId: string, type: 'EMAIL' | 'SMS', dest: string, code: string, purpose: string,
+  ): Promise<boolean> {
     try {
+      /*
+        Who the code is for, so `{{name}}` reads as a name in whichever wording an administrator
+        writes. One column of one row; a failed read leaves the placeholder empty rather than
+        stopping a sign-in.
+      */
+      const recipientName = await this.recipientName(userId);
       if (type === 'EMAIL') {
-        const res = await this.email.send({ to: dest, subject: 'Your FAPOMS verification code', text: body });
-        return !!res?.success;
+        const res = await this.emails.sendNow({
+          kind: 'MFA_CODE',
+          to: dest,
+          recipientName,
+          content: {
+            template: 'mfa-code',
+            data: {
+              otpCode: code,
+              validMinutes: String(Math.round(DELIVERED_CODE_TTL_S / 60)),
+              purpose,
+              logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+              companyName: 'Sumeru Global',
+            },
+          },
+          entityType: 'USER',
+          entityId: userId,
+          requestedBy: userId,
+        });
+        return !!res?.sent;
       }
-      return await this.sms.send(dest, `Your FAPOMS code is ${code} (valid 5 min).`);
+      const res = await this.sms.sendNow({
+        kind: 'MFA_CODE',
+        to: dest,
+        recipientName,
+        content: {
+          template: 'mfa-code',
+          data: { code, validMinutes: String(Math.round(DELIVERED_CODE_TTL_S / 60)) },
+        },
+        entityType: 'USER',
+        entityId: userId,
+        requestedBy: userId,
+      });
+      return !!res?.sent;
     } catch (e) {
       this.logger.warn(`MFA code delivery over ${type} failed: ${(e as Error).message}`);
       return false;
+    }
+  }
+
+  /** The person's name for the message, or nothing — never a reason a code fails to go out. */
+  private async recipientName(userId: string): Promise<string | null> {
+    try {
+      const user = await this.users.findOne({ where: { id: userId }, select: ['id', 'displayName'] });
+      return user?.displayName?.trim() || null;
+    } catch {
+      return null;
     }
   }
 

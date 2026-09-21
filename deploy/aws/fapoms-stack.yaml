@@ -26,7 +26,12 @@ Parameters:
     AllowedValues: [t4g.medium, t4g.large, t4g.xlarge, t4g.2xlarge]
     Description: >
       Graviton (ARM) size. t4g.large (8 GB) is the minimal full app stack ('saving').
-      Use t4g.xlarge/2xlarge for 'full' - Nominatim + OSRM need the extra memory.
+      MODE=full needs t4g.2xlarge (32 GB). Building the whole-India OSRM graph was measured
+      OOM-killed three times on 2026-09-19 - at 11.7 GB, and twice at 17.6 GB including once
+      with the machine entirely to itself - so 16 GB is not enough. bootstrap.sh refuses to
+      start the build below 24 GB rather than let the kernel kill it halfway with no error
+      line. A smaller box can still run MODE=full against a REGIONAL extract: build
+      <zone>-latest from geofabrik and point OSRM_GRAPH at it.
 
   RootVolumeSizeGb:
     Type: Number

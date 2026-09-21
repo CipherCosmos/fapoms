@@ -239,7 +239,8 @@ export const AssayerDetailModal: React.FC<{
                         <span>{formatRouteDistance(candidate.distanceKm, candidate.distanceSource ?? null)}</span>
                         {candidate.durationMinutes != null && <span>{formatTravelTime(candidate.durationMinutes, candidate.distanceSource ?? null)}</span>}
                         <span title={candidate.usedFallbackBaseFee ? 'No priced rate on file — platform default, not a contracted figure.' : undefined}>
-                          Base: {candidate.baseFee != null ? `₹${candidate.baseFee}` : '—'}{candidate.usedFallbackBaseFee ? ' (platform default)' : ''}
+                          Audit fee: {candidate.baseFee != null ? `₹${candidate.baseFee}` : '—'}{candidate.usedFallbackBaseFee ? ' (platform default)' : ''}
+                          {candidate.baseFee != null && <span style={{ opacity: 0.65 }}> + travel</span>}
                         </span>
                         {candidate.score != null && (
                           <span style={{ fontWeight: 700, color: candidate.score >= 90 ? 'var(--status-active)' : 'var(--warning)' }}>{Math.round(candidate.score)}% Match</span>
@@ -260,7 +261,7 @@ export const AssayerDetailModal: React.FC<{
                           <Phone size={12} /> Call & Assign
                         </button>
                         <button onClick={() => onSendToApp(candidate)} className="btn btn-secondary" style={{ padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                          Send to app (no fee)
+                          Send to app
                         </button>
                       </div>
                     </div>

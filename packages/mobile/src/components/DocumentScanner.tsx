@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Modal, Image, TextInput, ScrollView, Platform, ActivityIndicator } from 'react-native';
+import { View, Modal, Image, ScrollView, Platform, ActivityIndicator } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import {
@@ -11,7 +11,7 @@ import { SCAN_UPLOAD_MIME_TYPES, uploadSizeProblem } from '@fapoms/shared';
 import { scanPlanFor, scanFileName } from './document-scan-options';
 import { hintKeyFor } from '../services/registration-checklist';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Icon, IconButton, Badge } from './ui/primitives';
+import { AppText, Button, Icon, IconButton, Input, Badge } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
 import { assetToBase64 } from '../utils/pickDocument';
 import { useT, serverErrorText } from '../i18n';
@@ -266,36 +266,15 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
         ) : hasScan ? (
           <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.lg }}>
             {/* File name — Drive lets you rename before the document is filed. */}
-            <View style={{ gap: t.space.xs }}>
-              <AppText variant="caption" tone="muted">
-                {tr('scanner.fileNameLabel')}
-              </AppText>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: t.space.sm,
-                  backgroundColor: t.colors.surface,
-                  borderWidth: 1,
-                  borderColor: t.colors.border,
-                  borderRadius: t.radius.md,
-                  paddingHorizontal: t.space.md,
-                }}
-              >
-                <Icon name="document-text-outline" size={18} color={t.colors.textMuted} />
-                <TextInput
-                  value={fileName}
-                  onChangeText={setFileName}
-                  selectTextOnFocus
-                  placeholder={tr('scanner.fileNamePlaceholder')}
-                  placeholderTextColor={t.colors.textMuted}
-                  style={{ flex: 1, paddingVertical: t.space.md, color: t.colors.text, fontSize: 15 }}
-                />
-                <AppText variant="caption" tone="muted">
-                  {pdfUri ? '.pdf' : '.jpg'}
-                </AppText>
-              </View>
-            </View>
+            <Input
+              label={tr('scanner.fileNameLabel')}
+              icon="document-text-outline"
+              value={fileName}
+              onChangeText={setFileName}
+              selectTextOnFocus
+              placeholder={tr('scanner.fileNamePlaceholder')}
+              rightAccessory={<AppText variant="body" tone="muted">{pdfUri ? '.pdf' : '.jpg'}</AppText>}
+            />
 
             {/* Page previews */}
             <View style={{ gap: t.space.sm }}>
@@ -365,23 +344,27 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
           >
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               {!unavailable && (
-                <Button
-                  label={hasScan ? tr('scanner.rescan') : tr('scanner.openScanner')}
-                  icon="camera"
-                  variant={hasScan ? 'neutral' : undefined}
-                  onPress={launchScanner}
-                  disabled={saving}
-                  style={{ flex: 1 }}
-                />
+                <View style={{ flex: 1 }}>
+                  <Button
+                    label={hasScan ? tr('scanner.rescan') : tr('scanner.openScanner')}
+                    icon="camera"
+                    variant={hasScan ? 'neutral' : undefined}
+                    onPress={launchScanner}
+                    disabled={saving}
+                    full
+                  />
+                </View>
               )}
-              <Button
-                label={tr('scanner.attachFile')}
-                icon="document-attach"
-                variant="neutral"
-                onPress={pickFile}
-                disabled={saving}
-                style={{ flex: 1 }}
-              />
+              <View style={{ flex: 1 }}>
+                <Button
+                  label={tr('scanner.attachFile')}
+                  icon="document-attach"
+                  variant="neutral"
+                  onPress={pickFile}
+                  disabled={saving}
+                  full
+                />
+              </View>
             </View>
 
             {hasScan && (
