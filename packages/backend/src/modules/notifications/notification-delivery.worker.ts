@@ -359,6 +359,11 @@ export class NotificationDeliveryWorker {
       ...(payload.subtotalTravel !== undefined ? [{ label: 'Travel Expenses', value: `₹${Number(payload.subtotalTravel).toLocaleString('en-IN')}` }] : []),
       ...(payload.tdsAmount !== undefined ? [{ label: 'TDS Deduction', value: `₹${Number(payload.tdsAmount).toLocaleString('en-IN')}` }] : []),
       ...(payload.totalAmount !== undefined ? [{ label: 'Net Payable', value: `₹${Number(payload.totalAmount).toLocaleString('en-IN')}` }] : []),
+    ] : payload.applicationId ? [
+      { label: 'Applicant Name', value: String(payload.applicantName || 'Candidate') },
+      ...(payload.mobile ? [{ label: 'Mobile Number', value: String(payload.mobile) }] : []),
+      ...(payload.email ? [{ label: 'Email Address', value: String(payload.email) }] : []),
+      { label: 'Application Status', value: 'Pending Review' },
     ] : undefined;
 
     const to = recipientEmail;
@@ -377,7 +382,7 @@ export class NotificationDeliveryWorker {
           bodyLines: bodyText.split('\n').filter(Boolean),
           kvTable,
           linkUrl,
-          linkLabel: payload.invoiceNumber ? 'Review & Confirm Claim in App' : 'Open in FAPOMS',
+          linkLabel: payload.invoiceNumber ? 'Review & Confirm Claim in App' : payload.applicationId ? 'Review Application' : 'Open in FAPOMS',
         },
       },
     }));
@@ -561,11 +566,15 @@ export class NotificationDeliveryWorker {
     const cat = String(category || '').toUpperCase();
 
     if (notifType === 'ACCOUNT_LOCKED' || cat.includes('SECURITY')) return { text: 'SECURITY ALERT', tone: 'crimson' };
+    if (notifType === 'ASSAYER_APPLICATION_SUBMITTED' || notifType.includes('REGISTRATION')) {
+      return { text: 'NEW REGISTRATION', tone: 'emerald' };
+    }
     if (notifType.includes('DESTRUCTIVE') || notifType.includes('APPROVAL') || notifType.includes('ACTION_REQUIRED')) {
       return { text: 'ACTION REQUIRED', tone: 'crimson' };
     }
     if (notifType.includes('SLA') || notifType.includes('BREACH')) return { text: 'SLA ESCALATION', tone: 'flame' };
     if (cat.includes('COMPLIANCE')) return { text: 'COMPLIANCE NOTICE', tone: 'gold' };
+    if (cat.includes('WORKFORCE')) return { text: 'HR & WORKFORCE', tone: 'emerald' };
     if (cat.includes('WORKFLOW')) return { text: 'WORKFLOW UPDATE', tone: 'emerald' };
     if (cat.includes('BILLING') || cat.includes('FINANCE')) return { text: 'FINANCE NOTICE', tone: 'gold' };
     return { text: 'FAPOMS NOTIFICATION', tone: 'gold' };

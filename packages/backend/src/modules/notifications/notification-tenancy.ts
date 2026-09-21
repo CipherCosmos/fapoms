@@ -107,6 +107,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 const ENTITY_ORGANIZATION_SQL: Record<string, string> = {
   ASSAYER: `SELECT organization_id AS org FROM assayers WHERE id = $1`,
+  ASSAYER_APPLICATION: `
+    SELECT COALESCE(app.organization_id, i.organization_id) AS org
+      FROM assayer_applications app
+      LEFT JOIN assayer_interviews i ON i.id = app.interview_id
+     WHERE app.id = $1`,
+  ASSAYER_INTERVIEW: `SELECT organization_id AS org FROM assayer_interviews WHERE id = $1`,
   BRANCH: `SELECT organization_id AS org FROM branches WHERE id = $1`,
   CLIENT: `SELECT organization_id AS org FROM clients WHERE id = $1`,
   PROJECT: `SELECT organization_id AS org FROM projects WHERE id = $1`,

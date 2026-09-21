@@ -115,6 +115,7 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
   const compose = (content: EmailContent) => {
     if ('template' in content) return EMAIL_TEMPLATE_REGISTRY[content.template].fallbackRenderer(content.data);
     if ('rendered' in content) return content.rendered;
+    if ('layout' in content) return { subject: content.subject, text: content.text || '', html: '' };
     throw new Error('This service sends only registered templates.');
   };
   type Receipt = { id: string | null; status: string; to: string; error?: string | null };
@@ -670,7 +671,34 @@ describe('submitting', () => {
 
     expect(application!.status).toBe(ApplicationStatus.PENDING_VALIDATION);
     expect(notificationDispatch.emitSafe).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'ASSAYER_APPLICATION_SUBMITTED' }),
+      expect.objectContaining({
+        type: 'ASSAYER_APPLICATION_SUBMITTED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application!.id,
+        payload: expect.objectContaining({
+          applicantName: application!.fullName,
+          applicationId: application!.id,
+          mobile: application!.mobile,
+        }),
+      }),
+    );
+  });
+
+  it('queues a confirmation email to the candidate when email is present', async () => {
+    const { service, emailService, application } = makeService({
+      application: ready({ email: 'candidate@example.com', fullName: 'Asha Verma' }),
+      cache: verified(),
+    });
+    await service.submit(RAW_TOKEN);
+
+    expect(emailService.queue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'REGISTRATION_SUBMITTED',
+        to: 'candidate@example.com',
+        recipientName: 'Asha Verma',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application!.id,
+      }),
     );
   });
 

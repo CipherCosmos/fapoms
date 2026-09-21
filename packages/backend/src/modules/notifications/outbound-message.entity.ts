@@ -19,7 +19,8 @@ export type OutboundMessageKind =
   | 'MFA_CODE'
   | 'BRANCH_AUDIT_PACKET'
   | 'TRANSPORT_TEST'
-  | 'TEMPLATE_TEST';
+  | 'TEMPLATE_TEST'
+  | 'REGISTRATION_SUBMITTED';
 
 /**
  * One message — an email or a text — somebody's action asked for, from the moment it was asked for

@@ -959,17 +959,12 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     // Same audience and reason as ASSAYER_ONBOARDED above — the review queue is on the HR desk.
     roles: ['OPERATIONS', ...ADMINS],
     fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
-    channels: IN_APP,
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
     title: 'New registration to review',
     body: '${applicantName} submitted a self-registration application.',
     link: '/hr/applications',
     skipActor: true,
-    collapse: {
-      windowSeconds: 900,
-      title: '${count} new registrations to review',
-      body: '${count} candidates submitted a self-registration application.',
-      link: '/hr/applications',
-    },
   },
   ASSAYER_BGV_RECORDED: {
     category: NotificationCategory.WORKFORCE,

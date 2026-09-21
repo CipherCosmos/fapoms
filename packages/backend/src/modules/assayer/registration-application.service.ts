@@ -1791,6 +1791,16 @@ export class RegistrationApplicationService {
     application.status = ApplicationStatus.PENDING_VALIDATION;
     const saved = await this.applications.save(application);
 
+    const interview = saved.interviewId
+      ? await this.interviews.findOne({ where: { id: saved.interviewId } })
+      : null;
+    const effectiveOrgId = saved.organizationId || interview?.organizationId || null;
+
+    if (!saved.organizationId && effectiveOrgId) {
+      saved.organizationId = effectiveOrgId;
+      await this.applications.update(saved.id, { organizationId: effectiveOrgId });
+    }
+
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: wasAwaitingInfo ? 'ASSAYER_APPLICATION_RESUBMITTED' : 'ASSAYER_APPLICATION_SUBMITTED',
@@ -1798,12 +1808,46 @@ export class RegistrationApplicationService {
       entityId: saved.id,
       remarks: `Registration application submitted by ${saved.fullName ?? saved.mobile}.`,
     });
+
     this.notificationDispatch.emitSafe({
       type: 'ASSAYER_APPLICATION_SUBMITTED',
-      payload: { applicantName: saved.fullName ?? saved.mobile },
+      payload: {
+        applicantName: saved.fullName ?? saved.mobile,
+        applicationId: saved.id,
+        mobile: saved.mobile,
+        email: saved.email ?? undefined,
+      },
       entityType: 'ASSAYER_APPLICATION',
       entityId: saved.id,
+      organizationId: effectiveOrgId ?? undefined,
+      ownerUserId: interview?.interviewedByUserId ?? undefined,
     });
+
+    if (saved.email) {
+      this.emails.queue({
+        kind: 'REGISTRATION_SUBMITTED',
+        to: saved.email,
+        recipientName: saved.fullName || 'Candidate',
+        content: {
+          layout: {
+            title: 'Application Submitted Successfully',
+            subtitle: 'Sumeru Global Appraiser Registration',
+            badge: { text: 'Application Received', tone: 'emerald' },
+            bodyLines: [
+              `Hello ${saved.fullName || 'Candidate'},`,
+              'Thank you for completing your registration details and uploading your documents.',
+              'Your application has been received and is now undergoing review by our operations and HR team.',
+              'You will receive an update once your profile and documents have been verified.',
+            ],
+            securityNotice: 'If you have any questions, please contact your Sumeru Global representative.',
+          },
+          subject: 'Application Received — Sumeru Global Appraiser Registration',
+        },
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: saved.id,
+      }).catch((err) => this.logger.warn(`Could not queue candidate submission confirmation: ${err?.message}`));
+    }
+
     return saved;
   }
 
