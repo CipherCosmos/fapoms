@@ -451,6 +451,11 @@ describe('billing overview region scoping, reconciled against the real schema', 
       expect(out.payouts.dueCount).toBe(await countOf('assayer_payables', m.payables, `${live} AND status = 'PENDING' AND on_hold = false`));
       expect(out.payouts.approvedCount).toBe(await countOf('assayer_payables', m.payables, `${live} AND status = 'APPROVED' AND on_hold = false`));
       expect(out.payouts.heldCount).toBe(await countOf('assayer_payables', m.payables, `${live} AND on_hold = true`));
+      // `due` splits in two by whether an assayer invoice has already claimed the payable.
+      expect(out.payouts.unbilled).toBe(await sumOf('assayer_payables', m.payables, 'total_amount - paid_amount', `${live} AND status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NULL`));
+      expect(out.payouts.unbilledCount).toBe(await countOf('assayer_payables', m.payables, `${live} AND status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NULL`));
+      expect(out.payouts.inClaimReview).toBe(await sumOf('assayer_payables', m.payables, 'total_amount - paid_amount', `${live} AND status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NOT NULL`));
+      expect(out.payouts.inClaimReviewCount).toBe(await countOf('assayer_payables', m.payables, `${live} AND status = 'PENDING' AND on_hold = false AND assayer_invoice_id IS NOT NULL`));
       expect(out.margin.cost).toBe(await sumOf('assayer_payables', m.payables, 'base_amount + travel_amount', live));
       expect(out.tax.tdsWithheldFromAssayers).toBe(await sumOf('assayer_payables', m.payables, 'tds_amount', live));
     });
@@ -460,6 +465,9 @@ describe('billing overview region scoping, reconciled against the real schema', 
       expect(out.payouts).toEqual({
         due: 990, approved: 1980, paid: 2970, held: 3960,
         dueCount: 1, approvedCount: 1, heldCount: 1,
+        // pA1 is the only live, un-held PENDING payable in A, and no fixture payable is on an
+        // assayer invoice, so all of `due` is still unbilled and nothing is in claim review.
+        unbilled: 990, unbilledCount: 1, inClaimReview: 0, inClaimReviewCount: 0,
       });
       expect(out.margin.cost).toBe(11000);            // 1100 + 2200 + 3300 + 4400
       expect(out.tax.tdsWithheldFromAssayers).toBe(1100);
@@ -834,10 +842,19 @@ describe('billing overview region scoping, reconciled against the real schema', 
       const [age] = await qr.query(ORIGINAL.ageing);
       const [cash] = await qr.query(ORIGINAL.cash);
 
-      expect(out.payouts).toEqual({
+      // The pre-fix query predates the unbilled / in-claim-review split, so it has nothing to say about
+      // those two fields. Compare the seven it does compute, and hold the new ones to the identity that
+      // defines them: every due payable is either not yet on an assayer invoice or already claimed on one.
+      const { unbilled, unbilledCount, inClaimReview, inClaimReviewCount, ...headline } = out.payouts;
+      expect(headline).toEqual({
         due: r2(num(pay.due)), approved: r2(num(pay.approved)), paid: r2(num(pay.paid)), held: r2(num(pay.held)),
         dueCount: num(pay.due_count), approvedCount: num(pay.approved_count), heldCount: num(pay.held_count),
       });
+      // Present and numeric first (the fields are optional on the return type), so a missing one fails
+      // here rather than being summed away as zero.
+      for (const v of [unbilled, unbilledCount, inClaimReview, inClaimReviewCount]) expect(typeof v).toBe('number');
+      expect(r2(unbilled! + inClaimReview!)).toBe(headline.due);
+      expect(unbilledCount! + inClaimReviewCount!).toBe(headline.dueCount);
       expect(out.margin.cost).toBe(r2(num(pay.gross_cost)));
       expect(out.tax.tdsWithheldFromAssayers).toBe(r2(num(pay.tds_from_assayers)));
       expect(out.receivables.unbilled).toBe(r2(num(ent.unbilled)));
@@ -932,7 +949,10 @@ describe('billing overview region scoping, reconciled against the real schema', 
   describe('a region with no financial records at all', () => {
     it('returns zeros and empty lists, never nulls and never an error', async () => {
       const out = await scoped([EMPTY]);
-      expect(out.payouts).toEqual({ due: 0, approved: 0, paid: 0, held: 0, dueCount: 0, approvedCount: 0, heldCount: 0 });
+      expect(out.payouts).toEqual({
+        due: 0, approved: 0, paid: 0, held: 0, dueCount: 0, approvedCount: 0, heldCount: 0,
+        unbilled: 0, unbilledCount: 0, inClaimReview: 0, inClaimReviewCount: 0,
+      });
       expect(out.receivables).toEqual({
         unbilled: 0, invoiced: 0, collected: 0, outstanding: 0, held: 0,
         aging: { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90_plus: 0 },
