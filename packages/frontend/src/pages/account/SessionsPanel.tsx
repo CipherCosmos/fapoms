@@ -122,6 +122,7 @@ export const SessionsPanel: React.FC<{ userId?: string }> = ({ userId }) => {
                 onClick={() => revoke.mutate(s.id)}
                 disabled={revoke.isPending}
                 className="btn btn-secondary"
+                title={`Terminate session on ${s.device || s.browser || 'this device'} and sign it out immediately`}
                 style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
               >
                 <LogOut size={13} /> Sign out

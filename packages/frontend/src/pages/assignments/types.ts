@@ -30,8 +30,8 @@ export interface Assignment {
   /** Stated when a job was closed with an arrival and no departure. */
   completedWithoutCheckOutReason?: string | null;
   project: { name: string };
-  assayer: { displayName: string };
-  projectBranch: { status?: string; branch: { name: string; state: string } };
+  assayer: { displayName: string; phone?: string | null };
+  projectBranch: { status?: string; branch: { name: string; state: string; city?: string | null } };
   assessment: { status?: string; branch: { name: string; state: string }; packetSize?: number } | null;
 }
 

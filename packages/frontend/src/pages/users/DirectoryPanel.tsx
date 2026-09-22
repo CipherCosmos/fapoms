@@ -563,7 +563,7 @@ export const DirectoryPanel: React.FC = () => {
           { value: 'LOCKED', label: 'Locked out' },
         ]} />
         <div style={{ marginLeft: 'auto' }}>
-          <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
+          <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />} title="Create a new staff user account or invite a colleague">
             <span>Add someone</span>
           </PrimaryButton>
         </div>
@@ -584,13 +584,16 @@ export const DirectoryPanel: React.FC = () => {
               { value: 'SUSPENDED', label: 'Suspend' },
             ]}
             placeholder="Set status…"
+            title="Choose new account status to apply in bulk"
             style={{ minWidth: '160px' }}
           />
           <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary"
+            title={`Apply status change to ${selectedIds.size} selected user account(s)`}
             style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
             {bulkBusy ? 'Applying…' : 'Apply'}
           </button>
           <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary"
+            title="Deselect all accounts"
             style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
         </div>
       )}

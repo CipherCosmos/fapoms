@@ -21,6 +21,7 @@ import { userMessage } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { getZones } from '../services/planning';
 import { Page } from '../components/ui/Page';
+import { BranchReconciliationModal, BranchReconciliationReport } from '../components/branch/BranchReconciliationModal';
 
 interface ClientOption {
   id: string;
@@ -314,6 +315,9 @@ export const Branches: React.FC = () => {
    */
   const branchImport = useImportJob();
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [reconcileReport, setReconcileReport] = useState<BranchReconciliationReport | null>(null);
+  const [showReconcileModal, setShowReconcileModal] = useState(false);
+  const [isPreflighting, setIsPreflighting] = useState(false);
   // Audit and finance can open this page but hold no branch write permission —
   // showing them Add/Edit/Delete only produces a 403 when they click.
   const roles = useCurrentRoles();
@@ -492,7 +496,22 @@ export const Branches: React.FC = () => {
     e.target.value = '';
     if (!file || !selectedClientId) return;
     setMessage(null);
-    await branchImport.start(`/branches/import/${selectedClientId}`, file);
+    setIsPreflighting(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const report = await api.post<BranchReconciliationReport>(
+        `/branches/reconcile/${selectedClientId}`,
+        formData
+      );
+      setReconcileReport(report);
+      setShowReconcileModal(true);
+    } catch (err: any) {
+      // Fallback to queued import if reconcile fails
+      await branchImport.start(`/branches/import/${selectedClientId}`, file);
+    } finally {
+      setIsPreflighting(false);
+    }
   };
 
   /**
@@ -536,18 +555,14 @@ export const Branches: React.FC = () => {
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
         {[
-          // Each tile now says what its number is and what it is for. "Standard Complexity 71"
-          // was a puzzle: nothing on the page defined complexity, so a clerk could not tell
-          // whether 71 was good, bad, or something they were supposed to act on. The numbers
-          // themselves are unchanged.
-          { label: 'Total Branches', value: totalCount, icon: Building2, color: 'var(--accent-primary)', note: 'On this client\u2019s list, within your current scope' },
-          { label: 'Regions Covered', value: regionCount, icon: Globe, color: 'var(--status-active)', note: 'Distinct planning regions these branches fall in' },
-          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: 'var(--danger)', note: 'Need an experienced assayer \u2014 plan these first' },
-          { label: 'Standard Complexity', value: standardCount, icon: Activity, color: 'var(--accent-secondary)', note: 'A normal one-day visit (about 8 hours each)' },
+          { label: 'Total Branches', value: totalCount, icon: Building2, color: 'var(--accent-primary)', note: 'In current scope', tooltip: 'Total branches imported for this client within active scope' },
+          { label: 'Regions Covered', value: regionCount, icon: Globe, color: 'var(--status-active)', note: 'Planning zones', tooltip: 'Unique administrative and geographic planning regions' },
+          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: 'var(--danger)', note: 'Priority focus', tooltip: 'Branches classified with high or critical risk ratings requiring priority auditing' },
+          { label: 'Standard Complexity', value: standardCount, icon: Activity, color: 'var(--accent-secondary)', note: 'Standard audits', tooltip: 'Branches with standard operational scope and estimated audit duration' },
         ].map(card => {
           const Icon = card.icon;
           return (
-            <div key={card.label} className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div key={card.label} className="glass-card" title={`${card.label}: ${card.value} — ${card.tooltip}`} style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px' }}>
               <div style={{ width: '44px', height: '44px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.color }}>
                 <Icon size={22} />
               </div>
@@ -581,17 +596,17 @@ export const Branches: React.FC = () => {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
               <label style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Excel Import</label>
-              <label className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: branchImport.busy ? 'not-allowed' : 'pointer', fontSize: 'var(--text-sm)', opacity: branchImport.busy ? 0.7 : 1 }}>
-                <Upload size={14} /> {branchImport.busy ? 'Importing…' : 'Import Excel'}
-                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={branchImport.busy} style={{ display: 'none' }} />
+              <label className="btn btn-primary" title="Upload an Excel spreadsheet or CSV containing client branch records" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: branchImport.busy ? 'not-allowed' : 'pointer', fontSize: 'var(--text-sm)', opacity: branchImport.busy ? 0.7 : 1 }}>
+                <Upload size={14} /> {isPreflighting ? 'Analyzing…' : branchImport.busy ? 'Importing…' : 'Import Excel'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isPreflighting || branchImport.busy} style={{ display: 'none' }} />
               </label>
             </div>
             <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name or SOL ID..." compact style={{ minWidth: '180px' }} />
-            <button onClick={() => setShowFilters(!showFilters)} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button onClick={() => setShowFilters(!showFilters)} title={showFilters ? 'Hide advanced branch filters' : 'Show advanced branch filters'} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Filter size={13} /> Filters <ChevronDown size={12} style={{ transform: showFilters ? 'rotate(180deg)' : '' }} />
             </button>
             {canManage && (
-              <button onClick={() => setShowCreateModal(true)} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={() => setShowCreateModal(true)} title="Manually create a new bank branch entry with location and SOL ID" className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Plus size={14} /> Add Branch
               </button>
             )}
@@ -696,8 +711,8 @@ export const Branches: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   {canManage && <>
-                    <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: 'var(--text-2xs)' }}><Edit2 size={11} /></button>
-                    <button onClick={() => setShowContactModal(true)} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <button onClick={() => { setEditingBranch(selectedBranch); setShowEditModal(true); }} title="Edit branch parameters, risk, and contact information" className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: 'var(--text-2xs)' }}><Edit2 size={11} /></button>
+                    <button onClick={() => setShowContactModal(true)} title="Add key branch contact person or escalation contact" className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Plus size={11} /> Contact
                     </button>
                   </>}
@@ -856,12 +871,46 @@ export const Branches: React.FC = () => {
 
       {confirmDialog}
 
+      {showReconcileModal && reconcileReport && (
+        <BranchReconciliationModal
+          open={showReconcileModal}
+          onClose={() => setShowReconcileModal(false)}
+          report={reconcileReport}
+          scope={{ kind: 'CLIENT', id: selectedClientId }}
+          title={`Reconcile Branches: ${clients.find(c => c.id === selectedClientId)?.name || 'Client'}`}
+          onCommitSuccess={(outcome) => {
+            setMessage({
+              type: 'success',
+              text: `Branches imported: ${outcome.created} added to master DB, ${outcome.updated} updated.`,
+            });
+            void loadBranches(selectedClientId);
+          }}
+        />
+      )}
+
       {showContactModal && selectedBranch && (
         <AddBranchContactModal branchId={selectedBranch.id} onClose={() => setShowContactModal(false)} onAdded={() => { setShowContactModal(false); void loadBranchDetail(selectedBranch); }} />
       )}
     </Page>
   );
 };
+
+const BANK_PATTERNS: { name: string; regex: RegExp; code: string }[] = [
+  { name: 'State Bank of India', regex: /\b(sbi|sbin|state bank|st\.?\s*bank)\b/i, code: 'SBIN' },
+  { name: 'HDFC Bank', regex: /\b(hdfc|hdfcbank)\b/i, code: 'HDFC' },
+  { name: 'ICICI Bank', regex: /\b(icici|icic)\b/i, code: 'ICIC' },
+  { name: 'Axis Bank', regex: /\b(axis|utib)\b/i, code: 'UTIB' },
+  { name: 'Punjab National Bank', regex: /\b(pnb|punb|punjab national)\b/i, code: 'PUNB' },
+  { name: 'Bank of Baroda', regex: /\b(bob|barb|bank of baroda)\b/i, code: 'BARB' },
+  { name: 'Canara Bank', regex: /\b(canara|cnrb)\b/i, code: 'CNRB' },
+  { name: 'Kotak Mahindra Bank', regex: /\b(kotak|kkbk)\b/i, code: 'KKBK' },
+  { name: 'Union Bank of India', regex: /\b(union bank|ubin)\b/i, code: 'UBIN' },
+  { name: 'Bank of India', regex: /\b(bank of india|bkid)\b/i, code: 'BKID' },
+  { name: 'IndusInd Bank', regex: /\b(indusind|indb)\b/i, code: 'INDB' },
+  { name: 'Yes Bank', regex: /\b(yes bank|yesb)\b/i, code: 'YESB' },
+  { name: 'IDFC First Bank', regex: /\b(idfc|idfb)\b/i, code: 'IDFB' },
+  { name: 'RBL Bank', regex: /\b(rbl|ratn)\b/i, code: 'RATN' },
+];
 
 /** Exported for the same reason as `BranchFormData` above — a focused test harness. */
 export const BranchFormModal: React.FC<{
@@ -883,6 +932,26 @@ export const BranchFormModal: React.FC<{
    */
   const [addrNote, setAddrNote] = useState<{ message: string; blocking: boolean } | null>(null);
   const [addrLookup, setAddrLookup] = useState(false);
+
+  /** Client mismatch advisory for manual entry */
+  const clientMismatchNote = React.useMemo(() => {
+    if (!form.clientId) return null;
+    const currentClient = clientOptions.find((c) => c.id === form.clientId);
+    if (!currentClient) return null;
+    const clientText = `${currentClient.name} ${currentClient.clientCode || ''}`;
+    const targetBank = BANK_PATTERNS.find((b) => b.regex.test(clientText));
+
+    const textToCheck = `${form.name || ''} ${form.solId || ''}`;
+    for (const bp of BANK_PATTERNS) {
+      if (bp.regex.test(textToCheck)) {
+        if (targetBank && bp.code !== targetBank.code) {
+          return `Branch name or SOL ID references "${bp.name}", but the selected client is "${currentClient.name}". Please verify if this branch belongs to this client.`;
+        }
+      }
+    }
+    return null;
+  }, [form.clientId, form.name, form.solId, clientOptions]);
+
   // The zone was previously a free-text box labelled "Zone ID", which asked the operator to type a
   // raw UUID. Zone ids are not shown anywhere in the application, so there was no way to know one;
   // and anything that was not a UUID came back as a 500. Zones are few, so offer them by name.
@@ -1082,6 +1151,17 @@ export const BranchFormModal: React.FC<{
         {/* SOL ID is the single branch identifier. It comes off the client's own SOL register and
             is mandatory — there is no auto-allocation. */}
         {field('SOL ID', 'solId', { required: true, placeholder: 'e.g. 12345', full: true })}
+        {clientMismatchNote && (
+          <div style={{
+            gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)',
+            padding: '6px 8px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--status-pending-bg)',
+            color: 'var(--warning)',
+            border: '1px solid var(--border-color)',
+          }}>
+            <AlertTriangle size={13} aria-hidden /> {clientMismatchNote}
+          </div>
+        )}
 
         <span style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
         {/* Pincode first, and deliberately so: it is the one thing on a branch letterhead that

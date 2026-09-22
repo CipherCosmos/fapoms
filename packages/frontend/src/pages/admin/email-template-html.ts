@@ -101,7 +101,9 @@ const TEMPLATE_BLOCKS: Record<string, (buttonLabel: string | undefined) => Templ
       code: '{{assayerCode}}',
       note: trustedEmailHtml('Effective Date: <strong>{{effectiveDate}}</strong>'),
     },
-    button: { href: '{{loginUrl}}', label: `${buttonLabel || 'Access Appraiser Portal'} →` },
+    // The app, not the web portal: an appraiser has no surface on the web app, and at the moment
+    // this letter is sent they hold a code but not yet the password that follows separately.
+    button: { href: '{{appDownloadUrl}}', label: `${buttonLabel || 'Get the appraiser app'} →` },
   }),
   'application-rejected': () => ({
     callout: { tone: 'crimson', title: 'Review Committee Notes', text: '{{reviewNotes}}' },

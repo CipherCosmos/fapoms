@@ -495,7 +495,7 @@ export const Documents: React.FC = () => {
         title="Documents"
         subtitle="Every branch's files in one place — upload, dispatch, receive and process without switching screens."
         actions={
-          <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button onClick={loadOverview} className="btn btn-secondary" title="Refresh document status and file lists" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <RefreshCw size={16} /> Refresh
           </button>
         }
@@ -547,18 +547,38 @@ export const Documents: React.FC = () => {
           <DocumentModelLegend />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             {canCustomerMaster && (
-              <button onClick={() => setView('daily')} className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+              <button
+                onClick={() => setView('daily')}
+                className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'}
+                title="View documents scheduled and prepared for today's audit runs"
+                style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+              >
                 Daily Run
               </button>
             )}
-            <button onClick={() => setView('branch')} className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+            <button
+              onClick={() => setView('branch')}
+              className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'}
+              title="Organize and inspect audit paperwork grouped by individual bank branch"
+              style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+            >
               By Branch
             </button>
-            <button onClick={() => setView('flat')} className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+            <button
+              onClick={() => setView('flat')}
+              className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'}
+              title="View all audit paperwork and uploaded attachments across all branches"
+              style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+            >
               All Files
             </button>
             {canCustomerMaster && (
-              <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+              <button
+                onClick={() => setView('versions')}
+                className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'}
+                title="Manage customer master sheets, imports, and revision history"
+                style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+              >
                 Customer Master
               </button>
             )}
@@ -568,6 +588,7 @@ export const Documents: React.FC = () => {
                 value={projectId}
                 onChange={setProjectId}
                 options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                title="Filter daily run documents by project"
                 style={{ marginLeft: 4 }}
               />
             )}

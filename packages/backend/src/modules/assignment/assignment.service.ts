@@ -1385,6 +1385,7 @@ export class AssignmentService {
       clientRequestId?: string;
       assayerId?: string;
       requireVersionProtection?: boolean;
+      scheduledDate?: string;
     },
   ): Promise<{ saved: AssignmentEntity; event: any }> {
     const requestHash = options?.clientRequestId
@@ -1461,6 +1462,9 @@ export class AssignmentService {
       }
       if (fee !== undefined) {
         assignment.agreedFee = fee;
+      }
+      if (options?.scheduledDate) {
+        assignment.scheduledDate = new Date(options.scheduledDate);
       }
       event = AssignmentStateMachine.acceptOffer(assignment, userId);
       if (assignment.projectBranch) {
@@ -1888,7 +1892,7 @@ export class AssignmentService {
     userId: string,
     fee?: number,
     reason?: string,
-    options?: { expectedVersion?: number; clientRequestId?: string; acceptOnBehalf?: boolean; isAssayerRole?: boolean },
+    options?: { expectedVersion?: number; clientRequestId?: string; acceptOnBehalf?: boolean; isAssayerRole?: boolean; scheduledDate?: string },
   ): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
     if (options?.isAssayerRole && assignment.assayerId != null && assignment.assayerId !== userId) {

@@ -2472,6 +2472,7 @@ export const PlanningWorkspace: React.FC = () => {
             onChange={setSelectedProjectId}
             options={projects.map(p => ({ value: p.id, label: `${p.name} (${p.projectNumber})` }))}
             menuWidth={320}
+            title="Filter planning workspace by project"
             style={{
               border: '1px solid rgba(216,174,71,0.35)',
               borderRadius: '6px',
@@ -2505,17 +2506,18 @@ export const PlanningWorkspace: React.FC = () => {
         {/* Right: Key Metrics & Report Export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-2xs)' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Total: <b style={{ color: 'var(--text-primary)' }}>{totalCount}</b></span>
-            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-active-bg)', color: 'var(--success)', fontWeight: 700 }}>
+            <span style={{ color: 'var(--text-muted)' }} title={`Total branches in project: ${totalCount}`}>Total: <b style={{ color: 'var(--text-primary)' }}>{totalCount}</b></span>
+            <span title={`${confirmedCount} branches have confirmed assayer assignments (${coveragePct}% coverage)`} style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-active-bg)', color: 'var(--success)', fontWeight: 700 }}>
               {coveragePct}% ({confirmedCount})
             </span>
-            <span style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
+            <span title={`${totalCount - confirmedCount} branches still waiting to be staffed with an assayer`} style={{ padding: '2px 6px', borderRadius: '10px', background: 'var(--status-pending-bg)', color: 'var(--warning)', fontWeight: 700 }}>
               Pending ({totalCount - confirmedCount})
             </span>
           </div>
 
           <button
             onClick={handleExportCoverageReport}
+            title="Download full project branch coverage schedule as an Excel spreadsheet (.xlsx)"
             style={{
               background: 'var(--status-active-bg)',
               border: '1px solid var(--status-active-bg)',
@@ -2606,6 +2608,7 @@ export const PlanningWorkspace: React.FC = () => {
           <input
             type="text"
             placeholder="Filter city..."
+            title="Filter branch list by city name"
             value={cityFilter}
             onChange={e => setCityFilter(e.target.value)}
             style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-2xs)' }}
@@ -2615,6 +2618,7 @@ export const PlanningWorkspace: React.FC = () => {
           <input
             type="text"
             placeholder="Filter district..."
+            title="Filter branch list by district name"
             value={districtFilter}
             onChange={e => setDistrictFilter(e.target.value)}
             style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-2xs)' }}
@@ -2740,12 +2744,15 @@ export const PlanningWorkspace: React.FC = () => {
             }}
             disabled={bulkAssigning || bulkTargetBranches.rows.length === 0}
             className="btn btn-secondary"
+            title="Mark selected branches as unable to cover and record explanation"
             style={{ padding: '5px 11px', fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--danger)', borderColor: 'var(--danger)' }}>
             Mark unable to cover
           </button>
 
           <button onClick={() => { setBulkSelectedIds(new Set()); setBulkFailures([]); }}
-            className="btn btn-secondary" style={{ padding: '5px 11px', fontSize: 'var(--text-2xs)' }}>
+            className="btn btn-secondary"
+            title="Deselect all branches currently ticked"
+            style={{ padding: '5px 11px', fontSize: 'var(--text-2xs)' }}>
             Clear
           </button>
 

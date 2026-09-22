@@ -968,6 +968,30 @@ describe('ProjectService', () => {
       });
     });
 
+    it('auto-hydrates missing state and address from master DB so known branches are never rejected', async () => {
+      const existing = {
+        id: 'b-known-1', solId: 'BR-KNOWN', name: 'Known Branch',
+        state: 'Maharashtra', district: 'Mumbai', address: '123 Marine Drive',
+        pincode: '400020', latitude: 18.93, longitude: 72.82, region: 'WEST',
+        isActive: true,
+      };
+      mockBranchRepo.find.mockImplementation(async (opts: any) => (opts?.where?.solId ? [existing] : []));
+      mockBranchService.update.mockImplementation(async (id: string, patch: any) => ({ ...existing, id, ...patch }));
+
+      // Row in Excel has ONLY SOL ID and Branch Name — NO STATE, NO ADDRESS!
+      const buffer = sheetBuffer([
+        { BRANCH: 'BR-KNOWN', BRANCH_NAME: 'Known Branch', Packets: 40 },
+      ]);
+
+      const report = await service.uploadBranchesFromExcel(
+        { kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1',
+      );
+
+      expect(report.skipped).toHaveLength(0);
+      expect(report.totalRows).toBe(1);
+      expect(report.linked).toBe(1);
+    });
+
   });
 
   describe('generateBranchTemplate', () => {
@@ -1020,6 +1044,135 @@ describe('ProjectService', () => {
       expect(row).not.toHaveProperty('Latitude');
       expect(row).not.toHaveProperty('Risk Category');
       expect(row).not.toHaveProperty('Estimated Hours');
+    });
+  });
+
+  describe('reconcileBranches & commitReconciledBranches', () => {
+    it('reconciles known vs new branches and flags missing fields correctly', async () => {
+      const existing = {
+        id: 'b-100', solId: 'SOL-100', name: 'Master Branch',
+        state: 'Karnataka', district: 'Bangalore', address: 'MG Road',
+        pincode: '560001', latitude: 12.97, longitude: 77.59,
+        geoSource: 'manual', geoAccuracyMeters: 5, isActive: true,
+      };
+      mockBranchRepo.find.mockImplementation(async (opts: any) => (opts?.where?.solId ? [existing] : []));
+
+      const report = await service.reconcileBranches(
+        { kind: 'PROJECT', id: 'p-1' },
+        undefined,
+        [
+          // Known branch with minimal details
+          { 'SOL ID': 'SOL-100', 'Branch Name': 'Master Branch' },
+          // New branch with complete details
+          { 'SOL ID': 'SOL-200', 'Branch Name': 'New Branch', State: 'Kerala', District: 'Kochi', Address: 'Kochi Port', Pincode: '682001' },
+          // New branch missing State
+          { 'SOL ID': 'SOL-300', 'Branch Name': 'Incomplete Branch' },
+        ],
+      );
+
+      expect(report.summary.totalRows).toBe(3);
+      expect(report.summary.existingInMaster).toBe(1);
+      expect(report.summary.newBranches).toBe(2);
+      expect(report.summary.needsDetailsCount).toBe(1); // SOL-300 needs state
+      expect(report.rows[0].existsInMaster).toBe(true);
+      expect(report.rows[0].status).toBe('ready'); // Coordinates came from master (5m manual)
+      expect(report.rows[1].existsInMaster).toBe(false);
+      expect(report.rows[2].missingFields).toContain('state');
+    });
+
+    it('commitReconciledBranches updates existing and registers new branches', async () => {
+      mockProjectRepo.findOne.mockResolvedValue({ id: 'p-1', clientId: 'c-1', priority: 'MEDIUM' });
+      mockBranchRepo.findOne.mockResolvedValue(null);
+      mockBranchService.registerImportedBranch.mockResolvedValue({
+        id: 'b-new-1', solId: 'NEW-1', name: 'New 1', state: 'Tamil Nadu', district: 'Chennai',
+      });
+
+      const outcome = await service.commitReconciledBranches(
+        { kind: 'PROJECT', id: 'p-1' },
+        [
+          {
+            rowNumber: 2, solId: 'NEW-1', name: 'New 1', state: 'Tamil Nadu',
+            district: 'Chennai', address: 'Anna Salai', existsInMaster: false,
+            missingFields: [], status: 'ready',
+          },
+        ],
+        'user-1',
+      );
+
+      expect(outcome.created).toBe(1);
+      expect(outcome.linked).toBe(1);
+      expect(mockBranchService.registerImportedBranch).toHaveBeenCalled();
+    });
+
+    it('detects and flags wrong branches uploaded to the wrong client across multiple angles', async () => {
+      mockClientRepo.findOne.mockResolvedValue({ id: 'c-sbi', name: 'State Bank of India', clientCode: 'SBI' });
+      mockBranchRepo.find.mockImplementation(async (opts: any) => {
+        // Mock cross-client check: SOL-999 belongs to Axis Bank
+        if (opts?.relations?.includes('client')) {
+          return [
+            {
+              id: 'b-axis-1',
+              solId: 'SOL-999',
+              name: 'Axis MG Road',
+              clientId: 'c-axis',
+              client: { id: 'c-axis', name: 'Axis Bank' },
+            },
+          ];
+        }
+        return [];
+      });
+
+      const report = await service.reconcileBranches(
+        { kind: 'CLIENT', id: 'c-sbi' },
+        undefined,
+        [
+          // Row 1: Valid SBI branch
+          { 'SOL ID': 'SOL-001', 'Branch Name': 'SBI Main', State: 'Maharashtra', District: 'Mumbai', Address: 'Fort', Pincode: '400001' },
+          // Row 2: Explicit Bank column mismatch (HDFC vs SBI)
+          { 'SOL ID': 'SOL-002', 'Branch Name': 'HDFC Branch', Bank: 'HDFC Bank', State: 'Maharashtra', District: 'Mumbai', Address: 'Andheri', Pincode: '400053' },
+          // Row 3: IFSC code prefix mismatch (UTIB vs SBIN)
+          { 'SOL ID': 'SOL-003', 'Branch Name': 'Koramangala Branch', IFSC: 'UTIB0000502', State: 'Karnataka', District: 'Bangalore', Address: '80ft Rd', Pincode: '560034' },
+          // Row 4: Branch Name explicitly mentions ICICI Bank
+          { 'SOL ID': 'SOL-004', 'Branch Name': 'ICICI Bank Connaught Place', State: 'Delhi', District: 'New Delhi', Address: 'CP', Pincode: '110001' },
+          // Row 5: Cross-client collision (SOL-999 already in DB under Axis Bank)
+          { 'SOL ID': 'SOL-999', 'Branch Name': 'Another Branch', State: 'Karnataka', District: 'Bangalore', Address: 'Whitefield', Pincode: '560066' },
+        ],
+      );
+
+      expect(report.summary.totalRows).toBe(5);
+      expect(report.summary.clientMismatchCount).toBe(4);
+
+      // Row 1: No mismatch
+      expect(report.rows[0].clientMismatch).toBeUndefined();
+
+      // Row 2: Bank column mismatch
+      expect(report.rows[1].clientMismatch).toMatchObject({
+        detectedBankCode: 'HDFC',
+        expectedBankCode: 'SBIN',
+        severity: 'critical',
+      });
+      expect(report.rows[1].status).toBe('needs_details');
+
+      // Row 3: IFSC prefix mismatch
+      expect(report.rows[2].clientMismatch).toMatchObject({
+        detectedBankCode: 'UTIB',
+        expectedBankCode: 'SBIN',
+        severity: 'critical',
+      });
+
+      // Row 4: Branch name mismatch
+      expect(report.rows[3].clientMismatch).toMatchObject({
+        detectedBankCode: 'ICIC',
+        expectedBankCode: 'SBIN',
+        severity: 'critical',
+      });
+
+      // Row 5: Cross-client collision warning
+      expect(report.rows[4].clientMismatch).toMatchObject({
+        otherClientName: 'Axis Bank',
+        severity: 'warning',
+      });
+      expect(report.rows[4].warnings?.[0]).toContain("already registered in master DB under client 'Axis Bank'");
     });
   });
 });

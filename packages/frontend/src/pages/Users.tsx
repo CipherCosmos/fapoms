@@ -47,10 +47,16 @@ export const Users: React.FC = () => {
         {TABS.map((t) => {
           const Icon = t.icon;
           const active = tab === t.key;
+          const title = t.key === 'directory'
+            ? 'View and manage internal staff user accounts, statuses, and permissions'
+            : t.key === 'roles'
+            ? 'Inspect role definitions, assigned capabilities, and access rights'
+            : 'Review chronological system audit trail and user access history';
           return (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
+              title={title}
               style={{
                 display: 'flex', alignItems: 'center', gap: '7px', padding: '10px 16px',
                 fontSize: 'var(--text-sm)', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',

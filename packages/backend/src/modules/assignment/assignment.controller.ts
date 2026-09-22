@@ -706,12 +706,13 @@ export class AssignmentController {
       // then be paid that figure. This guard shipped in 85aa82bf and was accidentally reverted
       // by 89fd422e ten minutes later; the spec beside this controller now pins it.
       const deskSuppliedFee = callerIsAssayer ? undefined : (body.fee ?? body.agreedFee);
+      const deskScheduledDate = callerIsAssayer ? undefined : (body.scheduledDate ? String(body.scheduledDate) : undefined);
       assignment = await this.assignmentService.acceptOffer(
         id,
         userId,
         deskSuppliedFee != null && !isNaN(Number(deskSuppliedFee)) ? Number(deskSuppliedFee) : undefined,
         body.reason ?? body.remarks,
-        cmdOptions,
+        { ...cmdOptions, scheduledDate: deskScheduledDate },
       );
     } else if (targetStatus === 'REJECTED') {
       /**

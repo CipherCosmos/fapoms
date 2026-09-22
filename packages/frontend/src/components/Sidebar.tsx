@@ -54,98 +54,175 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
    */
   const auditWorkTabs = WORK_TABS.filter((tab) => canAccessRoute(userRoles, userPermissions, tab.path));
 
-  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[] }[] }[] = [
+  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; tooltip: string }[] }[] = [
     {
       category: 'Overview',
       items: [
-        { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-        { name: 'Coverage map', path: '/executive-map', icon: Map },
-        { name: 'Support', path: '/feedback', icon: MessageSquare },
+        {
+          name: 'Dashboard',
+          path: '/dashboard',
+          icon: LayoutDashboard,
+          tooltip: 'Operational metrics, audit health, and real-time execution KPI summaries',
+        },
+        {
+          name: 'Coverage map',
+          path: '/executive-map',
+          icon: Map,
+          tooltip: 'Geographic visualization of client coverage, branch audits, and field density',
+        },
       ],
     },
     {
-      category: 'Operations',
+      category: 'Commercial & Clients',
       items: [
+        {
+          name: 'Clients',
+          path: '/clients',
+          icon: Building2,
+          tooltip: 'Client directory, commercial contracts, billing configurations, and agreements',
+        },
+        {
+          name: 'Branches',
+          path: '/branches',
+          icon: GitMerge,
+          tooltip: 'Master branch directory with IFSC codes, geographic coordinates, and coverage',
+        },
+      ],
+    },
+    {
+      category: 'Field Operations',
+      items: [
+        {
+          name: 'Projects',
+          path: '/projects',
+          icon: FolderKanban,
+          tooltip: 'Audit engagements, branch allotments, scope tracking, and progress lifecycle',
+        },
         ...(auditWorkTabs.length > 0
           ? [{
               name: 'Audit Work',
               path: auditWorkTabs[0].path as string,
               icon: ClipboardList,
               activePaths: WORK_TABS.map((tab) => tab.path),
+              tooltip: 'Single dispatch desk: today’s actions, assayer planning, calendar scheduling, and field execution',
             }]
           : []),
-        { name: 'Overdue', path: '/falling-behind', icon: AlertTriangle },
-        { name: 'Projects', path: '/projects', icon: FolderKanban },
+        {
+          name: 'Overdue Tracking',
+          path: '/falling-behind',
+          icon: AlertTriangle,
+          tooltip: 'Track overdue visits, stalled branches, unassigned audits, and SLA breaches',
+        },
       ],
     },
     {
-      category: 'Business Records',
+      category: 'Document & Data Desk',
       items: [
-        { name: 'Clients', path: '/clients', icon: Building2 },
-        { name: 'Billing', path: '/billing', icon: Receipt },
-        { name: 'Branches', path: '/branches', icon: GitMerge },
-        /*
-          One row for one subject.
-
-          Interviews and Applications were rows of their own here, beside Workforce, because each
-          draws its own page header. Three rows for one subject is what the owner saw — and two of
-          them highlighted at once, because `/hr/interviews` starts with `/hr/`. The breadcrumb had
-          already called both of them "Workforce", so the two chromes disagreed about where you
-          were. They are tabs inside the section now; the URLs did not change.
-
-          `activePaths` keeps this row lit while you are on any of them, which is what the row has
-          effectively been doing all along by prefix.
-        */
+        {
+          name: 'Documents',
+          path: '/documents',
+          icon: Files,
+          tooltip: 'Audit photo evidence, verification packets, signed delivery notes, and documents',
+        },
+        {
+          name: 'Audit Data Entry',
+          path: '/data-entry',
+          icon: Inbox,
+          tooltip: 'Desk QA review, branch audit findings entry, discrepancy logs, and validation packets',
+        },
+      ],
+    },
+    {
+      category: 'Workforce & HR',
+      items: [
         {
           name: 'Workforce',
           path: '/hr',
           icon: UserCog,
           activePaths: ['/hr', '/hr/roster', '/hr/pay', '/hr/where', '/hr/issues', '/hr/interviews', '/hr/applications', '/hr/onboarding'],
+          tooltip: 'Assayer roster, onboarding, recruitment pipeline, live attendance, and payout ledger',
         },
-        { name: 'Documents', path: '/documents', icon: Files },
-        { name: 'Audit Data Entry', path: '/data-entry', icon: Inbox },
       ],
     },
-    /**
-     * Two groups, not one list in the order things were built.
-     *
-     * "Operational setup" is reference data operations maintain to do the work — dates that
-     * cannot be worked, territories, what travel costs, and everything the platform assumes
-     * when no contract says otherwise. "Administration" is who may use the system and the
-     * deliberate suspension of its controls. They were one accreted list, which is why "where
-     * do I change X" had no answerable shape.
-     *
-     * Platform Settings moved here from Administration for that reason: almost everything in
-     * it is a fact about the business — the company's own GST details, what an unpriced audit
-     * is worth, how long the product team has to answer feedback — rather than a fact about
-     * the software.
-     */
+    {
+      category: 'Finance & Billing',
+      items: [
+        {
+          name: 'Billing',
+          path: '/billing',
+          icon: Receipt,
+          tooltip: 'Client invoicing, assayer payouts, expense claims, and GST/TDS tax deductions',
+        },
+      ],
+    },
     {
       category: 'Operational Setup',
       items: [
-        { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
-        { name: 'Service Areas', path: '/zones', icon: Map },
-        // "Business Rules" pointed at /rules, a second screen for changing how the system
-        // behaves sitting under a different nav heading from Platform Settings — so the
-        // question "where do I change X" had two answers and nothing to choose between them.
-        // It is a section of Platform Settings now.
-        { name: 'Platform Settings', path: '/admin/settings', icon: SlidersHorizontal },
-        { name: 'Service Logs', path: '/admin/logs', icon: ScrollText },
+        {
+          name: 'Service Areas',
+          path: '/zones',
+          icon: Map,
+          tooltip: 'Pincode operational zones, regional boundaries, and travel radius settings',
+        },
+        {
+          name: 'Holiday Calendar',
+          path: '/holidays',
+          icon: CalendarDays,
+          tooltip: 'Indian bank holidays, 2nd & 4th Saturdays, and gazetted non-audit dates',
+        },
+        {
+          name: 'Platform Settings',
+          path: '/admin/settings',
+          icon: SlidersHorizontal,
+          tooltip: 'System settings, rate cards, timeout rules, and operational parameters',
+        },
+        {
+          name: 'Service Logs',
+          path: '/admin/logs',
+          icon: ScrollText,
+          tooltip: 'System activity logs, background worker status, and audit trail events',
+        },
       ],
     },
     {
-      category: 'Administration',
+      category: 'Administration & Governance',
       items: [
-        { name: 'Notification Rules', path: '/admin/notifications', icon: BellRing },
-        { name: 'User Management', path: '/users', icon: Users },
-        // The admin's side of the destructive-action two-person rule: a developer's data-wipe
-        // requests are decided here. Visibility flows from canAccessRoute like every other item.
-        { name: 'Approvals', path: '/admin/approvals', icon: ShieldCheck },
-        // Administrators and auditors — the incident register + compliance health.
-        { name: 'Security & Compliance', path: '/admin/compliance', icon: ShieldAlert },
-        // Administrators only — filtered by canAccessRoute against route-permissions, same as
-        // every other item here.
-        { name: 'Paused rules', path: '/admin/rule-bypass', icon: ShieldOff },
+        {
+          name: 'User Management',
+          path: '/users',
+          icon: Users,
+          tooltip: 'Internal user accounts, roles, access permissions, and account status',
+        },
+        {
+          name: 'Notification Rules',
+          path: '/admin/notifications',
+          icon: BellRing,
+          tooltip: 'Dispatch notifications, SLA breach alerts, and escalation triggers',
+        },
+        {
+          name: 'Approvals',
+          path: '/admin/approvals',
+          icon: ShieldCheck,
+          tooltip: 'Pending management approvals, fee overrides, and exception sign-offs',
+        },
+        {
+          name: 'Security & Compliance',
+          path: '/admin/compliance',
+          icon: ShieldAlert,
+          tooltip: 'Compliance policies, system health checks, and data protection audits',
+        },
+        {
+          name: 'Paused rules',
+          path: '/admin/rule-bypass',
+          icon: ShieldOff,
+          tooltip: 'Temporary rule exemptions, emergency overrides, and bypassed constraints',
+        },
+        {
+          name: 'Support',
+          path: '/feedback',
+          icon: MessageSquare,
+          tooltip: 'Operator support tickets, platform bug reports, and feature feedback',
+        },
       ],
     },
   ];
@@ -157,7 +234,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
     }))
     .filter((group) => group.items.length > 0);
 
-  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[] }) => {
+  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; tooltip: string }) => {
     const Icon = item.icon;
     // `activePaths` exists for merged destinations (Audit Work), whose tabs are each their own
     // URL: without it, switching to a tab other than the one this row links to would un-highlight
@@ -171,7 +248,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         key={item.name}
         to={item.path}
         className={`sidebar-link ${isActive ? 'active' : ''}`}
-        title={collapsed ? item.name : undefined}
+        title={`${item.name} — ${item.tooltip}`}
         style={{
           display: 'flex',
           alignItems: 'center',

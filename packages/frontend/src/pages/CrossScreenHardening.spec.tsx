@@ -423,7 +423,7 @@ describe('Phase 4: Cross-Screen Product Hardening Specification', () => {
       );
 
       const colHeaders = screen.getAllByRole('columnheader');
-      expect(colHeaders.length).toBeGreaterThanOrEqual(7);
+      expect(colHeaders.length).toBeGreaterThanOrEqual(6);
 
       // Verify scope="col" on all headers
       colHeaders.forEach((th) => {

@@ -15,7 +15,7 @@ const useIsNarrow = (max = 900): boolean => {
   }, [max]);
   return narrow;
 };
-import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown, Zap } from 'lucide-react';
+import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown, MapPin, Plus } from 'lucide-react';
 import { ProjectStatus, Priority, projectStatusLabel, branchStatusLabel, businessTodayDateKey } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
@@ -31,6 +31,9 @@ import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 import { fetchWholeBranchDirectory } from '../services/branch-directory';
 import { Page } from '../components/ui/Page';
+import { GeoPrecisionBadge } from '../components/GeoPrecisionBadge';
+import { CoordinatePinModal } from '../components/geo/CoordinatePinModal';
+import { BranchReconciliationModal, BranchReconciliationReport, BranchReconciliationRow } from '../components/branch/BranchReconciliationModal';
 
 interface ClientOption {
   id: string;
@@ -278,6 +281,16 @@ export const Projects: React.FC = () => {
   // can be filled in later on the project. Less typing for the common "just start one" case.
   const [showQuickModal, setShowQuickModal] = useState(false);
   const [quickForm, setQuickForm] = useState<{ name: string; clientId: string; priority: Priority }>({ name: '', clientId: '', priority: Priority.MEDIUM });
+  const [showAdvancedProjectFields, setShowAdvancedProjectFields] = useState(false);
+
+  // Branch preflight reconciliation and pinning
+  const [reconcileReport, setReconcileReport] = useState<BranchReconciliationReport | null>(null);
+  const [showReconcileModal, setShowReconcileModal] = useState(false);
+  const [reconcileScope, setReconcileScope] = useState<{ kind: 'PROJECT' | 'CLIENT'; id: string }>({ kind: 'PROJECT', id: '' });
+  const [reconcileForCreate, setReconcileForCreate] = useState(false);
+  const [attachedBranches, setAttachedBranches] = useState<BranchReconciliationRow[]>([]);
+  const [pinBranch, setPinBranch] = useState<any | null>(null);
+  const [isPreflighting, setIsPreflighting] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState('');
@@ -565,26 +578,38 @@ export const Projects: React.FC = () => {
     }
     setIsSaving(true);
     try {
-      const response = await api.request<ProjectItem>('/projects', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name,
-          // No number: the server assigns it. The request DTO refuses one, rather than ignoring
-          // it, so a client that still sends one is told rather than left believing it stuck.
-          clientId: form.clientId,
-          priority: form.priority,
-          startDate: form.startDate || undefined,
-          endDate: form.endDate || undefined,
-          budget: form.budget ? Number(form.budget) : undefined,
-          scope: form.scope || undefined,
-          requiredSkills: form.requiredSkills ? form.requiredSkills.split(',').map(s => s.trim()) : undefined,
-          requiredCertifications: form.requiredCertifications ? form.requiredCertifications.split(',').map(s => s.trim()) : undefined,
-          description: form.description || undefined,
-        })
-      });
-      setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
+      const projectData = {
+        name: form.name,
+        // No number: the server assigns it. The request DTO refuses one, rather than ignoring
+        // it, so a client that still sends one is told rather than left believing it stuck.
+        clientId: form.clientId,
+        priority: form.priority,
+        startDate: form.startDate || undefined,
+        endDate: form.endDate || undefined,
+        budget: form.budget ? Number(form.budget) : undefined,
+        scope: form.scope || undefined,
+        requiredSkills: form.requiredSkills ? form.requiredSkills.split(',').map(s => s.trim()) : undefined,
+        requiredCertifications: form.requiredCertifications ? form.requiredCertifications.split(',').map(s => s.trim()) : undefined,
+        description: form.description || undefined,
+      };
+
+      let response: ProjectItem;
+      if (attachedBranches.length > 0) {
+        response = await api.post<ProjectItem>('/projects/create-with-branches', {
+          project: projectData,
+          branches: attachedBranches,
+        });
+        setMessage({
+          type: 'success',
+          text: `Project "${response.name}" (${response.projectNumber}) created with ${attachedBranches.length} branches linked!`,
+        });
+      } else {
+        response = await api.post<ProjectItem>('/projects', projectData);
+        setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
+      }
       setShowCreateModal(false);
       setForm(getInitialProjectForm());
+      setAttachedBranches([]);
       void loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to create project. ${userMessage(err)}` });
@@ -732,7 +757,48 @@ export const Projects: React.FC = () => {
   const handleUploadBranches = async (file: File) => {
     if (!detail) return;
     setMessage(null);
-    await branchImport.start(`/projects/${detail.id}/branches/upload`, file);
+    setIsPreflighting(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const report = await api.post<BranchReconciliationReport>(
+        `/projects/${detail.id}/branches/reconcile`,
+        formData
+      );
+      setReconcileReport(report);
+      setReconcileScope({ kind: 'PROJECT', id: detail.id });
+      setReconcileForCreate(false);
+      setShowReconcileModal(true);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `Branch preflight reconciliation failed: ${userMessage(err)}` });
+    } finally {
+      setIsPreflighting(false);
+    }
+  };
+
+  const handleAttachBranchesForCreate = async (file: File) => {
+    if (!form.clientId) {
+      setMessage({ type: 'error', text: 'Please select a client before uploading branches.' });
+      return;
+    }
+    setMessage(null);
+    setIsPreflighting(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const report = await api.post<BranchReconciliationReport>(
+        `/projects/reconcile-branches?clientId=${form.clientId}`,
+        formData
+      );
+      setReconcileReport(report);
+      setReconcileScope({ kind: 'CLIENT', id: form.clientId });
+      setReconcileForCreate(true);
+      setShowReconcileModal(true);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `Failed to analyze branch file: ${userMessage(err)}` });
+    } finally {
+      setIsPreflighting(false);
+    }
   };
 
   /**
@@ -832,20 +898,149 @@ export const Projects: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Budget (INR)</label>
-            <input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value === '' ? '' : Number(e.target.value) }))} placeholder="e.g. 150000" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '2px' }}>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedProjectFields(prev => !prev)}
+              className="btn btn-secondary"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: 'var(--text-xs)',
+                padding: '4px 10px',
+                color: 'var(--accent-primary)',
+              }}
+            >
+              {showAdvancedProjectFields ? '− Hide optional details' : '+ Add budget, description, scope, branches...'}
+            </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Description</label>
-            <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Project description..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
-          </div>
+          {showAdvancedProjectFields && (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Budget (INR)</label>
+                <input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value === '' ? '' : Number(e.target.value) }))} placeholder="e.g. 150000" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+              </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Scope</label>
-            <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Description</label>
+                <textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Project description..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Scope</label>
+                <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
+              </div>
+
+              {/* Branch Spreadsheet Attachment & Preflight */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--border-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FileSpreadsheet size={15} style={{ color: 'var(--accent-primary)' }} />
+                Audit Branches (Optional)
+              </label>
+              {attachedBranches.length > 0 && (
+                <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--success)', background: 'var(--status-active-bg)', padding: '2px 8px', borderRadius: '10px' }}>
+                  {attachedBranches.length} branches attached
+                </span>
+              )}
+            </div>
+
+            <p style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', margin: 0 }}>
+              Upload an Excel file with branch SOL IDs. We'll automatically identify existing master branches and resolve addresses, coordinates, and IFSC details.
+            </p>
+
+            {attachedBranches.length > 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+                <div style={{ fontSize: 'var(--text-2xs)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{attachedBranches.length} branches ready</span>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
+                    ({attachedBranches.filter(r => r.existsInMaster).length} from master DB, {attachedBranches.filter(r => r.status === 'ready').length} exact GPS)
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const existingCount = attachedBranches.filter(r => r.existsInMaster).length;
+                      setReconcileReport({
+                        summary: {
+                          totalRows: attachedBranches.length,
+                          existingInMaster: existingCount,
+                          newBranches: attachedBranches.length - existingCount,
+                          readyCount: attachedBranches.filter(r => r.status === 'ready').length,
+                          coarseCount: attachedBranches.filter(r => r.status === 'coarse').length,
+                          needsDetailsCount: attachedBranches.filter(r => r.status === 'needs_details').length,
+                        },
+                        rows: attachedBranches,
+                      });
+                      setReconcileScope({ kind: 'CLIENT', id: form.clientId });
+                      setReconcileForCreate(true);
+                      setShowReconcileModal(true);
+                    }}
+                    style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', background: 'var(--accent-primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Review / Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedBranches([])}
+                    style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', background: 'transparent', color: 'var(--danger)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <input
+                  type="file"
+                  id="project-create-branch-file"
+                  accept=".xlsx,.xls,.csv"
+                  disabled={!form.clientId || isPreflighting}
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file) void handleAttachBranchesForCreate(file);
+                  }}
+                />
+                <label
+                  htmlFor={form.clientId ? "project-create-branch-file" : undefined}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    fontSize: 'var(--text-2xs)',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    cursor: form.clientId && !isPreflighting ? 'pointer' : 'not-allowed',
+                    background: form.clientId ? 'var(--bg-primary)' : 'var(--bg-surface-2)',
+                    border: '1px solid var(--border-color)',
+                    color: form.clientId ? 'var(--text-primary)' : 'var(--text-muted)',
+                    opacity: isPreflighting ? 0.7 : 1,
+                  }}
+                  onClick={() => {
+                    if (!form.clientId) {
+                      setMessage({ type: 'error', text: 'Please select a client first so we can match branches against their database.' });
+                    }
+                  }}
+                >
+                  <FileSpreadsheet size={13} style={{ color: 'var(--accent-primary)' }} />
+                  {isPreflighting ? 'Analyzing branches…' : 'Attach Excel File (.xlsx)'}
+                </label>
+                {!form.clientId && (
+                  <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                    Select a client above first
+                  </span>
+                )}
+              </div>
+            )}
           </div>
+          </>
+          )}
 
           {/*
             * Behind a disclosure because these two fields decide who the engine will even
@@ -941,17 +1136,8 @@ export const Projects: React.FC = () => {
             <FileSpreadsheet size={15} /> Export
           </button>
           {canManage && (
-            <button
-              onClick={() => { setMessage(null); setQuickForm({ name: '', clientId: clients[0]?.id || '', priority: Priority.MEDIUM }); setShowQuickModal(true); }}
-              className="btn btn-secondary"
-              title="Create a project with just a name and client — add the rest later"
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
-              <Zap size={15} /> Quick create
-            </button>
-          )}
-          {canManage && (
-            <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}>
-              Create Project
+            <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowAdvancedProjectFields(false); setShowCreateModal(true); }}>
+              <Plus size={15} /> Create Project
             </PrimaryButton>
           )}
         </>}
@@ -977,7 +1163,7 @@ export const Projects: React.FC = () => {
                 {i > 0 && <div style={{ alignSelf: 'center', color: 'var(--text-muted)', opacity: 0.4, fontSize: 'var(--text-2xs)' }}>›</div>}
                 <button
                   onClick={() => setStatusFilter(on ? 'ALL' : stage)}
-                  title={`${n} project(s) in ${stage}`}
+                  title={`${projectStatusLabel(stage)}: ${n} project${n === 1 ? '' : 's'}. Click to ${on ? 'show all' : 'filter by this stage'}.`}
                   style={{
                     flex: '1 1 0', minWidth: '92px', padding: '9px 8px', cursor: 'pointer',
                     borderRadius: 'var(--radius-sm)', textAlign: 'left',
@@ -1002,6 +1188,7 @@ export const Projects: React.FC = () => {
               const on = statusFilter === stage;
               return (
                 <button key={stage} onClick={() => setStatusFilter(on ? 'ALL' : stage)}
+                  title={`${projectStatusLabel(stage)}: ${n} project${n === 1 ? '' : 's'}. Click to ${on ? 'show all' : 'filter'}.`}
                   style={{
                     padding: '4px 10px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
                     background: on ? `${STAGE_TONE[stage]}22` : 'transparent',
@@ -1142,11 +1329,13 @@ export const Projects: React.FC = () => {
                       <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                           <button onClick={() => navigate(`/planning?projectId=${p.id}`)}
+                            title="Open project branch allocation and candidate matching in Audit Planning"
                             className="btn btn-primary"
                             style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <Compass size={13} /> Plan
                           </button>
                           <button onClick={() => setSelectedId(selectedId === p.id ? null : p.id)}
+                            title={selectedId === p.id ? 'Close project detail panel' : 'Open project detail inspector'}
                             className="btn btn-secondary"
                             style={{ padding: '5px 10px', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <Eye size={13} /> {selectedId === p.id ? 'Close' : 'Detail'}
@@ -1321,7 +1510,7 @@ export const Projects: React.FC = () => {
                             title={branchesLocked ? lockReason : undefined}
                             style={{ display: 'flex', gap: '8px', opacity: branchesLocked ? 0.45 : 1, pointerEvents: branchesLocked ? 'none' : 'auto' }}
                           >
-                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={branchImport.busy} busyLabel="Importing branches…" />
+                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={isPreflighting || branchImport.busy} busyLabel={isPreflighting ? 'Analyzing branches…' : 'Importing branches…'} />
                           </div>
                         </div>
                       </div>
@@ -1352,18 +1541,14 @@ export const Projects: React.FC = () => {
                               <span>
                                 {branchShortfall.reason ? (
                                   <>
-                                    This client's branches could not be loaded, so the search below will find none
-                                    of them — that is not the same as this project already holding them all.{' '}
-                                    {branchShortfall.reason} Add the branches you need with the Excel upload above
-                                    instead; that does not go through this list.
+                                    Client branches could not be loaded. {branchShortfall.reason} Upload Excel above to add branches.
                                   </>
                                 ) : (
                                   <>
                                     Only {branchShortfall.shown.toLocaleString('en-IN')} of this client's{' '}
                                     {branchShortfall.total.toLocaleString('en-IN')} branches could be loaded, so the
                                     search below cannot find the other {(branchShortfall.total - branchShortfall.shown).toLocaleString('en-IN')}.
-                                    Reload the page to try again. If the same message comes back, add the branches you
-                                    need with the Excel upload above instead — that does not go through this list.
+                                    Upload Excel above to add any branch directly.
                                   </>
                                 )}
                               </span>
@@ -1406,10 +1591,41 @@ export const Projects: React.FC = () => {
                           {projectBranches.map((pb: any) => (
                             <div key={pb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--text-xs)', padding: '8px 10px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', borderLeft: '3px solid var(--accent-secondary)' }}>
                               <div>
-                                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</div>
-                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch?.city}, {pb.branch?.state}</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pb.branch?.name}</span>
+                                  {pb.branch?.solId && (
+                                    <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>({pb.branch.solId})</span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                  {pb.branch?.city ? `${pb.branch.city}, ` : ''}{pb.branch?.state}
+                                </div>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <GeoPrecisionBadge source={pb.branch?.geoSource || 'none'} accuracyMeters={pb.branch?.geoAccuracyMeters} />
+                                {canManage && (
+                                  <button
+                                    type="button"
+                                    title="Verify or adjust pin on satellite map"
+                                    onClick={() => setPinBranch(pb.branch)}
+                                    style={{
+                                      background: 'none',
+                                      border: '1px solid var(--border-color)',
+                                      borderRadius: '4px',
+                                      padding: '3px 7px',
+                                      fontSize: 'var(--text-3xs)',
+                                      color: 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    <MapPin size={11} style={{ color: 'var(--accent-primary)' }} />
+                                    Pin
+                                  </button>
+                                )}
                                 <span className="badge" style={{ fontSize: 'var(--text-3xs)', padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{branchStatusLabel(pb.status)}</span>
                                 {canManage && (detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
                                   <button type="button" aria-label="Remove branch" onClick={() => handleRemoveBranch(pb.id)}
@@ -1605,6 +1821,48 @@ export const Projects: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {showReconcileModal && reconcileReport && (
+        <BranchReconciliationModal
+          open={showReconcileModal}
+          onClose={() => setShowReconcileModal(false)}
+          report={reconcileReport}
+          scope={reconcileScope}
+          title={reconcileForCreate ? `Reconcile Branches for ${clients.find(c => c.id === form.clientId)?.name || 'New Project'}` : `Reconcile Branches: ${detail?.name || ''}`}
+          onCommitSuccess={(outcome) => {
+            setMessage({
+              type: 'success',
+              text: `Branches committed: ${outcome.linked} linked to project (${outcome.created} created in master DB, ${outcome.updated} updated).`,
+            });
+            if (detail?.id) void loadDetail(detail.id);
+          }}
+          onConfirmRows={reconcileForCreate ? (confirmedRows) => {
+            setAttachedBranches(confirmedRows);
+            setShowReconcileModal(false);
+            setMessage({
+              type: 'success',
+              text: `${confirmedRows.length} branches ready and attached to new project form.`,
+            });
+          } : undefined}
+        />
+      )}
+
+      {pinBranch && (
+        <CoordinatePinModal
+          open={Boolean(pinBranch)}
+          onClose={() => setPinBranch(null)}
+          target="branch"
+          id={pinBranch.id}
+          initialLat={pinBranch.latitude}
+          initialLng={pinBranch.longitude}
+          initialAccuracy={pinBranch.geoAccuracyMeters}
+          title={`Pin Location: ${pinBranch.name}`}
+          subtitle={pinBranch.address || `${pinBranch.city || ''}, ${pinBranch.state || ''}`}
+          onConfirmed={() => {
+            if (detail?.id) void loadDetail(detail.id);
+          }}
+        />
+      )}
 
     </Page>
   );

@@ -163,6 +163,41 @@ export class ProjectController {
     return project;
   }
 
+  @Post('create-with-branches')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:create:organization')
+  @ApiOperation({ summary: 'Create a project and commit reconciled branches in one step' })
+  async createWithBranches(
+    @Body() body: { project: CreateProjectRequestDto; branches: any[] },
+    @Req() req: any,
+  ) {
+    if (!body?.project) {
+      throw new BadRequestException('Missing project details in body.');
+    }
+    return await this.projectService.createWithBranches(
+      body.project,
+      body.branches || [],
+      req.user.id,
+      req.user.organizationId,
+    );
+  }
+
+  @Post('reconcile-branches')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:create:organization')
+  @UseInterceptors(FileInterceptor('file', projectBranchUploadMulterOptions), FileScanInterceptor)
+  @ApiOperation({ summary: 'Pre-reconcile branches for a client before project creation' })
+  async reconcileBranchesForClient(
+    @Query('clientId') clientIdQuery: string,
+    @UploadedFile() file: any,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
+    const clientId = clientIdQuery || '';
+    return await this.projectService.reconcileBranches({ kind: 'CLIENT', id: clientId }, file.buffer);
+  }
+
   // Was @Public(): the entire project portfolio was readable without a token.
   // The controller-level staff gate now applies.
   @Get()
@@ -535,6 +570,46 @@ export class ProjectController {
       // therefore dropped in silence. See `BranchImportOutcome.notes`.
       notes: report.notes,
     };
+  }
+
+  @Post(':id/branches/reconcile')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:create:organization')
+  @UseInterceptors(FileInterceptor('file', projectBranchUploadMulterOptions), FileScanInterceptor)
+  @ApiOperation({ summary: 'Reconcile project branch spreadsheet against master DB and return readiness preview' })
+  async reconcileBranches(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: any,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
+    return await this.projectService.reconcileBranches({ kind: 'PROJECT', id }, file.buffer);
+  }
+
+  @Post(':id/branches/commit-reconciled')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:create:organization')
+  @ApiOperation({ summary: 'Commit reviewed/reconciled branches to master DB and link to project' })
+  async commitReconciledBranches(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { branches: any[] },
+    @Req() req: any,
+    @GlobalScopeFilter() globalScope?: GlobalScope,
+  ) {
+    if (!Array.isArray(body?.branches)) {
+      throw new BadRequestException('Invalid branches payload. Expected an array.');
+    }
+    for (const b of body.branches) {
+      if (b.state) {
+        this.regionGuard.assertRegionSettable(b.state, globalScope);
+      }
+    }
+    return await this.projectService.commitReconciledBranches(
+      { kind: 'PROJECT', id },
+      body.branches,
+      req.user.id,
+    );
   }
 
   /**

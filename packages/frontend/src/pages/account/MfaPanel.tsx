@@ -275,15 +275,15 @@ export const MfaPanel: React.FC = () => {
                 </div>
                 <div style={{ flexShrink: 0 }}>
                   {on ? (
-                    <button onClick={() => removeFactor(factor)} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)', color: 'var(--danger, #ef4444)' }}>
+                    <button onClick={() => removeFactor(factor)} className="btn btn-ghost" title={`Disable ${meta.label} as a two-step verification method`} style={{ gap: 6, fontSize: 'var(--text-xs)', color: 'var(--danger, #ef4444)' }}>
                       <Trash2 size={14} /> Turn off
                     </button>
                   ) : open ? (
-                    <button onClick={closeFlow} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
+                    <button onClick={closeFlow} className="btn btn-ghost" title="Cancel factor setup" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
                       <X size={14} /> Cancel
                     </button>
                   ) : offline ? null : (
-                    <button onClick={() => startFlow(factor)} disabled={busy} className="btn btn-primary" style={{ gap: 6, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
+                    <button onClick={() => startFlow(factor)} disabled={busy} className="btn btn-primary" title={`Configure and activate ${meta.label} for two-step verification`} style={{ gap: 6, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
                       Set up
                     </button>
                   )}

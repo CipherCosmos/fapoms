@@ -17,10 +17,10 @@ import { Page } from '../../components/ui/Page';
  */
 
 const PAGES = [
-  { to: '/data-entry', end: true, label: 'Overview', icon: LayoutDashboard },
-  { to: '/data-entry/packets', label: 'Packets', icon: Inbox },
-  { to: '/data-entry/reviews', label: 'Reviews', icon: ClipboardCheck },
-  { to: '/data-entry/clarifications', label: 'Clarifications', icon: MessagesSquare },
+  { to: '/data-entry', end: true, label: 'Overview', icon: LayoutDashboard, hint: 'Summary of received audit packets, validation status, and desk workload' },
+  { to: '/data-entry/packets', label: 'Packets', icon: Inbox, hint: 'Queue of uploaded audit packets awaiting data extraction and validation' },
+  { to: '/data-entry/reviews', label: 'Reviews', icon: ClipboardCheck, hint: 'Packets flagged for supervisory review and quality checks' },
+  { to: '/data-entry/clarifications', label: 'Clarifications', icon: MessagesSquare, hint: 'Open questions with field assayers regarding discrepancies or missing photos' },
 ] as const;
 
 export const DataEntryLayout: React.FC = () => (
@@ -38,6 +38,7 @@ export const DataEntryLayout: React.FC = () => (
           <NavLink
             key={p.to}
             to={p.to}
+            title={p.hint}
             end={'end' in p ? p.end : false}
             style={({ isActive }) => ({
               display: 'flex', alignItems: 'center', gap: 6,

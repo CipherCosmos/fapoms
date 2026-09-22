@@ -1,19 +1,19 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useNavigate } from 'react-router-dom';
 import {
   Phone, PhoneOff, CheckCircle, XCircle, RefreshCw, AlertTriangle,
-  CalendarClock, UserX, Inbox as InboxIcon, X, MapPin,
+  CalendarClock, UserX, Inbox as InboxIcon, X, MapPin, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { queryClient, loadFailed } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketConnection } from '../hooks/useSocketConnection';
-import { getRecommendations, suggestAuditDate, describeSuggestedDate } from '../services/planning';
+import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 import { userMessage } from '../services/errors';
 import { todayDateKey, formatDateOnly } from '../utils/statusLabels';
-import { formatRouteDistance, type RouteSource, callOutcomeLabel } from '@fapoms/shared';
+import { callOutcomeLabel } from '@fapoms/shared';
 import { AlertBanner, useConfirm, PageHeader } from '../components/ui';
 import { LoadFailure } from '../components/LoadFailure';
 
@@ -74,13 +74,6 @@ interface InboxData {
   waitingOnApp: number;
   fieldIssues: FieldIssueItem[];
   suggestNextAfterAttempts: number;
-}
-
-interface Candidate {
-  id: string; displayName: string; distanceKm: number | null; score: number | null;
-  /** 'OSRM' by road, 'ESTIMATE' straight line — the row labels the figure accordingly. */
-  distanceSource?: RouteSource | null;
-  baseFee: number | null; phone?: string;
 }
 
 import { money as inr } from '../utils/money';
@@ -189,9 +182,11 @@ export const OperationsInbox: React.FC = () => {
   // Per-card expanded input: which card has which mini-form open ('agree' | 'decline' | 'noshow').
   const [openForm, setOpenForm] = useState<{ id: string; kind: 'agree' | 'decline' | 'noshow' } | null>(null);
   const [feeInput, setFeeInput] = useState('');
+  const [agreeDateInput, setAgreeDateInput] = useState('');
   const [reasonInput, setReasonInput] = useState('');
-  // Reassign drawer target.
-  const [reassignFor, setReassignFor] = useState<InboxItem | null>(null);
+  const [collapsedLanes, setCollapsedLanes] = useState<Record<string, boolean>>({});
+  const toggleLane = (key: string) => setCollapsedLanes((prev) => ({ ...prev, [key]: !prev[key] }));
+
   /**
    * Inline booking for the "Accepted, not scheduled" lane.
    *
@@ -252,10 +247,15 @@ export const OperationsInbox: React.FC = () => {
     void act(item, async () => {
       await api.request(`/assignments/${item.id}/transition`, {
         method: 'POST',
-        body: JSON.stringify({ targetStatus: 'ACCEPTED', fee, reason: 'Verbal acceptance recorded by the desk' }),
+        body: JSON.stringify({
+          targetStatus: 'ACCEPTED',
+          fee,
+          scheduledDate: agreeDateInput || undefined,
+          reason: 'Verbal acceptance recorded by the desk',
+        }),
       });
-      await logCall(item, 'AGREED', fee, 'Agreed on call — accepted on their behalf');
-    }, `${item.assayerName} accepted ${item.branchName} at ${inr(fee)} (call logged).`);
+      await logCall(item, 'AGREED', fee, `Agreed on call${agreeDateInput ? ` · visit ${agreeDateInput}` : ''} — accepted on their behalf`);
+    }, `${item.assayerName} accepted ${item.branchName} at ${inr(fee)}${agreeDateInput ? ` and booked for ${formatDateOnly(agreeDateInput)}` : ''} (call logged).`);
   };
 
   const decline = (item: InboxItem) => {
@@ -365,31 +365,74 @@ export const OperationsInbox: React.FC = () => {
         <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-secondary)' }}>{bookNote}</div>
       )}
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          type="date"
+          value={bookDate}
+          onChange={(e) => setBookDate(e.target.value)}
+          aria-label="Visit date"
+          style={{
+            padding: '4px 8px',
+            background: 'var(--bg-primary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '6px',
+            color: 'var(--text-primary)',
+            outline: 'none',
+            fontSize: 'var(--text-xs)',
+          }}
+        />
         <button onClick={() => confirmBooking(item)} disabled={busyId === item.id || bookLoadingDate}
-          className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
+          className="btn btn-primary"
+          title={`Confirm visit date ${formatDateOnly(bookDate)} for ${item.assayerName || 'the assayer'}`}
+          style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
           {busyId === item.id ? 'Booking…' : 'Confirm'}
         </button>
         {/* Changing anything hands the operator the full scheduling page, with this
             assignment already chosen — the old behaviour, kept as the escape hatch
             rather than the default. */}
         <button onClick={() => navigate(`/scheduling?assignmentId=${item.id}`)}
-          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
-          Change date
+          className="btn btn-secondary"
+          title="Open interactive calendar view to review audit schedule conflicts"
+          style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
+          Calendar view
         </button>
-        <button onClick={() => { setBookFor(null); openBookingIdRef.current = null; }} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
+        <button onClick={() => { setBookFor(null); openBookingIdRef.current = null; }}
+          className="btn btn-secondary"
+          title="Cancel date selection"
+          style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
           Cancel
         </button>
       </div>
     </div>
   );
 
-  const lane = (title: string, icon: React.ReactNode, count: number, tone: string, children: React.ReactNode) =>
+  const lane = (key: string, title: string, icon: React.ReactNode, count: number, tone: string, children: React.ReactNode) =>
     count === 0 ? null : (
       <section style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', fontWeight: 800, color: tone, margin: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-          {icon} {title} <span style={{ background: `${tone}20`, padding: '1px 9px', borderRadius: '10px' }}>{count}</span>
-        </h2>
-        {children}
+        <button
+          type="button"
+          onClick={() => toggleLane(key)}
+          aria-expanded={!collapsedLanes[key]}
+          style={{
+            all: 'unset',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '6px 10px',
+            borderRadius: '6px',
+            background: collapsedLanes[key] ? 'var(--bg-surface-2)' : 'transparent',
+            border: collapsedLanes[key] ? '1px solid var(--border-color)' : '1px solid transparent',
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', fontWeight: 800, color: tone, margin: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            {icon} {title} <span style={{ background: `${tone}20`, padding: '1px 9px', borderRadius: '10px' }}>{count}</span>
+          </h2>
+          <span style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
+            {collapsedLanes[key] ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+          </span>
+        </button>
+        {!collapsedLanes[key] && children}
       </section>
     );
 
@@ -487,7 +530,7 @@ export const OperationsInbox: React.FC = () => {
         </div>
       ) : (
         <>
-          {lane('Call queue', <Phone size={14} />, data0.callTasks.length, 'var(--warning)', (
+          {lane('callTasks', 'Call queue', <Phone size={14} />, data0.callTasks.length, 'var(--warning)', (
             data0.callTasks.map((item) => {
               const suggestNext = item.callAttempts >= data0.suggestNextAfterAttempts;
               const form = openForm?.id === item.id ? openForm.kind : null;
@@ -507,8 +550,24 @@ export const OperationsInbox: React.FC = () => {
                       {form === 'agree' ? (
                         <>
                           {miniInput('Agreed ₹', feeInput, setFeeInput)}
+                          <input
+                            type="date"
+                            value={agreeDateInput}
+                            onChange={(e) => setAgreeDateInput(e.target.value)}
+                            aria-label="Visit date"
+                            title="Visit date (leave blank if scheduling later)"
+                            style={{
+                              padding: '5px 9px',
+                              background: 'var(--bg-primary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '6px',
+                              color: 'var(--text-primary)',
+                              outline: 'none',
+                              fontSize: 'var(--text-xs)',
+                            }}
+                          />
                           <button onClick={() => agree(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--success)', borderColor: 'var(--success)' }}>
-                            {busy ? 'Saving…' : 'Confirm & assign'}
+                            {busy ? 'Saving…' : agreeDateInput ? 'Agree & Book' : 'Confirm & assign'}
                           </button>
                           <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}><X size={12} /></button>
                         </>
@@ -529,25 +588,32 @@ export const OperationsInbox: React.FC = () => {
                             different amount" call is no longer recorded as a pending counter, the
                             desk either agrees a figure here and assigns, or declines.
                           */}
-                          <button onClick={() => { setFeeInput(String(item.proposedFee ?? '')); setOpenForm({ id: item.id, kind: 'agree' }); }} disabled={busy}
-                            className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--success)', borderColor: 'var(--success)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <button onClick={() => { setFeeInput(String(item.proposedFee ?? '')); setAgreeDateInput(item.scheduledDate || todayDateKey()); setOpenForm({ id: item.id, kind: 'agree' }); }} disabled={busy}
+                            className="btn btn-primary"
+                            title="Record verbally agreed fee from the call and assign the audit"
+                            style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--success)', borderColor: 'var(--success)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <CheckCircle size={12} /> Agreed at ₹…
                           </button>
                           <button onClick={() => { setReasonInput(''); setOpenForm({ id: item.id, kind: 'decline' }); }} disabled={busy}
-                            className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            className="btn btn-secondary"
+                            title="Record assayer verbal decline and specify reason"
+                            style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <XCircle size={12} /> Declined
                           </button>
                           <button onClick={() => noAnswer(item)} disabled={busy}
-                            className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            className="btn btn-secondary"
+                            title="Log unanswered call attempt and increment call count"
+                            style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <PhoneOff size={12} /> {busy ? '…' : 'No answer'}
                           </button>
                         </>
                       )}
                     </div>
                     {suggestNext && !form && (
-                      <button onClick={() => setReassignFor(item)} className="btn btn-secondary"
+                      <button onClick={() => openPlanningFor(item)} className="btn btn-secondary"
+                        title="Multiple unanswered calls — open planning workspace to find an alternate assayer"
                         style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
-                        {item.callAttempts}+ unanswered calls — find another assayer
+                        {item.callAttempts}+ unanswered calls — plan replacement in Planning
                       </button>
                     )}
                   </div>
@@ -556,29 +622,30 @@ export const OperationsInbox: React.FC = () => {
             })
           ))}
 
-          {lane('Needs a replacement', <UserX size={14} />, data0.replacements.length, 'var(--danger)', (
+          {lane('replacements', 'Needs a replacement', <UserX size={14} />, data0.replacements.length, 'var(--danger)', (
             data0.replacements.map((item) => (
               <CardShell key={item.id} item={item}
                 chip={<span style={{ marginLeft: 8, fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                   {item.rejectReason === 'AUTO_DECLINED_SLA_EXPIRED' ? 'Expired' : 'Declined'}
                 </span>}>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  <button onClick={() => setReassignFor(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
-                    Find replacement
-                  </button>
-                  <button onClick={() => openPlanningFor(item)} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
-                    Open planning
+                  <button onClick={() => openPlanningFor(item)} className="btn btn-primary"
+                    title="Open planning workspace to find and assign an alternate assayer"
+                    style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
+                    Plan replacement
                   </button>
                 </div>
               </CardShell>
             ))
           ))}
 
-          {lane('Accepted, not scheduled', <CalendarClock size={14} />, data0.unscheduled.length, 'var(--accent)', (
+          {lane('unscheduled', 'Accepted, not scheduled', <CalendarClock size={14} />, data0.unscheduled.length, 'var(--accent)', (
             data0.unscheduled.map((item) => (
               <CardShell key={item.id} item={item}>
                 {bookFor?.id !== item.id ? (
-                  <button onClick={() => startBooking(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
+                  <button onClick={() => startBooking(item)} className="btn btn-primary"
+                    title="Choose a visit date to put this accepted audit on the calendar"
+                    style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                     Put on calendar
                   </button>
                 ) : (
@@ -588,7 +655,7 @@ export const OperationsInbox: React.FC = () => {
             ))
           ))}
 
-          {lane('Audit overdue — no check-in', <AlertTriangle size={14} />, data0.overdue.length, 'var(--danger)', (
+          {lane('overdue', 'Audit overdue — no check-in', <AlertTriangle size={14} />, data0.overdue.length, 'var(--danger)', (
             data0.overdue.map((item) => {
               const busy = busyId === item.id;
               const form = openForm?.id === item.id ? openForm.kind : null;
@@ -599,24 +666,29 @@ export const OperationsInbox: React.FC = () => {
                   </span>}>
                   {bookFor?.id === item.id ? bookingPanel(item) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
-                      {/* Everything happens here — no bounce to another screen. Reassign opens the
-                          same ranked-candidates drawer as Replacements; Reschedule opens the inline
-                          date-picker; No-show cancels with a captured reason. */}
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        <button onClick={() => setReassignFor(item)} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <UserX size={12} /> Reassign
+                        <button onClick={() => openPlanningFor(item)} disabled={busy}
+                          className="btn btn-secondary"
+                          title="Open planning workspace to reassign this overdue audit to another assayer"
+                          style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <UserX size={12} /> Reassign in Planning
                         </button>
                         <button onClick={() => startBooking(item)} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          className="btn btn-secondary"
+                          title="Reschedule this overdue audit for a future date"
+                          style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <CalendarClock size={12} /> Reschedule
                         </button>
                         <button onClick={() => { setReasonInput(''); setOpenForm({ id: item.id, kind: 'noshow' }); }} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          className="btn btn-secondary"
+                          title="Flag this audit as an assayer no-show and record reason"
+                          style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <UserX size={12} /> Mark no-show
                         </button>
                         <button onClick={() => navigate(`/assignments?id=${item.id}`)} disabled={busy}
-                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
+                          className="btn btn-secondary"
+                          title="Open assignment detail drawer to inspect full history"
+                          style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                           Open
                         </button>
                       </div>
@@ -625,10 +697,11 @@ export const OperationsInbox: React.FC = () => {
                           <ReasonPresetSelect value={reasonInput} onChange={setReasonInput} />
                           {miniInput("Why? e.g. assayer didn't attend", reasonInput, setReasonInput, 'text')}
                           <button onClick={() => markNoShow(item)} disabled={busy} className="btn btn-primary"
+                            title="Confirm no-show status on this assignment"
                             style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', background: 'var(--danger)', borderColor: 'var(--danger)' }}>
                             {busy ? 'Saving…' : 'Confirm no-show'}
                           </button>
-                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}><X size={12} /></button>
+                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" title="Cancel" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}><X size={12} /></button>
                         </div>
                       )}
                     </div>
@@ -638,7 +711,7 @@ export const OperationsInbox: React.FC = () => {
             })
           ))}
 
-          {lane('Field issues', <MapPin size={14} />, data0.fieldIssues.length, 'var(--warning)', (
+          {lane('fieldIssues', 'Field issues', <MapPin size={14} />, data0.fieldIssues.length, 'var(--warning)', (
             data0.fieldIssues.map((issue) => (
               <div key={issue.id} className="glass-card" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <div>
@@ -649,7 +722,9 @@ export const OperationsInbox: React.FC = () => {
                     {issue.note || 'No detail given.'} — {issue.assayerName || 'Assayer'} · {new Date(issue.reportedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
                   </div>
                 </div>
-                <button onClick={() => navigate(`/assignments?id=${issue.assignmentId}`)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
+                <button onClick={() => navigate(`/assignments?id=${issue.assignmentId}`)} className="btn btn-primary"
+                  title="Open this assignment to review and resolve the reported field issue"
+                  style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)' }}>
                   Open assignment
                 </button>
               </div>
@@ -658,131 +733,7 @@ export const OperationsInbox: React.FC = () => {
         </>
       )}
 
-      {reassignFor && (
-        <ReassignDrawer
-          item={reassignFor}
-          onClose={() => setReassignFor(null)}
-          onOffered={(name) => {
-            setReassignFor(null);
-            setMessage({ type: 'success', text: `Offer sent to ${name} for ${reassignFor.branchName}.` });
-            refresh();
-          }}
-        />
-      )}
       {confirmDialog}
-    </div>
-  );
-};
-
-/**
- * Inline reassignment: the engine's ranked candidates for the branch, one click to offer —
- * without leaving the queue. Mirrors the planning page's recommendation data exactly.
- */
-const ReassignDrawer: React.FC<{
-  item: InboxItem;
-  onClose: () => void;
-  onOffered: (assayerName: string) => void;
-}> = ({ item, onClose, onOffered }) => {
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // onClose is an inline arrow at the call site, so it's a new reference every render — held in
-  // a ref, as Modal.tsx/DetailDrawer.tsx do, so this effect only attaches the listener once.
-  const onCloseRef = useRef(onClose);
-  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseRef.current(); };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, []);
-
-  const recommendations = useQuery({
-    queryKey: ['inbox-recommendations', item.branchId, item.scheduledDate],
-    // A replacement steps into the ORIGINAL audit date, so candidates are ranked for that
-    // day — availability and fees for "today" would answer the wrong question.
-    queryFn: () => getRecommendations<Candidate, unknown>(item.branchId!, item.scheduledDate?.slice(0, 10) || undefined),
-    enabled: !!item.branchId,
-    staleTime: 30_000,
-  });
-  const { data, isLoading } = recommendations;
-  const candidates = (data?.data ?? []).filter((c) => c.id !== item.assayerId).slice(0, 6);
-
-  const offer = async (c: Candidate) => {
-    if (!item.projectBranchId || busyId) return;
-    setBusyId(c.id);
-    setError(null);
-    try {
-      await api.request('/assignments', {
-        method: 'POST',
-        body: JSON.stringify({
-          projectBranchId: item.projectBranchId,
-          assayerId: c.id,
-          // Deliberately NO proposedFee. The candidate row only knows the assayer's BASE fee;
-          // sending that alone under-quoted every replacement, because a replacement is usually
-          // further from the branch than the person who declined and so owes more travel. With
-          // the fee omitted, POST /assignments prices the full quote itself — base + routed
-          // travel by the client's rate card — exactly the way the primary offer path does.
-          remarks: `Reassigned from the Operations Inbox (previous: ${item.assayerName ?? 'n/a'})`,
-        }),
-      });
-      onOffered(c.displayName);
-    } catch (err: any) {
-      setError(err?.message || 'Could not create the offer.');
-      setBusyId(null);
-    }
-  };
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', justifyContent: 'flex-end', zIndex: 1000 }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()}
-        role="dialog" aria-modal="true" aria-labelledby="reassign-drawer-title"
-        style={{ width: 'min(420px, 100%)', height: '100%', overflowY: 'auto', background: 'var(--bg-primary)', borderLeft: '1px solid var(--border-color)', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
-          <div>
-            <div id="reassign-drawer-title" style={{ fontSize: 'var(--text-md)', fontWeight: 800, color: 'var(--text-primary)' }}>Find a replacement</div>
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              {item.branchName}{item.branchCity ? ` · ${item.branchCity}` : ''} — the engine's ranked candidates. One click sends the offer;
-              the fee is the full quote (base + travel to this branch), priced when it is sent.
-            </div>
-          </div>
-          <button onClick={onClose} className="btn btn-secondary" style={{ padding: '6px', lineHeight: 0 }} aria-label="Close"><X size={15} /></button>
-        </div>
-
-        {error && <AlertBanner type="error" message={error} onClose={() => setError(null)} />}
-
-        {!item.branchId ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>This item carries no branch reference — open planning instead.</div>
-        ) : loadFailed(recommendations) ? (
-          /* "No eligible candidates — open planning to widen the filters" sends an operator who
-             is replacing a declined audit to go and loosen filters that were never consulted. */
-          <LoadFailure loads={[{ label: 'the ranked replacements', query: recommendations }]} />
-        ) : isLoading ? (
-          <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
-            <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} /> Ranking candidates…
-          </div>
-        ) : candidates.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>No eligible candidates — open planning to widen the filters.</div>
-        ) : (
-          candidates.map((c, i) => (
-            <div key={c.id} className="glass-card" style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  <span style={{ color: 'var(--text-muted)', fontWeight: 800, marginRight: 6 }}>#{i + 1}</span>
-                  {c.displayName}
-                  {c.score != null && <span style={{ marginLeft: 6, fontSize: 'var(--text-3xs)', fontWeight: 800, color: 'var(--success)' }}>{Math.round(c.score)}%</span>}
-                </div>
-                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  {formatRouteDistance(c.distanceKm, c.distanceSource ?? null, { emptyAs: 'distance n/a' })} · base {inr(c.baseFee)} + travel
-                </div>
-              </div>
-              <button onClick={() => offer(c)} disabled={busyId != null}
-                className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', flexShrink: 0 }}>
-                {busyId === c.id ? 'Offering…' : 'Offer'}
-              </button>
-            </div>
-          ))
-        )}
-      </div>
     </div>
   );
 };

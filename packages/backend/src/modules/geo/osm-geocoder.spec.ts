@@ -1,5 +1,5 @@
 import { verifyCandidate, PRECISION_METERS, politely, gradeNominatimCandidate, resolveFreely } from './osm-geocoder';
-import { isPlausibleIndianCoord, needsBetterFix, resolveCoordinates } from './coordinate-resolution';
+import { isPlausibleIndianCoord, needsBetterFix, resolveCoordinates, parseLocationInput } from './coordinate-resolution';
 
 /**
  * These guard the part of free geocoding that decides whether an answer is believable.
@@ -163,6 +163,36 @@ describe('resolveCoordinates', () => {
       city: 'Pune', district: 'Pune', state: 'Maharashtra', precise: false,
     });
     expect(result?.geoSource).not.toBe('manual');
+  });
+});
+
+describe('parseLocationInput', () => {
+  it('parses Google Maps URLs with @lat,lng', () => {
+    const parsed = parseLocationInput('https://www.google.com/maps/place/HDFC+Bank/@19.076090,72.877726,17z/data=...');
+    expect(parsed).toEqual({ lat: 19.07609, lng: 72.877726 });
+  });
+
+  it('parses Google Maps query URLs with ?q=lat,lng', () => {
+    const parsed = parseLocationInput('https://maps.google.com/?q=12.9352,77.6245');
+    expect(parsed).toEqual({ lat: 12.9352, lng: 77.6245 });
+  });
+
+  it('parses plain decimal strings and auto-corrects Indian transposition', () => {
+    expect(parseLocationInput('12.9352, 77.6245')).toEqual({ lat: 12.9352, lng: 77.6245 });
+    // Transposed (lng, lat): 77.6245 is longitude, 12.9352 is latitude
+    expect(parseLocationInput('77.6245, 12.9352')).toEqual({ lat: 12.9352, lng: 77.6245 });
+  });
+
+  it('parses DMS notation', () => {
+    const parsed = parseLocationInput('19°04\'33.6"N 72°52\'39.7"E');
+    expect(parsed?.lat).toBeCloseTo(19.076, 2);
+    expect(parsed?.lng).toBeCloseTo(72.8776, 2);
+  });
+
+  it('returns null for empty or non-Indian coordinates', () => {
+    expect(parseLocationInput('')).toBeNull();
+    expect(parseLocationInput('not a coordinate')).toBeNull();
+    expect(parseLocationInput('51.5074, -0.1278')).toBeNull(); // London
   });
 });
 

@@ -481,6 +481,114 @@ describe('AssayerService.bulkIssueAppAccess', () => {
   });
 
   /**
+   * A queue that THROWS is not the same as a queue that answers `NOT_QUEUED`, and the difference
+   * used to matter: the throw escaped past the per-person catch and landed the person in `failed`
+   * — after `issueAppAccessCore` had already replaced their password. HR read "failed" against
+   * somebody whose old credential had just stopped working, so a run that half-succeeded looked
+   * like a run to repeat.
+   */
+  it('does not report a person as failed when the credential was issued but a queue threw', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    people.set('p1', person('p1', { email: 'p1@example.com', phone: '9822014455' }));
+    emails.queue.mockRejectedValueOnce(new Error('smtp down'));
+
+    const out = await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    expect(out.failed).toEqual([]);
+    expect(out.succeeded).toEqual([{ id: 'p1', channels: ['SMS'], smsId: 'sms-1' }]);
+    // The credential is live either way — the password was already committed before delivery.
+    expect(assayers.update).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  /** Neither the address nor the password may travel into a log line when delivery goes wrong. */
+  it('logs which person a failed delivery was for, and nothing else about them', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    people.set('p1', person('p1', { email: 'p1@example.com', phone: '9822014455' }));
+    emails.queue.mockRejectedValueOnce(new Error('smtp down'));
+
+    await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    const lines = warn.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(lines).toMatch(/app-access email for p1/);
+    expect(lines).not.toMatch(/p1@example\.com/);
+    const issued = String(sms.queue.mock.calls[0][0].content.data.temporaryPassword);
+    expect(lines).not.toContain(issued);
+    warn.mockRestore();
+  });
+
+  /**
+   * `issueAndDeliverAppAccess` is what approving a registration calls, and it is the SAME mint and
+   * the SAME delivery this bulk run uses — one implementation, two entry points. Before it existed,
+   * approval minted nothing at all and mailed the new appraiser a "Sign in" button over an account
+   * with `passwordHash = NULL`.
+   */
+  describe('issuing to one person, delivered rather than read aloud', () => {
+    it('mints the credential and queues it to both of their channels', async () => {
+      const out = await service.issueAndDeliverAppAccess(
+        person('solo', { email: 'solo@example.com', phone: '9822014455' }) as never,
+        ACTOR,
+      );
+
+      expect(out).toEqual({ channels: ['EMAIL', 'SMS'], emailId: 'email-1', smsId: 'sms-1' });
+      // The same stored shape the bulk run writes: hashed, must-change, lockout cleared.
+      const [, patch] = assayers.update.mock.calls[0];
+      expect(patch.mustChangePassword).toBe(true);
+      expect(patch.passwordHash).toEqual(expect.stringMatching(/^\$2[aby]\$/));
+    });
+
+    it('sends the registered wording exactly what it needs, and nothing it does not', async () => {
+      await service.issueAndDeliverAppAccess(
+        person('solo', { email: null, phone: '9822014455' }) as never,
+        ACTOR,
+      );
+
+      const [request] = sms.queue.mock.calls[0];
+      expect(Object.keys(request.content.data).sort())
+        .toEqual([...SMS_TEMPLATE_REGISTRY['app-credentials'].requiredTokens].sort());
+    });
+
+    /**
+     * The one place this deliberately differs from `bulkIssueAppAccess`, which refuses a run with
+     * no email queue outright. A bulk run exists only to deliver, so delivering to nobody is a
+     * pointless run worth stopping. An approval is a hiring decision that happens to send a letter,
+     * and refusing it because a mail server is down would be the wrong trade — so the credential is
+     * still minted and the empty `channels` is what tells the caller a handover is owed.
+     */
+    it('still mints a credential when the email queue is not wired in, and says nothing was sent', async () => {
+      const noEmail = await Test.createTestingModule({
+        providers: [
+          AssayerService,
+          { provide: getRepositoryToken(AssayerEntity), useValue: assayers },
+          { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: {} },
+          { provide: getRepositoryToken(WorkforceAttributeEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
+          { provide: getRepositoryToken(AssayerRemarkEntity), useValue: {} },
+          { provide: getRepositoryToken(AssayerActivityEntity), useValue: { create: jest.fn((r) => r), save: jest.fn() } },
+          { provide: AuditService, useValue: audit },
+          { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
+          { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
+          { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+          { provide: NotificationService, useValue: { notifyAssayer: jest.fn().mockResolvedValue({ inAppDelivered: true }) } },
+          { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
+          { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
+          { provide: CacheService, useValue: { del: jest.fn().mockResolvedValue(undefined) } },
+        ],
+      }).compile();
+
+      const out = await noEmail.get(AssayerService).issueAndDeliverAppAccess(
+        person('solo', { email: 'solo@example.com', phone: null }) as never,
+        ACTOR,
+      );
+
+      expect(out).toEqual({ channels: [] });
+      expect(assayers.update).toHaveBeenCalledTimes(1);
+      // …and the bulk tool still refuses outright, so the two policies stay visibly different.
+      await expect(noEmail.get(AssayerService).bulkIssueAppAccess(['solo'], ACTOR))
+        .rejects.toThrow(/email queue is not wired/i);
+    });
+  });
+
+  /**
    * A text that could not even be queued is not reported as sent: no `SMS` channel and no receipt,
    * so HR's "texts queued" count and the watched receipts both leave this person out.
    */

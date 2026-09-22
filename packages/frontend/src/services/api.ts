@@ -63,6 +63,44 @@ export interface NotificationPreference {
 class ApiClient {
   private refreshPromise: Promise<boolean> | null = null;
 
+  async get<T>(
+    endpoint: string,
+    options?: Omit<RequestInit, 'method'> & { raw?: boolean; withMeta?: boolean; timeoutMs?: number },
+  ): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: 'GET' });
+  }
+
+  async post<T>(
+    endpoint: string,
+    body?: any,
+    options?: Omit<RequestInit, 'method' | 'body'> & { raw?: boolean; withMeta?: boolean; timeoutMs?: number },
+  ): Promise<T> {
+    return this.request<T>(endpoint, {
+      ...options,
+      method: 'POST',
+      body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  }
+
+  async put<T>(
+    endpoint: string,
+    body?: any,
+    options?: Omit<RequestInit, 'method' | 'body'> & { raw?: boolean; withMeta?: boolean; timeoutMs?: number },
+  ): Promise<T> {
+    return this.request<T>(endpoint, {
+      ...options,
+      method: 'PUT',
+      body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  }
+
+  async delete<T>(
+    endpoint: string,
+    options?: Omit<RequestInit, 'method'> & { raw?: boolean; withMeta?: boolean; timeoutMs?: number },
+  ): Promise<T> {
+    return this.request<T>(endpoint, { ...options, method: 'DELETE' });
+  }
+
   async request<T>(
     endpoint: string,
     options?: RequestInit & { raw?: boolean; withMeta?: boolean; timeoutMs?: number },

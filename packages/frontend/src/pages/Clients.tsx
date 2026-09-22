@@ -301,11 +301,11 @@ const Clients: React.FC = () => {
         title="Clients"
         subtitle="Client records, contacts, contracts and billing — and whether each one is still active."
         actions={<>
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
+          <button onClick={() => refetch()} title="Refresh client directory and active status counts" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
             <RefreshCw size={15} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
           {canManage && (
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
+            <button onClick={() => setShowCreate(true)} title="Add a new client organization with commercial details" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
               <Plus size={15} /> Add Client
             </button>
           )}
@@ -511,16 +511,16 @@ const Clients: React.FC = () => {
               <div style={{ display: 'flex', gap: 6 }}>
                 {canManage && (
                   <>
-                    <button onClick={() => setShowEdit(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button onClick={() => setShowEdit(true)} title="Edit client organization information" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Pencil size={14} /> Edit
                     </button>
-                    <button onClick={() => setShowLifecycle(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button onClick={() => setShowLifecycle(true)} title="Advance or update client operational lifecycle status" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <ArrowLeftRight size={14} /> Change status
                     </button>
                   </>
                 )}
                 {canDelete && (
-                  <button onClick={() => { setDeleteConfirmText(''); setShowDeleteConfirm(true); }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                  <button onClick={() => { setDeleteConfirmText(''); setShowDeleteConfirm(true); }} title="Permanently delete client record" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                     <Trash2 size={14} /> Delete
                   </button>
                 )}
@@ -632,10 +632,10 @@ const Clients: React.FC = () => {
 
 const TabGroup: React.FC<{ active: string; onChange: (t: 'contacts' | 'contracts' | 'billing' | 'config') => void }> = ({ active, onChange }) => {
   const tabs = [
-    { key: 'contacts' as const, label: 'Contacts' },
-    { key: 'contracts' as const, label: 'Contracts' },
-    { key: 'billing' as const, label: 'Billing' },
-    { key: 'config' as const, label: 'Settings' },
+    { key: 'contacts' as const, label: 'Contacts', hint: 'Client key personnel, escalations, and branch liaison contacts' },
+    { key: 'contracts' as const, label: 'Contracts', hint: 'Commercial agreements, fee schedules, SLA terms, and active mandates' },
+    { key: 'billing' as const, label: 'Billing', hint: 'Invoicing configurations, GSTIN, PAN, and payment terms' },
+    { key: 'config' as const, label: 'Settings', hint: 'Shortfall thresholds, custom rules, and client-level preferences' },
   ];
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)' }}>
@@ -643,6 +643,7 @@ const TabGroup: React.FC<{ active: string; onChange: (t: 'contacts' | 'contracts
         <button
           key={t.key}
           onClick={() => onChange(t.key)}
+          title={t.hint}
           style={{
             padding: '8px 14px',
             background: 'none',

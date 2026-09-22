@@ -4,7 +4,7 @@ NAME: Application Approval
 REQUIRED_TOKENS:
   - fullName
   - assayerCode
-  - loginUrl
+  - appDownloadUrl
   - logoUrl
 OPTIONAL_TOKENS:
   - displayName
@@ -48,6 +48,9 @@ RAW_TOKENS:
               <p style="margin:0 0 12px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;line-height:1.65;color:#374151;">
                 Congratulations! Your application has been approved. You have been officially registered as an authorized Appraiser in our network. Our operations team will be in touch shortly regarding branch roster assignments and field audit schedules.
               </p>
+              <p style="margin:0 0 12px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;line-height:1.65;color:#374151;">
+                Install the appraiser app on your phone using the button below. Your sign-in details &mdash; your username and a temporary password &mdash; are sent to you in a separate message.
+              </p>
               
               <!-- Clean Appraiser Code Table -->
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:18px 0 20px 0;border:1px solid #E5E7EB;border-radius:8px;overflow:hidden;background-color:#F9FAFB;">
@@ -81,15 +84,15 @@ RAW_TOKENS:
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 8px 0;">
                 <tr>
                   <td align="center" style="border-radius:6px;background-color:#ED6714;">
-                    <a href="{{loginUrl}}" target="_blank" style="display:inline-block;padding:11px 26px;background-color:#ED6714;color:#FFFFFF;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:0.2px;text-decoration:none;border-radius:6px;">
-                      Sign in to FAPOMS
+                    <a href="{{appDownloadUrl}}" target="_blank" style="display:inline-block;padding:11px 26px;background-color:#ED6714;color:#FFFFFF;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;letter-spacing:0.2px;text-decoration:none;border-radius:6px;">
+                      Get the appraiser app
                     </a>
                   </td>
                 </tr>
               </table>
 
               <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;color:#9CA3AF;margin-top:8px;word-break:break-all;line-height:1.4;">
-                Direct link: <a href="{{loginUrl}}" style="color:#ED6714;text-decoration:underline;">{{loginUrl}}</a>
+                Direct link: <a href="{{appDownloadUrl}}" style="color:#ED6714;text-decoration:underline;">{{appDownloadUrl}}</a>
               </div>
 
               <div style="margin-top:16px;padding-top:12px;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;color:#6B7280;line-height:1.45;">

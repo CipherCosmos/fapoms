@@ -168,3 +168,58 @@ export interface BranchImportPreflight {
   rowsNeedingGeocode: number;
   sheetName: string;
 }
+
+export interface ClientMismatchWarning {
+  detectedBank?: string;
+  detectedBankCode?: string;
+  expectedBank: string;
+  expectedBankCode?: string;
+  reason: string;
+  otherClientName?: string;
+  otherClientId?: string;
+  severity: 'critical' | 'warning';
+}
+
+export interface BranchReconciliationRow {
+  rowNumber: number;
+  solId: string;
+  name: string;
+  address?: string;
+  district?: string;
+  state?: string;
+  pincode?: string;
+  packetCount?: number;
+  latitude?: number;
+  longitude?: number;
+  geoSource?: string;
+  geoAccuracyMeters?: number;
+  existsInMaster: boolean;
+  masterBranchId?: string;
+  isArchivedInMaster?: boolean;
+  status: 'ready' | 'coarse' | 'needs_details';
+  missingFields: string[];
+  suggestedDetails?: {
+    district?: string;
+    state?: string;
+    address?: string;
+    pincode?: string;
+    phone?: string;
+    bank?: string;
+    branch?: string;
+  };
+  clientMismatch?: ClientMismatchWarning;
+  warnings?: string[];
+}
+
+export interface BranchReconciliationReport {
+  summary: {
+    totalRows: number;
+    existingInMaster: number;
+    newBranches: number;
+    readyCount: number;
+    coarseCount: number;
+    needsDetailsCount: number;
+    clientMismatchCount: number;
+  };
+  rows: BranchReconciliationRow[];
+}

@@ -440,9 +440,31 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
           <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', margin: '1px 0 0' }}>{assignment.project?.name}</p>
         </div>
         <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Calendar size={13} style={{ color: 'var(--accent)' }} />
-          <div>
-            <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Scheduled</span>
+          <Calendar size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Scheduled</span>
+              <button
+                type="button"
+                onClick={() => navigate(`/scheduling?assignmentId=${assignment.id}`)}
+                className="btn btn-secondary"
+                style={{
+                  padding: '1px 5px',
+                  fontSize: 'var(--text-3xs)',
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--accent-primary)',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '2px',
+                }}
+                title="View or change date on Calendar"
+              >
+                Calendar ↗
+              </button>
+            </div>
             <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>{assignment.scheduledDate ? new Date(assignment.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Unscheduled'}</p>
           </div>
         </div>
@@ -542,7 +564,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
             <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Quick Links</span>
             <div style={{ display: 'flex', gap: '4px', marginTop: '1px' }}>
               <button onClick={() => navigate(planningLinkFor(assignment))} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Planning</button>
-              <button onClick={() => navigate(`/scheduling?assignmentId=${assignment.id}`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Schedule</button>
+              <button onClick={() => navigate(`/scheduling?assignmentId=${assignment.id}`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Calendar</button>
             </div>
           </div>
         </div>

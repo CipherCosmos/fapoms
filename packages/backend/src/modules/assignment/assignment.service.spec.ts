@@ -1679,6 +1679,25 @@ const mockNotificationService = {
       expect(result.status).toBe(AssignmentStatus.ACCEPTED);
     });
 
+    it('sets scheduledDate and auto-schedules when scheduledDate is provided in accept options', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-unscheduled', assignmentNumber: 'ASN-2026-99', assayerId: 'assayer-1', projectId: 'proj-1',
+        status: AssignmentStatus.PENDING, autoSchedule: true, scheduledDate: null,
+        agreedFee: 500, proposedFee: 500, isActive: true,
+        projectBranch: { id: 'pb-1', isActive: true, status: ProjectBranchStatus.NEGOTIATION, branch: { name: 'Kochi Central', state: 'KL' } },
+      } as any);
+
+      const result = await service.acceptOffer('asn-unscheduled', 'user-1', 2500, 'Agreed on call', {
+        scheduledDate: '2026-09-25',
+      });
+
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+      expect(mockConstraintEvaluator.checkDateAvailability).toHaveBeenCalledWith(
+        expect.objectContaining({ scheduledDate: new Date('2026-09-25') }),
+      );
+      expect(mockScheduleRepoInTx.save).toHaveBeenCalled();
+    });
+
     it('survives the availability check throwing outright, without losing the acceptance', async () => {
       // A synchronous throw used to escape the promise-only handler and roll the acceptance back
       // to PENDING — the assayer's "yes" vanished because a calendar lookup failed.

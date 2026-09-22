@@ -235,7 +235,7 @@ Output ONLY the clean, raw HTML code.
 | :--- | :--- | :--- | :--- |
 | `{{candidateName}}` | Escaped | **Yes** | Candidate's name |
 | `{{assayerCode}}` | Escaped | **Yes** | Official Assayer Code (e.g., `ASY-2026-0842`) |
-| `{{loginUrl}}` | Escaped | **Yes** | FAPOMS Portal URL |
+| `{{appDownloadUrl}}` | Escaped | **Yes** | Where the appraiser installs the phone app — the one stable link |
 | `{{supportEmail}}` | Escaped | **Yes** | Support email |
 | `{{remarks}}` | Escaped | *Optional* | Committee approval notes or condition remarks |
 
@@ -260,7 +260,9 @@ TECHNICAL REQUIREMENTS:
   - Standing: Active Roster Ready
   - Next Steps: Operations will assign bank branch audits directly via FAPOMS.
 - Optional committee notes section displaying {{remarks}}.
-- Primary CTA Button: "Open FAPOMS Portal" linking to {{loginUrl}}.
+- Primary CTA Button: "Get the appraiser app" linking to {{appDownloadUrl}}.
+- A line stating their sign-in details arrive in a separate message. This letter must NOT invite
+  them to sign in: when it is sent they hold a code, and the password follows on its own.
 - Security footer highlighting that {{assayerCode}} is required during bank branch audit identity verification.
 - Support footer with {{supportEmail}}.
 
@@ -268,7 +270,7 @@ CRITICAL TOKEN RULES (DO NOT CHANGE OR OMIT):
 You MUST include these exact placeholder tokens:
 - {{candidateName}}
 - {{assayerCode}}
-- {{loginUrl}}
+- {{appDownloadUrl}}
 - {{supportEmail}}
 - {{remarks}} (can be in an optional or small remarks section)
 

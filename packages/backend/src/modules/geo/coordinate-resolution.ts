@@ -18,6 +18,7 @@
 
 import { geocodeIndiaRobust } from './india-geocoder';
 import { GeoPrecision, PRECISION_METERS } from './osm-geocoder';
+export { PRECISION_METERS };
 
 /** The geo columns branches and assayers share. */
 export interface GeoFields {
@@ -65,6 +66,63 @@ export function isPlausibleIndianCoord(lat: unknown, lng: unknown): boolean {
   if (!Number.isFinite(la) || !Number.isFinite(ln)) return false;
   if (la === 0 && ln === 0) return false;
   return la >= 6.4 && la <= 37.7 && ln >= 68.0 && ln <= 97.5;
+}
+
+/**
+ * Parses user input into a validated Indian coordinate pair.
+ * Supports:
+ * - Google Maps URLs (e.g. maps.google.com/?q=19.07,72.87 or /@19.07,72.87)
+ * - Decimal strings ("19.0760, 72.8777" or "19.0760 72.8777")
+ * - Transposed coordinates (in India, lat is 6-38° and lng is 68-98°; automatically fixed)
+ * - DMS notation ("19°04'33.6\"N 72°52'39.7\"E")
+ */
+export function parseLocationInput(input?: string | null): { lat: number; lng: number } | null {
+  if (!input) return null;
+  const raw = input.trim();
+  if (!raw) return null;
+
+  // 1. Google Maps URL pattern: /@([0-9.-]+),([0-9.-]+) or ?q=([0-9.-]+),([0-9.-]+) or query=([0-9.-]+),([0-9.-]+)
+  const urlMatch = raw.match(/[@?&](?:q|query)?=?([0-9.-]+),([0-9.-]+)/);
+  if (urlMatch) {
+    const p1 = parseFloat(urlMatch[1]);
+    const p2 = parseFloat(urlMatch[2]);
+    if (isPlausibleIndianCoord(p1, p2)) return { lat: p1, lng: p2 };
+    if (isPlausibleIndianCoord(p2, p1)) return { lat: p2, lng: p1 };
+  }
+
+  // 2. DMS pattern: e.g. 19°4'33"N 72°52'39"E
+  const dmsRegex = /(\d+)[°\s]+(\d+)['\s]+([\d.]+)?["\s]*([NSEW])/gi;
+  const dmsMatches = [...raw.matchAll(dmsRegex)];
+  if (dmsMatches.length >= 2) {
+    let lat: number | null = null;
+    let lng: number | null = null;
+    for (const m of dmsMatches) {
+      const deg = parseFloat(m[1]);
+      const min = parseFloat(m[2]) || 0;
+      const sec = parseFloat(m[3]) || 0;
+      const dir = m[4].toUpperCase();
+      const dec = deg + min / 60 + sec / 3600;
+      if (dir === 'N') lat = dec;
+      else if (dir === 'S') lat = -dec;
+      else if (dir === 'E') lng = dec;
+      else if (dir === 'W') lng = -dec;
+    }
+    if (lat !== null && lng !== null) {
+      if (isPlausibleIndianCoord(lat, lng)) return { lat, lng };
+    }
+  }
+
+  // 3. Plain decimal pair: e.g. "19.0760, 72.8777" or "19.0760 72.8777"
+  const decMatch = raw.match(/([+-]?\d+(?:\.\d+)?)[,\s/]+([+-]?\d+(?:\.\d+)?)/);
+  if (decMatch) {
+    const p1 = parseFloat(decMatch[1]);
+    const p2 = parseFloat(decMatch[2]);
+    if (isPlausibleIndianCoord(p1, p2)) return { lat: p1, lng: p2 };
+    // Transposition check: if someone entered lng, lat (e.g. 72.87, 19.07)
+    if (isPlausibleIndianCoord(p2, p1)) return { lat: p2, lng: p1 };
+  }
+
+  return null;
 }
 
 /**

@@ -215,13 +215,31 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
     category: 'Recruitment',
     description: 'Notice of approval and official appraiser code issuance sent to successfully verified candidates.',
     defaultSubjectTemplate: 'Your Appraiser application has been approved',
-    requiredTokens: ['assayerCode', 'loginUrl', 'logoUrl'],
-    optionalTokens: ['candidateName', 'displayName', 'fullName', 'remarks', 'securityNotice', 'status', 'companyName'],
+    /**
+     * `appDownloadUrl`, not `loginUrl`. This letter used to end in a "Sign in to FAPOMS" button
+     * pointing at the web root — which is the wrong door twice over: the web app has no appraiser
+     * surface at all, and at the moment this is sent the reader has a code but not yet the
+     * password that arrives in their `app-credentials` message. The button is now the app itself.
+     *
+     * `loginUrl` stays DECLARED so an administrator's published version that still uses it keeps
+     * validating as a known token rather than being rejected outright — but it is no longer
+     * required, and a version without `appDownloadUrl` is now correctly treated as broken: an
+     * approval letter that does not say where to get the app is missing the only thing the reader
+     * has to act on.
+     */
+    requiredTokens: ['assayerCode', 'appDownloadUrl', 'logoUrl'],
+    optionalTokens: [
+      'candidateName', 'displayName', 'fullName', 'remarks', 'securityNotice', 'status',
+      'companyName', 'loginUrl',
+      // Emitted by the visual editor's layout for this template (`email-template-html.ts`) and
+      // never declared, so anything built there failed contract validation on publish.
+      'effectiveDate',
+    ],
     rawTokens: [],
     allowRawHtmlTokens: false,
     sampleData: {
       assayerCode: 'ASY-2026-0842',
-      loginUrl: `${appPublicUrl()}/login`,
+      appDownloadUrl: `${appPublicUrl()}/download/app.apk`,
       logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
       candidateName: 'Pooja Sharma',
       // The shipped HTML greets and names the person by this token.
@@ -233,12 +251,17 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
       const greeting = data.candidateName ? `Hello ${data.candidateName},` : 'Hello,';
       const assayerCode = String(data.assayerCode || '');
       const subject = 'Your Appraiser application has been approved';
-      const text = `${greeting}\n\nYour application has been approved. Your Appraiser code is ${assayerCode}. HR will be in touch about next steps.`;
+      const text = `${greeting}\n\nYour application has been approved. Your Appraiser code is ${assayerCode}.\n\n`
+        + 'Install the appraiser app on your phone: '
+        + `${String(data.appDownloadUrl || appPublicUrl())}\n\n`
+        + 'Your sign-in details — your username and a temporary password — are sent to you in a '
+        + 'separate message. HR will be in touch about next steps.';
       const html = renderEmailHtml({
         title: 'Application Approved — Welcome to Sumeru Global',
         bodyLines: [
           greeting,
           'Congratulations! Your application has been approved. You have been officially registered as an authorized Appraiser in our network.',
+          'Install the appraiser app on your phone using the button below. Your sign-in details — your username and a temporary password — are sent to you in a separate message.',
           'Our operations team will be in touch shortly regarding branch roster assignments and field audit schedules.',
         ],
         kvTable: [
@@ -246,8 +269,8 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
           { label: 'Registered Name', value: String(data.candidateName || data.displayName || data.fullName || '—') },
           { label: 'Status', value: String(data.status || 'Active Roster Ready') },
         ],
-        linkUrl: String(data.loginUrl || appPublicUrl()),
-        linkLabel: 'Sign in to FAPOMS',
+        linkUrl: String(data.appDownloadUrl || appPublicUrl()),
+        linkLabel: 'Get the appraiser app',
         securityNotice: data.securityNotice || `Keep your Appraiser code (${assayerCode}) confidential. It is required during bank branch audit verification.`,
       });
       return { html, text, subject };

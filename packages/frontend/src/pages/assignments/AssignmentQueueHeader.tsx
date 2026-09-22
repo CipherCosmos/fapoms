@@ -85,6 +85,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
             <button
               onClick={onRefresh}
               className="btn btn-secondary"
+              title="Refresh assignment list and live statuses"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -97,6 +98,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
             <button
               onClick={handleExport}
               disabled={exporting}
+              title="Download assignment queue and audit statuses to Excel spreadsheet"
               className="btn btn-secondary"
               style={{
                 display: 'flex',
@@ -139,13 +141,13 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
         }}
       >
         {[
-          { label: 'All', value: totalCount, icon: ClipboardList, color: 'var(--accent)', filter: 'ALL' },
-          { label: 'Active', value: activeCount, icon: RefreshCw, color: 'var(--status-active-fg)', filter: ACTIVE_STATUSES },
-          { label: 'Awaiting response', value: pendingCount, icon: AlertTriangle, color: 'var(--warning)', filter: 'PENDING' },
-          { label: 'Declined — replace', value: rejectedCount, icon: XCircle, color: 'var(--danger)', filter: 'REJECTED' },
-          { label: 'Escalated', value: escalatedCount, icon: Flame, color: 'var(--danger)', filter: ESCALATED_FILTER },
-          { label: 'Closed', value: closedCount, icon: CheckCircle, color: 'var(--success)', filter: 'CLOSED' },
-          { label: 'Cancelled / Rejected', value: cancelledCount, icon: XCircle, color: 'var(--danger)', filter: TERMINAL_FILTER },
+          { label: 'All', value: totalCount, icon: ClipboardList, color: 'var(--accent)', filter: 'ALL', hint: 'All assignments in scope' },
+          { label: 'Active', value: activeCount, icon: RefreshCw, color: 'var(--status-active-fg)', filter: ACTIVE_STATUSES, hint: 'Audits scheduled, on-site, or under validation review' },
+          { label: 'Awaiting response', value: pendingCount, icon: AlertTriangle, color: 'var(--warning)', filter: 'PENDING', hint: 'Offer sent to assayer; awaiting their acceptance' },
+          { label: 'Declined — replace', value: rejectedCount, icon: XCircle, color: 'var(--danger)', filter: 'REJECTED', hint: 'Assayer declined offer; needs reassignment in Planning' },
+          { label: 'Escalated', value: escalatedCount, icon: Flame, color: 'var(--danger)', filter: ESCALATED_FILTER, hint: 'High-urgency field blockers flagged for operations' },
+          { label: 'Closed', value: closedCount, icon: CheckCircle, color: 'var(--success)', filter: 'CLOSED', hint: 'Completed and closed audits' },
+          { label: 'Cancelled / Rejected', value: cancelledCount, icon: XCircle, color: 'var(--danger)', filter: TERMINAL_FILTER, hint: 'Cancelled or rejected records' },
         ].map((chip) => {
           const Icon = chip.icon;
           const isActive = statusFilter === chip.filter;
@@ -153,6 +155,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
             <button
               key={chip.label}
               onClick={() => applyFilter(chip.filter)}
+              title={chip.hint}
               className="btn btn-secondary"
               style={{
                 display: 'flex',
@@ -211,6 +214,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
               <button
                 key={s}
                 onClick={() => applyFilter(isActive ? ACTIVE_STATUSES : s)}
+                title={isActive ? `Filtering by ${branchStatusLabel(s)}. Click to clear and view all active assignments` : `Filter by stage: ${branchStatusLabel(s)} (${branchStatusCounts[s] ?? 0} assignments)`}
                 className="btn btn-secondary"
                 style={{
                   padding: '4px 10px',
@@ -276,6 +280,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
                   e.stopPropagation();
                   setShowHandledIssues((v) => !v);
                 }}
+                title={showHandledIssues ? 'Click to show only unresolved, open field issues' : `Click to also show ${handledIssues.length} previously resolved field issues`}
                 style={{
                   marginLeft: 'auto',
                   fontSize: 'var(--text-2xs)',

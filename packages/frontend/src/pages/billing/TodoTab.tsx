@@ -257,7 +257,7 @@ const StepRow: React.FC<{ step: Step; n: number }> = ({ step, n }) => {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 3 }}>
           <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', lineHeight: 1.45 }}>{step.why}</span>
-          <button onClick={step.go} className="btn btn-secondary" style={{ whiteSpace: 'nowrap', fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>{step.cta} →</button>
+          <button onClick={step.go} className="btn btn-secondary" title={`Proceed to ${step.title.toLowerCase()}`} style={{ whiteSpace: 'nowrap', fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>{step.cta} →</button>
         </div>
       </div>
     </div>

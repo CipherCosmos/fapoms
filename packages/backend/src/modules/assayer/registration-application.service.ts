@@ -2475,6 +2475,38 @@ export class RegistrationApplicationService {
       void this.geoPrecision.enqueueBackfill('assayer', [assayer.id], `application ${application.id} approved`);
     }
 
+    /**
+     * THE MOMENT THEY ARE HIRED IS THE MOMENT THEY GET A KEY.
+     *
+     * Approval used to mint nobody anything. It created the person at `INVITED` — a stage that is
+     * deliberately allowed to sign in, confined to finishing their own registration — and then
+     * emailed them a button reading "Sign in to FAPOMS". The account behind that button had
+     * `passwordHash = NULL`, so `AuthService.login` answered with the same bare `Invalid
+     * credentials` a mistyped password gets. The candidate had no way to tell the two apart, would
+     * reasonably keep trying, and after five attempts tripped the account alert. Nothing anywhere
+     * told HR that a person was sitting there waiting for a credential that no step produced.
+     *
+     * The same `issueAndDeliverAppAccess` the bulk tool drives: the password is generated, hashed,
+     * stored with `mustChangePassword`, audited, and queued to whichever of their email and phone
+     * is on file. Not a separate copy of any of that.
+     *
+     * Failures here never fail the approval. The person is hired either way, and a mail server
+     * being down is not a reason to refuse a hiring decision — so an empty `channels` is written
+     * to the audit trail as a named follow-up instead.
+     */
+    let accessChannels: ('EMAIL' | 'SMS')[] = [];
+    try {
+      const delivery = await this.assayerService.issueAndDeliverAppAccess(assayer, actorUserId);
+      accessChannels = delivery.channels;
+    } catch (err) {
+      this.logger.warn(
+        `Application ${application.id} was approved but app access could not be issued: ${(err as Error)?.message ?? err}`,
+      );
+    }
+    if (accessChannels.length === 0) {
+      profileGaps.push('app access (nothing could be sent — issue it from their record)');
+    }
+
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: 'ASSAYER_APPLICATION_APPROVED',
@@ -2498,6 +2530,11 @@ export class RegistrationApplicationService {
       /*
         Queued, not sent here: approving was the one step a reviewer waited on the mail server for.
 
+        This letter no longer points at the web login. An appraiser has no surface there at all —
+        their work is the phone app — so the button is the app download, and the letter says their
+        sign-in details are following separately rather than inviting them to sign in with a
+        credential this message does not carry.
+
         The profile gaps are NOT in this letter. They are the record's own refusal messages (an
         empanelment "for client <id>", say), written for the desk, which reads them on the audit row
         above. Neither the shipped HTML nor the built-in letter ever showed them to the candidate.
@@ -2509,7 +2546,9 @@ export class RegistrationApplicationService {
           template: 'application-approved',
           data: {
             assayerCode: assayer.assayerCode,
-            loginUrl: appPublicUrl(),
+            // The stable link Caddy serves at `/download/app.apk` — one address to hand a field
+            // appraiser, which survives every rebuild of the APK behind it.
+            appDownloadUrl: `${appPublicUrl()}/download/app.apk`,
             logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
             candidateName: name,
             // The shipped HTML greets and names the person by `fullName`.

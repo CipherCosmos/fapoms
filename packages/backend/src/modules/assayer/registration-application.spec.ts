@@ -10,6 +10,7 @@ import {
   RegistrationApplicationService, documentsRequestedFor, maskedMobile, maskedEmail,
 } from './registration-application.service';
 import { __resetPincodeCache } from '../geo/pincode-lookup.helper';
+import { clearIfscCache } from '../geo/ifsc-lookup.helper';
 import { OpenWithoutInterviewDto } from './hr-applications.controller';
 import { runWithRequestContext } from '../../core/context/request-context';
 import { __resetKeyCacheForTests } from '../../infrastructure/security/field-encryption';
@@ -97,6 +98,12 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
   const assayerService = {
     create: jest.fn(async (_dto: Row, _userId?: string, _org?: string | null, _roles?: string[]) =>
       ({ id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni' })),
+    /**
+     * Approving now mints and sends the credential (see `promote`). Stubbed as delivered by both
+     * channels so these tests keep asserting what they are about — which gaps the profile and the
+     * terms produce — rather than picking up the "app access could not be sent" follow-up gap.
+     */
+    issueAndDeliverAppAccess: jest.fn(async () => ({ channels: ['EMAIL', 'SMS'] as ('EMAIL' | 'SMS')[], emailId: 'em-cred', smsId: 'sms-cred' })),
   };
   const rosterRecords = { attachFile: jest.fn(async () => ({})) };
   const auditService = { recordEventSafe: jest.fn(async () => undefined) };
@@ -1205,6 +1212,129 @@ describe('the extended profile the wizard collects', () => {
 });
 
 /**
+ * THE KEY IS HANDED OVER AT THE MOMENT OF HIRING.
+ *
+ * Approval promoted a candidate to `INVITED` — a stage `ONBOARDING_SIGN_IN` deliberately lets sign
+ * in — and then mailed them a button reading "Sign in to FAPOMS". The account behind it had
+ * `passwordHash = NULL`, and `AuthService.login` answers that with the same bare `Invalid
+ * credentials` a mistyped password gets, so the person could not tell "nobody gave me a password"
+ * from "I typed it wrong". The only two ways a credential had ever been minted were an HR officer
+ * reading one aloud off the record screen and the 500-at-a-time bulk tool; neither was reachable
+ * from this flow, and nothing told HR somebody was waiting.
+ */
+describe('an approved candidate is given a way in', () => {
+  const candidate = (over: Row = {}) => ({
+    id: 'app-x', mobile: '9822014455', fullName: 'Full Payload', state: 'Maharashtra',
+    status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+    source: ApplicationSource.HR_DESK, createdBy: 'hr-maker',
+    email: 'candidate@example.com',
+    ...over,
+  });
+
+  it('issues and sends a credential through the one path the bulk tool uses', async () => {
+    const ctx = makeService({ application: candidate() });
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    const issue = (ctx.assayerService as any).issueAndDeliverAppAccess;
+    expect(issue).toHaveBeenCalledTimes(1);
+    // The person who was just created, and the reviewer as the actor — not the candidate.
+    expect(issue.mock.calls[0][0]).toMatchObject({ id: 'assayer-1', assayerCode: 'AS0009' });
+    expect(issue.mock.calls[0][1]).toBe('hr-checker');
+    expect(result.gaps).toEqual([]);
+  });
+
+  /** Minted after the person exists, or there is no account to attach a password to. */
+  it('issues only once the assayer record has been created', async () => {
+    const order: string[] = [];
+    const ctx = makeService({ application: candidate() });
+    (ctx.assayerService as any).create = jest.fn(async () => {
+      order.push('create');
+      return { id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni' };
+    });
+    (ctx.assayerService as any).issueAndDeliverAppAccess = jest.fn(async () => {
+      order.push('issue');
+      return { channels: ['EMAIL'] };
+    });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(order).toEqual(['create', 'issue']);
+  });
+
+  /**
+   * A hiring decision must not be refused because a mail server is down. The person is hired
+   * either way — the unsent credential becomes a named follow-up for the desk instead.
+   */
+  it('does not fail the approval when the credential cannot be sent, and names it as a gap', async () => {
+    const ctx = makeService({ application: candidate() });
+    (ctx.assayerService as any).issueAndDeliverAppAccess = jest.fn(async () => {
+      throw new Error('smtp unreachable');
+    });
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(result.assayer.id).toBe('assayer-1');
+    expect(result.gaps).toEqual([expect.stringContaining('app access')]);
+  });
+
+  /** Issued, but reaching nobody, is the same follow-up: silence is what has to be visible. */
+  it('names the gap when the credential was minted but no channel carried it', async () => {
+    const ctx = makeService({ application: candidate() });
+    (ctx.assayerService as any).issueAndDeliverAppAccess = jest.fn(async () => ({ channels: [] }));
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(result.gaps).toEqual([expect.stringContaining('app access')]);
+    // …and the desk reads it on the approval audit row, where the other gaps are.
+    const approved = (ctx.auditService.recordEventSafe as jest.Mock).mock.calls
+      .map(([e]: [Row]) => e)
+      .find((e: Row) => e.eventType === 'ASSAYER_APPLICATION_APPROVED');
+    expect(String(approved!.remarks)).toMatch(/app access/);
+  });
+
+  /**
+   * The letter sends them to the app, not to a web login they have no surface on and no password
+   * for. `loginUrl` is gone from this template's data entirely: leaving it would put the old
+   * button back the moment an administrator's published version still referenced it.
+   */
+  it('points the approval letter at the app download and never at a sign-in', async () => {
+    const ctx = makeService({ application: candidate() });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    const approval = ctx.emailService.queue.mock.calls.find(([r]) => r.kind === 'APPLICATION_APPROVED');
+    const data = (approval![0].content as { data: Row }).data;
+    expect(data.appDownloadUrl).toMatch(/\/download\/app\.apk$/);
+    expect(data).not.toHaveProperty('loginUrl');
+
+    const letter = ctx.mailbox.send.mock.calls.at(-1)![0];
+    expect(letter.text).toContain('/download/app.apk');
+    expect(letter.text).not.toMatch(/sign in to fapoms/i);
+  });
+
+  /** So the reader knows a second message is coming and does not go hunting for a password. */
+  it('tells them their sign-in details arrive separately', async () => {
+    const ctx = makeService({ application: candidate() });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    const letter = ctx.mailbox.send.mock.calls.at(-1)![0];
+    expect(letter.text).toMatch(/separate message/i);
+  });
+
+  /** No address is not a reason to withhold the credential: the SMS leg still carries it. */
+  it('still issues a credential for a candidate with no email address', async () => {
+    const ctx = makeService({ application: candidate({ email: null }) });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect((ctx.assayerService as any).issueAndDeliverAppAccess).toHaveBeenCalledTimes(1);
+    expect(ctx.emailService.queue.mock.calls.filter(([r]) => r.kind === 'APPLICATION_APPROVED')).toHaveLength(0);
+  });
+});
+
+/**
  * One registration, whoever is typing.
  *
  * These cover the thing the pipeline previously could not do: carry the WHOLE person. A candidate
@@ -2081,7 +2211,10 @@ describe('the desk filling in an application', () => {
 describe('candidate lookups (pincode → address, IFSC → bank)', () => {
   // The directory answer is cached process-wide (it costs ~3.6s and pincodes do not move), so a
   // suite that stubs `fetch` has to start from an empty one or it tests the previous test's answer.
-  beforeEach(() => __resetPincodeCache());
+  beforeEach(() => {
+    __resetPincodeCache();
+    clearIfscCache();
+  });
 
   /**
    * The directory is read through the invite token, not a session — so the token

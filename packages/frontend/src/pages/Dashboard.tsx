@@ -294,11 +294,13 @@ export const Dashboard: React.FC = () => {
             </span>
           )}
           <button onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.all })}
+            title="Reload latest operational metrics and status counters"
             className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} className={isFetching ? 'dash-spin' : undefined} /> Refresh
           </button>
           {canSeeCommandCenter && (
             <button onClick={() => navigate('/executive-map')} className="btn btn-primary"
+              title="Open interactive national coverage map showing branch density and client distribution"
               style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 'var(--text-xs)', fontWeight: 600 }}>
               <Map size={14} /> Coverage map <ArrowRight size={13} />
             </button>
@@ -372,6 +374,7 @@ export const Dashboard: React.FC = () => {
                   return (
                     <button key={a.key} onClick={() => navigate(a.link)}
                       className={`dash-attention${a.severity === 'critical' ? ' dash-attention--critical' : ''}`}
+                      title={`${a.label} (${a.severity.toUpperCase()} priority) — ${a.detail}. Click to resolve.`}
                       style={{
                         textAlign: 'left', cursor: 'pointer',
                         background: `linear-gradient(135deg, color-mix(in srgb, ${c} 7%, var(--bg-secondary)), var(--bg-secondary) 70%)`,
@@ -575,6 +578,7 @@ const KpiTile: React.FC<{ kpi: Kpi }> = ({ kpi }) => {
     <button
       onClick={kpi.onClick}
       className="dash-kpi"
+      title={`${kpi.label}: ${kpi.value} (${kpi.sub})${kpi.onClick ? ' — Click to view details' : ''}`}
       style={{
         textAlign: 'left', cursor: kpi.onClick ? 'pointer' : 'default',
         background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)',
@@ -616,7 +620,9 @@ const ChartCard: React.FC<{ title: string; icon?: React.ReactNode; action?: Reac
 );
 
 const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?: string; color: string; onClick?: () => void }> = ({ icon, label, value, sub, color, onClick }) => (
-  <button onClick={onClick} className="dash-stat" style={{
+  <button onClick={onClick} className="dash-stat"
+    title={`${label}: ${value}${sub ? ` · ${sub}` : ''}${onClick ? ' — Click to view' : ''}`}
+    style={{
     textAlign: 'left', cursor: onClick ? 'pointer' : 'default', background: 'var(--bg-secondary)',
     border: '1px solid var(--border-hair)', borderLeft: `3px solid ${color}`,
     borderRadius: 'var(--radius-md)', padding: '13px 15px', color: 'var(--text-primary)',

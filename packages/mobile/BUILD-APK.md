@@ -61,8 +61,14 @@ If the DN says `CN=Android Debug`, it was built without the keystore properties 
 
 ## Bumping the version
 
-`versionCode` in `android/app/build.gradle` must increase for every build users upgrade onto;
-Android refuses an install whose code is not higher than the installed one.
+`versionCode` must increase for every build users upgrade onto; Android refuses an install whose
+code is not higher than the installed one.
+
+**For an EAS build you do not touch it.** `eas.json` sets `appVersionSource: "remote"` and the
+production profile sets `autoIncrement`, so EAS holds the number and raises it itself — the
+2026-09-21 build went 7 → 8 while `android/app/build.gradle` still said 4. Editing the gradle
+value to "bump" an EAS build changes nothing and makes the repo disagree with what shipped.
+It is only the source of truth for a LOCAL gradle build.
 
 ---
 
@@ -74,11 +80,20 @@ Android refuses an install whose code is not higher than the installed one.
 https://homeserver.tailc73ec8.ts.net/download/app.apk
 ```
 
-Served straight from the deployment. Publishing a new build is a copy, not a redeploy:
+That link is a **redirect**, not a file served off the box — the deployment sits behind a
+residential line, and EAS already hosts every finished build on a CDN. Publishing changes where
+the redirect points:
 
 ```bash
-scp app-release.apk shivam@100.67.63.97:~/fapoms-downloads/app.apk
+deploy/publish-apk.sh <EAS artifact URL>     # the fast path: nothing is transferred
+deploy/publish-apk.sh path/to/app-release.apk   # fallback for a build not on EAS
 ```
+
+Run it from any host the stack runs on; it works out the compose file, the env file, the download
+directory and podman-vs-docker for itself, validates the new config before restarting caddy, and
+journals every publish. **Do not copy the APK into place by hand** — the download directory is
+`/srv/fapoms-downloads` (whatever `APK_DIR` says), not `~/fapoms-downloads`, and getting that wrong
+writes the file somewhere caddy is not looking while everything appears to have worked.
 
 Testers must allow "install unknown apps" for their browser once — unavoidable outside Play.
 
@@ -148,8 +163,16 @@ channel is missing or nothing is published for that runtime version.
 
 ```bash
 cd packages/mobile
-EXPO_PUBLIC_API_URL="https://homeserver.tailc73ec8.ts.net"   npx eas update --branch production --message "what changed"
+npx eas update --branch production --environment production --message "what changed"
 ```
+
+`--environment production` pulls `EXPO_PUBLIC_API_URL` from the same EAS environment `eas build`
+reads, so the bundle a handset receives over the air defaults to the same backend as the APK it
+is updating. Do NOT hand-type the URL on this command instead: an OTA payload has the value
+inlined at publish time exactly as a build does, so a typo — or simply forgetting it, which leaves
+the value undefined — silently repoints or strips the default backend on every device that takes
+the update. Only handsets with a server URL already stored would be spared, and they are the ones
+who need it least.
 
 Handsets fetch it in the background on next launch and apply it on the one after. No reinstall,
 no prompt.

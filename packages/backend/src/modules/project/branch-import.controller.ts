@@ -26,6 +26,7 @@
 
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Param,
@@ -152,6 +153,40 @@ export class BranchImportController {
        */
       importedCount: report.created + report.updated + report.unchanged,
     };
+  }
+
+  @Post('reconcile/:clientId')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('branch:create:organization')
+  @UseInterceptors(FileInterceptor('file', branchUploadMulterOptions), FileScanInterceptor)
+  @ApiOperation({ summary: 'Reconcile branches for client master DB' })
+  async reconcileBranches(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
+    return await this.projectService.reconcileBranches({ kind: 'CLIENT', id: clientId }, file.buffer);
+  }
+
+  @Post('commit-reconciled/:clientId')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('branch:create:organization')
+  @ApiOperation({ summary: 'Commit reconciled branches to client master DB' })
+  async commitReconciledBranches(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Body() body: { branches: any[] },
+    @Req() req: any,
+  ) {
+    if (!Array.isArray(body?.branches)) {
+      throw new BadRequestException('Invalid branches payload. Expected an array.');
+    }
+    return await this.projectService.commitReconciledBranches(
+      { kind: 'CLIENT', id: clientId },
+      body.branches,
+      req.user.id,
+    );
   }
 
   /**

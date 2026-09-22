@@ -16,6 +16,9 @@ import type {
   BranchImportProgress,
   BranchImportPreflight,
   ImportScope,
+  BranchReconciliationRow,
+  BranchReconciliationReport,
+  ClientMismatchWarning,
 } from '../import/import.contract';
 import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -35,7 +38,9 @@ import { parseSheet, rowReader, identifyTemplate, normaliseHeader, BLANK_HEADER,
 import { buildWorkbook } from '../reports/excel-export';
 import { BranchEntity } from '../branch/branch.entity';
 import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
-import { needsBetterFix } from '../geo/coordinate-resolution';
+import { needsBetterFix, parseLocationInput, PRECISION_METERS } from '../geo/coordinate-resolution';
+import { lookupBranchByIfscOrSol, lookupIfsc, inferIfscFromSolId, IfscLookupResult, resolveBankCode } from '../geo/ifsc-lookup.helper';
+import { lookupPincode } from '../geo/pincode-lookup.helper';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -88,6 +93,8 @@ export type {
   BranchImportProgress,
   BranchImportPreflight,
   ImportScope,
+  BranchReconciliationRow,
+  BranchReconciliationReport,
 } from '../import/import.contract';
 
 /** Partial edit of a project. Lifecycle moves go through transition(). */
@@ -793,17 +800,33 @@ export class ProjectService implements OnModuleInit {
    * refuses them by name ("No state for …"), and they resolve to no region, so there is nothing
    * for a ceiling to compare.
    */
-  async branchExcelRegions(fileBuffer: Buffer): Promise<string[]> {
+  async branchExcelRegions(fileBuffer: Buffer, clientId?: string): Promise<string[]> {
     const sheet = this.parseBranchSheet(fileBuffer);
     const regions = new Set<string>();
+    const missingStateSols: string[] = [];
     for (const row of sheet.rows) {
       const get = rowReader(row);
       const name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
       const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code');
       // The same blank-trailing-row test the importer uses.
       if (!name && !solId) continue;
-      const region = resolveRegion(get('STATE', 'State', 'StateName'));
-      if (region) regions.add(region);
+      const state = get('STATE', 'State', 'StateName');
+      const region = resolveRegion(state);
+      if (region) {
+        regions.add(region);
+      } else if (solId) {
+        missingStateSols.push(solId.trim());
+      }
+    }
+    if (missingStateSols.length && clientId) {
+      const known = await this.branchRepository.find({
+        where: { solId: In(missingStateSols), clientId },
+        select: ['region', 'state'],
+      });
+      for (const b of known) {
+        const r = b.region || resolveRegion(b.state);
+        if (r) regions.add(r);
+      }
     }
     return [...regions];
   }
@@ -980,8 +1003,31 @@ export class ProjectService implements OnModuleInit {
       calculatedHours: number | null;
       suppliedCoords: { lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null } | null;
       region: string | null;
+      ifscLookupData?: IfscLookupResult | null;
     }
     const prepared: PreparedRow[] = [];
+
+    // Pre-hoist candidate SOL IDs and pre-load existing branches from master DB
+    // so known branches are never dropped for missing State/Address in Excel.
+    const candidateSols = rows.map((row) => {
+      const getQuick = rowReader(row, askedFor);
+      return getQuick('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo',
+                      'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code')?.trim();
+    }).filter((s): s is string => Boolean(s));
+
+    const clientScope = target.clientId ? { clientId: target.clientId } : {};
+    const existingBySol = candidateSols.length
+      ? await this.branchRepository.find({
+          where: { solId: In(candidateSols), ...clientScope },
+        })
+      : [];
+    const branchBySol = new Map<string, BranchEntity>();
+    for (const b of existingBySol) {
+      if (b.solId) branchBySol.set(b.solId.trim().toUpperCase(), b);
+    }
+
+    const clientEntity = target.clientId ? await this.clientRepository.findOne({ where: { id: target.clientId } }) : null;
+    const clientName = clientEntity?.name || '';
 
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
@@ -1034,10 +1080,42 @@ export class ProjectService implements OnModuleInit {
        * number. Pass 2 carries the same guard for the failures only it can hit.
        */
       try {
-        const district = get('DISTRICT', 'District', 'DistrictName').toUpperCase();
-        const state = get('STATE', 'State', 'StateName');
-        const address = get('Branch Address', 'Address', 'BranchAddress');
-        const pincodeStr = get('Pincode', 'Pin', 'Pin Code', 'Postal Code', 'Zip');
+        let district = get('DISTRICT', 'District', 'DistrictName').toUpperCase();
+        let state = get('STATE', 'State', 'StateName');
+        let address = get('Branch Address', 'Address', 'BranchAddress');
+        let pincodeStr = get('Pincode', 'Pin', 'Pin Code', 'Postal Code', 'Zip');
+        const ifscInput = get('IFSC', 'IFSC Code', 'Ifsc', 'IfscCode');
+        const locationInput = get('Google Maps Link', 'Maps Link', 'Location URL', 'Map URL', 'Coordinates', 'Location', 'Geo');
+
+        // 1. Auto-hydrate from existing branch in master DB if already known
+        const existingBranch = branchBySol.get(solKey);
+        if (existingBranch) {
+          if (!state && existingBranch.state) state = existingBranch.state;
+          if (!district && existingBranch.district) district = existingBranch.district.toUpperCase();
+          if (!address && existingBranch.address) address = existingBranch.address;
+          if (!pincodeStr && existingBranch.pincode) pincodeStr = existingBranch.pincode;
+        }
+
+        // 2. Try IFSC lookup if state is still missing
+        let ifscLookupData: IfscLookupResult | null = null;
+        if (!state && (ifscInput || solId)) {
+          ifscLookupData = await lookupBranchByIfscOrSol(clientName, ifscInput || solId);
+          if (ifscLookupData) {
+            if (!state && ifscLookupData.state) state = ifscLookupData.state;
+            if (!district && ifscLookupData.district) district = ifscLookupData.district.toUpperCase();
+            if (!address && ifscLookupData.address) address = ifscLookupData.address;
+            if (!pincodeStr && ifscLookupData.pincode) pincodeStr = ifscLookupData.pincode;
+          }
+        }
+
+        // 3. Try Pincode directory lookup if state is still missing
+        if (!state && pincodeStr && /^[1-9][0-9]{5}$/.test(pincodeStr.trim())) {
+          const pinData = await lookupPincode(pincodeStr.trim());
+          if (pinData) {
+            if (!state) state = pinData.state;
+            if (!district) district = pinData.district.toUpperCase();
+          }
+        }
 
         if (!state) {
           // State drives the region, the zone and the public-holiday calendar. A branch without
@@ -1069,19 +1147,33 @@ export class ProjectService implements OnModuleInit {
           ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
           : null;
 
-        // The template no longer asks for coordinates — a branch is located from its address —
-        // but a pair that arrives anyway (a client's own export carrying their GPS survey, say)
-        // is exact and is honoured over geocoding. This is the one derived field a sheet may
-        // still override, because a real coordinate beats any lookup.
-        const latRaw = parseFloat(get('Latitude', 'Lat'));
-        const lngRaw = parseFloat(get('Longitude', 'Lng', 'Long'));
-        // Normalised to the same shape a geocode returns, so the two paths cannot diverge in
-        // what they record. A coordinate the client put in their own sheet is authoritative for
-        // that branch, so it is kept as-is and marked accordingly rather than re-derived.
-        const suppliedCoords: { lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null } | null =
-          Number.isFinite(latRaw) && Number.isFinite(lngRaw)
-            ? { lat: latRaw, lng: lngRaw, geoSource: 'geocoder', geoAccuracyMeters: 60, geoMatchedName: 'Supplied in the import sheet' }
-            : null;
+        // Coordinate resolution: check location input (Google Maps URL / DMS / decimal pair) or Lat/Lng columns
+        let suppliedCoords: { lat: number; lng: number; geoSource: string; geoAccuracyMeters: number; geoMatchedName: string | null } | null = null;
+        if (locationInput) {
+          const parsed = parseLocationInput(locationInput);
+          if (parsed) {
+            suppliedCoords = {
+              lat: parsed.lat,
+              lng: parsed.lng,
+              geoSource: 'manual',
+              geoAccuracyMeters: 5,
+              geoMatchedName: 'Location input parsed from sheet',
+            };
+          }
+        }
+        if (!suppliedCoords) {
+          const latRaw = parseFloat(get('Latitude', 'Lat'));
+          const lngRaw = parseFloat(get('Longitude', 'Lng', 'Long'));
+          if (Number.isFinite(latRaw) && Number.isFinite(lngRaw)) {
+            suppliedCoords = {
+              lat: latRaw,
+              lng: lngRaw,
+              geoSource: 'geocoder',
+              geoAccuracyMeters: 60,
+              geoMatchedName: 'Supplied in the import sheet',
+            };
+          }
+        }
 
         /**
          * Canonicalised, never the raw state string.
@@ -1095,7 +1187,7 @@ export class ProjectService implements OnModuleInit {
 
         prepared.push({
           rowNumber, get, branchName, solId, district, state, address, pincodeStr,
-          packetCount, calculatedHours, suppliedCoords, region,
+          packetCount, calculatedHours, suppliedCoords, region, ifscLookupData,
         });
       } catch (err: any) {
         skipped.push({
@@ -1105,50 +1197,6 @@ export class ProjectService implements OnModuleInit {
         });
       }
     }
-
-    /**
-     * ## The reads hoisted out of the row loop
-     *
-     * Each of these used to run once per row. They are all answerable for the whole file up
-     * front because none of them depends on what an earlier row did: a branch's existence is a
-     * fact about the database before the import starts, and a branch created *by* this import
-     * cannot also be matched by it — the duplicate-code guard above means each code appears once.
-     */
-
-    /**
-     * Every branch this file might already know about, in one query instead of one per row.
-     *
-     * Scoped to this project's client, exactly as the per-row `findOneByCode` was. Branch codes
-     * are the client's own numbering and collide across clients constantly — every bank has a
-     * branch "1" — so an unscoped lookup attached another client's branch, with its address,
-     * coordinates and region, to this project. Keyed on the code verbatim rather than a
-     * normalised form, again matching what `findOneByCode` did: a sheet saying `br-1` against a
-     * stored `BR-1` created a second branch before this change and must keep doing so, because
-     * silently merging them here would be a behaviour change wearing a performance change's
-     * clothes.
-     */
-    const sols = prepared.map((p) => p.solId).filter(Boolean);
-    const clientScope = target.clientId ? { clientId: target.clientId } : {};
-    /**
-     * Existing branches this file might already know, found by SOL id — the branch's single
-     * identity, per client. One query over the whole file, not one per row.
-     *
-     * **No `isActive` filter.** It had one, and that is how a re-import produced duplicates:
-     * archive a branch, re-upload the client's list, and the archived row was invisible here, so
-     * the importer created a *second* branch with the same client and SOL ID beside it. The
-     * database permits it — `UQ_branches_client_sol_id` is `WHERE is_active = true` — and the
-     * operator ends up with two branches they cannot tell apart, one holding all the history.
-     *
-     * Matching archived rows and reviving them is also what the assayer roster importer already
-     * does, and for the same stated reason: re-importing a list is meant to update the record it
-     * names, not to create a twin because the original was deactivated.
-     */
-    const existingBySol = sols.length
-      ? await this.branchRepository.find({
-          where: { solId: In(sols), ...clientScope },
-        })
-      : [];
-    const branchBySol = new Map(existingBySol.map((b) => [b.solId, b]));
 
     // Which branches this project already carries, and which already have an assessment. Both
     // were per-row `findOne`s whose answer is a single query over one project.
@@ -1228,7 +1276,7 @@ export class ProjectService implements OnModuleInit {
     for (let position = 0; position < prepared.length; position++) {
       const {
         rowNumber, get, branchName, solId, district, state, address, pincodeStr,
-        packetCount, calculatedHours, suppliedCoords, region,
+        packetCount, calculatedHours, suppliedCoords, region, ifscLookupData,
       } = prepared[position];
 
       /**
@@ -1242,7 +1290,7 @@ export class ProjectService implements OnModuleInit {
       try {
         // Matched by SOL id — the branch's single identity, per client — exactly as the
         // Branches-page importer matches it.
-        let branch = branchBySol.get(solId) ?? null;
+        let branch = branchBySol.get(solId.trim().toUpperCase()) ?? branchBySol.get(solId) ?? null;
         if (!branch) {
           const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
 
@@ -1283,9 +1331,9 @@ export class ProjectService implements OnModuleInit {
           const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
           // Was a random name from a hardcoded list and a random phone number, which
           // put fabricated contact details in front of an assayer about to visit the
-          // branch. Use what the client supplied; leave blank when they supplied nothing.
+          // branch. Use what the client supplied; fallback to verified IFSC contact phone if available.
           const managerName = get('Branch Manager', 'Manager', 'Manager Name') || null;
-          const phone = get('Branch Phone', 'Phone', 'Contact Number') || null;
+          const phone = get('Branch Phone', 'Phone', 'Contact Number') || ifscLookupData?.phone || null;
 
           branch = await this.branchService.registerImportedBranch({
             solId,
@@ -1545,6 +1593,561 @@ export class ProjectService implements OnModuleInit {
       scope, fileBuffer, userId, onProgress,
     );
     return outcome;
+  }
+
+  /**
+   * Reconcile branches from an uploaded spreadsheet (or parsed rows) against the master database.
+   * Identifies which branches already exist in the master DB, auto-hydrates missing fields,
+   * performs IFSC / Pincode lookups for new or sparse branches, parses coordinates / Google Maps links,
+   * and reports readiness status (ready, coarse, needs_details).
+   */
+  async reconcileBranches(
+    scope: ImportScope,
+    fileBuffer?: Buffer,
+    manualRows?: any[],
+  ): Promise<BranchReconciliationReport> {
+    let rawRows: any[] = [];
+    if (fileBuffer) {
+      const sheet = parseSheet(fileBuffer);
+      rawRows = sheet.rows;
+    } else if (manualRows && Array.isArray(manualRows)) {
+      rawRows = manualRows;
+    }
+
+    let clientId: string | undefined;
+    let clientName = '';
+    let targetBankCode: string | null = null;
+    let clientEntity: ClientEntity | null = null;
+    if (scope.kind === 'CLIENT') {
+      clientId = scope.id;
+    } else if (scope.kind === 'PROJECT') {
+      const proj = await this.projectRepository.findOne({ where: { id: scope.id } });
+      clientId = proj?.clientId;
+    }
+
+    if (clientId) {
+      clientEntity = await this.clientRepository.findOne({ where: { id: clientId } });
+      clientName = clientEntity?.name || clientEntity?.displayName || '';
+      targetBankCode = resolveBankCode(clientName) || resolveBankCode(clientEntity?.clientCode);
+    }
+
+    const askedFor = new Set<string>();
+    const candidateSols: string[] = [];
+    for (const r of rawRows) {
+      const getQuick = rowReader(r, askedFor);
+      const s = getQuick('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo',
+                         'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code')?.trim();
+      if (s) candidateSols.push(s);
+    }
+
+    const clientScope = clientId ? { clientId } : {};
+    const existingBySol = candidateSols.length
+      ? await this.branchRepository.find({
+          where: { solId: In(candidateSols), ...clientScope },
+        })
+      : [];
+    const branchBySol = new Map<string, BranchEntity>();
+    for (const b of existingBySol) {
+      if (b.solId) branchBySol.set(b.solId.trim().toUpperCase(), b);
+    }
+
+    // Cross-client collision detection: query candidate SOLs across all clients with client relation
+    const crossClientBranches = candidateSols.length
+      ? await this.branchRepository.find({
+          where: { solId: In(candidateSols) },
+          relations: ['client'],
+        })
+      : [];
+    const crossClientBySol = new Map<string, BranchEntity[]>();
+    for (const b of crossClientBranches) {
+      if (b.solId) {
+        const k = b.solId.trim().toUpperCase();
+        const list = crossClientBySol.get(k) || [];
+        list.push(b);
+        crossClientBySol.set(k, list);
+      }
+    }
+
+    const rows: BranchReconciliationRow[] = [];
+
+    for (let index = 0; index < rawRows.length; index++) {
+      const r = rawRows[index];
+      const rowNumber = index + 2;
+      const get = rowReader(r, askedFor);
+
+      let name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name') || '';
+      let solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo',
+                      'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code') || '';
+      if (!name && !solId) continue;
+
+      let district = get('DISTRICT', 'District', 'DistrictName') || '';
+      let state = get('STATE', 'State', 'StateName') || '';
+      let address = get('Branch Address', 'Address', 'BranchAddress') || '';
+      let pincode = get('Pincode', 'Pin', 'Pin Code', 'Postal Code', 'Zip') || '';
+      const bankInput = get('BANK', 'Bank', 'Bank Name', 'BankName', 'Client', 'Client Name', 'Institution');
+      const ifscInput = get('IFSC', 'IFSC Code', 'Ifsc', 'IfscCode');
+      const locationInput = get('Google Maps Link', 'Maps Link', 'Location URL', 'Map URL', 'Coordinates', 'Location', 'Geo');
+      const packetCountRaw = parseInt(get('Packets', 'packet_count', 'Packet Count'), 10);
+      const packetCount = !isNaN(packetCountRaw) && packetCountRaw > 0 ? packetCountRaw : undefined;
+
+      const solKey = solId.trim().toUpperCase();
+      const existing = solKey ? branchBySol.get(solKey) : undefined;
+      const existsInMaster = !!existing;
+      const masterBranchId = existing?.id;
+      const isArchivedInMaster = existing ? !existing.isActive : undefined;
+
+      let clientMismatch: ClientMismatchWarning | undefined;
+      const warnings: string[] = [];
+
+      // Angle A: Explicit Bank / Client Column in Row
+      if (bankInput && targetBankCode) {
+        const rowBankCode = resolveBankCode(bankInput);
+        if (rowBankCode && rowBankCode !== targetBankCode) {
+          clientMismatch = {
+            detectedBank: bankInput,
+            detectedBankCode: rowBankCode,
+            expectedBank: clientName,
+            expectedBankCode: targetBankCode,
+            reason: `Row specifies bank '${bankInput}' (${rowBankCode}), which does not match target client '${clientName}' (${targetBankCode}).`,
+            severity: 'critical',
+          };
+          warnings.push(clientMismatch.reason);
+        }
+      }
+
+      // Angle B: IFSC Prefix Mismatch
+      if (!clientMismatch && ifscInput && targetBankCode) {
+        const cleanIfsc = ifscInput.trim().toUpperCase();
+        if (/^[A-Z]{4}/.test(cleanIfsc)) {
+          const ifscBankCode = cleanIfsc.substring(0, 4);
+          if (ifscBankCode !== targetBankCode) {
+            clientMismatch = {
+              detectedBank: ifscBankCode,
+              detectedBankCode: ifscBankCode,
+              expectedBank: clientName,
+              expectedBankCode: targetBankCode,
+              reason: `IFSC '${cleanIfsc}' bank code '${ifscBankCode}' does not match target client '${clientName}' (${targetBankCode}).`,
+              severity: 'critical',
+            };
+            warnings.push(clientMismatch.reason);
+          }
+        }
+      }
+
+      let latitude: number | undefined;
+      let longitude: number | undefined;
+      let geoSource: string | undefined;
+      let geoAccuracyMeters: number | undefined;
+      let suggestedDetails: any = undefined;
+
+      // 1. Auto-hydrate from master DB if branch already exists
+      if (existing) {
+        if (!name && existing.name) name = existing.name;
+        if (!state && existing.state) state = existing.state;
+        if (!district && existing.district) district = existing.district;
+        if (!address && existing.address) address = existing.address;
+        if (!pincode && existing.pincode) pincode = existing.pincode;
+        if (existing.latitude && existing.longitude) {
+          latitude = Number(existing.latitude);
+          longitude = Number(existing.longitude);
+          geoSource = existing.geoSource || 'manual';
+          geoAccuracyMeters = existing.geoAccuracyMeters ?? 10;
+        }
+      }
+
+      // 2. Try IFSC lookup if address/state/district is missing (or to validate)
+      if (!state || !district || !address || !pincode || ifscInput) {
+        const ifscQuery = ifscInput || (solId ? inferIfscFromSolId(clientName, solId) : null);
+        if (ifscQuery) {
+          const ifscData = await lookupBranchByIfscOrSol(clientName, ifscQuery);
+          if (ifscData) {
+            suggestedDetails = {
+              district: ifscData.district,
+              state: ifscData.state,
+              address: ifscData.address,
+              pincode: ifscData.pincode,
+              phone: ifscData.phone,
+              bank: ifscData.bankName,
+              branch: ifscData.branchName,
+            };
+
+            // Angle C: Directory answers with a contradictory bank
+            if (!clientMismatch && ifscData.bankCode && targetBankCode && ifscData.bankCode !== targetBankCode) {
+              clientMismatch = {
+                detectedBank: ifscData.bankName,
+                detectedBankCode: ifscData.bankCode,
+                expectedBank: clientName,
+                expectedBankCode: targetBankCode,
+                reason: `IFSC directory confirmed this branch is '${ifscData.bankName}' (${ifscData.bankCode}), not '${clientName}' (${targetBankCode}).`,
+                severity: 'critical',
+              };
+              warnings.push(clientMismatch.reason);
+            }
+
+            // Only auto-hydrate details if not a critical bank mismatch
+            if (!clientMismatch || clientMismatch.severity !== 'critical') {
+              if (!state && ifscData.state) state = ifscData.state;
+              if (!district && ifscData.district) district = ifscData.district;
+              if (!address && ifscData.address) address = ifscData.address;
+              if (!pincode && ifscData.pincode) pincode = ifscData.pincode;
+            }
+          }
+        }
+      }
+
+      // Angle D: Branch Name explicitly mentions another bank
+      if (!clientMismatch && name && targetBankCode) {
+        const nameBankCode = resolveBankCode(name);
+        if (nameBankCode && nameBankCode !== targetBankCode) {
+          clientMismatch = {
+            detectedBank: name,
+            detectedBankCode: nameBankCode,
+            expectedBank: clientName,
+            expectedBankCode: targetBankCode,
+            reason: `Branch name '${name}' refers to another bank (${nameBankCode}) instead of '${clientName}' (${targetBankCode}).`,
+            severity: 'critical',
+          };
+          warnings.push(clientMismatch.reason);
+        }
+      }
+
+      // Angle E: Cross-Client Master DB Collision
+      if (solKey && crossClientBySol.has(solKey)) {
+        const otherBranches = (crossClientBySol.get(solKey) || []).filter((b) => b.clientId !== clientId);
+        if (otherBranches.length > 0) {
+          const other = otherBranches[0];
+          const otherClientName = (other as any).client?.name || 'another client';
+          const collisionMsg = `SOL ID '${solId}' is already registered in master DB under client '${otherClientName}' (Branch: '${other.name}').`;
+          warnings.push(collisionMsg);
+
+          const otherBankCode = resolveBankCode(otherClientName);
+          if (!clientMismatch && otherBankCode && targetBankCode && otherBankCode !== targetBankCode) {
+            clientMismatch = {
+              detectedBank: otherClientName,
+              detectedBankCode: otherBankCode,
+              expectedBank: clientName,
+              expectedBankCode: targetBankCode,
+              otherClientName,
+              otherClientId: other.clientId || undefined,
+              reason: collisionMsg,
+              severity: 'warning',
+            };
+          }
+        }
+      }
+
+      // 3. Try Pincode directory lookup if state or district is still missing
+      if ((!state || !district) && pincode && /^[1-9][0-9]{5}$/.test(pincode.trim())) {
+        const pinData = await lookupPincode(pincode.trim());
+        if (pinData) {
+          if (!suggestedDetails) suggestedDetails = {};
+          if (!suggestedDetails.state) suggestedDetails.state = pinData.state;
+          if (!suggestedDetails.district) suggestedDetails.district = pinData.district;
+          if (!state) state = pinData.state;
+          if (!district) district = pinData.district;
+        }
+      }
+
+      // 4. Coordinates / location parsing
+      if (locationInput) {
+        const parsedLoc = parseLocationInput(locationInput);
+        if (parsedLoc) {
+          latitude = parsedLoc.lat;
+          longitude = parsedLoc.lng;
+          geoSource = 'manual';
+          geoAccuracyMeters = 5;
+        }
+      }
+      if (latitude === undefined || longitude === undefined) {
+        const latRaw = parseFloat(get('Latitude', 'Lat'));
+        const lngRaw = parseFloat(get('Longitude', 'Lng', 'Long'));
+        if (Number.isFinite(latRaw) && Number.isFinite(lngRaw)) {
+          latitude = latRaw;
+          longitude = lngRaw;
+          geoSource = 'geocoder';
+          geoAccuracyMeters = 60;
+        }
+      }
+
+      // If coordinates still missing but address and state exist, estimate via geocoder
+      if ((latitude === undefined || longitude === undefined) && address && state) {
+        try {
+          const coords = await getRealCoordinates(address, name, district, state);
+          latitude = coords.lat;
+          longitude = coords.lng;
+          geoSource = coords.geoSource;
+          geoAccuracyMeters = coords.geoAccuracyMeters;
+        } catch {
+          // Fallback if geocoder throws
+        }
+      }
+
+      // Determine missing required fields
+      const missingFields: string[] = [];
+      if (!solId) missingFields.push('solId');
+      if (!name) missingFields.push('name');
+      if (!state) missingFields.push('state');
+      if (!district) missingFields.push('district');
+      if (!address) missingFields.push('address');
+
+      // Status classification: critical client mismatches require operator attention
+      let status: 'ready' | 'coarse' | 'needs_details';
+      if (!solId || !name || !state || (clientMismatch && clientMismatch.severity === 'critical')) {
+        status = 'needs_details';
+      } else if (geoSource === 'manual' || (geoAccuracyMeters !== undefined && geoAccuracyMeters <= 250)) {
+        status = 'ready';
+      } else {
+        status = 'coarse';
+      }
+
+      rows.push({
+        rowNumber,
+        solId,
+        name,
+        address: address || undefined,
+        district: district || undefined,
+        state: state || undefined,
+        pincode: pincode || undefined,
+        packetCount,
+        latitude,
+        longitude,
+        geoSource,
+        geoAccuracyMeters,
+        existsInMaster,
+        masterBranchId,
+        isArchivedInMaster,
+        status,
+        missingFields,
+        suggestedDetails,
+        clientMismatch,
+        warnings: warnings.length > 0 ? warnings : undefined,
+      });
+    }
+
+    return {
+      summary: {
+        totalRows: rows.length,
+        existingInMaster: rows.filter((r) => r.existsInMaster).length,
+        newBranches: rows.filter((r) => !r.existsInMaster).length,
+        readyCount: rows.filter((r) => r.status === 'ready').length,
+        coarseCount: rows.filter((r) => r.status === 'coarse').length,
+        needsDetailsCount: rows.filter((r) => r.status === 'needs_details').length,
+        clientMismatchCount: rows.filter((r) => !!r.clientMismatch).length,
+      },
+      rows,
+    };
+  }
+
+  /**
+   * Commits reconciled branches into the master database and optionally links them to a project.
+   * If a branch exists in the master DB, it is updated and restored if archived.
+   * If a branch is new, it is registered via branchService.registerImportedBranch.
+   * If scope is PROJECT, it also creates the ProjectBranchEntity and AssessmentEntity.
+   */
+  async commitReconciledBranches(
+    scope: ImportScope,
+    branches: BranchReconciliationRow[],
+    userId: string,
+  ): Promise<{ created: number; updated: number; unchanged: number; linked: number; revived: number }> {
+    let projectId: string | undefined;
+    let clientId: string | undefined;
+    let priority = 'MEDIUM';
+    let organizationId: string | undefined;
+
+    if (scope.kind === 'PROJECT') {
+      projectId = scope.id;
+      const proj = await this.projectRepository.findOne({ where: { id: projectId } });
+      if (!proj) throw new NotFoundException(`Project ${projectId} not found.`);
+      clientId = proj.clientId;
+      priority = proj.priority || 'MEDIUM';
+      organizationId = proj.organizationId || undefined;
+    } else {
+      clientId = scope.id;
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+    let unchangedCount = 0;
+    let linkedCount = 0;
+    let revivedCount = 0;
+
+    const zoneByState = new Map<string, ZoneEntity | null>();
+    const resolveZoneForState = async (state: string): Promise<ZoneEntity | null> => {
+      const key = state.toUpperCase();
+      if (zoneByState.has(key)) return zoneByState.get(key) ?? null;
+      const zoneName = await this.resolveZoneName(state, clientId);
+      const zone = clientId
+        ? await this.branchService.findOrCreateZone(zoneName, clientId, [key])
+        : null;
+      zoneByState.set(key, zone ?? null);
+      return zone ?? null;
+    };
+
+    const existingProjectBranches = projectId
+      ? await this.projectBranchRepository.find({ where: { projectId, isActive: true } })
+      : [];
+    const projectBranchByBranchId = new Map(existingProjectBranches.map((pb) => [pb.branchId, pb]));
+
+    const existingAssessments = projectId
+      ? await this.assessmentRepository.find({ where: { projectId, isActive: true }, select: ['id', 'branchId'] })
+      : [];
+    const branchIdsWithAssessment = new Set(existingAssessments.map((a) => a.branchId));
+
+    const derivedRiskCategory = priority.toUpperCase();
+
+    for (const item of branches) {
+      if (!item.solId || !item.name || !item.state) {
+        continue;
+      }
+
+      const clientScope = clientId ? { clientId } : {};
+      let branch = await this.branchRepository.findOne({
+        where: { solId: item.solId.trim(), ...clientScope },
+      });
+
+      if (!branch) {
+        const state = item.state;
+        const district = (item.district || 'UNKNOWN').toUpperCase();
+        const address = item.address || `${item.name}, ${district}, ${state}`;
+        const zone = await resolveZoneForState(state);
+        const region = resolveRegion(state);
+        const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
+        const packetCount = item.packetCount ?? null;
+        const calculatedHours = packetCount && packetCount > 0 ? parseFloat(((packetCount * 15) / 60).toFixed(2)) : 6.0;
+
+        let lat = item.latitude;
+        let lng = item.longitude;
+        let geoSource = item.geoSource || 'none';
+        let geoAccuracyMeters = item.geoAccuracyMeters ?? 500000;
+
+        if (lat === undefined || lng === undefined) {
+          const coords = await getRealCoordinates(address, item.name, district, state);
+          lat = coords.lat;
+          lng = coords.lng;
+          geoSource = coords.geoSource;
+          geoAccuracyMeters = coords.geoAccuracyMeters;
+        }
+
+        branch = await this.branchService.registerImportedBranch({
+          solId: item.solId.trim(),
+          name: item.name,
+          address,
+          state,
+          district,
+          city: district,
+          pincode: item.pincode || null,
+          branchType,
+          latitude: lat,
+          longitude: lng,
+          location: { type: 'Point', coordinates: [lng, lat] },
+          geoSource,
+          geoAccuracyMeters,
+          geoMatchedName: item.suggestedDetails?.bank || null,
+          geoResolvedAt: new Date(),
+          organizationId,
+          clientId,
+          zoneId: zone ? zone.id : null,
+          region,
+          territory: `${district} Area`,
+          managerName: null,
+          phone: item.suggestedDetails?.phone || null,
+          email: null,
+          riskCategory: derivedRiskCategory,
+          riskScore: riskScoreFromCategory(derivedRiskCategory),
+          complexity: complexityFromPackets(packetCount),
+          estimatedDurationHours: calculatedHours,
+          createdBy: userId,
+          updatedBy: userId,
+        }, userId);
+        createdCount++;
+      } else {
+        const patch: UpdateBranchDto = {};
+        if (branch.isActive === false) {
+          branch = await this.branchService.restoreArchived(branch.id, userId);
+          revivedCount++;
+        }
+        if (item.name && item.name !== branch.name) patch.name = item.name;
+        if (item.address && item.address !== branch.address) patch.address = item.address;
+        if (item.state && item.state !== branch.state) {
+          patch.state = item.state;
+          const reg = resolveRegion(item.state);
+          if (reg) patch.region = reg;
+        }
+        if (item.district && item.district !== branch.district) patch.district = item.district;
+        if (item.pincode && item.pincode !== branch.pincode) patch.pincode = item.pincode;
+        if (item.latitude !== undefined && item.longitude !== undefined) {
+          if (Number(branch.latitude) !== item.latitude) patch.latitude = item.latitude;
+          if (Number(branch.longitude) !== item.longitude) patch.longitude = item.longitude;
+        }
+        if (item.packetCount !== undefined && item.packetCount > 0) {
+          const calcHours = parseFloat(((item.packetCount * 15) / 60).toFixed(2));
+          if (Number(branch.estimatedDurationHours) !== calcHours) patch.estimatedDurationHours = calcHours;
+          const comp = complexityFromPackets(item.packetCount);
+          if (branch.complexity !== comp) patch.complexity = comp;
+        }
+
+        if (Object.keys(patch).length > 0) {
+          branch = await this.branchService.update(branch.id, patch, userId);
+          updatedCount++;
+        } else {
+          unchangedCount++;
+        }
+      }
+
+      if (projectId && branch) {
+        const pb = projectBranchByBranchId.get(branch.id) ?? null;
+        if (!pb) {
+          const created = this.projectBranchRepository.create({
+            projectId,
+            branchId: branch.id,
+            zoneId: branch.zoneId,
+            status: ProjectBranchStatus.IMPORTED,
+            packetCount: item.packetCount ?? null,
+            priority: priority as any,
+            createdBy: userId,
+            updatedBy: userId,
+          });
+          const savedPb = await this.projectBranchRepository.save(created);
+          projectBranchByBranchId.set(branch.id, savedPb);
+          linkedCount++;
+
+          if (!branchIdsWithAssessment.has(branch.id)) {
+            const asmt = this.assessmentRepository.create({
+              projectId,
+              branchId: branch.id,
+              createdBy: userId,
+              updatedBy: userId,
+            });
+            await this.assessmentRepository.save(asmt);
+            branchIdsWithAssessment.add(branch.id);
+          }
+        } else if (item.packetCount && item.packetCount > 0) {
+          pb.packetCount = item.packetCount;
+          pb.updatedBy = userId;
+          await this.projectBranchRepository.save(pb);
+        }
+      }
+    }
+
+    return { created: createdCount, updated: updatedCount, unchanged: unchangedCount, linked: linkedCount, revived: revivedCount };
+  }
+
+  /**
+   * Create a project and simultaneously commit reconciled branches to it.
+   */
+  async createWithBranches(
+    dto: CreateProjectDto,
+    branches: BranchReconciliationRow[],
+    userId: string,
+    organizationId?: string | null,
+  ): Promise<{ project: ProjectEntity; outcome: { created: number; updated: number; unchanged: number; linked: number; revived: number } }> {
+    const project = await this.create(dto, userId, organizationId);
+    const outcome = await this.commitReconciledBranches(
+      { kind: 'PROJECT', id: project.id },
+      branches,
+      userId,
+    );
+    return { project, outcome };
   }
 
   async removeProjectBranch(projectId: string, projectBranchId: string, userId: string): Promise<ProjectBranchEntity[]> {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Point the stable download link at a build. Run ON the homeserver.
+# Point the stable download link at a build.
 #
 #   publish-apk.sh <EAS artifact URL | local .apk path>
 #
@@ -16,39 +16,97 @@
 #
 # Every publish is journalled to publish-apk.log so "which build did people actually install
 # on <date>" always has an answer.
+#
+# RUNS ON ANY HOST THE STACK RUNS ON. It used to hardcode the homeserver — `podman`, and paths
+# under ~/apps/fapoms — so on a developer machine it failed at the first compose call, after
+# having already written the snippet. Everything below is now derived from the script's own
+# location and from the SAME env file compose reads, which resolves to the identical paths on the
+# homeserver and needs no per-host configuration anywhere.
 set -euo pipefail
 
-# Must match deploy/docker-compose.prod.yml's own default for the same directory. It did not —
-# this said /home/shivam/fapoms-downloads while compose said /srv/fapoms-downloads — so publishing
-# wrote the snippet and the APK somewhere caddy was not looking, on any host where APK_DIR was not
-# exported. One directory, one default.
+# --- where everything is, worked out rather than assumed --------------------------------------
+HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd -- "$HERE/.." && pwd)
+COMPOSE="${COMPOSE:-$REPO/deploy/docker-compose.prod.yml}"
+ENVFILE="${ENVFILE:-$REPO/.env.docker}"
+
+# podman on the homeserver, docker on a developer machine. Whichever is present drives the same
+# compose file. Guessing wrong is not a loud failure — it is a restart that silently never
+# happens, leaving the old redirect live while the log says the publish succeeded.
+ENGINE="${CONTAINER_ENGINE:-}"
+if [ -z "$ENGINE" ]; then
+  for candidate in podman docker; do
+    command -v "$candidate" >/dev/null 2>&1 && { ENGINE=$candidate; break; }
+  done
+fi
+[ -n "$ENGINE" ] || { echo "neither podman nor docker is on PATH" >&2; exit 1; }
+
+# The directory compose mounts into caddy. Read from the same env file compose reads when the
+# caller has not exported it — this script and compose disagreeing about where downloads live is
+# exactly the bug that once wrote the snippet and the APK where caddy was not looking. The literal
+# default below must stay in step with docker-compose.prod.yml's default for the same variable.
+if [ -z "${APK_DIR:-}" ] && [ -f "$ENVFILE" ]; then
+  APK_DIR=$(sed -n 's/^APK_DIR=//p' "$ENVFILE" | tail -1)
+fi
 APK_DIR="${APK_DIR:-/srv/fapoms-downloads}"
-COMPOSE=~/apps/fapoms/deploy/docker-compose.prod.yml
-ENVFILE=~/apps/fapoms/.env.docker
-LOG=~/apps/fapoms-ops/publish-apk.log
+[ -d "$APK_DIR" ] || { echo "download directory does not exist: $APK_DIR" >&2; exit 1; }
+
 SNIPPET="$APK_DIR/apk-redirect.caddy"
 
-log() { printf '%s  %s\n' "$(date -Is)" "$*" | tee -a "$LOG"; }
+# The journal lives in the ops directory on the homeserver, deliberately outside the repo.
+# Anywhere else it sits beside the downloads it describes (that directory ignores it, so a
+# developer machine does not end up offering to commit its own publish history).
+LOG="${PUBLISH_APK_LOG:-}"
+if [ -z "$LOG" ]; then
+  if [ -d "$HOME/apps/fapoms-ops" ]; then LOG="$HOME/apps/fapoms-ops/publish-apk.log"
+  else LOG="$APK_DIR/publish-apk.log"; fi
+fi
+mkdir -p "$(dirname "$LOG")"
+
+# coreutils on Linux, BSD on macOS. Only ever used to journal which file was published.
+checksum() {
+  if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -c1-32
+  else md5 -q "$1" | cut -c1-32; fi
+}
+
+# `date -Is` is GNU-only; BSD date (macOS) rejects it and the journal line loses its timestamp —
+# which is the one thing the journal exists to record. This spelling is ISO-8601 on both.
+log() { printf '%s  %s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$*" | tee -a "$LOG"; }
 
 [ $# -eq 1 ] || { echo "usage: $0 <EAS artifact URL | local .apk path>" >&2; exit 2; }
 TARGET=$1
 
 write_snippet() {
+  # WRITTEN IN PLACE, NOT REPLACED. This used to be a write-to-temp plus `mv -f`, for atomicity.
+  #
+  # That breaks the deployment. Compose bind-mounts this single FILE into the caddy container, and
+  # a single-file bind mount is bound to the INODE. `mv` gives the path a new inode, so the
+  # container is left holding the old one — or, as actually observed on 2026-09-21, holding
+  # nothing at all: `/etc/caddy/apk-redirect.caddy` simply vanished inside a running container
+  # while the host file sat there perfectly readable. The Caddyfile `import`s that path, and an
+  # import of a missing file is a hard adapt error, so the next config load fails. The publish is
+  # refused by the check below (which is the guard working), but the deployment is then one
+  # unrelated caddy restart away from the proxy refusing to come up at all.
+  #
+  # It survived a first `mv` and not a second, so this is not a property to rely on either way.
+  # Truncating and rewriting the existing inode keeps the mount intact on every host and engine.
+  # The atomicity being given up buys nothing here: nothing reads this file concurrently — the
+  # only readers are the `caddy validate` and the container start below, both of which we trigger
+  # ourselves, after this returns.
+  #
   # 302, not 301: browsers and Android cache a permanent redirect aggressively, and the whole
   # reason this is a redirect is that the target CHANGES with every release.
   # 'temporary' + 'redir' is Caddy's spelling of that.
-  local tmp="$SNIPPET.tmp"
-  printf 'redir %s temporary\n' "$1" > "$tmp"
-  mv -f "$tmp" "$SNIPPET"   # atomic: caddy never sees a half-written file
+  printf 'redir %s temporary\n' "$1" > "$SNIPPET"
 }
 
 restart_caddy() {
   # Validate first: a snippet caddy rejects would take the proxy down, and the proxy is the only
   # way into this deployment. `admin off` in the Caddyfile rules out a live reload, and a
   # container restart is about a second — the same call auto-deploy.sh makes.
-  if podman compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T caddy \
+  if "$ENGINE" compose -f "$COMPOSE" --env-file "$ENVFILE" exec -T caddy \
        caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
-    podman compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --force-recreate caddy >/dev/null 2>&1
+    "$ENGINE" compose -f "$COMPOSE" --env-file "$ENVFILE" up -d --force-recreate caddy >/dev/null 2>&1
   else
     echo "REFUSING: caddy rejected the new config; leaving the running one in place." >&2
     exit 1
@@ -57,6 +115,22 @@ restart_caddy() {
 
 case "$TARGET" in
   http://*|https://*)
+    # PUBLISH THE STABLE URL, NOT THE ONE A DOWNLOAD RESOLVED TO.
+    #
+    # `https://expo.dev/artifacts/eas/<hash>.apk` is permanent and mints a fresh presigned S3 link
+    # on every request. That presigned link — `https://wf-artifacts.eascdn.net/...?X-Amz-Expires=900`
+    # — is what a browser's address bar or download history shows, and it is dead 15 minutes later.
+    # Publishing it looks perfectly healthy here (it HEADs fine, the probe below answers 302) and
+    # then hands every appraiser a broken download for the rest of the release. Warns rather than
+    # refuses: the markers below are a shape, not a rule, and a legitimate target this script
+    # cannot foresee — a self-hosted artifact store, say — must not be blocked by a guess.
+    case "$TARGET" in
+      *X-Amz-Expires=*|*wf-artifacts.eascdn.net*)
+        echo "WARNING: that looks like a PRESIGNED artifact link, which expires in minutes." >&2
+        echo "         Publish the stable https://expo.dev/artifacts/eas/<hash>.apk URL instead" >&2
+        echo "         (eas build:view <id> --json → .artifacts.applicationArchiveUrl)." >&2
+        ;;
+    esac
     # A quick, cheap sanity check on the URL — HEAD only, follows redirects, no download.
     # Catches a typo before it is published to every phone; does not try to be a full validator.
     if ! curl -fsSIL --max-time 20 "$TARGET" -o /dev/null; then
@@ -73,14 +147,15 @@ case "$TARGET" in
     [ "$(realpath "$TARGET")" = "$(realpath "$APK_DIR/$NAME" 2>/dev/null)" ] || cp -f "$TARGET" "$APK_DIR/$NAME"
     write_snippet "/download/$NAME"
     restart_caddy
-    log "published local file -> /download/$NAME ($(md5sum "$APK_DIR/$NAME" | cut -c1-32))"
+    log "published local file -> /download/$NAME ($(checksum "$APK_DIR/$NAME"))"
     ;;
   *)
     echo "not a URL or a .apk: $TARGET" >&2; exit 2 ;;
 esac
 
 # Prove the stable link answers, from the box's own front door.
-STATUS=$(curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:8080/download/app.apk || true)
+PROBE="${PUBLISH_APK_PROBE:-http://127.0.0.1:8080/download/app.apk}"
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$PROBE" || true)
 case "$STATUS" in
   302|301|200) log "stable link answers $STATUS — done" ;;
   *) log "WARNING: stable link answered '$STATUS' after publish"; exit 1 ;;

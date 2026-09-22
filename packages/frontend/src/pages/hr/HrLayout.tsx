@@ -271,6 +271,7 @@ export const HrLayout: React.FC = () => {
               <Link
                 to="/hr/hiring"
                 className="btn btn-primary"
+                title="Start onboarding a new assayer or review pending registration applications"
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}
               >
                 <Plus size={14} /> Add assayer
@@ -282,6 +283,7 @@ export const HrLayout: React.FC = () => {
             <Link
               to="/hr/roster"
               className="btn btn-secondary"
+              title="Open full assayer workforce directory to view profiles, rates, and active assignments"
               style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', textDecoration: 'none' }}
             >
               <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}

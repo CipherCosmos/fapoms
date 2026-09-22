@@ -27,7 +27,7 @@ const TOKENS: Record<string, string[]> = {
   'otp-verification': ['{{otpCode}}', '{{validMinutes}}'],
   'registration-invite': ['href="{{inviteUrl}}"', '&bull; PAN &amp; Aadhaar Cards<br/>'],
   'app-credentials': ['{{username}}', '{{temporaryPassword}}', '{{validDays}}', 'href="{{loginUrl}}"'],
-  'application-approved': ['{{assayerCode}}', '{{effectiveDate}}', 'href="{{loginUrl}}"'],
+  'application-approved': ['{{assayerCode}}', '{{effectiveDate}}', 'href="{{appDownloadUrl}}"'],
   'application-rejected': ['{{reviewNotes}}'],
   'branch-audit-paperwork': ['{{bankName}}', '{{branchName}}', '{{documentType}}', '{{fileName}}', 'href="{{downloadUrl}}"'],
   'morning-digest': ['{{briefDate}}', '{{subjectCounts}}', '>{{{digestSectionsHtml}}}</div>', 'href="{{portalUrl}}"'],

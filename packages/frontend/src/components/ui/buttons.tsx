@@ -13,7 +13,8 @@ export const PrimaryButton: React.FC<{
   type?: 'button' | 'submit';
   style?: React.CSSProperties;
   disabled?: boolean;
-}> = ({ onClick, children, icon = <Plus size={16} />, type = 'button', style, disabled }) => {
+  title?: string;
+}> = ({ onClick, children, icon = <Plus size={16} />, type = 'button', style, disabled, title }) => {
   // Renders the shared `.btn .btn-primary` class (single source of truth for
   // styling/hover) rather than duplicating the look with inline styles.
   return (
@@ -21,6 +22,7 @@ export const PrimaryButton: React.FC<{
       type={type}
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className="btn btn-primary"
       style={{ display: 'flex', alignItems: 'center', gap: '8px', ...style }}
     >

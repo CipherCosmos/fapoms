@@ -320,6 +320,12 @@ const EXEMPT: Record<string, Exemption> = {
     kind: 'by-design',
     reason: 'Generates an empty spreadsheet template. Contains no branch data of any region.',
   },
+  'project/project.controller.ts::reconcileBranches': {
+    kind: 'by-design',
+    reason:
+      'Dry-run preflight preview that reconciles uploaded branch rows against master database ' +
+      'records and external IFSC directories without writing or mutating any branch or project records.',
+  },
   'reports/reports.controller.ts::queueBilling': {
     kind: 'by-design',
     reason:

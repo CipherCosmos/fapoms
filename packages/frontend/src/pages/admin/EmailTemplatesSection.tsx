@@ -166,10 +166,12 @@ TECHNICAL REQUIREMENTS:
   - Official Assayer Code: {{assayerCode}} (prominent emerald monospace badge)
   - Effective Date: {{effectiveDate}}
 - Next steps guide: Download mobile app, review safety protocols, stand by for job dispatch.
-- Primary CTA: "Access Appraiser Portal" linking to {{loginUrl}}.
+- Primary CTA: "Get the appraiser app" linking to {{appDownloadUrl}}.
+- State plainly that their sign-in details arrive in a separate message. This letter must NOT
+  invite them to sign in: at the moment it is sent they hold a code, not yet a password.
 
 CRITICAL TOKEN RULES:
-You MUST include: {{fullName}}, {{assayerCode}}, {{effectiveDate}}, {{loginUrl}}, {{logoUrl}}.
+You MUST include: {{fullName}}, {{assayerCode}}, {{effectiveDate}}, {{appDownloadUrl}}, {{logoUrl}}.
 
 Do NOT use any <script>, <iframe>, <form>, or onclick handlers.
 Output ONLY the clean, raw HTML code.`,
@@ -403,8 +405,8 @@ export const VISUAL_DEFAULTS: Record<string, VisualTemplateData> = {
     subject: 'Your Appraiser application has been approved',
     headline: 'Application Approved',
     greeting: 'Congratulations {{fullName}},',
-    leadMessage: 'Your application has successfully completed committee evaluation and document verification. You are now officially empanelled.',
-    buttonLabel: 'Access Appraiser Portal',
+    leadMessage: 'Your application has successfully completed committee evaluation and document verification. You are now officially empanelled. Install the appraiser app on your phone — your sign-in details arrive in a separate message.',
+    buttonLabel: 'Get the appraiser app',
     footerNotice: 'Official Assayer Code: {{assayerCode}}. Effective Date: {{effectiveDate}}.',
     primaryColor: '#ED6714',
     accentBg: '#FFF7ED',

@@ -423,6 +423,8 @@ export const EMAIL_TEMPLATE_TOKEN_HELP: Record<string, string> = {
   intro: 'The standard opening paragraph for this email — leave it out and write your own instead',
   inviteUrl: 'The personal registration link. Every candidate gets a different one',
   loginUrl: 'Where to sign in to FAPOMS',
+  appDownloadUrl: 'Where a field appraiser installs the phone app from — the one stable link, whatever build is behind it',
+  effectiveDate: 'The date the appraiser code takes effect',
   logoUrl: 'Your company logo. Use it as an image source, not as text',
   otpCode: 'The verification code the person has to type, e.g. 849201',
   purpose: 'What the code is for, e.g. "sign in" — it reads inside a sentence',

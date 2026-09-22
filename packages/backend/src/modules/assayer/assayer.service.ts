@@ -5132,6 +5132,120 @@ export class AssayerService implements OnModuleInit {
   }
 
   /**
+   * Hand an already-issued credential to the person over their own channels.
+   *
+   * The delivery half of `bulkIssueAppAccess`, lifted out so that approving a registration reaches
+   * the same code instead of growing a second copy of it. Both callers queue rather than send: an
+   * SMTP conversation per person was most of what made a 540-person run take half an hour, and an
+   * approval must not sit waiting on a mail server either.
+   *
+   * A channel that is absent, unwired, or refuses is NOT an error here. It comes back as a missing
+   * entry in `channels`, which is how the caller learns this person still needs a handover by
+   * hand. The credential is live and audited by the time this runs, so reporting the whole act as
+   * failed would be false — and would leave somebody whose previous password had just stopped
+   * working recorded as untouched.
+   *
+   * The temporary password travels as template data and nowhere else: never into the return value,
+   * a log line, or the audit metadata `issueAppAccessCore` writes. Both queues encrypt the rendered
+   * message at rest and erase it once sent.
+   */
+  private async deliverAppAccess(
+    assayer: Pick<AssayerEntity, 'id' | 'displayName' | 'phone' | 'email'>,
+    issued: { username: string; temporaryPassword: string },
+    actorId: string,
+    emails: EmailService | null,
+    texts: SmsService | null,
+  ): Promise<{ channels: ('EMAIL' | 'SMS')[]; emailId?: string; smsId?: string }> {
+    const channels: ('EMAIL' | 'SMS')[] = [];
+    let emailId: string | undefined;
+    let smsId: string | undefined;
+
+    if (assayer.email && emails) {
+      const receipt = await emails.queue({
+        kind: 'APP_ACCESS_CREDENTIALS',
+        to: assayer.email,
+        recipientName: assayer.displayName,
+        content: {
+          template: 'app-credentials',
+          data: {
+            displayName: assayer.displayName || 'Appraiser',
+            username: issued.username,
+            temporaryPassword: issued.temporaryPassword,
+            validDays: '7',
+            loginUrl: appPublicUrl(),
+            logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+            companyName: 'Sumeru Global',
+          },
+        },
+        entityType: 'ASSAYER',
+        entityId: assayer.id,
+        requestedBy: actorId,
+      }).catch((err: unknown) => {
+        // Never the address and never the password — just which person, so the run and the
+        // approval both carry on and HR sees `channels: []` against this id.
+        this.logger.warn(`Could not queue the app-access email for ${assayer.id}: ${(err as Error)?.message ?? err}`);
+        return null;
+      });
+      if (receipt && receipt.status === 'QUEUED' && receipt.id) {
+        channels.push('EMAIL');
+        emailId = receipt.id;
+      }
+    }
+
+    if (assayer.phone && texts) {
+      // Queued for the same reason as the email, and as the registered DLT template: the wording
+      // lives in `sms-template-registry.ts`, not here.
+      const receipt = await texts.queue({
+        kind: 'APP_ACCESS_CREDENTIALS',
+        to: assayer.phone,
+        recipientName: assayer.displayName,
+        content: {
+          template: 'app-credentials',
+          data: {
+            username: issued.username,
+            temporaryPassword: issued.temporaryPassword,
+            validDays: '7',
+          },
+        },
+        entityType: 'ASSAYER',
+        entityId: assayer.id,
+        requestedBy: actorId,
+      }).catch((err: unknown) => {
+        this.logger.warn(`Could not queue the app-access text for ${assayer.id}: ${(err as Error)?.message ?? err}`);
+        return null;
+      });
+      if (receipt && receipt.status === 'QUEUED' && receipt.id) {
+        channels.push('SMS');
+        smsId = receipt.id;
+      }
+    }
+
+    return { channels, ...(emailId ? { emailId } : {}), ...(smsId ? { smsId } : {}) };
+  }
+
+  /**
+   * Issue a credential to ONE person and send it to them, without an officer reading it aloud.
+   *
+   * For the moment somebody is hired by their registration being approved. Approval used to mint
+   * nobody anything: the `application-approved` letter said "Sign in to FAPOMS" over a link, and
+   * the account behind that link had `passwordHash = NULL`, so following the button returned the
+   * same bare `Invalid credentials` a mistyped password returns. The candidate could not tell the
+   * two apart and would reasonably keep trying; nothing anywhere told HR they were waiting.
+   *
+   * Unlike `bulkIssueAppAccess` this does NOT refuse when the email queue is unwired. A bulk run
+   * exists only to deliver, so delivering to nobody is a pointless run worth stopping; an approval
+   * is a hiring decision that happens to send a letter, and must not be refused because a mail
+   * server is down. The empty `channels` is the signal, and the caller records it.
+   */
+  async issueAndDeliverAppAccess(
+    assayer: Pick<AssayerEntity, 'id' | 'assayerCode' | 'displayName' | 'phone' | 'email' | 'lifecycleStatus'>,
+    actorId: string,
+  ): Promise<{ channels: ('EMAIL' | 'SMS')[]; emailId?: string; smsId?: string }> {
+    const issued = await this.issueAppAccessCore(assayer, actorId);
+    return this.deliverAppAccess(assayer, issued, actorId, this.emailService ?? null, this.smsService ?? null);
+  }
+
+  /**
    * Issue app access to a batch of assayers in one operation, delivered by email and SMS
    * instead of read off a screen one person at a time. Both are queued on the outbound ledger.
    *
@@ -5197,68 +5311,14 @@ export class AssayerService implements OnModuleInit {
         }
 
         const issued = await this.issueAppAccessCore(assayer, actorId);
-        const channels: ('EMAIL' | 'SMS')[] = [];
-        let emailId: string | undefined;
-        let smsId: string | undefined;
-
-        if (assayer.email) {
-          // Queued, not sent in this loop: an SMTP conversation per person was most of what made a
-          // 540-person run take half an hour. The message is encrypted at rest and erased once sent.
-          const receipt = await emails.queue({
-            kind: 'APP_ACCESS_CREDENTIALS',
-            to: assayer.email,
-            recipientName: assayer.displayName,
-            content: {
-              template: 'app-credentials',
-              data: {
-                displayName: assayer.displayName || 'Appraiser',
-                username: issued.username,
-                temporaryPassword: issued.temporaryPassword,
-                validDays: '7',
-                loginUrl: appPublicUrl(),
-                logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
-                companyName: 'Sumeru Global',
-              },
-            },
-            entityType: 'ASSAYER',
-            entityId: assayer.id,
-            requestedBy: actorId,
-          });
-          if (receipt.status === 'QUEUED' && receipt.id) {
-            channels.push('EMAIL');
-            emailId = receipt.id;
-          }
-        }
-        if (assayer.phone && texts) {
-          // Queued for the same reason as the email, and as the registered DLT template: the
-          // wording lives in `sms-template-registry.ts`, not here.
-          const receipt = await texts.queue({
-            kind: 'APP_ACCESS_CREDENTIALS',
-            to: assayer.phone,
-            recipientName: assayer.displayName,
-            content: {
-              template: 'app-credentials',
-              data: {
-                username: issued.username,
-                temporaryPassword: issued.temporaryPassword,
-                validDays: '7',
-              },
-            },
-            entityType: 'ASSAYER',
-            entityId: assayer.id,
-            requestedBy: actorId,
-          });
-          if (receipt.status === 'QUEUED' && receipt.id) {
-            channels.push('SMS');
-            smsId = receipt.id;
-          }
-        }
-
+        // One delivery implementation, shared with the approval path — see `deliverAppAccess`.
         // A person with neither channel queued is not moved to `failed`: the credential is live
         // either way (issueAppAccessCore already committed it, and already wrote its own audit
         // row), and `channels: []` is how HR sees that nothing is on its way to this person and a
         // manual follow-up is needed.
-        succeeded.push({ id, channels, ...(emailId ? { emailId } : {}), ...(smsId ? { smsId } : {}) });
+        const delivery = await this.deliverAppAccess(assayer, issued, actorId, emails, texts);
+
+        succeeded.push({ id, ...delivery });
       } catch (e) {
         failed.push({ id, reason: (e as Error).message });
       }

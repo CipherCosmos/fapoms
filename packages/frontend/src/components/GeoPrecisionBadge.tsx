@@ -119,11 +119,15 @@ export const GeoPrecisionBadge: React.FC<{
   /** What the geocoder matched. The tier says how precise; only this says whether it is right. */
   matchedName?: string | null;
   compact?: boolean;
-}> = ({ source, matchedName, compact = false }) => {
+  accuracyMeters?: number | null;
+}> = ({ source, matchedName, compact = false, accuracyMeters }) => {
   const tier = geoTier(source);
+  const accuracyText = accuracyMeters != null && accuracyMeters > 0
+    ? (accuracyMeters < 1000 ? `±${Math.round(accuracyMeters)}m` : `±${(accuracyMeters / 1000).toFixed(1)}km`)
+    : '';
   return (
     <span
-      title={tier.hint + (matchedName ? `\n\nMatched to: ${matchedName}` : '')}
+      title={tier.hint + (accuracyText ? ` (${accuracyText})` : '') + (matchedName ? `\n\nMatched to: ${matchedName}` : '')}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

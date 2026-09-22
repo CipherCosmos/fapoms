@@ -176,6 +176,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('PROFILE')}
           className={`btn ${activeTab === 'PROFILE' ? 'btn-primary' : 'btn-ghost'}`}
+          title="View and update your personal contact details and name"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <User size={16} />
@@ -184,6 +185,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('SECURITY')}
           className={`btn ${activeTab === 'SECURITY' ? 'btn-primary' : 'btn-ghost'}`}
+          title="Change account password and configure multi-factor authentication (MFA)"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <Lock size={16} />
@@ -192,6 +194,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('SESSIONS')}
           className={`btn ${activeTab === 'SESSIONS' ? 'btn-primary' : 'btn-ghost'}`}
+          title="Inspect and revoke active browser sessions and logged-in devices"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <MonitorSmartphone size={16} />
@@ -200,6 +203,7 @@ export const Settings: React.FC = () => {
         <button
           onClick={() => setActiveTab('APPEARANCE')}
           className={`btn ${activeTab === 'APPEARANCE' ? 'btn-primary' : 'btn-ghost'}`}
+          title="Customize color theme, dark/light mode, and accent colors"
           style={{ gap: '8px', padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
         >
           <Palette size={16} />
@@ -395,6 +399,7 @@ export const Settings: React.FC = () => {
                 type="submit"
                 disabled={savingProfile}
                 className="btn btn-primary"
+                title="Save changes to your personal name and contact phone number"
                 style={{ gap: '8px', padding: '10px 24px', fontWeight: 600 }}
               >
                 <Save size={16} />
@@ -500,6 +505,7 @@ export const Settings: React.FC = () => {
                 type="submit"
                 disabled={changingPassword}
                 className="btn btn-primary"
+                title="Change your current password and update account authentication credentials"
                 style={{ gap: '8px', padding: '10px 24px', fontWeight: 600 }}
               >
                 <KeyRound size={16} />

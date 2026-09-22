@@ -21,7 +21,9 @@ import { ProjectEntity } from '../../modules/project/project.entity';
 import { ProjectBranchEntity } from '../../modules/project/project-branch.entity';
 import { HolidayEntity } from '../../modules/holiday/holiday.entity';
 import { ValidationCaseEntity } from '../../modules/validation/validation-case.entity';
-import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority, Region, businessDateKey } from '@fapoms/shared';
+import { AssignmentEntity } from '../../modules/assignment/assignment.entity';
+import { ScheduleEntity } from '../../modules/scheduling/schedule.entity';
+import { SystemRole, PermissionResource, PermissionAction, AuthorizationScope, UserStatus, AssayerStatus, AssayerLifecycleStatus, ValidationStatus, ProjectStatus, ProjectBranchStatus, Priority, Region, AssignmentStatus, ScheduleStatus, businessDateKey } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
 
 /**
@@ -103,7 +105,7 @@ async function seed() {
       'client_configurations', 'client_contacts', 'client_contracts', 'client_billing', 'assayers',
       'assayer_commercial_profiles', 'assayer_government_documents', 'assayer_documents',
       'assayer_remarks', 'assayer_activities', 'workforce_attributes', 'branches',
-      'branch_contacts', 'branch_documents', 'zones', 'projects', 'project_branches', 'assignments',
+      'branch_contacts', 'branch_documents', 'zones', 'projects', 'project_branches', 'assignments', 'schedules',
     ];
     const present: { table_name: string }[] = await AppDataSource.query(
       `SELECT table_name FROM information_schema.tables
@@ -1139,6 +1141,7 @@ async function seed() {
           location: { type: 'Point', coordinates: [ad.longitude, ad.latitude] },
           status: AssayerStatus.ACTIVE,
           lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+          preferredContactChannel: (ad.code === 'AS-01' || ad.code === 'AS-02') ? 'PHONE' : 'APP',
           experienceYears: assayerSkillsMap[ad.code]?.experienceYears || 3,
           performanceRating: assayerSkillsMap[ad.code]?.performanceRating || 4.0,
           organizationId: defaultOrg.id,
@@ -1544,13 +1547,18 @@ async function seed() {
           clientId: sbiClient.id,
           status: ProjectStatus.PLANNING,
           priority: Priority.HIGH,
-          startDate: new Date('2026-07-01'),
-          endDate: new Date('2026-07-31'),
+          startDate: new Date('2026-01-01'),
+          endDate: new Date('2027-12-31'),
           createdBy: 'system',
           updatedBy: 'system',
         });
         project = await projectRepository.save(project);
         console.log(`Seeded project: ${project.name}`);
+      } else {
+        project.startDate = new Date('2026-01-01');
+        project.endDate = new Date('2027-12-31');
+        project = await projectRepository.save(project);
+        console.log(`Updated project dates for: ${project.name}`);
       }
 
       // 13. Seed Project Branches
@@ -1628,6 +1636,248 @@ async function seed() {
           })
         );
         console.log(`Seeded validation case for project branch ${b.id}`);
+      }
+    }
+
+    // 16. Seed Sample Assignments & Schedules
+    console.log('Seeding sample assignments and schedules...');
+    const projectRepo = AppDataSource.getRepository(ProjectEntity);
+    const defaultProject = await projectRepo.findOne({ where: { projectNumber: 'PRJ-2026-001' } });
+
+    if (defaultProject) {
+      const assignmentRepository = AppDataSource.getRepository(AssignmentEntity);
+      const scheduleRepository = AppDataSource.getRepository(ScheduleEntity);
+      const pbList = await pbRepo.find({
+        where: { projectId: defaultProject.id },
+        relations: ['branch'],
+        order: { createdAt: 'ASC' },
+      });
+      const assayersList = await assayerRepository.find({
+        order: { assayerCode: 'ASC' },
+      });
+
+      if (pbList.length >= 7 && assayersList.length >= 7) {
+        // 1. PENDING Phone Assignment -> Today's Actions "Assigned to Call"
+        let a1 = await assignmentRepository.findOne({ where: { assignmentNumber: 'ASN-2026-001' } });
+        if (!a1) {
+          a1 = assignmentRepository.create({
+            assignmentNumber: 'ASN-2026-001',
+            projectId: defaultProject.id,
+            projectBranchId: pbList[0].id,
+            assayerId: assayersList[0].id,
+            status: AssignmentStatus.PENDING,
+            priority: Priority.HIGH,
+            proposedFee: 1800,
+            scheduledDate: new Date('2026-09-22'),
+            slaStatus: 'COMPLIANT',
+            createdBy: 'system',
+            updatedBy: 'system',
+          });
+          await assignmentRepository.save(a1);
+          pbList[0].status = ProjectBranchStatus.CONTACT_INITIATED;
+          await pbRepo.save(pbList[0]);
+          console.log(`Seeded assignment ASN-2026-001 (PENDING call task) for ${pbList[0].branch?.name}`);
+        }
+
+        // 2. PENDING Phone Assignment -> Today's Actions "Assigned to Call"
+        let a2 = await assignmentRepository.findOne({ where: { assignmentNumber: 'ASN-2026-002' } });
+        if (!a2) {
+          a2 = assignmentRepository.create({
+            assignmentNumber: 'ASN-2026-002',
+            projectId: defaultProject.id,
+            projectBranchId: pbList[1].id,
+            assayerId: assayersList[1].id,
+            status: AssignmentStatus.PENDING,
+            priority: Priority.MEDIUM,
+            proposedFee: 1600,
+            scheduledDate: new Date('2026-09-23'),
+            slaStatus: 'COMPLIANT',
+            createdBy: 'system',
+            updatedBy: 'system',
+          });
+          await assignmentRepository.save(a2);
+          pbList[1].status = ProjectBranchStatus.CONTACT_INITIATED;
+          await pbRepo.save(pbList[1]);
+          console.log(`Seeded assignment ASN-2026-002 (PENDING call task) for ${pbList[1].branch?.name}`);
+        }
+
+        // 3. REJECTED Assignment -> Today's Actions "Replacement Needed"
+        let a3 = await assignmentRepository.findOne({ where: { assignmentNumber: 'ASN-2026-003' } });
+        if (!a3) {
+          a3 = assignmentRepository.create({
+            assignmentNumber: 'ASN-2026-003',
+            projectId: defaultProject.id,
+            projectBranchId: pbList[2].id,
+            assayerId: assayersList[2].id,
+            status: AssignmentStatus.REJECTED,
+            priority: Priority.HIGH,
+            proposedFee: 1500,
+            rejectReason: 'Assayer unavailable for this date',
+            scheduledDate: new Date('2026-09-20'),
+            slaStatus: 'COMPLIANT',
+            createdBy: 'system',
+            updatedBy: 'system',
+          });
+          await assignmentRepository.save(a3);
+          pbList[2].status = ProjectBranchStatus.PLANNING;
+          await pbRepo.save(pbList[2]);
+          console.log(`Seeded assignment ASN-2026-003 (REJECTED / replacement needed) for ${pbList[2].branch?.name}`);
+        }
+
+        // 4. ACCEPTED & SCHEDULED Assignment (Today) -> Scheduling Week View & Field Work
+        let a4 = await assignmentRepository.findOne({ where: { assignmentNumber: 'ASN-2026-004' } });
+        if (!a4) {
+          a4 = assignmentRepository.create({
+            assignmentNumber: 'ASN-2026-004',
+            projectId: defaultProject.id,
+            projectBranchId: pbList[3].id,
+            assayerId: assayersList[3].id,
+            status: AssignmentStatus.ACCEPTED,
+            priority: Priority.HIGH,
+            proposedFee: 1700,
+            agreedFee: 1700,
+            scheduledDate: new Date('2026-09-21'),
+            slaStatus: 'COMPLIANT',
+            createdBy: 'system',
+            updatedBy: 'system',
+          });
+          await assignmentRepository.save(a4);
+          pbList[3].status = ProjectBranchStatus.SCHEDULED;
+          await pbRepo.save(pbList[3]);
+
+          let s4 = await scheduleRepository.findOne({ where: { assignmentId: a4.id } });
+          if (!s4) {
+            s4 = scheduleRepository.create({
+              assignmentId: a4.id,
+              projectId: defaultProject.id,
+              assayerId: assayersList[3].id,
+              scheduledDate: new Date('2026-09-21'),
+              status: ScheduleStatus.CONFIRMED,
+              createdBy: 'system',
+              updatedBy: 'system',
+            });
+            await scheduleRepository.save(s4);
+          }
+          console.log(`Seeded assignment ASN-2026-004 (SCHEDULED today) for ${pbList[3].branch?.name}`);
+        }
+
+        // 5. ACCEPTED & SCHEDULED Assignment (This Thursday) -> Scheduling Week View
+        let a5 = await assignmentRepository.findOne({ where: { assignmentNumber: 'ASN-2026-005' } });
+        if (!a5) {
+          a5 = assignmentRepository.create({
+            assignmentNumber: 'ASN-2026-005',
+            projectId: defaultProject.id,
+            projectBranchId: pbList[4].id,
+            assayerId: assayersList[4].id,
+            status: AssignmentStatus.ACCEPTED,
+            priority: Priority.MEDIUM,
+            proposedFee: 1550,
+            agreedFee: 1550,
+            scheduledDate: new Date('2026-09-24'),
+            slaStatus: 'COMPLIANT',
+            createdBy: 'system',
+            updatedBy: 'system',
+          });
+          await assignmentRepository.save(a5);
+          pbList[4].status = ProjectBranchStatus.SCHEDULED;
+          await pbRepo.save(pbList[4]);
+
+          let s5 = await scheduleRepository.findOne({ where: { assignmentId: a5.id } });
+          if (!s5) {
+            s5 = scheduleRepository.create({
+              assignmentId: a5.id,
+              projectId: defaultProject.id,
+              assayerId: assayersList[4].id,
+              scheduledDate: new Date('2026-09-24'),
+              status: ScheduleStatus.CONFIRMED,
+              createdBy: 'system',
+              updatedBy: 'system',
+            });
+            await scheduleRepository.save(s5);
+          }
+          console.log(`Seeded assignment ASN-2026-005 (SCHEDULED Thursday) for ${pbList[4].branch?.name}`);
+        }
+
+        // 6. CHECKED_IN Assignment -> Field Work ("On Site")
+        let a6 = await assignmentRepository.findOne({ where: { assignmentNumber: 'ASN-2026-006' } });
+        if (!a6) {
+          a6 = assignmentRepository.create({
+            assignmentNumber: 'ASN-2026-006',
+            projectId: defaultProject.id,
+            projectBranchId: pbList[5].id,
+            assayerId: assayersList[5].id,
+            status: AssignmentStatus.CHECKED_IN,
+            priority: Priority.HIGH,
+            proposedFee: 1400,
+            agreedFee: 1400,
+            scheduledDate: new Date('2026-09-21'),
+            checkedInAt: new Date('2026-09-21T09:30:00Z'),
+            checkInLatitude: 18.5529,
+            checkInLongitude: 73.8796,
+            slaStatus: 'COMPLIANT',
+            createdBy: 'system',
+            updatedBy: 'system',
+          });
+          await assignmentRepository.save(a6);
+          pbList[5].status = ProjectBranchStatus.SCHEDULED;
+          await pbRepo.save(pbList[5]);
+
+          let s6 = await scheduleRepository.findOne({ where: { assignmentId: a6.id } });
+          if (!s6) {
+            s6 = scheduleRepository.create({
+              assignmentId: a6.id,
+              projectId: defaultProject.id,
+              assayerId: assayersList[5].id,
+              scheduledDate: new Date('2026-09-21'),
+              status: ScheduleStatus.CONFIRMED,
+              createdBy: 'system',
+              updatedBy: 'system',
+            });
+            await scheduleRepository.save(s6);
+          }
+          console.log(`Seeded assignment ASN-2026-006 (CHECKED_IN / On Site) for ${pbList[5].branch?.name}`);
+        }
+
+        // 7. COMPLETED Assignment -> Field Work ("Completed")
+        let a7 = await assignmentRepository.findOne({ where: { assignmentNumber: 'ASN-2026-007' } });
+        if (!a7) {
+          a7 = assignmentRepository.create({
+            assignmentNumber: 'ASN-2026-007',
+            projectId: defaultProject.id,
+            projectBranchId: pbList[6].id,
+            assayerId: assayersList[6].id,
+            status: AssignmentStatus.COMPLETED,
+            priority: Priority.HIGH,
+            proposedFee: 2000,
+            agreedFee: 2000,
+            scheduledDate: new Date('2026-09-18'),
+            checkedInAt: new Date('2026-09-18T09:00:00Z'),
+            checkedOutAt: new Date('2026-09-18T14:30:00Z'),
+            completionDate: new Date('2026-09-18'),
+            slaStatus: 'COMPLIANT',
+            createdBy: 'system',
+            updatedBy: 'system',
+          });
+          await assignmentRepository.save(a7);
+          pbList[6].status = ProjectBranchStatus.AUDIT_COMPLETED;
+          await pbRepo.save(pbList[6]);
+
+          let s7 = await scheduleRepository.findOne({ where: { assignmentId: a7.id } });
+          if (!s7) {
+            s7 = scheduleRepository.create({
+              assignmentId: a7.id,
+              projectId: defaultProject.id,
+              assayerId: assayersList[6].id,
+              scheduledDate: new Date('2026-09-18'),
+              status: ScheduleStatus.COMPLETED,
+              completedAt: new Date('2026-09-18T14:30:00Z'),
+              createdBy: 'system',
+              updatedBy: 'system',
+            });
+            await scheduleRepository.save(s7);
+          }
+          console.log(`Seeded assignment ASN-2026-007 (COMPLETED) for ${pbList[6].branch?.name}`);
+        }
       }
     }
 

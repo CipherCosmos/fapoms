@@ -12,6 +12,8 @@ import { RoutingService, DestinationCoords } from './routing.provider';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
 import { autocompleteIndia, isPlaceLookupConfigured } from './india-autocomplete.helper';
 import { lookupIfsc } from './ifsc-lookup.helper';
+import { lookupPincode } from './pincode-lookup.helper';
+import { parseLocationInput } from './coordinate-resolution';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -198,6 +200,21 @@ export class GeoController {
     // normal, expected outcome for a form field, not an error — so it is a 200 with null data,
     // not a 404. The caller decides what "we couldn't find that" looks like in the UI.
     return result;
+  }
+
+  @Get('pincode/:pincode')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Pincode → state/district lookup' })
+  async pincodeLookup(@Param('pincode') pincode: string) {
+    const result = await lookupPincode(pincode);
+    return result;
+  }
+
+  @Get('parse-location')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Parse Google Maps URL, DMS, or coordinate string into lat/lng' })
+  parseLocation(@Query('input') input: string) {
+    return parseLocationInput(input);
   }
 
   @Get('states')
