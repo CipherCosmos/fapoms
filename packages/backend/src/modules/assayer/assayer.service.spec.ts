@@ -79,6 +79,8 @@ describe('AssayerService', () => {
   };
 
   const mockActivityRepo = {
+    // The lifecycle trail: no row means "not parked mid-onboarding" — a working return.
+    findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn(),
     save: jest.fn(),
     findAndCount: jest.fn(),

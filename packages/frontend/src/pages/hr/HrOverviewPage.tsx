@@ -43,6 +43,7 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
               <button
                 key={i}
                 onClick={() => onJump(target)}
+                title={`${a.title} — ${a.detail} (go to ${actionAreaLabel(a.area)})`}
                 style={{ ...card, textAlign: 'left', cursor: 'pointer', borderLeft: `3px solid ${s.fg}`, display: 'flex', gap: '10px', alignItems: 'flex-start' }}
               >
                 <AlertTriangle size={15} style={{ color: s.fg, flexShrink: 0, marginTop: '2px' }} />

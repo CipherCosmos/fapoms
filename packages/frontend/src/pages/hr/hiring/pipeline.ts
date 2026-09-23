@@ -1,5 +1,5 @@
 import {
-  ApplicationStatus, AssayerLifecycleStatus, InterviewOutcome, assayerLifecycleLabel,
+  ApplicationStatus, AssayerLifecycleStatus, InterviewOutcome, assayerLifecycleLabel, type SourceReferral,
 } from '@fapoms/shared';
 import { missingFields, payoutBlockers, type RosterPerson } from '../roster-filters';
 
@@ -19,7 +19,7 @@ import { missingFields, payoutBlockers, type RosterPerson } from '../roster-filt
  */
 
 /** Where a candidate stands, in the order they pass through. */
-export type StageKey = 'to-review' | 'waiting' | 'joining' | 'ready' | 'closed';
+export type StageKey = 'to-review' | 'approval' | 'waiting' | 'joining' | 'ready' | 'closed';
 
 export interface PipelineStage {
   key: StageKey;
@@ -34,6 +34,12 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
     key: 'to-review',
     label: 'To review',
     hint: 'They have sent their form in. Check it and either approve them or send it back.',
+    tone: 'alert',
+  },
+  {
+    key: 'approval',
+    label: 'Awaiting approval',
+    hint: 'HR has finished with them. A senior approves, rejects with a reason, or asks HR for more before training.',
     tone: 'alert',
   },
   {
@@ -106,6 +112,30 @@ export interface InterviewLike {
   spawnedApplicationId?: string | null;
   /** What the interviewer wrote down. Stored all along; shown nowhere until the interview drawer. */
   notes?: string | null;
+  /** The test papers the decision rested on. */
+  attachments?: InterviewFile[];
+  /** The interview that did not pass before this one, when the candidate was interviewed again. */
+  previousInterviewId?: string | null;
+  /** Who referred the candidate, as recorded at the interview. */
+  sourceReferral?: SourceReferral | null;
+}
+
+/** One file kept with an interview. */
+export interface InterviewFile {
+  storageKey: string;
+  fileName: string;
+  mimeType: string | null;
+  size: number | null;
+  uploadedAt: string;
+  uploadedByName: string | null;
+}
+
+/**
+ * The interview that followed this one, if the candidate was interviewed again after it.
+ * A failed interview that has one is no longer the last word on that candidate.
+ */
+export function followUpOf(interview: Pick<InterviewLike, 'id'>, all: InterviewLike[]): InterviewLike | null {
+  return all.find((i) => i.previousInterviewId === interview.id) ?? null;
 }
 
 /** The desk's own note when somebody was let in without an interview — see `openWithoutInterview`. */
@@ -183,7 +213,7 @@ function joiningNeeds(person: RosterPerson): string {
     case AssayerLifecycleStatus.DOCUMENT_VERIFICATION:
       return 'Check their PAN and Aadhaar against the originals';
     case AssayerLifecycleStatus.BACKGROUND_VERIFICATION:
-      return 'Record the result of their background check';
+      return 'Record the result of their background check, then send them for approval';
     case AssayerLifecycleStatus.TRAINING: {
       // Named gaps, not "incomplete": these are exactly what the server refuses to activate without.
       const gaps = activationBlockers(person);
@@ -209,9 +239,12 @@ export function assayerRow(person: RosterPerson): PipelineRow {
     mobile: person.phone ?? null,
     email: person.email ?? null,
     assayerCode: person.assayerCode,
-    stage: ready ? 'ready' : 'joining',
+    // Awaiting a senior's decision is its own queue — the approver's — not more of HR's joining work.
+    stage: ready ? 'ready' : person.lifecycleStatus === AssayerLifecycleStatus.FINAL_APPROVAL ? 'approval' : 'joining',
     stageLabel: ready ? 'Ready to activate' : assayerLifecycleLabel(person.lifecycleStatus),
-    needs: ready ? 'Make them Active so they can be offered work' : joiningNeeds(person),
+    needs: ready ? 'Make them Active so they can be offered work'
+      : person.lifecycleStatus === AssayerLifecycleStatus.FINAL_APPROVAL ? 'A senior approves them before training'
+        : joiningNeeds(person),
     note: soft.length > 0 ? `Also missing: ${soft.join(', ')}` : undefined,
     since: (person as { updatedAt?: string }).updatedAt ?? null,
   };
@@ -235,14 +268,18 @@ export function interviewRow(interview: InterviewLike): PipelineRow | null {
     email: interview.email,
     stage: 'closed',
     stageLabel: 'Interview not passed',
-    needs: 'No further action',
+    needs: 'Interview again if they are ready',
     since: interview.interviewedAt,
-    note: interview.interviewedByName ? `Interviewed by ${interview.interviewedByName}` : undefined,
+    note: [
+      interview.interviewedByName ? `Interviewed by ${interview.interviewedByName}` : null,
+      interview.previousInterviewId ? 'interviewed again' : null,
+      (interview.attachments?.length ?? 0) > 0 ? `${interview.attachments!.length} test paper${interview.attachments!.length === 1 ? '' : 's'}` : null,
+    ].filter(Boolean).join(' · ') || undefined,
   };
 }
 
 const STAGE_ORDER: Record<StageKey, number> = {
-  'to-review': 0, ready: 1, joining: 2, waiting: 3, closed: 4,
+  'to-review': 0, approval: 1, ready: 2, joining: 3, waiting: 4, closed: 5,
 };
 
 /**
@@ -258,7 +295,11 @@ export function buildPipeline(input: {
   const rows: PipelineRow[] = [
     ...(input.applications ?? []).map(applicationRow),
     ...(input.people ?? []).map(assayerRow),
-    ...(input.interviews ?? []).map(interviewRow),
+    // A "did not pass" that was followed by another interview is no longer where they are — the
+    // later interview (or the application it opened) is. The earlier one is reached from it.
+    ...(input.interviews ?? [])
+      .filter((i) => !followUpOf(i, input.interviews ?? []))
+      .map(interviewRow),
   ].filter((r): r is PipelineRow => r !== null);
 
   return rows.sort((a, b) => {

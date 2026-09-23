@@ -978,6 +978,153 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/hr',
     skipActor: true,
   },
+  /*
+    THE APPROVAL BEFORE TRAINING (2026-09-23): the approver's queue. Admins by name; a custom role
+    only when it holds BOTH the approve permission and the roster's own view permission — the link
+    is the person's record, and an approver who could not open it could not act on it either
+    (`usersHoldingPermission` requires every listed permission). OPERATIONS is not the audience:
+    HR prepares the file, and the one who sent it up is the actor, skipped.
+  */
+  ASSAYER_SENT_FOR_APPROVAL: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Approval needed: ${assayerName}',
+    body: '${sentBy} sent ${assayerName} up for approval before training.${noteLine} Approve, reject with a reason, or ask HR for more.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  /** HR answered what the approver asked — it is back with them. Same audience as above. */
+  ASSAYER_APPROVAL_ANSWERED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'HR answered on ${assayerName}',
+    body: '${answeredBy} answered what was asked before approving ${assayerName}: "${answer}". It is back with you to decide.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  /*
+    The other direction: what the approver decided, told to the HR people who prepared the round —
+    whoever sent it up and anyone who answered on it (one emit each, as RECORD_OWNER). Not the
+    whole HR desk: the file is theirs, and a question broadcast to everybody is answered by nobody.
+  */
+  ASSAYER_APPROVAL_INFO_REQUESTED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'More needed before ${assayerName} is approved',
+    body: '${askedBy} asked: "${question}". Answer it on their record to send them back for approval.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_APPROVAL_APPROVED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: '${assayerName} approved — on to training',
+    body: '${decidedBy} approved ${assayerName}.${noteLine}',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_APPROVAL_REJECTED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
+    title: '${assayerName} was not approved',
+    body: '${decidedBy} did not approve ${assayerName}: "${reason}". They are parked as not approved; they can be put up for approval again from their record.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  /*
+    RE-CHECKS OVER TIME (2026-09-23). An adverse re-check on somebody working goes to the approvers
+    (same audience and reasoning as ASSAYER_SENT_FOR_APPROVAL); what they decide goes back to
+    whoever recorded the check. The due/overdue reminders go to the HR desk, collapsed, because the
+    first round falls due for the whole roster on one date and must not arrive as a thousand rows.
+  */
+  ASSAYER_RECHECK_ADVERSE: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Decision needed: ${assayerName}\'s ${checkLabel}',
+    body: '${checkLabel} for ${assayerName} came back ${outcome}: ${findings} They are held from new work until you decide to keep them working or suspend them.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_RECHECK_REVIEWED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: '${assayerName}: ${checkLabel} decided',
+    body: '${decidedBy} ${outcome}: "${reason}".',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+  },
+  ASSAYER_RECHECK_DUE_SOON: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.NORMAL,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP,
+    title: '${checkLabel} due soon: ${assayerName}',
+    body: '${assayerName}\'s ${checkLabel} is due on ${dueOn}.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 3600,
+      title: '${count} re-checks due soon',
+      body: '${count} re-checks fall due in the coming weeks — see the re-checks list.',
+      link: '/hr/rechecks',
+    },
+  },
+  ASSAYER_RECHECK_DUE: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: '${checkLabel} due now: ${assayerName}',
+    body: '${assayerName}\'s ${checkLabel} was due on ${dueOn}. If it is not recorded by ${blockFrom}, they will be held from new work.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 3600,
+      title: '${count} re-checks due now',
+      body: '${count} re-checks are due. Anyone still not re-checked after the grace period is held from new work — see the re-checks list.',
+      link: '/hr/rechecks',
+    },
+  },
+  ASSAYER_RECHECK_BLOCKED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Held from new work: ${assayerName}',
+    body: '${assayerName}\'s ${checkLabel} has been overdue since ${dueOn}. They are held from new work until it is recorded; work already assigned continues.',
+    link: '/hr/roster/${assayerId}',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 3600,
+      title: '${count} assayers held from new work',
+      body: '${count} assayers are held from new work until an overdue re-check is recorded — see the re-checks list.',
+      link: '/hr/rechecks',
+    },
+  },
   ASSAYER_CODE_ISSUED: {
     category: NotificationCategory.WORKFORCE,
     priority: NotificationPriority.LOW,

@@ -105,6 +105,21 @@ const TEMPLATE_BLOCKS: Record<string, (buttonLabel: string | undefined) => Templ
     // this letter is sent they hold a code but not yet the password that follows separately.
     button: { href: '{{appDownloadUrl}}', label: `${buttonLabel || 'Get the appraiser app'} →` },
   }),
+  // The list HR ticked, one item per line — the callout keeps the line breaks. No button: the
+  // candidate reopens the link they already hold (see `requestMoreInfo`).
+  'application-info-requested': () => ({
+    callout: { tone: 'gold', title: 'What HR asked for', text: '{{itemsText}}' },
+  }),
+  // Why a stranger to us is getting this, and who they write to if they object — the notice owed to
+  // somebody whose details a candidate handed over. No button: there is nothing for them to do.
+  'reference-notice': () => ({
+    callout: {
+      tone: 'slate',
+      title: 'Why you are receiving this',
+      text: 'They gave us your name and contact details for this reason only, and we keep them with their record. '
+        + 'If you do not know them, or would rather not be contacted, write to {{contactLine}} and we will stop.',
+    },
+  }),
   'application-rejected': () => ({
     callout: { tone: 'crimson', title: 'Review Committee Notes', text: '{{reviewNotes}}' },
   }),

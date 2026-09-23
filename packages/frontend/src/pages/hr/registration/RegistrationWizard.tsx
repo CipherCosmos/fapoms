@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { APPLICATION_REFERENCES_MAX, bankAccountConfirmProblem, referenceEmailProblem, referencePhoneForDisplay } from '@fapoms/shared';
 import {
   User, MapPin, CreditCard, FileText, Users, Building2, ClipboardCheck,
   Check, ChevronLeft, ChevronRight, AlertTriangle, Plus, Phone,
@@ -222,13 +223,14 @@ export interface DraftReference {
   fullName: string;
   relationship?: string;
   phone?: string;
+  email?: string;
 }
 
 const ReferencesBlock: React.FC<{
   references: DraftReference[];
   onChange: (next: DraftReference[]) => void;
 }> = ({ references, onChange }) => {
-  const [draft, setDraft] = useState({ fullName: '', relationship: '', phone: '' });
+  const [draft, setDraft] = useState({ fullName: '', relationship: '', phone: '', email: '' });
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const saving = false;
@@ -238,14 +240,25 @@ const ReferencesBlock: React.FC<{
       setError('A reference needs at least a name.');
       return;
     }
+    // Same ceiling the candidate's own form and the server enforce — a fourth name has
+    // nowhere to go, so it is refused here rather than dropped on save.
+    if (references.length >= APPLICATION_REFERENCES_MAX) {
+      setError(`Only ${APPLICATION_REFERENCES_MAX} references are needed.`);
+      return;
+    }
+    if (draft.email.trim() && referenceEmailProblem(draft.email.trim().toLowerCase())) {
+      setError('That email does not look right.');
+      return;
+    }
     setError(null);
     onChange([...references, {
       fullName: draft.fullName.trim(),
       relationship: draft.relationship || undefined,
       phone: draft.phone.trim() || undefined,
+      email: draft.email.trim().toLowerCase() || undefined,
     }]);
     toast({ type: 'success', title: 'Reference added', message: `${draft.fullName.trim()} is on file. Nobody has rung them yet.` });
-    setDraft({ fullName: '', relationship: '', phone: '' });
+    setDraft({ fullName: '', relationship: '', phone: '', email: '' });
   };
 
   const inputStyle: React.CSSProperties = {
@@ -264,20 +277,37 @@ const ReferencesBlock: React.FC<{
         separately, on their record, by whoever makes the call.
       </div>
       {references.length > 0 && (
-        <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {references.map((r, i) => (
-            <li key={`${r.fullName}-${i}`} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <Phone size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} aria-hidden />
-              <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{r.fullName}</span>
-              {r.relationship && <span>· {r.relationship}</span>}
-              {r.phone && <span>· {r.phone}</span>}
-              {/* Nobody can have been rung yet: this person does not exist to be a reference FOR
-                  until the application is approved. */}
-              <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>· not rung yet</span>
-            </li>
-          ))}
-        </ul>
-      )}
+          <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {references.map((r, i) => (
+              <li key={`${r.fullName}-${i}`} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <Phone size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} aria-hidden />
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{r.fullName}</span>
+                {r.relationship && <span>· {r.relationship}</span>}
+                {r.phone && <span>· {referencePhoneForDisplay(r.phone)}</span>}
+                {r.email && <span>· {r.email}</span>}
+                {/* Nobody can have been rung yet: this person does not exist to be a reference FOR
+                    until the application is approved. */}
+                <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>· not rung yet</span>
+                {/* Without this a mistyped name could only be lived with — and with a ceiling of
+                    three, one typo left the clerk unable to add the reference they meant. */}
+                <button
+                  type="button"
+                  onClick={() => onChange(references.filter((_, j) => j !== i))}
+                  aria-label={`Remove reference ${r.fullName}`}
+                  className="btn btn-secondary"
+                  style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', padding: '3px 10px' }}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      {references.length >= APPLICATION_REFERENCES_MAX ? (
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          Three references is the most an application takes — remove one to change them.
+        </div>
+      ) : (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px', alignItems: 'end' }}>
         <input
           value={draft.fullName}
@@ -307,6 +337,14 @@ const ReferencesBlock: React.FC<{
           aria-label="Phone number of the reference"
           style={inputStyle}
         />
+        <input
+          value={draft.email}
+          onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+          placeholder="Their email (optional)"
+          aria-label="Email of the reference"
+          type="email"
+          style={inputStyle}
+        />
         <button
           type="button"
           onClick={() => void add()}
@@ -317,6 +355,7 @@ const ReferencesBlock: React.FC<{
           <Plus size={13} /> {saving ? 'Adding…' : 'Add this person'}
         </button>
       </div>
+      )}
       {error && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '6px' }}>{error}</div>}
     </div>
   );
@@ -546,6 +585,20 @@ export const RegistrationWizard: React.FC<{
   // Loaded only on the step that shows `hrOwnerName` — see `useHrOwnerOptions`.
   const hrOwnerOpts = useHrOwnerOptions(step === 'people');
   const [stepProblems, setStepProblems] = useState<string[]>([]);
+  /**
+   * The account number typed a second time, when the clerk has typed a NEW one. Local only — it is
+   * compared, never saved. An untouched account (shown masked, as its last digits) needs no second
+   * typing: it was confirmed when it was saved.
+   */
+  const [accountConfirm, setAccountConfirm] = useState('');
+  const accountTypedNow = reg.isDirty(['bankAccountNumber']) && !!(reg.form.bankAccountNumber || '').trim();
+  const accountUnconfirmed = accountTypedNow
+    && !!bankAccountConfirmProblem(reg.form.bankAccountNumber || '', accountConfirm);
+  /**
+   * The noun phrase the "Before this can be saved, it needs …" banner reads. No comma in it: the
+   * banner joins its list by turning the last comma into "and", which would rewrite this sentence.
+   */
+  const ACCOUNT_CONFIRM_NEEDED = 'the bank account number typed a second time to match the first';
   const [addrNote, setAddrNote] = useState<{ message: string; blocking: boolean } | null>(null);
   const [addrLookup, setAddrLookup] = useState(false);
   /** The last resolved IFSC code's bank/branch details — see `applyIfscLookup`. */
@@ -745,6 +798,8 @@ export const RegistrationWizard: React.FC<{
   const leaveStep = async (): Promise<boolean> => {
     setAdvanceAttempted(true);
     const problems = validateStep(step, reg.form);
+    // Typed twice, because nothing else catches a wrong digit — account numbers carry no check digit.
+    if (step === 'identity' && accountUnconfirmed) problems.push(ACCOUNT_CONFIRM_NEEDED);
     if (problems.length > 0) { setStepProblems(problems); return false; }
     setStepProblems([]);
     // Papers write through their own route as they go, and the summary owns nothing. `clients`
@@ -794,6 +849,15 @@ export const RegistrationWizard: React.FC<{
     if (target === step) return;
     const targetIndex = REGISTRATION_STEP_KEYS.indexOf(target);
     setStepProblems([]);
+    /*
+      The one thing the rail does not wave through: a forward move saves the step, and saving an
+      account number that has not been typed twice is the exact slip this is here to catch. Going
+      back saves nothing, so it stays free.
+    */
+    if (targetIndex >= stepIndex && step === 'identity' && accountUnconfirmed) {
+      setStepProblems([ACCOUNT_CONFIRM_NEEDED]);
+      return;
+    }
     if (targetIndex >= stepIndex && canSaveCurrentStep()) await reg.commit();
     setStep(target);
   };
@@ -1064,6 +1128,35 @@ export const RegistrationWizard: React.FC<{
             keys={['bankAccountNumber', 'ifscCode', 'bankName']}
             render={renderIdentity}
           />
+          {accountTypedNow && (
+            <div style={{ maxWidth: '360px' }}>
+              <label htmlFor="reg-wizard-account-confirm" style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
+                Re-enter account number
+              </label>
+              <input
+                id="reg-wizard-account-confirm"
+                value={accountConfirm}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Type it again, from the passbook"
+                onChange={(e) => setAccountConfirm(e.target.value.replace(/[^\d\s-]/g, '').slice(0, 24))}
+                // A pasted copy repeats the slip it is meant to catch.
+                onPaste={(e) => e.preventDefault()}
+                aria-invalid={!!accountConfirm.trim() && accountUnconfirmed}
+                style={{
+                  width: '100%', padding: '9px 11px', fontSize: 'var(--text-sm)', fontFamily: 'monospace',
+                  background: 'var(--bg-surface-2)', color: 'var(--text-primary)', boxSizing: 'border-box',
+                  border: `1px solid ${accountConfirm.trim() && accountUnconfirmed ? 'var(--danger)' : 'var(--border-color)'}`,
+                  borderRadius: 'var(--radius-sm)',
+                }}
+              />
+              <div style={{ fontSize: 'var(--text-xs)', marginTop: '4px', color: accountConfirm.trim() && accountUnconfirmed ? 'var(--danger)' : 'var(--text-muted)' }}>
+                {accountConfirm.trim()
+                  ? (bankAccountConfirmProblem(reg.form.bankAccountNumber || '', accountConfirm) ?? 'Matches.')
+                  : 'Typed rather than pasted — it is the only check that catches a wrong digit.'}
+              </div>
+            </div>
+          )}
         </div>
       ) : step === 'documents' ? (
         <ApplicationDocumentsStep

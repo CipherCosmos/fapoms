@@ -668,6 +668,7 @@ export const ASSAYER_LIFECYCLE_LABELS: Record<AssayerLifecycleStatus, string> = 
   [AssayerLifecycleStatus.INVITED]: 'Invited',
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'Document Verification',
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'Background Verification',
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: 'Awaiting Approval',
   [AssayerLifecycleStatus.TRAINING]: 'Training',
   [AssayerLifecycleStatus.ACTIVE]: 'Active',
   [AssayerLifecycleStatus.ON_LEAVE]: 'On Leave',

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
@@ -29,12 +29,14 @@ import {
   summariseRemarks,
 } from '../assayer-remarks/assayer-remark.contract';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { ComplianceStandingService } from '../assayer/compliance-standing.service';
 
 /**
  * Human-readable reason per filter name. Ops sees these, not internal filter identifiers.
  */
 const EXCLUSION_REASONS: Record<string, string> = {
   deployable: 'Onboarding not finished — not yet assignable',
+  compliance: 'Held from new work — a re-check is overdue or awaiting a senior\'s decision',
   availability: 'Unavailable on this date (already booked or on leave)',
   consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
   clientEligibility: 'Not eligible for this client — planning requires an Active or Recommended empanelment standing',
@@ -55,6 +57,7 @@ const EXCLUSION_REASONS: Record<string, string> = {
  */
 const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY' | 'SKILLS' | 'ONBOARDING'> = {
   deployable: 'ONBOARDING',
+  compliance: 'POLICY',
   availability: 'DATE',
   consecutiveBranchAudit: 'ROTATION',
   distancePolicy: 'DISTANCE',
@@ -302,6 +305,49 @@ export class DeployabilityFilter implements CandidateFilter {
     const step = onboardingNextStep(assayer.lifecycleStatus);
     if (step) return `Onboarding not finished: ${step}.`;
     return `Not assignable — profile status is ${assayer.status} (${assayer.lifecycleStatus}).`;
+  }
+}
+
+/**
+ * Held from new work on compliance grounds — a re-check overdue past its grace period, or an
+ * adverse re-check awaiting a senior (see `periodic-checks.ts`). The same answer the assignment
+ * gates refuse on (`ComplianceStandingService.workBlockers`), asked once per planning run for every
+ * candidate (`prime`) rather than once per candidate. Never relaxed and never overridable here:
+ * the remedy is on the person's record, not a reason typed on this screen.
+ */
+@Injectable()
+export class ComplianceHoldFilter implements CandidateFilter {
+  name = 'compliance';
+  private readonly cache = new Map<string, { at: number; blockers: string[] }>();
+  private static readonly FRESH_MS = 60_000;
+
+  constructor(@Optional() private readonly compliance?: ComplianceStandingService) {}
+
+  /** Load every candidate's standing in one batch before the loop asks about them one by one. */
+  async prime(assayerIds: string[]): Promise<void> {
+    if (!this.compliance || assayerIds.length === 0) return;
+    if (this.cache.size > 5_000) this.cache.clear();
+    const standings = await this.compliance.standingsFor(assayerIds);
+    const at = Date.now();
+    for (const id of assayerIds) this.cache.set(id, { at, blockers: standings.get(id)?.blockers ?? [] });
+  }
+
+  private async blockers(assayerId: string): Promise<string[]> {
+    if (!this.compliance) return [];
+    const hit = this.cache.get(assayerId);
+    if (hit && Date.now() - hit.at < ComplianceHoldFilter.FRESH_MS) return hit.blockers;
+    const blockers = await this.compliance.workBlockers(assayerId);
+    this.cache.set(assayerId, { at: Date.now(), blockers });
+    return blockers;
+  }
+
+  async evaluate(assayer: AssayerEntity): Promise<boolean> {
+    return (await this.blockers(assayer.id)).length === 0;
+  }
+
+  /** What holds them, in the words the record and the assignment refusal use. */
+  async explain(assayer: AssayerEntity): Promise<string> {
+    return `${(await this.blockers(assayer.id)).join('; ')}. Record it on their Background tab.`;
   }
 }
 
@@ -1721,10 +1767,14 @@ export class RecommendationEngine {
      */
     private readonly remarksServiceForFacts: AssayerRemarksService,
     private readonly platformSettings: PlatformSettingsService,
+    /** Re-checks over time — see ComplianceHoldFilter. Optional so older specs build unchanged. */
+    @Optional() private readonly complianceHoldFilter?: ComplianceHoldFilter,
   ) {
     this.filters.push(
       // First: "can this person be sent anywhere at all?" — see DeployabilityFilter.
       this.deployabilityFilter,
+      // Then: are they held from new work on compliance grounds? Equally unconditional.
+      ...(this.complianceHoldFilter ? [this.complianceHoldFilter] : []),
       /**
        * Second, ahead of every policy/skills/rotation check below: this loop stops at the
        * FIRST filter a candidate fails, and DistancePolicyFilter's minDistanceKm floor is a
@@ -2530,6 +2580,7 @@ export class RecommendationEngine {
       overridable?: boolean;
     }[] = [];
 
+    await this.complianceHoldFilter?.prime(assayers.map((a) => a.id));
     for (const assayer of assayers) {
       let blockedBy: string | null = null;
       for (const filter of this.filters) {
@@ -2582,6 +2633,10 @@ export class RecommendationEngine {
         } else if (blockedBy === this.deployabilityFilter.name) {
           // Which onboarding stage they are stuck at, and the click that unsticks them.
           detail = this.deployabilityFilter.explain(assayer);
+        } else if (this.complianceHoldFilter && blockedBy === this.complianceHoldFilter.name) {
+          // Which check, since when — and it is not waived by a reason typed here.
+          overridable = false;
+          detail = await this.complianceHoldFilter.explain(assayer);
         } else if (blockedBy === this.clientEligibilityFilter.name) {
           // The specific standing (or its absence), not the generic sentence — "RESIGNED from
           // AXIS" tells the operator exactly which vetting row to change.

@@ -1,9 +1,18 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import {
+  BadRequestException, Body, Controller, Get, HttpCode, Inject, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Req, Res,
+  UploadedFile, UseGuards, UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { IsEmail, IsEnum, IsObject, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { SystemRole, InterviewOutcome } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { AssayerInterviewService } from './assayer-interview.service';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { assertUploadAllowed, uploadMulterOptions, SCAN_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { deriveFileIntegrity } from '../document/document-integrity';
+import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+import { AuditRead } from '../../core/audit/audit-read.decorator';
 
 class RecordInterviewRequestDto {
   @IsString() @MinLength(1) @MaxLength(200)
@@ -20,6 +29,14 @@ class RecordInterviewRequestDto {
 
   @IsEnum(InterviewOutcome)
   outcome: InterviewOutcome;
+
+  /** Set when a candidate who did not pass is being interviewed again. */
+  @IsOptional() @IsUUID()
+  previousInterviewId?: string;
+
+  /** Who referred the candidate. Checked in full by the shared `normalizeSourceReferral`. */
+  @IsOptional() @IsObject()
+  sourceReferral?: Record<string, unknown> | null;
 }
 
 /**
@@ -50,7 +67,10 @@ class AmendInterviewRequestDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('assayer-interviews')
 export class AssayerInterviewController {
-  constructor(private readonly interviews: AssayerInterviewService) {}
+  constructor(
+    private readonly interviews: AssayerInterviewService,
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
+  ) {}
 
   @Post()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
@@ -83,6 +103,64 @@ export class AssayerInterviewController {
     @Req() req: any,
   ) {
     return await this.interviews.amend(id, dto, req.user.id);
+  }
+
+  /**
+   * Keep a file with an interview — the test paper, an answer sheet. Through the same door as every
+   * other upload (allow-list, size cap, virus scan, storage engine), never around it.
+   */
+  @Post(':id/file')
+  @HttpCode(201)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:create:organization')
+  @UseInterceptors(FileInterceptor('file', uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES })), FileScanInterceptor)
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Keep a test paper or other file with an interview' })
+  async attachFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: any,
+    @Req() req: any,
+  ) {
+    if (!file?.buffer?.length) throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    assertUploadAllowed({
+      contentType: file.mimetype,
+      fileName: file.originalname,
+      size: file.size,
+      allowed: SCAN_UPLOAD_TYPES,
+      hint: 'Scan or photograph the paper, or upload it as a PDF.',
+    });
+    const integrity = deriveFileIntegrity(file.buffer, file.mimetype);
+    const key = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype, file.size);
+    return await this.interviews.attachFile(id, {
+      storageKey: key,
+      fileName: String(file.originalname ?? 'file'),
+      mimeType: integrity.effectiveMimeType ?? file.mimetype ?? null,
+      size: integrity.byteLength,
+      sha256: integrity.sha256,
+    }, req.user.id, req.user.displayName ?? req.user.username ?? null);
+  }
+
+  /** One of an interview's files, streamed like every personnel scan: opaque, never cached. */
+  @Get(':id/file/:index')
+  @AuditRead({ resource: 'ASSAYER_INTERVIEW', idParam: 'id', eventType: 'ASSAYER_INTERVIEW_FILE_VIEWED' })
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
+  @ApiOperation({ summary: 'Fetch one file kept with an interview' })
+  async getFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('index') index: string,
+    @Res() res: any,
+  ): Promise<void> {
+    const found = await this.interviews.fileKey(id, Number(index));
+    if (!found) throw new NotFoundException('No such file on this interview.');
+    const stream = await this.storage.getFileStream(found.key);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', 'inline; filename="interview-file"');
+    res.setHeader('Cache-Control', 'private, no-store');
+    stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
   }
 
   @Get()

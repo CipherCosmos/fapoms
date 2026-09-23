@@ -285,7 +285,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
             </button>
           )}
           {stage === 'TO_PAY' && <>
-            <button className="btn btn-primary" disabled={!payable.length || pay.isPending || bulkBusy} onClick={() => setPayOpen(true)} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button className="btn btn-primary" disabled={!payable.length || pay.isPending || bulkBusy} onClick={() => setPayOpen(true)} title={payable.length ? `Record payment for ${payable.length} payout${payable.length === 1 ? '' : 's'}` : 'Tick an approved, unpaid payout first'} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <Banknote size={14} /> Record payment {payable.length ? `(${payable.length} · ${money(payable.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0))})` : ''}
             </button>
             <button className="btn btn-secondary" disabled={!payable.length || bankBusy} onClick={downloadBankFile}
@@ -294,7 +294,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
               <FileDown size={14} /> {bankBusy ? 'Preparing…' : 'Download bank file'}
             </button>
           </>}
-          <button className="btn btn-secondary" onClick={() => setSelected(new Set())}>Clear</button>
+          <button className="btn btn-secondary" onClick={() => setSelected(new Set())} title="Untick everything">Clear</button>
           {selectedRows.length > approvable.length + payable.length && (
             <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Held and already-paid rows are skipped.</span>
           )}
@@ -357,7 +357,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
                         const isReimb = !!r.expenseId;
                         return (
                           <tr key={r.id} style={{ opacity: r.status === AssayerPayableStatus.PAID ? 0.7 : 1 }}>
-                            {selectable && <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>}
+                            {selectable && <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} title={`Tick ${r.assignmentNumber ?? r.payableNumber ?? 'this payout'} for the bulk action`} /></td>}
                             <td style={td}>
                               <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                                 {isReimb && <Receipt size={12} style={{ color: 'var(--text-muted)' }} />}{r.assignmentNumber ?? '—'}

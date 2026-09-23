@@ -130,6 +130,12 @@ export enum AssayerLifecycleStatus {
   INVITED = 'INVITED',
   DOCUMENT_VERIFICATION = 'DOCUMENT_VERIFICATION',
   BACKGROUND_VERIFICATION = 'BACKGROUND_VERIFICATION',
+  /**
+   * Awaiting approval (2026-09-23): HR's checks are done and a senior — anyone holding
+   * `ASSAYER:APPROVE:ORGANIZATION`, never the person who sent the file up — approves, rejects with
+   * a reason, or asks HR for more. Only that decision moves somebody on to TRAINING.
+   */
+  FINAL_APPROVAL = 'FINAL_APPROVAL',
   TRAINING = 'TRAINING',
   ACTIVE = 'ACTIVE',
   ON_LEAVE = 'ON_LEAVE',

@@ -24,6 +24,8 @@ export interface PaperworkDocument {
   requirement: string;
   label: string;
   identity: boolean;
+  /** Read and signed off by a reviewer — the identity documents and the bank passbook. */
+  verifiable?: boolean;
   id: string | null;
   currentVersionId?: string | null;
   docVersion?: number;
@@ -86,10 +88,16 @@ export interface AssayerDossier {
     id: string;
     fullName: string;
     phone?: string | null;
+    email?: string | null;
     relationship?: string | null;
     checkedAt?: string | null;
     checkedBy?: string | null;
     remarks?: string | null;
+    /** When they were told HR may call, and how (`EMAIL`, `SMS`, `EMAIL,SMS`). Null until something went. */
+    notifiedAt?: string | null;
+    notifiedVia?: string | null;
+    /** Why it did not reach them every way it could — no address, a text with no DLT template. */
+    noticeProblem?: string | null;
   }>;
   empanelments: ClientEmpanelment[];
   backgroundChecks: BackgroundCheck[];

@@ -1,5 +1,7 @@
 import { Platform } from 'react-native';
-import { ApplicationStatus, type ConsentNotice, type EmploymentCategory } from '@fapoms/shared';
+import {
+  ApplicationStatus, type ApplicationInfoRequestItem, type ConsentNotice, type EmploymentCategory, type SourceReferral,
+} from '@fapoms/shared';
 import { getApiBaseUrl } from './api.service';
 
 /**
@@ -37,13 +39,32 @@ export interface RegistrationApplication {
   /**
    * The rest of the person, keyed by the assayer record's own field names — identity numbers,
    * bank details, emergency contact, qualification. Same shape the web form and the desk use.
+   * `references` rides beside the fields: people who can vouch for the candidate, replayed
+   * onto the record at approval.
    */
-  extendedProfile: { fields?: Record<string, string | number | null> } | null;
+  extendedProfile: {
+    fields?: Record<string, string | number | null>;
+    references?: RegistrationReference[];
+    /** Who referred them — HR's entry (shown, not changed here) or their own. */
+    sourceReferral?: SourceReferral | null;
+  } | null;
 }
 
 export interface RegistrationDocument {
   requirement: string;
   filePaths: string[];
+  /** HR's verdict on this requirement — `NEEDS_RESUBMIT` flags it until a fresh scan lands. */
+  reviewStatus?: string | null;
+  rejectionReason?: string | null;
+  rejectionNote?: string | null;
+}
+
+/** Somebody who can vouch for the candidate — name plus a number that dials. Email where known. */
+export interface RegistrationReference {
+  fullName: string;
+  phone?: string;
+  relationship?: string;
+  email?: string;
 }
 
 export interface RegistrationHydration {
@@ -52,6 +73,8 @@ export interface RegistrationHydration {
   documentsRequested: string[];
   /** The server's own record that this link's number was confirmed, so a reopen does not ask again. */
   otpVerified?: boolean;
+  /** Exactly what HR asked for — the to-do list this link renders instead of one note. */
+  infoRequests?: ApplicationInfoRequestItem[];
   /**
    * What must be shown, and agreed to, before the form collects anything. Served rather than
    * bundled: the version is stamped on the acceptance, so the words read and the words recorded
@@ -105,6 +128,13 @@ export interface DraftPatch {
    * package for what the server will keep.
    */
   record?: Record<string, string | number>;
+  /**
+   * People who can vouch for the candidate — up to three. Normalized server-side; submit
+   * refuses an application with nobody ringable on it.
+   */
+  references?: Array<{ fullName?: string; phone?: string; relationship?: string; email?: string }>;
+  /** Who referred them — only while HR has not recorded it. `null` clears their own entry. */
+  sourceReferral?: { type: string; name: string; mobile: string; email: string } | null;
 }
 
 /**

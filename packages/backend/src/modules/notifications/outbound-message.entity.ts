@@ -9,6 +9,8 @@ export type OutboundMessageKind =
   | 'ACCOUNT_SETUP_LINK'
   | 'APPLICATION_APPROVED'
   | 'APPLICATION_REJECTED'
+  | 'APPLICATION_INFO_REQUESTED'
+  | 'REFERENCE_NOTICE'
   | 'APP_ACCESS_CREDENTIALS'
   | 'ROSTER_MESSAGE'
   /** A catalog notification's email leg (`NotificationDeliveryWorker`). */

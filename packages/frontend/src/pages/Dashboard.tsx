@@ -339,7 +339,7 @@ export const Dashboard: React.FC = () => {
             your account has not been given that. Ask an administrator if you need it.
           </span>
           {landing !== '/dashboard' && (
-            <button onClick={() => navigate(landing)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
+            <button onClick={() => navigate(landing)} className="btn btn-secondary" title="Go to your assigned start page" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
               Go to my start page
             </button>
           )}
@@ -347,7 +347,7 @@ export const Dashboard: React.FC = () => {
       ) : (
         <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 'var(--text-sm)', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><AlertTriangle size={15} /> Could not load the operational snapshot.</span>
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)' }}>Retry</button>
+          <button onClick={() => refetch()} className="btn btn-secondary" title="Try loading the dashboard figures again" style={{ padding: '4px 12px', fontSize: 'var(--text-xs)' }}>Retry</button>
         </div>
       ))}
 
@@ -516,7 +516,7 @@ export const Dashboard: React.FC = () => {
               <div className="glass-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14, marginTop: 12 }}>
                 {data.projects.length === 0 && <EmptyLine>No active projects.</EmptyLine>}
                 {data.projects.map((p) => (
-                  <button type="button" key={p.id} className="dash-project" style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer', borderRadius: 'var(--radius-sm)' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
+                  <button type="button" key={p.id} className="dash-project" title={`${p.name} (${p.projectNumber}) — ${p.clientName}, ${p.progressPct}% audited, ${p.totalBranches} branches. Click to open in Planning.`} style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', background: 'none', border: 'none', padding: '2px 0', cursor: 'pointer', borderRadius: 'var(--radius-sm)' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>
                         {p.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-2xs)' }}>{p.projectNumber}</span>

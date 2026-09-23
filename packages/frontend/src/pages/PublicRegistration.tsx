@@ -1,13 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, Loader2, Phone, ShieldCheck, Eye, ArrowLeft, CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck, MapPin, Landmark, GraduationCap, Users, Info, Camera, HelpCircle, Award,
+  Check, Loader2, Phone, ShieldCheck, Eye, ArrowLeft, CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck, MapPin, Landmark, GraduationCap, Users, Info, Camera, HelpCircle, Award, UserPlus,
 } from 'lucide-react';
 import {
   ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS,
+  DOCUMENT_REJECTION_GUIDANCE, APPLICATION_REFERENCES_MAX, referenceSubmitProblem, referencePhoneForDisplay, referenceEmailProblem, bankAccountConfirmProblem, REGISTRATION_REQUIRED_DOCUMENTS,
   uploadSizeProblem, isValidIfsc, normalisePhone, scanMimeType, storedScanFileName,
   inferRegistrationStep, registrationStepProblems, resumableRegistrationStep, REGISTRATION_CONDITIONAL_DOCUMENTS,
+  type ApplicationInfoRequestItem, readApplicationInfoRequests, applicationFieldStep,
   type RegistrationFormField, type RegistrationFormValues, type RegistrationProblem,
+  normalizeSourceReferral, candidateMayEditSourceReferral, sourceReferralLine, type SourceReferral,
 } from '@fapoms/shared';
+import {
+  SourceReferralFields, EMPTY_REFERRAL, referralDraftFrom, referralPayload, type SourceReferralDraft,
+} from '../components/SourceReferralFields';
 import { Select } from '../components/ui/Select';
 import { ScanOrAttach } from '../components/scanner/ScanOrAttach';
 import { AlertBanner } from '../components/ui/AlertBanner';
@@ -178,6 +184,146 @@ const FieldError: React.FC<{ message?: string | null; id?: string }> = ({ messag
   );
 };
 
+/**
+ * People who can vouch for the candidate — up to three, at least one with a number.
+ *
+ * Each row saves with the draft as it is added or removed, the same as every other answer on
+ * this form. Submit refuses without a ringable one (see `referenceSubmitProblem`), so the
+ * error here names the rule before the candidate reaches the last step.
+ *
+ * Exported for its spec: three rows, a cap, and the rule are the whole contract.
+ */
+export const ReferencesEditor: React.FC<{
+  references: CandidateReference[];
+  error: string | null;
+  onChange: (next: CandidateReference[]) => void;
+}> = ({ references, error, onChange }) => {
+  const [draft, setDraft] = useState({ fullName: '', phone: '', relationship: '', email: '' });
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const add = () => {
+    if (!draft.fullName.trim()) {
+      setLocalError('Give a name for this reference.');
+      return;
+    }
+    if (references.length >= APPLICATION_REFERENCES_MAX) {
+      setLocalError(`Only ${APPLICATION_REFERENCES_MAX} references are needed.`);
+      return;
+    }
+    if (draft.email.trim() && referenceEmailProblem(draft.email.trim().toLowerCase())) {
+      setLocalError('That email does not look right.');
+      return;
+    }
+    setLocalError(null);
+    onChange([...references, {
+      fullName: draft.fullName.trim(),
+      phone: draft.phone.replace(/\D/g, '').slice(0, 15),
+      relationship: draft.relationship.trim(),
+      email: draft.email.trim().toLowerCase(),
+    }]);
+    setDraft({ fullName: '', phone: '', relationship: '', email: '' });
+  };
+
+  const remove = (index: number) => onChange(references.filter((_, i) => i !== index));
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {references.length > 0 && (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {references.map((r, i) => (
+            <li
+              key={`${r.fullName}-${i}`}
+              style={{
+                display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap',
+                padding: '8px 12px', borderRadius: '8px',
+                background: 'var(--bg-surface)', border: '1px solid var(--border-hair)',
+                fontSize: 'var(--text-xs)',
+              }}
+            >
+              <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{r.fullName}</span>
+              {r.relationship && <span style={{ color: 'var(--text-secondary)' }}>· {r.relationship}</span>}
+              {r.phone && <span style={{ color: 'var(--text-secondary)' }}>· {referencePhoneForDisplay(r.phone)}</span>}
+              {r.email && <span style={{ color: 'var(--text-secondary)' }}>· {r.email}</span>}
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                aria-label={`Remove reference ${r.fullName}`}
+                className="btn btn-secondary"
+                style={{ fontSize: 'var(--text-2xs)', padding: '3px 10px', marginLeft: 'auto' }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {references.length < APPLICATION_REFERENCES_MAX ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', alignItems: 'end' }}>
+          <div>
+            <label htmlFor="reg-ref-name-input" style={LABEL_STYLE}>Their name *</label>
+            <input
+              id="reg-ref-name-input"
+              value={draft.fullName}
+              onChange={(e) => setDraft({ ...draft, fullName: e.target.value })}
+              placeholder="Former employer or colleague"
+              autoComplete="off"
+              maxLength={200}
+              className="reg-input"
+              style={INPUT_STYLE}
+            />
+          </div>
+          <div>
+            <label htmlFor="reg-ref-phone-input" style={LABEL_STYLE}>Their phone number</label>
+            <PhoneInput
+              id="reg-ref-phone-input"
+              value={draft.phone}
+              onChange={(v) => setDraft({ ...draft, phone: v })}
+              onBlur={() => setDraft((d) => ({ ...d, phone: d.phone.replace(/\D/g, '').slice(0, 15) }))}
+              placeholder="10-digit mobile"
+              invalid={Boolean(draft.phone) && !normalisePhone(draft.phone)}
+            />
+          </div>
+          <div>
+            <label htmlFor="reg-ref-relation-input" style={LABEL_STYLE}>How they know you</label>
+            <input
+              id="reg-ref-relation-input"
+              value={draft.relationship}
+              onChange={(e) => setDraft({ ...draft, relationship: e.target.value })}
+              placeholder="e.g. Former manager"
+              autoComplete="off"
+              maxLength={100}
+              className="reg-input"
+              style={INPUT_STYLE}
+            />
+          </div>
+          <div>
+            <label htmlFor="reg-ref-email-input" style={LABEL_STYLE}>Their email (optional)</label>
+            <input
+              id="reg-ref-email-input"
+              type="email"
+              value={draft.email}
+              onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+              placeholder="name@example.com"
+              autoComplete="off"
+              maxLength={255}
+              className="reg-input"
+              style={INPUT_STYLE}
+            />
+          </div>
+          <div>
+            <PrimaryButton onClick={add} title="Add this person as a reference">
+              Add reference
+            </PrimaryButton>
+          </div>
+        </div>
+      ) : (
+        <div style={HINT_STYLE}>Three references is the most this form takes — remove one to change them.</div>
+      )}
+      <FieldError message={localError ?? error} />
+    </div>
+  );
+};
+
 /** Phone box with a fixed +91 prefix so candidates stop typing it (and re-typing it wrong). */
 const PhoneInput: React.FC<{
   id: string;
@@ -188,7 +334,8 @@ const PhoneInput: React.FC<{
   disabled?: boolean;
   invalid?: boolean;
   describedBy?: string;
-}> = ({ id, value, onChange, onBlur, placeholder, disabled, invalid, describedBy }) => (
+  title?: string;
+}> = ({ id, value, onChange, onBlur, placeholder, disabled, invalid, describedBy, title }) => (
   <div style={{ position: 'relative' }}>
     <span
       aria-hidden
@@ -202,6 +349,7 @@ const PhoneInput: React.FC<{
     <input
       id={id}
       value={value}
+      title={title}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
       inputMode="tel"
@@ -219,6 +367,31 @@ const PhoneInput: React.FC<{
 
 /** The same answers the phone app's registration holds — the rules over them live in shared. */
 type FormState = RegistrationFormValues;
+
+interface CandidateReference {
+  fullName: string;
+  phone: string;
+  relationship: string;
+  email: string;
+}
+
+/** Who referred them, as stored on the application — HR's entry or their own. */
+const readSourceReferral = (app: RegistrationApplication | null | undefined): SourceReferral | null =>
+  ((app?.extendedProfile as { sourceReferral?: SourceReferral } | null)?.sourceReferral) ?? null;
+
+const readCandidateReferences = (app: RegistrationApplication): CandidateReference[] => {
+  const raw = (app.extendedProfile as { references?: unknown } | null)?.references;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
+    .map((r) => ({
+      fullName: String(r.fullName ?? ''),
+      phone: String(r.phone ?? ''),
+      relationship: String(r.relationship ?? ''),
+      email: String(r.email ?? ''),
+    }))
+    .filter((r) => r.fullName.trim() !== '' || r.phone.trim() !== '' || r.email.trim() !== '');
+};
 
 export const RECORD_KEYS = [
   'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'bankName',
@@ -243,9 +416,15 @@ const seedForm = (app: RegistrationApplication): FormState => ({
   ...Object.fromEntries(
     RECORD_KEYS.map((k) => [k, String(app.extendedProfile?.fields?.[k] ?? '')]),
   ) as Pick<FormState, typeof RECORD_KEYS[number]>,
+  // What is already saved counts as confirmed: it was typed twice when it was saved. Only a number
+  // typed NOW has to be typed again.
+  bankAccountNumberConfirm: String(app.extendedProfile?.fields?.bankAccountNumber ?? ''),
 });
 
 function fieldPatch(key: keyof FormState, value: string): UpdateRegistrationDraftInput {
+  // The second typing of the account number exists only on this screen, to be compared. Never sent:
+  // the API refuses properties it does not know, so leaking it would fail every whole-form save.
+  if (key === 'bankAccountNumberConfirm') return {};
   const trimmed = (value ?? '').trim();
 
   if (key === 'dateOfBirth') {
@@ -415,7 +594,7 @@ const STEP_MESSAGES: Partial<Record<RegistrationFormField, Partial<Record<Regist
 function problemMessage(field: RegistrationFormField, problem: RegistrationProblem): string {
   if (problem.code === 'tooLong') return `Keep this under ${problem.max} characters (${problem.length} now).`;
   if (problem.code === 'outOfRange') return `Enter ${problem.min} for fresher, up to ${problem.max} years.`;
-  if (problem.code === 'dateOfBirth') return problem.message;
+  if (problem.code === 'dateOfBirth' || problem.code === 'mismatch') return problem.message;
   return STEP_MESSAGES[field]?.[problem.code] ?? 'Check this answer.';
 }
 
@@ -434,6 +613,20 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [application, setApplication] = useState<RegistrationApplication | null>(null);
   const [documents, setDocuments] = useState<RegistrationApplicationDocument[]>([]);
   const [documentsRequested, setDocumentsRequested] = useState<string[]>([]);
+  /**
+   * People who can vouch for the candidate — up to three, at least one with a number.
+   * Saved with the draft like every other answer; submit refuses without a ringable one.
+   */
+  const [references, setReferences] = useState<CandidateReference[]>([]);
+  const [referencesError, setReferencesError] = useState<string | null>(null);
+  /** Who referred them — theirs to fill only while HR has not recorded it. */
+  const [referral, setReferral] = useState<SourceReferralDraft>(EMPTY_REFERRAL);
+  const [referralError, setReferralError] = useState<string | null>(null);
+  /**
+   * Exactly what HR asked for — the to-do list this link renders instead of one free-text
+   * banner. Entries clear themselves as the candidate fixes each item.
+   */
+  const [infoRequests, setInfoRequests] = useState<ApplicationInfoRequestItem[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
 
   const [activeStep, setActiveStep] = useState<number>(() => getStoredStep(token) ?? 1);
@@ -524,8 +717,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       setConsentNotice(result.consentNotice);
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
+      setInfoRequests(result.infoRequests ?? []);
       const seeded = seedForm(result.application);
       setForm(seeded);
+      setReferences(readCandidateReferences(result.application));
+      setReferral(referralDraftFrom(readSourceReferral(result.application)));
+      setReferencesError(null);
       setPhone(result.application.mobile ?? '');
       if (result.otpVerified) {
         setOtpVerified(true);
@@ -563,6 +760,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       const result = await hydrateRegistration(token);
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
+      setInfoRequests(result.infoRequests ?? []);
       setApplication((prev) => (prev ? { ...prev, ...result.application } : result.application));
       if (result.otpVerified) {
         setOtpVerified(true);
@@ -689,6 +887,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     try {
       const saved = await updateRegistrationDraft(token, patch);
       setApplication(saved);
+      // The server drops an ask the moment its field actually changes; read the list back so the
+      // "Action needed" box shrinks as they fix things, the same way a re-uploaded scan does.
+      if ('infoRequests' in (saved as object)) {
+        setInfoRequests(readApplicationInfoRequests((saved as { infoRequests?: unknown }).infoRequests));
+      }
       setDraftSaved(true);
     } catch (err) {
       setDraftError(userMessage(err));
@@ -978,6 +1181,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     try {
       const row = await uploadRegistrationDocument(token, requirement, file);
       setDocuments((prev) => [...prev.filter((d) => d.requirement !== requirement), row]);
+      // The fresh scan answers its own send-back: drop the ask so the to-do list shrinks now,
+      // not on the next reload. (The server clears its copy the same way.)
+      setInfoRequests((prev) => prev.filter((i) => !(i.kind === 'document' && i.key === requirement)));
     } catch (err) {
       setUploadErrors((prev) => ({ ...prev, [requirement]: userMessage(err) }));
       onVerificationLost(err);
@@ -1076,6 +1282,27 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     setSubmitBusy(true);
     setSubmitError(null);
     try {
+      // Checked here too, so the candidate is taken to the document rather than told by the server.
+      const missingDoc = REGISTRATION_REQUIRED_DOCUMENTS.find(
+        (req) => documentsRequested.includes(req)
+          && !documents.some((d) => d.requirement === req && d.filePaths.length > 0),
+      );
+      if (missingDoc) {
+        const label = ONBOARDING_DOCUMENT_LABELS[missingDoc as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? missingDoc;
+        setSubmitError(`Upload your ${label.toLowerCase()} before submitting — the page showing your name, account number and IFSC.`);
+        goToStep(4);
+        window.setTimeout(() => {
+          document.getElementById(`doc-req-${missingDoc}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 150);
+        return;
+      }
+      const problem = referenceSubmitProblem(references);
+      if (problem) {
+        setReferencesError(problem);
+        setSubmitError(`${problem} Add them in Step 2 (Experience & Address).`);
+        goToStep(2);
+        return;
+      }
       const saved = await submitRegistration(token);
       setApplication(saved);
     } catch (err) {
@@ -1428,6 +1655,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         type="button"
                         onClick={() => isClickable && goToStep(s.id)}
                         disabled={!isClickable}
+                        title={`Go to step ${s.id}: ${s.title}`}
                         className={`pub-reg-roadmap-item ${isCurrent ? 'is-active' : ''} ${isCompleted ? 'is-completed' : ''}`}
                         aria-current={isCurrent ? 'step' : undefined}
                         style={{ cursor: isClickable ? 'pointer' : 'default' }}
@@ -1490,9 +1718,58 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
             </div>
 
             {application.status === ApplicationStatus.AWAITING_INFO && (
-              <AlertBanner type="error">
-                <strong>HR requested clarification:</strong> {application.reviewNotes || 'Please review and update your application details.'}
-              </AlertBanner>
+              <div
+                role="alert"
+                style={{
+                  padding: '14px 16px', borderRadius: '10px',
+                  background: 'color-mix(in srgb, var(--warning) 12%, transparent)',
+                  border: '1px solid var(--warning)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: infoRequests.length > 0 ? '8px' : 0 }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: '22px', height: '22px', padding: '0 6px', borderRadius: '999px',
+                    background: 'var(--warning)', color: '#fff',
+                    fontSize: 'var(--text-xs)', fontWeight: 700,
+                  }}>
+                    {infoRequests.length > 0 ? infoRequests.length : '!'}
+                  </span>
+                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    Action needed
+                  </span>
+                </div>
+                {infoRequests.length > 0 ? (
+                  <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {infoRequests.map((item) => (
+                      <li key={`${item.kind}:${item.key}`} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                        <strong>{item.label}</strong> — {item.message}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (item.kind === 'document') {
+                              goToStep(4);
+                              window.setTimeout(() => {
+                                document.getElementById(`doc-req-${item.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              }, 150);
+                            } else {
+                              goToStep(applicationFieldStep(item.key));
+                            }
+                          }}
+                          className="btn btn-secondary"
+                          style={{ fontSize: 'var(--text-2xs)', padding: '3px 10px', marginLeft: '8px' }}
+                        >
+                          Fix
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                    {application.reviewNotes || 'Please review your application and submit again.'}
+                  </div>
+                )}
+              </div>
             )}
 
             {draftError && (
@@ -1533,6 +1810,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         <PhoneInput
                           id="reg-phone-input"
                           value={phone}
+                          title="Type your 10-digit mobile number for verification"
                           onChange={(v) => {
                             setPhone(v);
                             if (phoneConflict) setPhoneConflict(null);
@@ -1574,6 +1852,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           onClick={() => void handleSendCode()}
                           busy={otpBusy || checkingPhone}
                           disabled={Boolean(phoneConflict) || Boolean(mobileHint(phone)) || otpCooldown > 0}
+                          title="Send a 6-digit verification code to this mobile number"
                         >
                           {otpCooldown > 0 ? `Send verification code (${otpCooldown}s)` : 'Send verification code'}
                         </PrimaryButton>
@@ -1615,7 +1894,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           </div>
                           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                             <div style={{ flex: '1 1 160px' }}>
-                              <PrimaryButton onClick={() => void handleVerifyCode()} busy={otpBusy}>
+                              <PrimaryButton onClick={() => void handleVerifyCode()} busy={otpBusy} title="Check the code and verify your mobile number">
                                 Verify code
                               </PrimaryButton>
                             </div>
@@ -1623,6 +1902,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                               type="button"
                               onClick={() => void handleSendCode()}
                               disabled={otpBusy || checkingPhone || Boolean(phoneConflict) || otpCooldown > 0}
+                              title="Send the verification code to your mobile number again"
                               className="btn btn-secondary"
                               style={{
                                 flex: '1 1 140px',
@@ -1671,6 +1951,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-fullName-input"
                         value={form.fullName}
+                        title="Type your full name exactly as on your Aadhaar or PAN card"
                         onChange={(e) => updateField('fullName', e.target.value)}
                         onBlur={commitField('fullName')}
                         placeholder="e.g. Ramesh Kumar Sharma"
@@ -1689,6 +1970,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         id="reg-dateOfBirth-input"
                         type="date"
                         value={form.dateOfBirth}
+                        title="Pick your date of birth as printed on your identity document"
                         min={DOB_MIN}
                         max={dobMaxToday()}
                         onChange={(e) => updateField('dateOfBirth', e.target.value)}
@@ -1706,6 +1988,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         id="reg-email-input"
                         value={form.email}
                         type="email"
+                        title="Type an email address where HR can reach you"
                         autoCapitalize="none"
                         autoComplete="email"
                         onChange={(e) => updateField('email', e.target.value)}
@@ -1746,7 +2029,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }} aria-live="polite">
                       {savingDraft ? 'Saving…' : draftSaved ? <span style={{ color: 'var(--success)' }}>✓ Saved automatically</span> : 'Progress saves automatically'}
                     </div>
-                    <PrimaryButton onClick={() => attemptGoToStep(2)}>
+                    <PrimaryButton onClick={() => attemptGoToStep(2)} title="Save this step and continue to experience details">
                       Continue to Experience &amp; Address &rarr;
                     </PrimaryButton>
                   </div>
@@ -1785,6 +2068,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-currentEmployer-input"
                       value={form.currentEmployer}
+                      title="Type the name of the jeweller or firm you currently work with, if any"
                       onChange={(e) => updateField('currentEmployer', e.target.value)}
                       onBlur={commitField('currentEmployer')}
                       placeholder="Current jeweller or valuation firm"
@@ -1802,6 +2086,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-expertise-input"
                       value={form.expertise}
+                      title="Describe your core valuation skills, e.g. gold purity testing"
                       onChange={(e) => updateField('expertise', e.target.value)}
                       onBlur={commitField('expertise')}
                       placeholder="Gold purity testing, hallmarking, diamond grading…"
@@ -1816,6 +2101,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-availability-input"
                       value={form.availability}
+                      title="Type the days you are available for branch audits"
                       onChange={(e) => updateField('availability', e.target.value)}
                       onBlur={commitField('availability')}
                       placeholder="Weekdays, alternate Saturdays, full-time…"
@@ -1847,6 +2133,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-pincode-input"
                       value={form.pincode}
+                      title="Type your 6-digit postal pincode to look up your address"
                       onChange={(e) => updateField('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))}
                       onBlur={handlePincodeBlur}
                       inputMode="numeric"
@@ -1872,6 +2159,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       {pincodeOffer && (
                         <button
                           type="button"
+                          title="Fill the state, district and town with the postal directory suggestion"
                           onClick={() => {
                             const place = pincodeOffer;
                             setForm((prev) => (prev ? {
@@ -1931,6 +2219,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-district-input"
                       value={form.district}
+                      title="Type your district name"
                       onChange={(e) => updateField('district', e.target.value)}
                       onBlur={commitField('district')}
                       placeholder="e.g. Thane"
@@ -1946,6 +2235,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-city-input"
                       value={form.city}
+                      title="Type your town or city name"
                       onChange={(e) => {
                         updateField('city', e.target.value);
                         if (stepErrors.city) {
@@ -1979,9 +2269,10 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <label htmlFor="reg-address-input" style={LABEL_STYLE}>
                     Full residential street address <span style={{ color: 'var(--danger)' }}>*</span>
                   </label>
-                  <textarea
+                    <textarea
                     id="reg-address-input"
                     value={form.address}
+                    title="Type your full street address with flat, building and street"
                     onChange={(e) => {
                       updateField('address', e.target.value);
                       if (stepErrors.address) {
@@ -2022,6 +2313,73 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   }}
                 />
 
+                <div style={{ borderTop: '1px solid var(--border-color)', margin: '6px 0' }} />
+
+                <div>
+                  <div style={SECTION_TITLE_STYLE}>
+                    <Users size={18} style={{ color: 'var(--accent)' }} />
+                    <span>References</span>
+                  </div>
+                  <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
+                    Up to {APPLICATION_REFERENCES_MAX} people who can vouch for you — a former
+                    employer or colleague. At least one with a phone number is required before
+                    you can submit; add an email wherever you have one.
+                  </div>
+                </div>
+
+                <ReferencesEditor
+                  references={references}
+                  error={referencesError}
+                  onChange={(next) => {
+                    setReferences(next);
+                    setReferencesError(null);
+                    void saveDraft({ references: next });
+                  }}
+                />
+
+                {/*
+                  WHO REFERRED THEM — the source reference, not a fourth referee. HR usually records
+                  it at intake; then it is shown, not asked. Otherwise it is theirs to give, saved
+                  when they leave the group (not box by box, which would call a half-typed entry
+                  wrong while they are still typing it).
+                */}
+                <div>
+                  <div style={SECTION_TITLE_STYLE}>
+                    <UserPlus size={18} style={{ color: 'var(--accent)' }} />
+                    <span>Who referred you</span>
+                  </div>
+                  {(() => {
+                    const stored = readSourceReferral(application);
+                    if (!candidateMayEditSourceReferral(stored)) {
+                      return (
+                        <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px' }}>
+                          {sourceReferralLine(stored)} — recorded by our HR team. Tell them if this is not right.
+                        </div>
+                      );
+                    }
+                    const commit = () => {
+                      const payload = referralPayload(referral);
+                      const { error } = normalizeSourceReferral(payload, 'CANDIDATE');
+                      if (error) { setReferralError(error); return; }
+                      setReferralError(null);
+                      const same = JSON.stringify(referralPayload(referralDraftFrom(stored))) === JSON.stringify(payload);
+                      if (!same) void saveDraft({ sourceReferral: payload });
+                    };
+                    return (
+                      <>
+                        <div style={{ ...SECTION_NOTE_STYLE, marginTop: '4px', marginBottom: '10px' }}>
+                          Optional. If somebody pointed you to us — one of our assayers, our staff, a
+                          bank branch — tell us who, with a mobile or an email.
+                        </div>
+                        <div onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) commit(); }}>
+                          <SourceReferralFields value={referral} onChange={(next) => { setReferral(next); setReferralError(null); }} idPrefix="reg-referral" voice="you" />
+                        </div>
+                        {referralError && <div role="alert" style={{ ...HINT_STYLE, color: 'var(--danger)' }}>{referralError}</div>}
+                      </>
+                    );
+                  })()}
+                </div>
+
                 <div style={{
                   display: 'flex',
                   justifyContent: 'space-between',
@@ -2035,12 +2393,13 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <button
                     type="button"
                     onClick={() => goToStep(1)}
+                    title="Go back to the personal details step"
                     className="btn btn-secondary"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
                   >
                     <ArrowLeft size={16} /> Back
                   </button>
-                  <PrimaryButton onClick={() => attemptGoToStep(3)}>
+                  <PrimaryButton onClick={() => attemptGoToStep(3)} title="Save this step and continue to bank details">
                     Continue to Statutory &amp; Bank &rarr;
                   </PrimaryButton>
                 </div>
@@ -2078,6 +2437,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           key={c.value}
                           type="button"
                           aria-pressed={selected}
+                          title={`Choose ${c.title}: ${c.desc}`}
                           onClick={() => void handleEmploymentCategoryChange(c.value)}
                           className={`reg-cat-card${selected ? ' reg-cat-selected' : ''}`}
                           style={{
@@ -2143,6 +2503,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-panNumber-input"
                         value={form.panNumber}
+                        title="Type your 10-character PAN, e.g. ABCDE1234F"
                         placeholder="ABCDE1234F"
                         onChange={(e) => updateField('panNumber', e.target.value.toUpperCase())}
                         onBlur={commitField('panNumber')}
@@ -2161,6 +2522,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-aadhaarNumber-input"
                         value={form.aadhaarNumber}
+                        title="Type the 12-digit number from your Aadhaar card"
                         inputMode="numeric"
                         placeholder="12 digits"
                         onChange={(e) => updateField('aadhaarNumber', e.target.value.replace(/\D/g, '').slice(0, 12))}
@@ -2192,10 +2554,19 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-bankAccountNumber-input"
                         value={form.bankAccountNumber}
+                        title="Type your bank account number where payouts should go"
                         inputMode="numeric"
                         placeholder="9–18 digit account number"
-                        onChange={(e) => updateField('bankAccountNumber', e.target.value.replace(/\D/g, '').slice(0, 18))}
-                        onBlur={commitField('bankAccountNumber')}
+                        onChange={(e) => {
+                          updateField('bankAccountNumber', e.target.value.replace(/\D/g, '').slice(0, 18));
+                          // A changed number is a new number: it has to be typed a second time.
+                          updateField('bankAccountNumberConfirm', '');
+                        }}
+                        onBlur={() => {
+                          // Saved once confirmed (see the box below) — except emptying it, which needs no
+                          // second typing and must reach the server so a wrong number can be cleared.
+                          if (!form.bankAccountNumber.trim()) void saveDraft(fieldPatch('bankAccountNumber', ''));
+                        }}
                         autoComplete="off"
                         aria-invalid={Boolean(stepErrors.bankAccountNumber)}
                         className="reg-input"
@@ -2203,11 +2574,50 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       />
                       <FieldError message={stepErrors.bankAccountNumber} />
                     </div>
+                    {/*
+                      Typed twice, because nothing else can catch a wrong digit: Indian account numbers
+                      carry no check digit, so a slip still "looks right" and the pay goes to a stranger
+                      or bounces. Pasting is refused here for that reason — a pasted copy repeats the
+                      mistake instead of catching it.
+                    */}
+                    <div id="reg-bankAccountNumberConfirm">
+                      <label htmlFor="reg-bankAccountNumberConfirm-input" style={LABEL_STYLE}>Re-enter account number</label>
+                      <input
+                        id="reg-bankAccountNumberConfirm-input"
+                        value={form.bankAccountNumberConfirm ?? ''}
+                        title="Type the account number again, from your passbook"
+                        inputMode="numeric"
+                        placeholder="Type it again to confirm"
+                        onChange={(e) => updateField('bankAccountNumberConfirm', e.target.value.replace(/\D/g, '').slice(0, 18))}
+                        onPaste={(e) => {
+                          e.preventDefault();
+                          setStepErrors((prev) => ({ ...prev, bankAccountNumberConfirm: 'Type it again rather than pasting — that is what catches a wrong digit.' }));
+                        }}
+                        onBlur={() => {
+                          const problem = bankAccountConfirmProblem(form.bankAccountNumber, form.bankAccountNumberConfirm ?? '');
+                          setStepErrors((prev) => {
+                            const next = { ...prev };
+                            if (problem && (form.bankAccountNumberConfirm ?? '').trim()) next.bankAccountNumberConfirm = problem;
+                            else delete next.bankAccountNumberConfirm;
+                            return next;
+                          });
+                          if (!problem && form.bankAccountNumber.trim()) {
+                            void saveDraft(fieldPatch('bankAccountNumber', form.bankAccountNumber));
+                          }
+                        }}
+                        autoComplete="off"
+                        aria-invalid={Boolean(stepErrors.bankAccountNumberConfirm)}
+                        className="reg-input"
+                        style={{ ...(stepErrors.bankAccountNumberConfirm ? INPUT_ERROR_STYLE : INPUT_STYLE), fontFamily: 'monospace' }}
+                      />
+                      <FieldError message={stepErrors.bankAccountNumberConfirm} />
+                    </div>
                     <div id="reg-ifscCode">
                       <label htmlFor="reg-ifscCode-input" style={LABEL_STYLE}>Bank IFSC code</label>
                       <input
                         id="reg-ifscCode-input"
                         value={form.ifscCode}
+                        title="Type the IFSC code from your passbook, e.g. SBIN0001234"
                         placeholder="e.g. SBIN0001234"
                         onChange={(e) => {
                           updateField('ifscCode', e.target.value.toUpperCase());
@@ -2246,6 +2656,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           id="reg-bankName-input"
                           value={form.bankName}
                           readOnly
+                          title="Bank name verified from your IFSC code"
                           aria-readonly="true"
                           className="reg-input"
                           style={{ ...INPUT_STYLE, background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontWeight: 600 }}
@@ -2255,6 +2666,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           <button
                             type="button"
                             onClick={() => setBankLocked(false)}
+                            title="Unlock the bank name field and type it yourself"
                             style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontWeight: 600, fontSize: 'var(--text-xs)', textDecoration: 'underline' }}
                           >
                             Edit anyway
@@ -2265,6 +2677,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       <input
                         id="reg-bankName-input"
                         value={form.bankName}
+                        title="Type your bank name, or enter an IFSC code above to fill it in"
                         placeholder="Enter IFSC code above to auto-populate, or type manually"
                         onChange={(e) => updateField('bankName', e.target.value)}
                         onBlur={commitField('bankName')}
@@ -2288,6 +2701,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-qualification-input"
                       value={form.qualification}
+                      title="Type your highest qualification as on your certificate"
                       placeholder="e.g. B.Com, Graduate, Diploma in Gemology"
                       onChange={(e) => updateField('qualification', e.target.value)}
                       onBlur={commitField('qualification')}
@@ -2319,6 +2733,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <input
                       id="reg-ec-name-input"
                       value={form.emergencyContactName}
+                      title="Type the name of the person to contact in an emergency"
                       placeholder="e.g. Sunita Sharma"
                       onChange={(e) => updateField('emergencyContactName', e.target.value)}
                       onBlur={commitField('emergencyContactName')}
@@ -2333,6 +2748,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <PhoneInput
                       id="reg-emergencyContactPhone-input"
                       value={form.emergencyContactPhone}
+                      title="Type a 10-digit mobile number for your emergency contact"
                       onChange={(v) => updateField('emergencyContactPhone', v)}
                       onBlur={commitField('emergencyContactPhone')}
                       invalid={Boolean(stepErrors.emergencyContactPhone)}
@@ -2369,6 +2785,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <PhoneInput
                       id="reg-alternatePhone-input"
                       value={form.alternatePhone}
+                      title="Type a second mobile number where you can be reached (optional)"
                       onChange={(v) => updateField('alternatePhone', v)}
                       onBlur={commitField('alternatePhone')}
                       placeholder="Optional second number"
@@ -2392,12 +2809,13 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   <button
                     type="button"
                     onClick={() => goToStep(2)}
+                    title="Go back to the experience and address step"
                     className="btn btn-secondary"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
                   >
                     <ArrowLeft size={16} /> Back
                   </button>
-                  <PrimaryButton onClick={() => attemptGoToStep(4)}>
+                  <PrimaryButton onClick={() => attemptGoToStep(4)} title="Save this step and continue to documents">
                     Continue to Documents & Submit &rarr;
                   </PrimaryButton>
                 </div>
@@ -2452,15 +2870,26 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       const label = ONBOARDING_DOCUMENT_LABELS[requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? requirement;
                       const isPhoto = requirement === 'PHOTOGRAPH';
                       const isConditional = CONDITIONAL_DOCS.has(requirement);
+                      // Enforced at submit — the rest of "Required" is advice, these are a refusal.
+                      const blocksSubmit = REGISTRATION_REQUIRED_DOCUMENTS.includes(requirement);
+                      // Sent back by HR: flagged until a fresh scan lands, with HR's own words.
+                      const sentBack = doc?.reviewStatus === 'NEEDS_RESUBMIT';
+                      const sentBackMessage = infoRequests.find((i) => i.kind === 'document' && i.key === requirement)?.message
+                        ?? doc?.rejectionNote
+                        ?? (doc?.rejectionReason
+                          ? (DOCUMENT_REJECTION_GUIDANCE[doc.rejectionReason as keyof typeof DOCUMENT_REJECTION_GUIDANCE] ?? null)
+                          : null);
 
                       return (
                         <div
                           key={requirement}
                           id={`doc-req-${requirement}`}
                           style={{
-                            border: uploaded
-                              ? '1px solid color-mix(in srgb, var(--success) 45%, var(--border-color))'
-                              : isPhoto ? '1px solid var(--accent)' : '1px dashed var(--border-color)',
+                            border: sentBack
+                              ? '1px solid var(--warning)'
+                              : uploaded
+                                ? '1px solid color-mix(in srgb, var(--success) 45%, var(--border-color))'
+                                : isPhoto ? '1px solid var(--accent)' : '1px dashed var(--border-color)',
                             borderRadius: 'var(--radius-sm, 10px)',
                             padding: '14px 16px',
                             display: 'flex',
@@ -2468,7 +2897,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                             justifyContent: 'space-between',
                             gap: '12px',
                             flexWrap: 'wrap',
-                            background: uploaded ? 'color-mix(in srgb, var(--success) 5%, transparent)' : 'transparent',
+                            background: sentBack
+                              ? 'color-mix(in srgb, var(--warning) 8%, transparent)'
+                              : uploaded ? 'color-mix(in srgb, var(--success) 5%, transparent)' : 'transparent',
                           }}
                         >
                           <div style={{ flex: '1 1 200px', minWidth: 0 }}>
@@ -2487,7 +2918,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                                 color: isPhoto ? '#fff' : isConditional ? 'var(--text-secondary)' : 'var(--accent)',
                                 border: isConditional ? '1px solid var(--border-color)' : 'none',
                               }}>
-                                {isPhoto ? 'Mandatory for ID Card' : isConditional ? 'If applicable' : 'Required'}
+                                {isPhoto ? 'Mandatory for ID Card' : blocksSubmit ? 'Needed to submit' : isConditional ? 'If applicable' : 'Required'}
                               </span>
                             </div>
                             <div style={{ fontSize: 'var(--text-xs)', color: uploaded ? 'var(--success)' : 'var(--text-secondary)', marginTop: '4px' }}>
@@ -2497,6 +2928,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                                 </span>
                               ) : isPhoto ? (
                                 'Required for your Appraiser ID Card — clear face portrait'
+                              ) : requirement === 'BANK_PASSBOOK' ? (
+                                'The page showing your name, account number and IFSC. No passbook? A cancelled cheque or the first page of a bank statement is fine.'
                               ) : isConditional ? (
                                 requirement === 'RENT_AGREEMENT' ? 'Required only if residential address differs from Aadhaar' : 'Required if shop premises are rented'
                               ) : (
@@ -2506,6 +2939,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                             {uploadErrors[requirement] && (
                               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)', marginTop: '4px' }}>
                                 {uploadErrors[requirement]}
+                              </div>
+                            )}
+                            {sentBack && sentBackMessage && (
+                              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', fontWeight: 600, marginTop: '4px', lineHeight: 1.5 }}>
+                                {sentBackMessage}
                               </div>
                             )}
                           </div>
@@ -2585,6 +3023,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       type="button"
                       onClick={() => void handleWithdraw()}
                       disabled={withdrawing}
+                      title="Withdraw your application and delete what you have shared"
                       style={{
                         background: 'none', border: 'none', padding: '2px',
                         color: 'var(--danger)', textDecoration: 'underline',
@@ -2612,6 +3051,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           <button
                             type="button"
                             onClick={() => goToStep(1)}
+                            title="Go back to step 1 to verify your mobile number"
                             style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
                           >
                             Verify in Step 1 &rarr;
@@ -2627,6 +3067,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           <button
                             type="button"
                             onClick={() => goToStep(1)}
+                            title="Go back to step 1 to enter your legal name"
                             style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
                           >
                             Enter in Step 1 &rarr;
@@ -2642,6 +3083,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                           <button
                             type="button"
                             onClick={() => goToStep(3)}
+                            title="Go back to step 3 to choose how you practise as an appraiser"
                             style={{ marginLeft: '8px', color: 'var(--accent)', background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', padding: '2px', fontWeight: 600, fontSize: 'var(--text-xs)' }}
                           >
                             Select in Step 3 &rarr;
@@ -2656,6 +3098,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                         {!hasPhotograph && (
                           <button
                             type="button"
+                            title="Scroll up to the photograph upload on this page"
                             onClick={() => {
                               const el = document.getElementById('doc-req-PHOTOGRAPH');
                               if (el) {
@@ -2696,6 +3139,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                     <button
                       type="button"
                       onClick={() => goToStep(3)}
+                      title="Go back to the bank details step"
                       className="btn btn-secondary"
                       style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '11px 18px', minHeight: '48px' }}
                     >
@@ -2705,6 +3149,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                       onClick={() => void handleSubmit()}
                       disabled={!canSubmit}
                       busy={submitBusy}
+                      title="Send your completed application to HR for review"
                       style={{ minWidth: '220px', flex: '1 1 220px', maxWidth: '340px' }}
                     >
                       Submit application for HR review

@@ -65,6 +65,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
           type="button"
           onClick={onToggleFilters}
           className={`btn ${showFilters ? 'btn-primary' : 'btn-secondary'}`}
+          title={showFilters ? 'Hide the filter panel' : `Show filters${appliedCount > 0 ? ` — ${appliedCount} active` : ''}`}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '7px 12px' }}
         >
           <SlidersHorizontal size={14} />
@@ -119,6 +120,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
               type="button"
               onClick={onOpenImport}
               className="btn btn-secondary"
+              title="Import roster rows from an Excel workbook — rehearsed first, nothing written blindly"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '7px 12px' }}
             >
               <Upload size={14} />
@@ -138,6 +140,7 @@ export const RosterHeader: React.FC<RosterHeaderProps> = ({
               type="button"
               onClick={() => navigate('/hr/interviews')}
               className="btn btn-primary"
+              title="Start hiring — add a candidate interview, then invite them to register themselves"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-sm)', padding: '7px 14px' }}
             >
               <Plus size={15} />

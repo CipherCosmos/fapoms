@@ -154,6 +154,7 @@ export const RecommendationPanel: React.FC<{
             </div>
             <button
               onClick={() => onViewHistory(selectedPb.id)}
+              title={`Show past visits and assignments for ${selectedPb.branch.name}`}
               style={{
                 marginTop: '10px', padding: '8px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
                 background: 'var(--bg-page)', border: '1px solid var(--border-color)',
@@ -201,7 +202,7 @@ export const RecommendationPanel: React.FC<{
                 {onToggleIgnoreDateAvailability && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: ignoreDateAvailability ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
                     title="Ranks everyone nearby even if they are booked or on leave that day. Each clash is still shown on the person's card.">
-                    <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} />
+                    <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} title="Tick to also list people who are booked or on leave that day" />
                     Also show people who are busy that day
                   </label>
                 )}
@@ -217,7 +218,7 @@ export const RecommendationPanel: React.FC<{
                 {onToggleIgnoreClientPolicy && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: ignoreClientPolicy ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
                     title="Ranks people who are not on this client's panel. Their standing is still shown on their card, and assigning one still needs a recorded reason.">
-                    <input type="checkbox" checked={ignoreClientPolicy} onChange={(e) => onToggleIgnoreClientPolicy(e.target.checked)} />
+                    <input type="checkbox" checked={ignoreClientPolicy} onChange={(e) => onToggleIgnoreClientPolicy(e.target.checked)} title="Tick to also list people not on this client's panel" />
                     Also show people not on this client&rsquo;s panel
                   </label>
                 )}
@@ -232,7 +233,7 @@ export const RecommendationPanel: React.FC<{
                 {onToggleIgnoreDistancePolicy && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: ignoreDistancePolicy ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
                     title="Searches the whole workforce instead of a radius around the branch. The client's conflict-of-interest minimum still applies — that one is not an operator's to waive.">
-                    <input type="checkbox" checked={ignoreDistancePolicy} onChange={(e) => onToggleIgnoreDistancePolicy(e.target.checked)} />
+                    <input type="checkbox" checked={ignoreDistancePolicy} onChange={(e) => onToggleIgnoreDistancePolicy(e.target.checked)} title="Tick to search the whole workforce, not just nearby" />
                     Search every distance
                   </label>
                 )}
@@ -322,6 +323,7 @@ export const RecommendationPanel: React.FC<{
                         <button
                           type="button"
                           onClick={() => setOverrideOpen(true)}
+                          title="Open controls to change the minimum distance rule"
                           style={{
                             background: 'transparent', border: '1px solid var(--border-color)',
                             borderRadius: '4px', color: 'var(--accent)', cursor: 'pointer',

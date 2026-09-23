@@ -6,7 +6,7 @@ import { SmsService } from '../notifications/sms.service';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { appPublicUrl } from '../../infrastructure/notifications/email-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { assessBackgroundGate } from './identity-artifacts'; import { openApprovalRound } from './onboarding-approval.store'; import { normalizeSourceReferral, sourceReferralLine, type SourceReferral, type ReferralRecordedBy } from '@fapoms/shared'; import { BackgroundCheckVerdict } from '@fapoms/shared'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { NotificationService } from '../notifications/notification.service'; import { appPublicUrl } from '../../infrastructure/notifications/email-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, ONBOARDING_STAGES, canTransitionAssayerLifecycle, mayReopenBackgroundVerification, mayReopenFinalApproval, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmploymentCategory, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, normaliseBankAccountNumber, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
   normalisePhone, formatDateOnly, parseCalendarDate, assayerLifecycleBlockedBy,
   IDEMPOTENCY_ERROR_CODES, payoutBlockingGaps,
@@ -223,6 +223,7 @@ function applyAuthoredName(
 function normaliseIdentityFields(dto: {
   panNumber?: string | null;
   ifscCode?: string | null;
+  bankAccountNumber?: string | null;
   phone?: string | null;
   alternatePhone?: string | null;
   emergencyContactPhone?: string | null;
@@ -232,6 +233,12 @@ function normaliseIdentityFields(dto: {
   }
   if (typeof dto.ifscCode === 'string' && dto.ifscCode.trim()) {
     dto.ifscCode = dto.ifscCode.trim().toUpperCase();
+  }
+  // The digits, as the shape rule judged them — "1234 5678 9012" and "123456789012" are one account,
+  // and storing the spaced one would make the duplicate check and a later comparison miss it.
+  // A masked value is left exactly as sent, for `assertNoMaskedPii` to refuse by name.
+  if (typeof dto.bankAccountNumber === 'string' && dto.bankAccountNumber.trim() && !looksMasked(dto.bankAccountNumber)) {
+    dto.bankAccountNumber = normaliseBankAccountNumber(dto.bankAccountNumber);
   }
   for (const field of ['phone', 'alternatePhone', 'emergencyContactPhone'] as const) {
     const value = dto[field];
@@ -2940,6 +2947,28 @@ export class AssayerService implements OnModuleInit {
       }
     }
 
+    /**
+     * The background-verification exit, asked the same way and for the same reason: a walk that
+     * crosses BACKGROUND_VERIFICATION → TRAINING is refused there (mandatory — no mode), so a batch
+     * `INVITED → ACTIVE` would otherwise commit two hops and strand people in background
+     * verification with a response calling them failed. Refused before it starts instead. A
+     * one-hop walk is left to the funnel, which cannot leave anything half-moved.
+     */
+    const crossesBgvExit = path.includes(AssayerLifecycleStatus.FINAL_APPROVAL)
+      && (from === AssayerLifecycleStatus.BACKGROUND_VERIFICATION || path.includes(AssayerLifecycleStatus.BACKGROUND_VERIFICATION));
+    if (path.length > 1 && crossesBgvExit && this.rosterRecords) {
+      const [verdict, reportOnFile] = await Promise.all([
+        this.rosterRecords.latestBackgroundVerdict(assayer.id),
+        this.rosterRecords.bgvReportOnFile(assayer.id),
+      ]);
+      const decision = assessBackgroundGate(verdict, 'leave-bgv', reportOnFile);
+      if (decision.refusal) {
+        return `${assayer.displayName} cannot be moved: ${decision.refusal} Reaching ${targetStatus} `
+          + `from ${from} passes through background verification${route}, so the whole move is `
+          + 'refused. Nothing was changed.';
+      }
+    }
+
     return null;
   }
 
@@ -2961,6 +2990,11 @@ export class AssayerService implements OnModuleInit {
   private static whyNoPath(from: string, targetStatus: string): string {
     const blocker = assayerLifecycleBlockedBy(from, targetStatus);
     if (!blocker) return '';
+    if (blocker === AssayerLifecycleStatus.FINAL_APPROVAL) {
+      return ` Every route from ${from} to ${targetStatus} passes through the approval before training, which`
+        + ' a senior decides one person at a time — a bulk action cannot approve anybody. Send them for'
+        + ' approval; the approver moves them on to training. Nothing was changed.';
+    }
     return ` Every route from ${from} to ${targetStatus} passes through ${blocker}, which is a`
       + ' decision somebody has to make and answer for, not a corridor — a bulk action will not'
       + ` take it on your behalf. Move them to ${blocker} as its own decision first. Nothing was`
@@ -3091,6 +3125,15 @@ export class AssayerService implements OnModuleInit {
     reason?: string,
     role = SystemRole.ADMIN,
     expectedVersion?: number,
+    /**
+     * Set only by `OnboardingApprovalService`: the approver's decision is the one thing that moves
+     * somebody out of FINAL_APPROVAL, and `inTransaction` writes the decision onto the round in the
+     * same transaction as the move, so neither can land without the other.
+     */
+    approval?: {
+      decision: 'APPROVED' | 'REJECTED';
+      inTransaction: (manager: EntityManager | undefined, saved: AssayerEntity) => Promise<void>;
+    },
   ): Promise<{ saved: AssayerEntity; event: any }> {
     const preRead = await this.findOne(id);
     const currentStatus = preRead.lifecycleStatus;
@@ -3255,30 +3298,37 @@ export class AssayerService implements OnModuleInit {
          * discipline as the identity gate below: after the edge is validated, inside the
          * transaction, so a refusal leaves no evidence of a move that never happened.
          */
-        const runBackgroundGate = async (site: 'leave-bgv' | 'activate') => {
+        const runBackgroundGate = async (site: 'leave-bgv' | 'finish-onboarding' | 'activate') => {
           if (!this.rosterRecords) return;
-          const verdict = await this.rosterRecords.latestBackgroundVerdict(preRead.id);
-          const decision = assessBackgroundGate(verdict, site);
+          const [verdict, reportOnFile] = await Promise.all([
+            this.rosterRecords.latestBackgroundVerdict(preRead.id),
+            this.rosterRecords.bgvReportOnFile(preRead.id),
+          ]);
+          // Mandatory: no mode, no warn arm. See `assessBackgroundGate` for why it once had one.
+          const decision = assessBackgroundGate(verdict, site, reportOnFile);
           if (decision.refusal) {
             throw withCode(
               new BadRequestException(`${assayer.displayName} cannot be moved: ${decision.refusal}`),
               ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
             );
           }
-          if (!decision.gated) return;
-          const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
-          if (mode === 'off') return;
-          const sentence = `${assayer.displayName}: ${decision.gated}`;
-          if (mode === 'enforce') {
-            throw withCode(new BadRequestException(sentence), ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR);
-          }
-          this.logger.warn(`Background gate (warn only): ${sentence}`);
-          await this.recordActivity(
-            preRead.id, 'ASSAYER_UPDATED', null, null, userId,
-            `Moved out of background verification with no completed check on file. The identity `
-            + 'gate is set to warn; switch it to Enforce in Settings once the vetting queue is worked.',
-            manager,
-          ).catch(() => undefined);
+        };
+
+        /**
+         * Was this person parked INACTIVE while still onboarding?
+         *
+         * Read from the lifecycle's own trail: the latest move INTO inactive, and where it came from.
+         * If that was an onboarding stage, "reactivating" them is really finishing onboarding — which
+         * background verification is mandatory for. No such row (a record older than the trail) is
+         * treated as a working return, never a refusal nobody could explain.
+         */
+        const parkedMidOnboarding = async (): Promise<boolean> => {
+          const parked = await (manager?.getRepository(AssayerActivityEntity) ?? this.activityRepository).findOne({
+            where: { assayerId: preRead.id, newState: AssayerLifecycleStatus.INACTIVE },
+            order: { createdAt: 'DESC' },
+          });
+          return !!parked?.previousState
+            && (ONBOARDING_STAGES as readonly string[]).includes(parked.previousState);
         };
 
         const runIdentityGate = async () => {
@@ -3334,17 +3384,69 @@ export class AssayerService implements OnModuleInit {
         if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {
           event = AssayerStateMachine.verifyDocuments(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION) {
-          await runDocumentGate();
+          const reopening = fromStatus === AssayerLifecycleStatus.INACTIVE;
+          /*
+            Back from INACTIVE only for somebody parked because background verification was not
+            passed — re-verified by the agency, they carry on through it to training. Anybody else
+            parked inactive has no verification to re-open. The failed check, its report and the
+            parking stay on the record; the new check is recorded beside them.
+          */
+          if (reopening && !mayReopenBackgroundVerification(fromStatus, assayer.unavailableReason)) {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} cannot be taken back into background verification: that is `
+                + 'only for somebody parked because it was not passed.',
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
+          if (!reopening) await runDocumentGate();
           event = AssayerStateMachine.initiateBackgroundCheck(assayer, userId);
+          // Back in verification, no longer parked for failing it — until a check says otherwise.
+          if (reopening) assayer.unavailableReason = null;
+        } else if (targetStatus === AssayerLifecycleStatus.FINAL_APPROVAL) {
+          const reopening = fromStatus === AssayerLifecycleStatus.INACTIVE;
+          // Back up for approval only for somebody rejected at it — see `reopenTargetFor`.
+          if (reopening && !mayReopenFinalApproval(fromStatus, assayer.unavailableReason)) {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} cannot be put up for approval again: that is only for somebody `
+                + 'who was not approved.',
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
+          // The onboarding exit the owner's drawing gates: PASSED goes forward, FAILED does not. It
+          // gates the way INTO approval now — nobody is sent up whose background check is not clear.
+          await runBackgroundGate('leave-bgv');
+          event = AssayerStateMachine.sendForApproval(assayer, userId);
+          if (reopening) assayer.unavailableReason = null;
         } else if (targetStatus === AssayerLifecycleStatus.TRAINING) {
-          // The onboarding exit the owner's drawing gates: PASSED goes forward, FAILED does not.
+          /*
+            Only the approval moves somebody into training. Not the stage buttons, not a bulk move,
+            not the API: the approver's decision is the control, and a second road around it would
+            make it optional.
+          */
+          if (fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL && approval?.decision !== 'APPROVED') {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} goes on to training when they are approved — open their approval to decide it.`,
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
+          // Checked again on the way out, so a report withdrawn during the approval still stops them.
           await runBackgroundGate('leave-bgv');
           event = AssayerStateMachine.startTraining(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
           AssayerStateMachine.assertCanActivate(assayer);
-          // Adverse-verdict arm only (see the decision table): this is what keeps a record parked
-          // as BGV_FAILED from re-entering the workforce until a newer check clears them.
-          await runBackgroundGate('activate');
+          // Adverse-verdict arm for a working return; the whole gate for somebody parked inactive
+          // mid-onboarding — see `assessBackgroundGate`'s decision table.
+          await runBackgroundGate(
+            fromStatus === AssayerLifecycleStatus.INACTIVE && await parkedMidOnboarding()
+              ? 'finish-onboarding'
+              : 'activate',
+          );
           await runIdentityGate();
 
           // ── Payout-readiness gate ────────────────────────────────────────────
@@ -3390,7 +3492,18 @@ export class AssayerService implements OnModuleInit {
         } else if (targetStatus === AssayerLifecycleStatus.SUSPENDED) {
           event = AssayerStateMachine.suspend(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.INACTIVE) {
+          // Out of approval only by the approver's rejection — which is what puts the reason on file.
+          if (fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL && approval?.decision !== 'REJECTED') {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} is awaiting approval. The approver decides it — including `
+                + 'not approving them, with the reason — on their approval.',
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
           event = AssayerStateMachine.deactivate(assayer, userId);
+          if (approval?.decision === 'REJECTED') assayer.unavailableReason = AssayerUnavailableReason.APPROVAL_REJECTED;
           /**
            * Name the parking, so the roster can say WHY.
            *
@@ -3424,6 +3537,41 @@ export class AssayerService implements OnModuleInit {
         const datesCorrected = this.reconcileDepartureDates(assayer, targetStatus);
 
         const saved = await assayerRepo.save(assayer);
+
+        /*
+          Into approval: open the round the approver decides, in this same transaction — a person
+          awaiting approval with nothing to approve is a stage nobody can leave.
+        */
+        if (targetStatus === AssayerLifecycleStatus.FINAL_APPROVAL) {
+          const approvalManager = manager ?? this.assayerRepository.manager;
+          const round = await openApprovalRound(approvalManager, saved.id, userId, reason ?? null);
+          /*
+            Tell the approvers — otherwise the only way anyone learns there is a decision waiting is
+            by opening the hiring list. Whoever sent it up is the actor, and is skipped. Keyed on the
+            round, so a re-save cannot announce the same request twice, and a re-opened rejection
+            (a new round) is announced afresh.
+          */
+          const [sender] = await approvalManager.query(
+            'SELECT display_name FROM users WHERE id = $1', [userId],
+          ).catch(() => []) as Array<{ display_name?: string }>;
+          const note = String(reason ?? '').trim();
+          this.notificationDispatch.emitSafe({
+            type: 'ASSAYER_SENT_FOR_APPROVAL',
+            entityType: 'ASSAYER',
+            entityId: saved.id,
+            actorUserId: userId,
+            assayerId: saved.id,
+            dedupeKey: `ASSAYER_SENT_FOR_APPROVAL:${round.id}`,
+            payload: {
+              assayerName: saved.displayName,
+              assayerId: saved.id,
+              sentBy: sender?.display_name?.trim() || 'HR',
+              noteLine: note && note !== 'Sent for approval before training' ? ` Their note: "${note.slice(0, 300)}".` : '',
+              round: round.round,
+            },
+          });
+        }
+        if (approval) await approval.inTransaction(manager, saved);
 
         // After the save, so a departure whose workflow command was refused does not close the
         // client standings of somebody still on the roster.
@@ -5221,6 +5369,58 @@ export class AssayerService implements OnModuleInit {
     }
 
     return { channels, ...(emailId ? { emailId } : {}), ...(smsId ? { smsId } : {}) };
+  }
+
+  /**
+   * The approver's decision on somebody awaiting approval — the only way out of FINAL_APPROVAL.
+   * `OnboardingApprovalService` checks who may decide and writes the round in `inTransaction`.
+   */
+  async decideFinalApproval(
+    id: string,
+    decision: 'APPROVED' | 'REJECTED',
+    userId: string,
+    reason: string,
+    inTransaction: (manager: EntityManager | undefined, saved: AssayerEntity) => Promise<void>,
+  ): Promise<AssayerEntity> {
+    const target = decision === 'APPROVED' ? AssayerLifecycleStatus.TRAINING : AssayerLifecycleStatus.INACTIVE;
+    const { saved, event } = await this.doTransitionLifecycle(
+      id, target, userId, reason, SystemRole.ADMIN, undefined, { decision, inTransaction },
+    );
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    await this.cache.del(rbacPrincipalCacheKey(id));
+    return saved;
+  }
+
+  /**
+   * Who referred this person — the source reference, one per person.
+   *
+   * Its own write rather than a field on `update`: it is a small object in a shared shape
+   * (`normalizeSourceReferral`), and the one rule that goes with it — who recorded it — is kept,
+   * so promotion can carry the candidate's own entry across unchanged. `null` clears it.
+   */
+  async setSourceReferral(
+    assayerId: string,
+    raw: unknown,
+    actorId: string,
+    recordedBy: ReferralRecordedBy = 'HR',
+  ): Promise<SourceReferral | null> {
+    const { referral, error } = normalizeSourceReferral(raw, recordedBy);
+    if (error) throw new BadRequestException(error);
+    const assayer = await this.findOne(assayerId);
+    const previous = (assayer as AssayerEntity).sourceReferral ?? null;
+    await this.assayerRepository.update({ id: assayerId }, { sourceReferral: referral as never, updatedBy: actorId });
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'ASSAYER_SOURCE_REFERRAL_SET',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actorId,
+      remarks: referral
+        ? `Referred by ${sourceReferralLine(referral)}${previous ? ` (was ${sourceReferralLine(previous)})` : ''}.`
+        : `Source referral cleared${previous ? ` (was ${sourceReferralLine(previous)})` : ''}.`,
+      metadata: { previousValue: previous, newValue: referral },
+    });
+    return referral;
   }
 
   /**

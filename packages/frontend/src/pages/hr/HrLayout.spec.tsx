@@ -17,6 +17,7 @@ jest.mock('../../hooks/useHrWorkforce', () => ({
 }));
 
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   canManageAssayers: () => true,
 }));

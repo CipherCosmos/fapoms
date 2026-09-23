@@ -70,7 +70,7 @@ export const TerritoryTable: React.FC<{
                 {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
               </button>
 
-              <button onClick={() => onSelectState(isSel ? null : t.state)}
+              <button onClick={() => onSelectState(isSel ? null : t.state)} title={isSel ? `Show all states, clear ${t.state} filter` : `Show only ${t.state} on the map and list`}
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0, flex: 1, minWidth: 150, color: 'var(--text-primary)' }}>
                 <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700 }}>{t.state}</div>
                 <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>

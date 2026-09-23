@@ -48,6 +48,7 @@ export const RosterSegmentTabs: React.FC<RosterSegmentTabsProps> = ({
               aria-selected={isSelected}
               aria-controls="roster-table-panel"
               onClick={() => onSelectSegment(segment.key)}
+              title={segment.hint ? `${segment.label} — ${segment.hint}` : `${segment.label} — ${count} people`}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',

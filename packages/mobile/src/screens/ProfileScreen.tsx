@@ -195,6 +195,8 @@ interface ProfileScreenProps {
   onOpenFeedback?: () => void;
   /** Opens the self-service time-off calendar. */
   onOpenAvailability?: () => void;
+  /** Opens the digital ID card — the only form the card takes (2026-09-23). */
+  onOpenIdCard?: () => void;
 }
 
 /**
@@ -875,6 +877,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onLogout,
   onOpenFeedback,
   onOpenAvailability,
+  onOpenIdCard,
   assayerId,
   onCapturePhoto,
 }) => {
@@ -1231,6 +1234,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       <GroupedSection title={tr('profile.sections.work')}>
         {/* Self-service time off opens straight into the calendar overlay — there's nothing
             else to show behind this row, so it stays a direct action rather than a push. */}
+        {/* The digital ID card first: it is what the assayer reaches for at a branch counter. */}
+        {onOpenIdCard && (
+          <GroupedRow
+            icon="id-card-outline" tone="accent" label={tr('idCard.open')}
+            hint={tr('idCard.openHint')}
+            onPress={onOpenIdCard} accessibilityLabel={tr('idCard.open')} chevron
+          />
+        )}
         <GroupedRow
           icon="calendar-outline" tone="primary" label={tr('profile.rows.availability')}
           hint={tr('profile.rows.availabilityHint')}

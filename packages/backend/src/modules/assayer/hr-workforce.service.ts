@@ -83,6 +83,7 @@ const ONBOARDING_STAGES = [
   { key: 'INVITED', label: 'Invited' },
   { key: 'DOCUMENT_VERIFICATION', label: 'Document check' },
   { key: 'BACKGROUND_VERIFICATION', label: 'Background check' },
+  { key: 'FINAL_APPROVAL', label: 'Awaiting approval' },
   { key: 'TRAINING', label: 'Training' },
   { key: 'ACTIVE', label: 'Active' },
 ];
@@ -324,7 +325,7 @@ export class HrWorkforceService implements OnModuleInit {
       SELECT
         COUNT(*)::int                                                              AS total,
         COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int                   AS active,
-        COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
+        COUNT(*) FILTER (WHERE lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','FINAL_APPROVAL','TRAINING')
                            AND ${ON_ROSTER})::int AS onboarding,
         -- Lifecycle status first, dates second. Active and onboarding are both counted from
         -- lifecycle_status; counting departures from the dates alone meant a resigned assayer
@@ -1326,7 +1327,7 @@ export class HrWorkforceService implements OnModuleInit {
         COUNT(DISTINCT a.id)::int AS "all",
         COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'ACTIVE')::int AS "active",
         COUNT(DISTINCT a.id) FILTER (
-          WHERE a.lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
+          WHERE a.lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','FINAL_APPROVAL','TRAINING')
         )::int AS "onboarding",
         COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'DOCUMENT_VERIFICATION')::int AS "to-verify",
         COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'BACKGROUND_VERIFICATION')::int AS "background-due",

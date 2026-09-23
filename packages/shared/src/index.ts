@@ -68,6 +68,9 @@ export * from './assignment-fee';
 // from the guarded live assayer lifecycle
 export * from './assayer-application';
 
+// References a candidate names before approval: how many, and what counts as one
+export * from './application-references';
+
 // PAN/Aadhaar/IFSC/phone validation — one rulebook for the importer and every API write path
 export * from './identity-validation';
 
@@ -105,3 +108,6 @@ export * from './socket-transport-config';
 export * from './registration-consent';
 export * from './identifier-entry';
 export * from './registration-form';
+export * from './source-referral';
+export * from './onboarding-approval';
+export * from './periodic-checks';

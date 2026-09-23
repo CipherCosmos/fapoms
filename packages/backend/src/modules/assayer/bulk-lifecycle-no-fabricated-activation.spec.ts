@@ -42,13 +42,12 @@ describe('ACTIVE is never a waypoint', () => {
   });
 
   /** And ACTIVE is still perfectly reachable as a destination — it is the corridor use that went. */
-  it('still reaches ACTIVE as a destination, by the full joining chain', () => {
-    expect(assayerLifecyclePath(AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.ACTIVE)).toEqual([
-      AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
-      AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
-      AssayerLifecycleStatus.TRAINING,
-      AssayerLifecycleStatus.ACTIVE,
-    ]);
+  it('still reaches ACTIVE as a destination, from training and from a pause', () => {
+    // From a new joiner there is no bulk road at all now: the approval before training is a
+    // decision, taken one person at a time (2026-09-23).
+    expect(assayerLifecyclePath(AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.ACTIVE)).toBeNull();
+    expect(assayerLifecyclePath(AssayerLifecycleStatus.TRAINING, AssayerLifecycleStatus.ACTIVE))
+      .toEqual([AssayerLifecycleStatus.ACTIVE]);
     expect(assayerLifecyclePath(AssayerLifecycleStatus.INACTIVE, AssayerLifecycleStatus.ACTIVE))
       .toEqual([AssayerLifecycleStatus.ACTIVE]);
     expect(assayerLifecyclePath(AssayerLifecycleStatus.ON_LEAVE, AssayerLifecycleStatus.ACTIVE))
@@ -144,9 +143,15 @@ describe('why there is no path', () => {
 
   /** A reachable pair has no blocker either — this is only ever asked after a null path. */
   it('reports no blocker for a walk that is allowed', () => {
-    expect(assayerLifecycleBlockedBy('INVITED', 'ACTIVE')).toBeNull();
+    expect(assayerLifecycleBlockedBy('INVITED', 'FINAL_APPROVAL')).toBeNull();
     expect(assayerLifecycleBlockedBy('TRAINING', 'ARCHIVED')).toBeNull();
     expect(assayerLifecycleBlockedBy('ACTIVE', 'ACTIVE')).toBeNull();
+  });
+
+  /** What stops a new joiner being walked to work: the approval, named — not the INACTIVE shortcut. */
+  it('names the approval as what stands between a new joiner and work', () => {
+    expect(assayerLifecycleBlockedBy('INVITED', 'ACTIVE')).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
+    expect(assayerLifecycleBlockedBy('BACKGROUND_VERIFICATION', 'TRAINING')).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
   });
 
   /** The destination is allowed to be a decision — arriving there IS the decision. */

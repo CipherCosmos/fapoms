@@ -196,6 +196,8 @@ export const queryKeys = {
      * filter, so one key covers the page's whole read.
      */
     interviews: ['hr', 'interviews'] as const,
+    /** Working assayers whose re-checks are due, overdue or held — `/hr/rechecks`. */
+    rechecks: ['hr', 'rechecks'] as const,
     /** Prefix: every applications query regardless of status filter. */
     applicationsAll: ['hr', 'applications'] as const,
     /**

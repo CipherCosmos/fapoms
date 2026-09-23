@@ -133,6 +133,7 @@ export const PinCoordinateControl: React.FC<{
             <button
               type="button"
               onClick={() => { setOpen(false); setShowMapModal(true); }}
+              title="Open the interactive map to drop a pin"
               style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: 'var(--text-3xs)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: 0 }}
             >
               <Map size={11} /> Open Interactive Map
@@ -146,6 +147,7 @@ export const PinCoordinateControl: React.FC<{
               onKeyDown={(e) => { if (e.key === 'Enter') void submit(); if (e.key === 'Escape') setOpen(false); }}
               placeholder="18.520430, 73.856744 or Google Maps link"
               aria-label="Exact coordinate or Google Maps link"
+              title="Paste coordinates or a Google Maps link, for example 18.5204, 73.8567"
               style={{ flex: 1, minWidth: '190px', fontSize: 'var(--text-2xs)', fontFamily: 'monospace', padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
             />
             <input

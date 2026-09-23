@@ -213,6 +213,7 @@ export const AssayerDetailModal: React.FC<{
                 return (
                   <button key={t.key} id={`adm-tab-${t.key}`} role="tab" aria-selected={on} aria-controls={`adm-panel-${t.key}`}
                     tabIndex={on ? 0 : -1} onClick={() => setTab(t.key)}
+                    title={t.key === 'overview' ? 'Show work summary and earnings' : t.key === 'qualification' ? 'Show scores, client eligibility and workload' : t.key === 'history' ? 'Show past audits and fee records' : 'Show staff remarks about this person'}
                     style={{
                       display: 'flex', alignItems: 'center', gap: '5px', padding: '9px 12px',
                       fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
@@ -257,10 +258,10 @@ export const AssayerDetailModal: React.FC<{
                         route={{ distanceKm: candidate.distanceKm, durationMinutes: candidate.durationMinutes ?? null, distanceSource: candidate.distanceSource ?? null }}
                       />
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
-                        <button onClick={() => onCallAndAssign(candidate)} className="btn btn-primary" style={{ padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                        <button onClick={() => onCallAndAssign(candidate)} title={`Call ${candidate.displayName} and assign this branch now`} className="btn btn-primary" style={{ padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                           <Phone size={12} /> Call & Assign
                         </button>
-                        <button onClick={() => onSendToApp(candidate)} className="btn btn-secondary" style={{ padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                        <button onClick={() => onSendToApp(candidate)} title={`Send this branch offer to ${candidate.displayName} in the app`} className="btn btn-secondary" style={{ padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                           Send to app
                         </button>
                       </div>

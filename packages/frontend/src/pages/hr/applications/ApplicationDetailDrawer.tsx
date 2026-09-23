@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApplicationStatus, ONBOARDING_DOCUMENT_LABELS, SCAN_UPLOAD_IMAGE_ACCEPT, scanMimeType,
+  DOCUMENT_REJECTION_LABELS, referencePhoneForDisplay,
   type OnboardingDocument, storedScanFileName,
   type OutboundMessageReceipt,
 } from '@fapoms/shared';
-import { Eye, AlertTriangle, ShieldAlert, Check, Camera, Pencil } from 'lucide-react';
+import { Eye, AlertTriangle, ShieldAlert, Check, Camera, Pencil, Undo2, ThumbsUp } from 'lucide-react';
 
 import { ScanOrAttach } from '../../../components/scanner/ScanOrAttach';
 import { api } from '../../../services/api';
@@ -16,9 +17,14 @@ import { loadFailed } from '../../../queryClient';
 import { LoadFailure } from '../../../components/LoadFailure';
 import { DetailDrawer, AlertBanner, StatusBadge, useConfirm, Modal } from '../../../components/ui';
 import { DeliveryNote } from '../../../components/DeliveryNote';
+import { useToast } from '../../../components/ui/Toast';
 import { humanizeStatus } from '../../../config/status-registry';
 import { Field, fmtDate, fmtWhen, InviteLinkBox } from '../hr-ui';
 import type { AssayerApplicationDetail, AssayerApplicationDocumentRow } from './application-types';
+import { RequestInfoDialog, type RequestInfoPayload } from './RequestInfoDialog';
+import { InterviewFiles } from '../hiring/InterviewFiles';
+import { sourceReferralLine, type SourceReferral } from '@fapoms/shared';
+import { RejectDocumentModal } from '../RejectDocumentModal';
 import { SkeletonList } from '../../../components/ui/Loading';
 import { useCurrentUserId } from '../../../hooks/useCurrentRoles';
 import { DocumentPreviewModal, type DocumentPreviewItem } from '../../../components/DocumentPreviewModal';
@@ -64,7 +70,18 @@ export const ApplicationDetailDrawer: React.FC<{
   const currentUserId = useCurrentUserId();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  /**
+   * Confirmation for the actions that deliberately leave this drawer OPEN — asking for more, and
+   * sending one document back — so HR can see the "Waiting on candidate" list update in place.
+   * They used to close it through `onSuccess`, which is where their confirmation lived; keeping the
+   * drawer open had left them with no confirmation at all.
+   */
+  const { toast } = useToast();
   const [staffUploading, setStaffUploading] = useState<Record<string, boolean>>({});
+  /** Targeted request dialog — tick documents/fields instead of one free-text note. */
+  const [requestInfoOpen, setRequestInfoOpen] = useState(false);
+  /** Which requirement a per-file send-back is being written for, if any. */
+  const [rejectTarget, setRejectTarget] = useState<{ requirement: string; label: string } | null>(null);
 
   // Document preview modal state
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -296,27 +313,75 @@ export const ApplicationDetailDrawer: React.FC<{
     }
   };
 
-  const handleRequestInfo = async () => {
+  const handleRequestInfo = async (payload: RequestInfoPayload) => {
     setActionError(null);
-    const { confirmed, reason: notes } = await confirmWithReason({
-      title: `Ask ${name} for more information?`,
-      message: 'They will be emailed a fresh link to resume their application, along with these notes.',
-      confirmLabel: 'Send request',
-      reasonPrompt: {
-        label: 'What do you need from them?',
-        placeholder: 'e.g. Please upload a clearer PAN card scan',
-      },
-    });
-    if (!confirmed) return;
     setBusy(true);
     try {
       await api.request(`/hr/applications/${id}/request-info`, {
         method: 'POST',
-        body: JSON.stringify({ notes }),
+        body: JSON.stringify({
+          ...(payload.notes ? { notes: payload.notes } : {}),
+          ...(payload.documents.length > 0 ? { documents: payload.documents } : {}),
+          ...(payload.fields.length > 0 ? { fields: payload.fields } : {}),
+        }),
       });
-      onSuccess({ tone: 'ok', text: `Asked ${name} for more information.` });
+      setRequestInfoOpen(false);
+      const asked = payload.documents.length + payload.fields.length;
+      toast({
+        type: 'success',
+        title: `Asked ${name} for more`,
+        message: asked > 0
+          ? `${asked} item${asked === 1 ? '' : 's'} on their to-do list. Their link reopens where they left off.`
+          : 'Your note is on their link. It reopens where they left off.',
+      });
+      await detailQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
     } catch (err) {
       setActionError(userMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * One file sent back on its own — the requirement is flagged, the candidate's SAME link
+   * reopens with it on their to-do list, and the rest of the application is untouched.
+   */
+  const handleSendBackDocument = async (requirement: string, reason: string, note: string) => {
+    setActionError(null);
+    setBusy(true);
+    try {
+      await api.request(`/hr/applications/${id}/documents/${encodeURIComponent(requirement)}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'NEEDS_RESUBMIT', reason, ...(note.trim() ? { note: note.trim() } : {}) }),
+      });
+      setRejectTarget(null);
+      toast({
+        type: 'success',
+        title: `${documentName(requirement)} sent back`,
+        message: `${name} is asked to re-upload just this one, on the same link.`,
+      });
+      await detailQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
+    } catch (err) {
+      setActionError(`Could not send back ${documentName(requirement)}: ${userMessage(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApproveDocument = async (requirement: string) => {
+    setActionError(null);
+    setBusy(true);
+    try {
+      await api.request(`/hr/applications/${id}/documents/${encodeURIComponent(requirement)}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'APPROVED' }),
+      });
+      await detailQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.hr.applicationsAll });
+    } catch (err) {
+      setActionError(`Could not approve ${documentName(requirement)}: ${userMessage(err)}`);
     } finally {
       setBusy(false);
     }
@@ -409,9 +474,9 @@ export const ApplicationDetailDrawer: React.FC<{
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={handleRequestInfo}
+                    onClick={() => setRequestInfoOpen(true)}
                     disabled={busy || isDraft}
-                    title={isDraft ? 'Cannot request info on an unsubmitted draft' : 'Ask candidate for clarifications or missing documents'}
+                    title={isDraft ? 'Cannot request info on an unsubmitted draft' : 'Tick exactly what is needed — documents and fields, each with its own instruction'}
                     style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', minHeight: '38px' }}
                   >
                     Request info
@@ -709,6 +774,20 @@ export const ApplicationDetailDrawer: React.FC<{
             <Field title="Expertise" wide><div>{app.expertise || '—'}</div></Field>
             <Field title="Availability" wide><div>{app.availability || '—'}</div></Field>
 
+            {/* Who referred them — the source reference, not one of the three who vouch for them. */}
+            {(() => {
+              const referral = (app.extendedProfile as { sourceReferral?: SourceReferral } | null)?.sourceReferral ?? null;
+              return (
+                <Field title="Referred by" wide>
+                  <div>
+                    {referral
+                      ? <>{sourceReferralLine(referral)}{referral.recordedBy === 'CANDIDATE' && <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}> — as the candidate gave it</span>}</>
+                      : <span style={{ color: 'var(--text-muted)' }}>Nobody recorded</span>}
+                  </div>
+                </Field>
+              );
+            })()}
+
             {/*
               The interview, which the person deciding this application could not see. Its notes
               were stored every time and appeared on no screen, so a reviewer approving somebody had
@@ -725,6 +804,25 @@ export const ApplicationDetailDrawer: React.FC<{
                   {detail.interview.notes?.trim()
                     ? <span style={{ whiteSpace: 'pre-line', overflowWrap: 'anywhere' }}>{detail.interview.notes}</span>
                     : <span style={{ color: 'var(--text-muted)' }}>The interviewer wrote nothing down.</span>}
+                  {detail.interview.id && (
+                    <InterviewFiles interviewId={detail.interview.id} files={detail.interview.attachments ?? []} />
+                  )}
+                  {/* They passed on a second attempt: the first, and its papers, are part of the story. */}
+                  {detail.interview.earlier && (
+                    <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
+                        Interviewed before: {detail.interview.earlier.outcome === 'PASS' ? 'Passed' : 'Did not pass'}
+                        {' · '}{fmtWhen(detail.interview.earlier.interviewedAt)}
+                        {detail.interview.earlier.interviewedByName ? ` · ${detail.interview.earlier.interviewedByName}` : ''}
+                      </span>
+                      {detail.interview.earlier.notes?.trim() && (
+                        <span style={{ whiteSpace: 'pre-line', overflowWrap: 'anywhere' }}>{detail.interview.earlier.notes}</span>
+                      )}
+                      {detail.interview.earlier.id && (
+                        <InterviewFiles interviewId={detail.interview.earlier.id} files={detail.interview.earlier.attachments ?? []} />
+                      )}
+                    </div>
+                  )}
                 </div>
               </Field>
             )}
@@ -744,6 +842,33 @@ export const ApplicationDetailDrawer: React.FC<{
                     <Field key={label} title={label}><div>{value}</div></Field>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/*
+              Who vouches for them. Submit refuses an application with nobody ringable on it,
+              so a queue row normally carries at least one — and the reviewer approving the
+              person should see the names, not discover them on the record afterwards.
+            */}
+            {((app.extendedProfile?.references?.length ?? 0) > 0 || (!isDraft && isReviewable)) && (
+              <div>
+                <div style={SECTION_LABEL}>References</div>
+                {(app.extendedProfile?.references?.length ?? 0) > 0 ? (
+                  <ul style={{ margin: 0, paddingLeft: '18px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                    {app.extendedProfile!.references!.map((r, i) => (
+                      <li key={`${r.fullName}-${i}`} style={{ marginBottom: '3px' }}>
+                        <strong style={{ color: 'var(--text-primary)' }}>{r.fullName || '—'}</strong>
+                        {r.relationship ? ` · ${r.relationship}` : ''}
+                        {r.phone ? ` · ${referencePhoneForDisplay(r.phone)}` : ''}
+                        {r.email ? ` · ${r.email}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', fontWeight: 600 }}>
+                    No references yet — the candidate must add at least one before submitting.
+                  </div>
+                )}
               </div>
             )}
 
@@ -773,6 +898,27 @@ export const ApplicationDetailDrawer: React.FC<{
                     ? 'Photograph is required before approval can proceed. Other missing fields can be updated after approval on the appraiser record.'
                     : 'None of these stops the approval. Each one stops the thing it names, until it is filled in on their record.'}
                 </div>
+              </div>
+            )}
+
+            {/*
+              What HR already asked for and is still waiting on.
+
+              `requestMoreInfo` used to be one free-text note, so a second reviewer opening this
+              drawer could not tell what the candidate had been asked — and asked it again. Each
+              entry carries its own instruction and clears itself when the candidate (or the desk)
+              fixes that item, so this list is the outstanding work, not the history.
+            */}
+            {(detail?.infoRequests?.length ?? 0) > 0 && (
+              <div>
+                <div style={SECTION_LABEL}>Waiting on candidate</div>
+                <ul style={{ margin: 0, paddingLeft: '18px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                  {detail!.infoRequests!.map((item) => (
+                    <li key={`${item.kind}:${item.key}`} style={{ marginBottom: '3px' }}>
+                      <strong>{item.label}</strong> — {item.message}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
 
@@ -903,6 +1049,8 @@ export const ApplicationDetailDrawer: React.FC<{
                     const hasFiles = doc.filePaths.length > 0;
                     const isLoadingThis = previewLoading === doc.requirement;
                     const isStaffUploadingThis = staffUploading[doc.requirement];
+                    const sentBack = doc.reviewStatus === 'NEEDS_RESUBMIT';
+                    const approvedDoc = doc.reviewStatus === 'APPROVED';
                     return (
                       <div
                         key={doc.id}
@@ -912,7 +1060,8 @@ export const ApplicationDetailDrawer: React.FC<{
                           display: 'flex', flexWrap: 'wrap', gap: '8px 12px',
                           justifyContent: 'space-between', alignItems: 'center',
                           padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-surface)',
-                          border: '1px solid var(--border-hair)', fontSize: 'var(--text-xs)',
+                          border: sentBack ? '1px solid var(--warning)' : '1px solid var(--border-hair)',
+                          fontSize: 'var(--text-xs)',
                         }}
                       >
                         <div
@@ -924,7 +1073,17 @@ export const ApplicationDetailDrawer: React.FC<{
                           </span>
                           <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>
                             {doc.filePaths.length} file{doc.filePaths.length === 1 ? '' : 's'} attached
+                            {approvedDoc ? ' · approved' : ''}
+                            {sentBack ? ' · sent back — needs resubmit' : ''}
                           </span>
+                          {sentBack && (
+                            <span style={{ color: 'var(--warning)', fontSize: 'var(--text-2xs)', fontWeight: 600 }}>
+                              {doc.rejectionReason
+                                ? (DOCUMENT_REJECTION_LABELS[doc.rejectionReason as keyof typeof DOCUMENT_REJECTION_LABELS] ?? doc.rejectionReason)
+                                : 'Sent back'}
+                              {doc.rejectionNote ? ` — ${doc.rejectionNote}` : ''}
+                            </span>
+                          )}
                         </div>
 
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
@@ -956,6 +1115,34 @@ export const ApplicationDetailDrawer: React.FC<{
                             />
                           )}
 
+                          {isReviewable && hasFiles && !approvedDoc && (
+                            <button
+                              type="button"
+                              onClick={() => void handleApproveDocument(doc.requirement)}
+                              disabled={busy}
+                              className="btn btn-secondary"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '5px 10px' }}
+                              title={`Mark ${documentName(doc.requirement)} as checked and accepted`}
+                            >
+                              <ThumbsUp size={13} />
+                              Approve
+                            </button>
+                          )}
+
+                          {isReviewable && (
+                            <button
+                              type="button"
+                              onClick={() => setRejectTarget({ requirement: doc.requirement, label: documentName(doc.requirement) })}
+                              disabled={busy}
+                              className="btn btn-secondary"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '5px 10px' }}
+                              title={`Send back only ${documentName(doc.requirement)} — the candidate re-uploads it on the same link`}
+                            >
+                              <Undo2 size={13} />
+                              {sentBack ? 'Send back again' : 'Send back'}
+                            </button>
+                          )}
+
                           {!hasFiles && !isReviewable && (
                             <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Pending upload</span>
                           )}
@@ -976,6 +1163,30 @@ export const ApplicationDetailDrawer: React.FC<{
         items={previewItems}
         initialIndex={previewIndex}
       />
+
+      {requestInfoOpen && detail && (
+        <RequestInfoDialog
+          candidateName={name}
+          documents={(detail.documents ?? []).map((d) => ({
+            requirement: d.requirement,
+            fileCount: d.filePaths.length,
+            reviewStatus: d.reviewStatus ?? null,
+          }))}
+          documentsRequested={detail.documentsRequested ?? []}
+          busy={busy}
+          error={actionError}
+          onCancel={() => { if (!busy) { setRequestInfoOpen(false); setActionError(null); } }}
+          onSubmit={(payload) => void handleRequestInfo(payload)}
+        />
+      )}
+
+      {rejectTarget && (
+        <RejectDocumentModal
+          label={rejectTarget.label}
+          onCancel={() => { if (!busy) setRejectTarget(null); }}
+          onSubmit={(reason, note) => void handleSendBackDocument(rejectTarget.requirement, reason, note)}
+        />
+      )}
 
       <Modal
         open={editingMobile}

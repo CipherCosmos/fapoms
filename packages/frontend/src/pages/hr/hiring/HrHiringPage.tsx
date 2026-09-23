@@ -43,6 +43,8 @@ export const HrHiringPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [adding, setAdding] = useState(false);
+  /** The failed interview being followed by "Interview again" — the dialog carries their details. */
+  const [retakeOf, setRetakeOf] = useState<InterviewLike | null>(null);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
 
   const stage = (params.get('stage') as StageKey | 'all' | null) ?? 'all';
@@ -245,12 +247,30 @@ export const HrHiringPage: React.FC = () => {
       )}
 
       {/* The row kind that had no drawer: a click set `?id=` and opened nothing. */}
-      {openRow?.kind === 'interview' && (() => {
-        const interview = (interviewsQuery.data ?? []).find((i) => i.id === openRow.id);
-        return interview ? <InterviewDetailDrawer interview={interview} onClose={() => open(null)} /> : null;
+      {/*
+        Looked up in the log, not the pipeline: an interview that was followed by another is not a
+        row any more, but it is still opened from the one after it.
+      */}
+      {openKey?.startsWith('interview:') && (() => {
+        const interview = (interviewsQuery.data ?? []).find((i) => `interview:${i.id}` === openKey);
+        return interview ? (
+          <InterviewDetailDrawer
+            interview={interview}
+            all={interviewsQuery.data ?? []}
+            onClose={() => open(null)}
+            onChanged={refresh}
+            onOpenInterview={(id) => { const next = new URLSearchParams(params); next.set('id', `interview:${id}`); setParams(next, { replace: true }); }}
+            onInterviewAgain={canManage ? (i) => { open(null); setRetakeOf(i); setAdding(true); } : undefined}
+          />
+        ) : null;
       })()}
 
-      <AddCandidateDialog open={adding} onClose={() => setAdding(false)} onAdded={refresh} />
+      <AddCandidateDialog
+        open={adding}
+        retakeOf={retakeOf}
+        onClose={() => { setAdding(false); setRetakeOf(null); }}
+        onAdded={refresh}
+      />
     </>
   );
 };

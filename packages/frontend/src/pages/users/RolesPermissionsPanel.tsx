@@ -270,7 +270,7 @@ export const RolesPermissionsPanel: React.FC = () => {
           changes reach everyone holding that role within seconds, without them signing out.
         </p>
         {canEdit && (
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', whiteSpace: 'nowrap' }}>
+          <button onClick={() => setShowCreate(true)} className="btn btn-primary" title="Create a new custom role" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px', whiteSpace: 'nowrap' }}>
             <Plus size={14} /> New Role
           </button>
         )}
@@ -305,6 +305,7 @@ export const RolesPermissionsPanel: React.FC = () => {
               onClick={() => setOpenRole(role)}
               role="button"
               tabIndex={0}
+              title={`Open the ${role.displayName || role.name} role to see or change what it grants`}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenRole(role); } }}
               style={{
                 display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px',
@@ -374,11 +375,11 @@ export const RolesPermissionsPanel: React.FC = () => {
                 {holderCount.get(openRole.id) ? ` · ${holderCount.get(openRole.id)} staff affected` : ''}
               </span>
               <div style={{ display: 'flex', gap: '10px' }}>
-                <button type="button" onClick={() => setOpenRole(null)} className="btn btn-secondary" disabled={saving}>
+                <button type="button" onClick={() => setOpenRole(null)} className="btn btn-secondary" disabled={saving} title="Close without saving role changes">
                   {canEdit ? 'Cancel' : 'Close'}
                 </button>
                 {canEdit && (
-                  <button type="button" onClick={savePermissions} className="btn btn-primary" disabled={saving || !dirty}>
+                  <button type="button" onClick={savePermissions} className="btn btn-primary" disabled={saving || !dirty} title={`Save permission changes for ${openRole.displayName || openRole.name}; everyone holding it is affected`}>
                     {saving ? 'Saving…' : dirty ? 'Save changes' : 'No changes'}
                   </button>
                 )}
@@ -418,6 +419,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                 type="text"
                 placeholder="Find a permission…"
                 value={filter}
+                title="Type to find a permission by name"
                 onChange={(e) => setFilter(e.target.value)}
                 style={{ ...input, paddingLeft: '30px' }}
               />
@@ -451,6 +453,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => toggleMany(areaPerms, !allOn)}
+                          title={allOn ? `Remove all ${area.label} permissions from this role` : `Give this role all ${area.label} permissions`}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 'var(--text-2xs)', fontWeight: 600, whiteSpace: 'nowrap' }}
                         >
                           {allOn ? 'Clear' : 'Select all'}
@@ -473,7 +476,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                                   key={p.id}
                                   type="button"
                                   disabled={!canEdit}
-                                  title={p.description || undefined}
+                                  title={p.description || `${actionLabel(p.action)} on ${resourceLabel(resource)}`}
                                   onClick={() => setDraft((prev) => {
                                     const next = new Set(prev);
                                     if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
@@ -521,8 +524,8 @@ export const RolesPermissionsPanel: React.FC = () => {
           onSubmit={createRole}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-              <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary" disabled={saving}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Creating…' : 'Create role'}</button>
+              <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary" disabled={saving} title="Close without creating the role">Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={saving} title="Create this role and choose its permissions next">{saving ? 'Creating…' : 'Create role'}</button>
             </div>
           }
         >
@@ -530,11 +533,13 @@ export const RolesPermissionsPanel: React.FC = () => {
             <div>
               <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Name</label>
               <input type="text" required placeholder="Regional Auditor" value={newDisplay}
+                title="Type a display name for the new role, e.g. Regional Auditor"
                 onChange={(e) => { setNewDisplay(e.target.value); if (!newNameEdited) setNewName(e.target.value); }} style={input} />
             </div>
             <div>
               <label style={{ ...label, display: 'block', marginBottom: '4px' }}>System reference</label>
               <input type="text" required placeholder="REGIONAL_AUDITOR" value={newName}
+                title="Type a capital-letter reference for the system, e.g. REGIONAL_AUDITOR"
                 onChange={(e) => { setNewName(e.target.value); setNewNameEdited(true); }} style={input} />
               <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
                 Saved in capitals. This cannot be changed afterwards.
@@ -543,6 +548,7 @@ export const RolesPermissionsPanel: React.FC = () => {
             <div>
               <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Description <span style={{ fontWeight: 400, textTransform: 'none' }}>(optional)</span></label>
               <input type="text" placeholder="What this role is for" value={newDesc}
+                title="Type a short note on what this role is for (optional)"
                 onChange={(e) => setNewDesc(e.target.value)} style={input} />
             </div>
             <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>

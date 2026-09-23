@@ -90,6 +90,7 @@ const ONBOARDING_SIGN_IN: AssayerLifecycleStatus[] = [
   AssayerLifecycleStatus.INVITED,
   AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
   AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+  AssayerLifecycleStatus.FINAL_APPROVAL,
   AssayerLifecycleStatus.TRAINING,
 ];
 

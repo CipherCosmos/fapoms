@@ -67,7 +67,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
                       </div>
                     </div>
                     {canAct && (
-                      <button className="btn btn-primary" disabled={c.count === 0} onClick={() => setCreating(c)} style={{ display: 'inline-flex', gap: 5, alignItems: 'center', padding: '6px 10px', fontSize: 'var(--text-xs)' }}>
+                      <button className="btn btn-primary" disabled={c.count === 0} onClick={() => setCreating(c)} title={c.count === 0 ? `Nothing invoiceable for ${c.clientName} right now` : `Invoice ${c.clientName} — ${c.count} assignment${c.count === 1 ? '' : 's'} totalling ${money(c.total)}`} style={{ display: 'inline-flex', gap: 5, alignItems: 'center', padding: '6px 10px', fontSize: 'var(--text-xs)' }}>
                         <Plus size={13} /> Invoice
                       </button>
                     )}
@@ -84,7 +84,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
         actions={
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {(['ALL', InvoiceStatus.DRAFT, InvoiceStatus.ISSUED, InvoiceStatus.PAID, InvoiceStatus.CANCELLED] as InvoiceFilter[]).map((f) => (
-              <button key={f} onClick={() => { onFilter(f); setPage(1); }} style={{
+              <button key={f} onClick={() => { onFilter(f); setPage(1); }} title={f === 'ALL' ? 'Show invoices in every state' : f === InvoiceStatus.DRAFT ? 'Drafts — created but not sent to the client yet' : f === InvoiceStatus.ISSUED ? 'Sent to the client — awaiting payment' : f === InvoiceStatus.PAID ? 'Fully paid invoices' : 'Cancelled invoices — kept as a record'} style={{
                 padding: '4px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
                 background: filter === f ? 'var(--status-pending-bg)' : 'transparent', color: filter === f ? 'var(--text-primary)' : 'var(--text-secondary)',
                 border: `1px solid ${filter === f ? 'var(--accent-primary)' : 'var(--border-color)'}`,
@@ -102,14 +102,14 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
             <div style={tableScrollStyle}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>
-                  <th style={th}>Invoice</th><th style={th}>Client</th><th style={th}>Status</th><th style={th}>Issued</th><th style={th}>Due</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Lines</th><th style={{ ...th, textAlign: 'right' }}>Total</th><th style={{ ...th, textAlign: 'right' }}>Outstanding</th>
+                  <th title="Invoice number — click a row to open it" style={th}>Invoice</th><th title="Billed client" style={th}>Client</th><th title="Draft, sent, paid or cancelled" style={th}>Status</th><th title="Date printed on the invoice" style={th}>Issued</th><th title="Payment due date — red when overdue" style={th}>Due</th>
+                  <th title="Assignments bundled on this invoice" style={{ ...th, textAlign: 'right' }}>Lines</th><th title="Invoice total including GST, minus TDS" style={{ ...th, textAlign: 'right' }}>Total</th><th title="Still unpaid on this invoice" style={{ ...th, textAlign: 'right' }}>Outstanding</th>
                 </tr></thead>
                 <tbody>
                   {rows.map((inv) => {
                     const overdue = inv.status === InvoiceStatus.ISSUED && inv.dueDate && new Date(inv.dueDate) < new Date() && Number(inv.outstandingAmount) > 0;
                     return (
-                      <tr key={inv.id} onClick={() => setOpenId(inv.id)} style={{ cursor: 'pointer' }}>
+                      <tr key={inv.id} onClick={() => setOpenId(inv.id)} title={`Open ${inv.invoiceNumber} — ${inv.clientName ?? 'client'} — ${money(inv.outstandingAmount)} outstanding`} style={{ cursor: 'pointer' }}>
                         <td style={{ ...td, fontWeight: 600, color: 'var(--text-primary)' }}>{inv.invoiceNumber}</td>
                         <td style={td}>{inv.clientName ?? '—'}</td>
                         <td style={td}><InvoiceStatusPill status={inv.status} partPaid={Number(inv.paidAmount) > 0 && Number(inv.outstandingAmount) > 0} /></td>

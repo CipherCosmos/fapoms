@@ -112,6 +112,7 @@ export const ActivityFeed: React.FC = () => {
         <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
           {['ALL', 'USER', 'DATA_ACCESS', 'OPERATIONAL', 'WORKFLOW'].map((c) => (
             <button key={c} onClick={() => setCategory(c)}
+              title={c === 'ALL' ? 'Show activity from every category' : `Show only ${(c.charAt(0) + c.slice(1).toLowerCase()).replace('_', ' ')} activity`}
               style={{
                 padding: '5px 11px', borderRadius: '999px', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer',
                 border: `1px solid ${category === c ? 'transparent' : 'var(--border-color)'}`,

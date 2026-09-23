@@ -316,7 +316,7 @@ export const TransportCostsSection: React.FC = () => {
             Show retired
           </label>
           {canManage && (
-            <button onClick={openCreate} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
+            <button onClick={openCreate} title="Add a new travel price for one way of travelling" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
               <Plus size={14} /> Add Rate
             </button>
           )}
@@ -350,6 +350,7 @@ export const TransportCostsSection: React.FC = () => {
             One-way distance (km)
             <input
               type="number" min={1} value={estKm} onChange={(e) => setEstKm(e.target.value)}
+              title="Type a one-way distance in kilometres to see the estimated cost"
               style={{ width: '120px', padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
             />
           </label>
@@ -459,19 +460,19 @@ export const TransportCostsSection: React.FC = () => {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="table" style={{ width: '100%' }}>
-              <thead>
-                <tr>
-                  <th>Mode</th>
-                  <th>Scope</th>
-                  <th style={{ textAlign: 'right' }}>Base fare</th>
-                  <th style={{ textAlign: 'right' }}>Per km</th>
-                  <th>Preferred</th>
-                  <th>Effective</th>
-                  <th>Status</th>
-                  <th>Notes</th>
-                  {canManage && <th />}
-                </tr>
-              </thead>
+            <thead>
+              <tr>
+                <th title="Way of travelling, e.g. bus or train">Mode</th>
+                <th title="Where this price applies">Scope</th>
+                <th title="Fixed cost of setting out, before distance" style={{ textAlign: 'right' }}>Base fare</th>
+                <th title="Cost for each kilometre travelled" style={{ textAlign: 'right' }}>Per km</th>
+                <th title="Whether this way of travelling is the recommended one">Preferred</th>
+                <th title="Dates this price is valid for">Effective</th>
+                <th title="Whether this price is currently used for new offers">Status</th>
+                <th title="Note explaining why this price is what it is">Notes</th>
+                {canManage && <th title="Edit or retire this price" />}
+              </tr>
+            </thead>
               <tbody>
                 {visibleRates.map((r) => (
                   <tr key={r.id} style={{ opacity: r.isActive ? 1 : 0.55 }}>
@@ -568,12 +569,12 @@ export const TransportCostsSection: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Base fare (₹) — the cost of setting out at all
-                <input type="number" min={0} step="0.01" value={form.baseFare} onChange={(e) => set({ baseFare: e.target.value })}
+                <input type="number" min={0} step="0.01" value={form.baseFare} onChange={(e) => set({ baseFare: e.target.value })} title="Type the fixed starting cost before distance"
                   style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Rate per km (₹)
-                <input type="number" min={0} step="0.01" value={form.perKmRate} onChange={(e) => set({ perKmRate: e.target.value })} required
+                <input type="number" min={0} step="0.01" value={form.perKmRate} onChange={(e) => set({ perKmRate: e.target.value })} required title="Type the cost for each kilometre travelled"
                   style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
             </div>
@@ -581,12 +582,12 @@ export const TransportCostsSection: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Effective from
-                <input type="date" value={form.effectiveFrom} onChange={(e) => set({ effectiveFrom: e.target.value })} required
+                <input type="date" value={form.effectiveFrom} onChange={(e) => set({ effectiveFrom: e.target.value })} required title="Pick the date this price starts applying from"
                   style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
                 Effective to (blank = open-ended)
-                <input type="date" value={form.effectiveTo} onChange={(e) => set({ effectiveTo: e.target.value })}
+                <input type="date" value={form.effectiveTo} onChange={(e) => set({ effectiveTo: e.target.value })} title="Pick the last date this price applies, leave blank for no end date"
                   style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               </label>
             </div>
@@ -607,12 +608,13 @@ export const TransportCostsSection: React.FC = () => {
               Notes — why this rate is what it is
               <textarea value={form.notes} onChange={(e) => set({ notes: e.target.value })} rows={2}
                 placeholder="e.g. State transport fare revision, April 2026"
+                title="Type why this price is what it is, for future reference"
                 style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)', resize: 'vertical' }} />
             </label>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={submitting}>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)} title="Close without saving this price">Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={submitting} title={editingId ? 'Save changes to this price' : 'Add this new travel price'}>
                 {submitting ? 'Saving…' : editingId ? 'Save Changes' : 'Add Rate'}
               </button>
             </div>

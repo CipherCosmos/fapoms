@@ -195,7 +195,7 @@ export const PacketsQueue: React.FC = () => {
           const active = lane === l.key;
           const count = l.key === '' ? undefined : data?.counts?.[l.key as keyof typeof data.counts];
           return (
-            <button key={l.key || 'all'} onClick={() => setLane(l.key)}
+            <button key={l.key || 'all'} onClick={() => setLane(l.key)} title={`Show ${l.label.toLowerCase()} packets${count != null ? ` — ${count}` : ''}`}
               className={active ? 'btn btn-primary' : 'btn btn-secondary'}
               style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', width: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
               {l.label}
@@ -205,7 +205,7 @@ export const PacketsQueue: React.FC = () => {
         })}
         <span style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 10px' }}>
           <Search size={13} style={{ color: 'var(--text-muted)' }} />
-          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search branch / code / file…"
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search branch / code / file…" title="Search by branch name, SOL ID or file name"
             style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 'var(--text-xs)', width: '190px' }} />
         </span>
         {isHead && (
@@ -234,8 +234,14 @@ export const PacketsQueue: React.FC = () => {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-xs)' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-              {['Branch', 'Received', 'With', 'Lane', ''].map((h) => (
-                <th key={h} style={{ ...deskLabel, textAlign: 'left', padding: '10px 14px', whiteSpace: 'nowrap' }}>{h}</th>
+              {[
+                { h: 'Branch', hint: 'Branch and SOL ID this packet belongs to' },
+                { h: 'Received', hint: 'When the packet arrived on the desk' },
+                { h: 'With', hint: 'Who is typing this packet up' },
+                { h: 'Lane', hint: 'Where this packet sits in the desk flow' },
+                { h: '', hint: '' },
+              ].map(({ h, hint }) => (
+                <th key={h} title={hint || undefined} style={{ ...deskLabel, textAlign: 'left', padding: '10px 14px', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -279,6 +285,7 @@ export const PacketsQueue: React.FC = () => {
                           onClick={() => assign(d.id, pick[d.id] ?? leastLoadedId)}
                           disabled={busy === d.id || !(pick[d.id] ?? leastLoadedId)}
                           className="btn btn-secondary"
+                          title={`Assign this packet to ${team.find((t) => t.id === (pick[d.id] ?? leastLoadedId))?.name ?? 'the selected member'}`}
                           style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', fontWeight: 700 }}>
                           {busy === d.id ? 'Assigning…' : 'Assign'}
                         </button>
@@ -289,7 +296,7 @@ export const PacketsQueue: React.FC = () => {
                   </td>
                   <td style={{ padding: '9px 14px' }}>
                     {chip && (
-                      <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: chip.color, border: `1px solid ${chip.color}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                      <span title={`Packet lane: ${chip.label} — ${d.lane === 'unassigned' ? 'waiting for a head to assign' : d.lane === 'working' ? 'being typed up' : d.lane === 'rework' ? 'sent back for correction' : 'handed back to the head'}`} style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: chip.color, border: `1px solid ${chip.color}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
                         {chip.label}
                       </span>
                     )}
@@ -297,12 +304,12 @@ export const PacketsQueue: React.FC = () => {
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', textAlign: 'right' }}>
                     <div style={{ display: 'inline-flex', gap: '6px' }}>
                       {(d.lane === 'working' || d.lane === 'rework') && (
-                        <button onClick={() => handBack(d.id)} disabled={busy === d.id} className="btn btn-secondary"
+                        <button onClick={() => handBack(d.id)} disabled={busy === d.id} className="btn btn-secondary" title="Mark typing complete and hand this packet back to the head for review"
                           style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', fontWeight: 700 }}>
                           {busy === d.id ? 'Saving…' : '✓ Hand back'}
                         </button>
                       )}
-                      <button onClick={() => d.projectBranchId && navigate(`/data-entry/case/${d.projectBranchId}`)}
+                      <button onClick={() => d.projectBranchId && navigate(`/data-entry/case/${d.projectBranchId}`)} title={d.projectBranchId ? `Open the workspace for ${d.branchName ?? d.fileName}` : 'No workspace linked yet'}
                         disabled={!d.projectBranchId} className="btn btn-secondary"
                         style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <FileText size={12} /> Open
@@ -319,10 +326,10 @@ export const PacketsQueue: React.FC = () => {
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
         <span>{data ? `${data.total} packet${data.total === 1 ? '' : 's'}` : '…'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }} title="Go to the previous page"
             disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
-          <span style={{ fontVariantNumeric: 'tabular-nums' }}>{page} / {totalPages}</span>
-          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }}
+          <span style={{ fontVariantNumeric: 'tabular-nums' }} title={`Page ${page} of ${totalPages}`}>{page} / {totalPages}</span>
+          <button className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', width: 'auto' }} title="Go to the next page"
             disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next ›</button>
         </span>
       </div>

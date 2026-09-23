@@ -237,10 +237,10 @@ export const MfaPanel: React.FC = () => {
             ))}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={copyRecovery} className="btn btn-ghost" style={{ gap: 8, fontSize: 'var(--text-sm)' }}>
+            <button onClick={copyRecovery} className="btn btn-ghost" title="Copy all recovery codes to the clipboard" style={{ gap: 8, fontSize: 'var(--text-sm)' }}>
               {copied ? <Check size={15} /> : <Copy size={15} />}{copied ? 'Copied' : 'Copy all'}
             </button>
-            <button onClick={() => setRecoveryCodes(null)} className="btn btn-primary" style={{ gap: 8, fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+            <button onClick={() => setRecoveryCodes(null)} className="btn btn-primary" title="Confirm you saved the codes and close this panel" style={{ gap: 8, fontSize: 'var(--text-sm)', fontWeight: 600 }}>
               <Check size={15} /> I’ve saved these
             </button>
           </div>
@@ -266,7 +266,7 @@ export const MfaPanel: React.FC = () => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--text-primary)' }}>{meta.label}</span>
                     {on && <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'var(--status-active-bg, rgba(34,197,94,0.14))', color: 'var(--success, #22c55e)' }}>ON</span>}
-                    {offline && !on && <span className="badge" style={{ fontSize: 'var(--text-3xs)', background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>Unavailable</span>}
+                    {offline && !on && <span className="badge" title="Text messages have not been set up on this system yet" style={{ fontSize: 'var(--text-3xs)', background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>Unavailable</span>}
                   </div>
                   <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: '3px 0 0' }}>{meta.blurb}</p>
                   {offline && (
@@ -317,6 +317,7 @@ export const MfaPanel: React.FC = () => {
                             }}>{groupSecret(flow.secret || '')}</code>
                             <button
                               onClick={async () => { try { await navigator.clipboard.writeText(flow.secret || ''); toast({ type: 'success', message: 'Setup key copied.' }); } catch { /* ignore */ } }}
+                              title="Copy the setup key to the clipboard for manual entry"
                               className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}
                             ><Copy size={14} /> Copy key</button>
                           </div>
@@ -333,6 +334,7 @@ export const MfaPanel: React.FC = () => {
                       <label style={labelStyle}>MOBILE NUMBER</label>
                       <input
                         type="tel" autoFocus value={flow.phone || ''} placeholder="e.g. 9876543210"
+                        title="Type the mobile number that should receive setup codes by text"
                         onChange={(e) => setFlow({ ...flow, phone: e.target.value })}
                         style={inputStyle}
                       />
@@ -351,6 +353,7 @@ export const MfaPanel: React.FC = () => {
                       <input
                         inputMode="numeric" autoComplete="one-time-code" autoFocus={flow.factor !== 'TOTP'}
                         value={flow.code} placeholder="000000" maxLength={8}
+                        title="Type the 6-digit code from your authenticator app or message"
                         onChange={(e) => setFlow({ ...flow, code: e.target.value })}
                         onKeyDown={(e) => { if (e.key === 'Enter') void confirmCode(); }}
                         style={{ ...inputStyle, letterSpacing: 4, fontSize: 'var(--text-lg)', textAlign: 'center' }}
@@ -360,18 +363,18 @@ export const MfaPanel: React.FC = () => {
 
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                     {flow.factor === 'SMS' && flow.phase === 'phone' ? (
-                      <button onClick={sendSms} disabled={busy || !(flow.phone || '').trim()} className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
+                      <button onClick={sendSms} disabled={busy || !(flow.phone || '').trim()} title="Send a setup code to this mobile number" className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
                         {busy && <Loader2 size={15} className="spin" />} Send code
                       </button>
                     ) : (
-                      <button onClick={confirmCode} disabled={busy || flow.code.trim().length < 6} className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
+                      <button onClick={confirmCode} disabled={busy || flow.code.trim().length < 6} title="Check the code and turn on two-step verification" className="btn btn-primary" style={{ gap: 8, fontWeight: 600 }}>
                         {busy && <Loader2 size={15} className="spin" />} Verify & turn on
                       </button>
                     )}
                     {flow.phase === 'code' && flow.factor !== 'TOTP' && (
                       <button
                         onClick={() => (flow.factor === 'SMS' ? sendSms() : startFlow('EMAIL'))}
-                        disabled={busy} className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }}
+                        disabled={busy} title="Send the setup code again" className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }}
                       >Resend code</button>
                     )}
                   </div>
@@ -389,7 +392,7 @@ export const MfaPanel: React.FC = () => {
             <KeyRound size={13} style={{ verticalAlign: -2, marginRight: 6 }} />
             Recovery codes remaining: <strong style={{ color: 'var(--text-primary)' }}>{status?.recoveryCodesRemaining ?? 0}</strong>
           </div>
-          <button onClick={regenerate} className="btn btn-ghost" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
+          <button onClick={regenerate} className="btn btn-ghost" title="Create new recovery codes; the current ones stop working at once" style={{ gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} /> Regenerate recovery codes
           </button>
         </div>

@@ -138,10 +138,11 @@ export const AddUserDialog: React.FC<{
       footer={(
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="submit" disabled={!ready || busy} className="btn btn-primary"
+            title="Create the account and email the invite link"
             style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', whiteSpace: 'nowrap', opacity: !ready || busy ? 0.55 : 1 }}>
             <Mail size={15} /> {busy ? 'Creating…' : 'Create & send invite'}
           </button>
-          <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
+          <button type="button" onClick={onClose} className="btn btn-secondary" title="Close without creating the account">Cancel</button>
           <span style={{ marginLeft: 'auto', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             They set their own password — you never see it.
           </span>
@@ -162,14 +163,17 @@ export const AddUserDialog: React.FC<{
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <Field label="First name">
               <StyledInput value={firstName} autoFocus
+                title="Type the person's first name"
                 onChange={(e) => setFirstName(e.target.value)} required />
             </Field>
             <Field label="Last name">
               <StyledInput value={lastName}
+                title="Type the person's last name"
                 onChange={(e) => setLastName(e.target.value)} required />
             </Field>
             <Field label="Work email" hint="Where the invite goes.">
               <StyledInput type="email" value={email}
+                title="Type their work email address; the invite goes here"
                 onChange={(e) => setEmail(e.target.value)} required />
             </Field>
 
@@ -178,12 +182,14 @@ export const AddUserDialog: React.FC<{
               {username && <>Signs in as <strong style={{ color: 'var(--text-secondary)' }}>{username}</strong></>}
               {!showUsername && username && (
                 <button type="button" onClick={() => setShowUsername(true)}
+                  title="Type a custom sign-in username instead of the suggested one"
                   style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', fontSize: 'var(--text-xs)', textDecoration: 'underline', marginLeft: '6px' }}>
                   change
                 </button>
               )}
               {showUsername && (
                 <StyledInput value={username} style={{ marginTop: '6px' }}
+                  title="Type the custom sign-in username for this account"
                   onChange={(e) => setUsernameOverride(e.target.value)} />
               )}
             </div>
@@ -195,6 +201,7 @@ export const AddUserDialog: React.FC<{
                   onChange={setClientId}
                   options={(clients ?? []).map((c): SelectOption => ({ value: c.id, label: c.name }))}
                   placeholder="Choose a client…"
+                  title="Choose which client this account belongs to"
                 />
               </Field>
             )}
@@ -214,6 +221,7 @@ export const AddUserDialog: React.FC<{
                       background: checked ? 'var(--status-pending-bg)' : 'transparent',
                     }}>
                       <input type="checkbox" checked={checked}
+                        title={`Tick to limit this account to the ${REGION_LABELS[r as Region] ?? r} region`}
                         onChange={() => setRegions(checked ? regions.filter((v) => v !== r) : [...regions, r])} />
                       {REGION_LABELS[r as Region] ?? r}
                     </label>
@@ -237,6 +245,7 @@ export const AddUserDialog: React.FC<{
               {rest.length > 0 && (
                 <>
                   <button type="button" onClick={() => setShowRest(!showRest)}
+                    title={showRest ? 'Hide the less common roles' : 'Show the less common roles'}
                     style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                     {showRest ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     Other roles ({rest.length})
@@ -276,7 +285,8 @@ const RoleChoice: React.FC<{ role: RoleRow; checked: boolean; onToggle: (id: str
       background: checked ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
     }}
   >
-    <input type="checkbox" checked={checked} onChange={() => onToggle(role.id)} style={{ marginTop: '2px' }} />
+    <input type="checkbox" checked={checked} onChange={() => onToggle(role.id)} style={{ marginTop: '2px' }}
+      title={`${checked ? 'Remove' : 'Give'} the ${role.displayName || roleLabel(role.name)} role ${checked ? 'from' : 'to'} this account`} />
     <span style={{ minWidth: 0 }}>
       <span style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
         {role.displayName || roleLabel(role.name)}
@@ -305,6 +315,7 @@ const Collapsible: React.FC<{ title: string; summary: string; children: React.Re
   return (
     <div style={{ borderTop: '1px solid var(--border-hair)', paddingTop: '12px' }}>
       <button type="button" onClick={() => setOpen(!open)}
+        title={open ? 'Hide the region limits' : `Show region limits: currently ${summary}`}
         style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
         {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />} {title}
         <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>· {summary}</span>
@@ -336,7 +347,7 @@ export const InviteResult: React.FC<{
   const [copied, setCopied] = useState(false);
   return (
     <Modal open onClose={onClose} title={`${result.displayName} is set up`} width="520px"
-      footer={<button type="button" onClick={onClose} className="btn btn-primary">Done</button>}>
+      footer={<button type="button" onClick={onClose} className="btn btn-primary" title="Close and return to the staff list">Done</button>}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
         {/*
           The same delivery line every other screen uses. The link appears only while the email has
@@ -351,8 +362,9 @@ export const InviteResult: React.FC<{
           fallback={`Pass this link to ${result.displayName} yourself — it works once and expires in 48 hours.`}
           whenUndelivered={(
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <StyledInput readOnly value={result.link} style={{ flex: 1, fontFamily: 'monospace', fontSize: 'var(--text-xs)' }} />
+              <StyledInput readOnly value={result.link} title="The one-time setup link to pass on yourself" style={{ flex: 1, fontFamily: 'monospace', fontSize: 'var(--text-xs)' }} />
               <button type="button" className="btn btn-secondary"
+                title="Copy the setup link to the clipboard"
                 onClick={() => { void navigator.clipboard?.writeText(result.link); setCopied(true); }}>
                 <Copy size={14} /> {copied ? 'Copied' : 'Copy'}
               </button>

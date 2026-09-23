@@ -97,9 +97,17 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ...[
     'AssayerActivatedEvent', 'AssayerSuspendedEvent', 'AssayerDeactivatedEvent', 'AssayerOnLeaveEvent',
     'AssayerResignedEvent', 'AssayerTerminatedEvent', 'AssayerArchivedEvent',
-    'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerTrainingStartedEvent',
+    'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerSentForApprovalEvent',
+    'AssayerTrainingStartedEvent',
     'assayer:updated', 'assayer:created', 'assayer:deleted',
-  ].map((event): [string, ...any[]] => [event, queryKeys.hr.rosterAll, queryKeys.hr.workforce]),
+  /*
+    And the maps. `queryKeys.assayers.all` is the planning map's pin roster and
+    `commandCenter.all` the Command Center's workforce layer; neither was refreshed by any of these
+    events, so a person added (or placed by the address lookup, or pinned by hand — which now
+    publishes `assayer:updated` too) did not appear on an open map until its five-minute cache ran
+    out AND the map was opened again. Reported as "created assayer doesn't come on the map".
+  */
+  ].map((event): [string, ...any[]] => [event, queryKeys.hr.rosterAll, queryKeys.hr.workforce, queryKeys.assayers.all, queryKeys.commandCenter.all]),
 ];
 
 /**
@@ -126,7 +134,12 @@ const EVENT_KEYS: [string, ...any[]][] = [
  * covers `hr.importIssues` — that one is not in `EVENT_KEYS` today, so this has no effect on it yet,
  * but it would need no separate decision if it ever is.
  */
-const SLOW_ROOTS = new Set<string>(['dashboard', 'command-center', 'hr']);
+/*
+ * `'assayers'` joined them with the map fix (2026-09-23): its only reader is the maps' pin roster
+ * (`/assayers/map-roster`), the whole scoped roster again — refreshed per event, a bulk stage move
+ * would re-download it once per person.
+ */
+const SLOW_ROOTS = new Set<string>(['dashboard', 'command-center', 'hr', 'assayers']);
 
 /**
  * Coalescing windows.

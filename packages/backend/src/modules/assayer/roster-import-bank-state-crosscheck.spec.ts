@@ -23,7 +23,7 @@ const mockedLookupIfsc = lookupIfsc as jest.MockedFunction<typeof lookupIfsc>;
 describe('roster import — state and bank cross-checks', () => {
   const HEADERS = [
     'Appraiser Name', 'Appraiser code', 'PAN Number', 'Residence Address', 'Location', 'District',
-    'State', 'Bank Name', 'IFSC Code',
+    'State', 'Bank Name', 'IFSC Code', 'A/c Number',
   ];
 
   const row = (over: Partial<Record<typeof HEADERS[number], string>> = {}): any[] => {
@@ -37,6 +37,7 @@ describe('roster import — state and bank cross-checks', () => {
       'State': 'Kerala',
       'Bank Name': '',
       'IFSC Code': '',
+      'A/c Number': '',
       ...over,
     };
     return HEADERS.map((h) => base[h]);
@@ -205,6 +206,25 @@ describe('roster import — state and bank cross-checks', () => {
      * bank name. `lookupIfsc` itself never throws, but this proves the importer's own fallback
      * holds even if it did — and that nothing about the row's import is skipped or delayed.
      */
+    /**
+     * The account number's shape, at the one write path that bypasses the API. A bad cell is a
+     * review issue and the row still imports — one unusable value must not abandon the sheet.
+     */
+    it('stores an account number as its digits, and files a bad one as an issue instead', async () => {
+      mockedLookupIfsc.mockResolvedValue(null);
+      const good = harness();
+      await good.service.importAssayerSheet(book([row({ 'A/c Number': '1234 5678-9012' })]), 'user-1', {});
+      expect(good.savedAssayers[0].bankAccountNumber).toBe('123456789012');
+
+      const bad = harness();
+      const summary = await bad.service.importAssayerSheet(book([row({ 'A/c Number': 'SBI 12345' })]), 'user-1', {});
+      expect(summary.created).toBe(1);
+      expect(bad.savedAssayers[0].bankAccountNumber ?? null).toBeNull();
+      expect(bad.savedIssues).toContainEqual(expect.objectContaining({
+        sourceColumn: 'A/c Number', rawValue: 'SBI 12345', reason: expect.stringMatching(/9 to 18 digits/),
+      }));
+    });
+
     it('falls back to the sheet bank name, and still imports the row, when the lookup fails', async () => {
       mockedLookupIfsc.mockRejectedValue(new Error('network down'));
       const h = harness();

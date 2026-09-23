@@ -2,14 +2,14 @@ import React, { useCallback, useRef, useState } from 'react';
 import { View } from 'react-native';
 import {
   EMERGENCY_CONTACT_RELATIONS, EmploymentCategory, REGISTRATION_FIELD_LIMITS,
-  identifierFormatIssue, isValidIfsc, normaliseIdentifierOnBlur, type RegistrationFormField,
+  bankAccountConfirmProblem, identifierFormatIssue, isValidIfsc, normaliseIdentifierOnBlur, type RegistrationFormField,
 } from '@fapoms/shared';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Card, FieldLabel, Icon, Input, Tappable, SelectField, type SelectOption } from '../../components/ui/primitives';
 import { useT, type TranslationKey, type TranslationVars } from '../../i18n';
 import { SelfRegistrationApi } from '../../services/self-registration.service';
 import { FieldNote, GroupHeader, StepFooter } from './parts';
-import { FORMAT_HINT_KEYS } from './registration-form';
+import { FORMAT_HINT_KEYS, registrationFieldPatch } from './registration-form';
 import type { StepProps } from './types';
 
 export interface StepBankProps extends StepProps {
@@ -43,7 +43,7 @@ type Note = { key: TranslationKey; vars?: TranslationVars; tone: 'info' | 'warni
 const digitsOnly = (v: string, max: number) => v.replace(/\D/g, '').slice(0, max);
 
 export const StepBank: React.FC<StepBankProps> = ({
-  token, form, errors, setField, commitField, pickField, onCategoryChange, categoryNote, onBack, onContinue,
+  token, form, errors, setField, commitField, pickField, save, onCategoryChange, categoryNote, onBack, onContinue,
 }) => {
   const t = useTheme();
   const tr = useT();
@@ -218,14 +218,47 @@ export const StepBank: React.FC<StepBankProps> = ({
         <Input
           label={tr('selfRegistration.form.bankAccountNumber')}
           value={form.bankAccountNumber}
-          onChangeText={(v) => setField('bankAccountNumber', digitsOnly(v, 18))}
-          onBlur={() => commitField('bankAccountNumber')}
+          onChangeText={(v) => {
+            setField('bankAccountNumber', digitsOnly(v, 18));
+            // A changed number is a new number: it has to be typed a second time.
+            setField('bankAccountNumberConfirm', '');
+          }}
+          onBlur={() => {
+            // Saved once confirmed (below) — except emptying it, which needs no second typing and
+            // must reach the server so a wrong number can be cleared.
+            if (!form.bankAccountNumber.trim()) commitField('bankAccountNumber');
+          }}
           placeholder={tr('selfRegistration.form.bankAccountPlaceholder')}
           keyboardType="number-pad"
           autoCapitalize="none"
           autoCorrect={false}
           maxLength={18}
           error={errors.bankAccountNumber}
+        />
+        {/*
+          Typed twice, because nothing else catches a wrong digit — Indian account numbers carry no
+          check digit. The copy/paste menu is hidden on this box: a pasted copy repeats the slip.
+        */}
+        <Input
+          label={tr('selfRegistration.form.bankAccountConfirm')}
+          value={form.bankAccountNumberConfirm ?? ''}
+          onChangeText={(v) => setField('bankAccountNumberConfirm', digitsOnly(v, 18))}
+          onBlur={() => {
+            if (form.bankAccountNumber.trim()
+              && !bankAccountConfirmProblem(form.bankAccountNumber, form.bankAccountNumberConfirm ?? '')) {
+              save(registrationFieldPatch('bankAccountNumber', form.bankAccountNumber));
+            }
+          }}
+          placeholder={tr('selfRegistration.form.bankAccountConfirmPlaceholder')}
+          keyboardType="number-pad"
+          autoCapitalize="none"
+          autoCorrect={false}
+          contextMenuHidden
+          maxLength={18}
+          error={errors.bankAccountNumberConfirm
+            ?? ((form.bankAccountNumberConfirm ?? '').trim()
+              ? bankAccountConfirmProblem(form.bankAccountNumber, form.bankAccountNumberConfirm ?? '') ?? undefined
+              : undefined)}
         />
         <View style={{ gap: t.space.sm }}>
           <Input

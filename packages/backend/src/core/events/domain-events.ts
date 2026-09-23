@@ -62,6 +62,8 @@ export class ValidationMovedToReviewEvent extends DomainEvent {}
 // Assayer Events
 export class AssayerDocumentVerificationStartedEvent extends DomainEvent {}
 export class AssayerBackgroundCheckInitiatedEvent extends DomainEvent {}
+/** Sent up for the approval before training (2026-09-23). */
+export class AssayerSentForApprovalEvent extends DomainEvent {}
 export class AssayerTrainingStartedEvent extends DomainEvent {}
 export class AssayerActivatedEvent extends DomainEvent {}
 export class AssayerOnLeaveEvent extends DomainEvent {}

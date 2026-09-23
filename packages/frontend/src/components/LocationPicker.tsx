@@ -179,6 +179,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
+        title={expanded ? 'Hide the map picker' : 'Show the map picker to pin your location'}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: '8px',
           padding: '12px 16px', background: 'none', border: 'none',
@@ -225,6 +226,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
               type="button"
               onClick={useMyLocation}
               disabled={geoStatus === 'finding'}
+              title="Use your device location for the pin"
               style={{
                 display: 'flex', alignItems: 'center', gap: '5px',
                 padding: '6px 12px', borderRadius: '6px',
@@ -240,6 +242,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({ latitude, longit
               <button
                 type="button"
                 onClick={clearPin}
+                title="Remove the pinned location"
                 style={{
                   padding: '6px 12px', borderRadius: '6px',
                   background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)',

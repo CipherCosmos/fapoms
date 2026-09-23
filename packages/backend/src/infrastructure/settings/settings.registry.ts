@@ -89,6 +89,7 @@ export const SETTINGS_GROUPS = [
   // (see feedback-roles.ts), so its SLA knobs follow the desk.
   { key: 'feedback', label: 'Support SLA', audience: 'technical', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
   { key: 'onboarding', label: 'Joining and identity', audience: 'technical', description: 'What an appraiser must prove about who they are before they can be activated, and how strictly it is enforced.' },
+  { key: 'rechecks', label: 'Re-checks over time', audience: 'business', description: 'How often a working appraiser is re-checked — background, police, credit and identity documents — how early HR is reminded, and how long an overdue check is allowed before they are held from new work.' },
   { key: 'field', label: 'In the field', audience: 'business', description: 'What the app enforces on an assayer while they are out on a job.' },
   { key: 'planning', label: 'Planning', audience: 'business', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
   { key: 'roster', label: 'Roster import', audience: 'business', description: 'How the appraiser roster spreadsheet is brought in.' },
@@ -816,7 +817,8 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
       + 'enforcing immediately would have blocked every new joiner against a process the desk had '
       + 'never operated once. Move it to Enforce as soon as the identity queue on the roster is '
       + 'being worked. "Off" skips the check entirely. Nothing here stops work already assigned, '
-      + 'and no earlier joining stage is affected.',
+      + 'and no earlier joining stage is affected. Background verification is NOT governed by this '
+      + 'switch: a clear check and its uploaded report are always required to finish onboarding.',
     group: 'onboarding',
     type: 'select',
     options: [
@@ -835,6 +837,102 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
      */
     default: 'warn',
     envVar: 'IDENTITY_GATE_MODE',
+    applies: 'immediately',
+  },
+  // ── Checks done over time (2026-09-23) ──────────────────────────────────
+  // Read by ComplianceStandingService on every read — a change applies to the next person looked
+  // at, the next planning run and the next reminder sweep. See periodic-checks.ts in shared.
+  {
+    key: 'recheck.bgv.intervalMonths',
+    label: 'Background verification — repeat every',
+    description: 'How many months after the last background verification a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 24,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.police.intervalMonths',
+    label: 'Police verification — repeat every',
+    description: 'How many months after the last police verification a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 12,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.credit.intervalMonths',
+    label: 'Credit (CIBIL) check — repeat every',
+    description: 'How many months after the last credit check a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 12,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.identity.intervalMonths',
+    label: 'Identity documents re-check — repeat every',
+    description: 'How many months after the last identity-documents re-check a working appraiser is due for the next one. '
+      + 'HR is reminded before it falls due; once it is overdue past the grace period below, they are '
+      + 'held from new work until it is done. Work already assigned is never affected.',
+    group: 'rechecks',
+    type: 'number',
+    default: 24,
+    min: 1,
+    max: 120,
+    unit: 'months',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.graceDays',
+    label: 'Re-check grace period',
+    description: 'Days after a re-check falls due before the appraiser is held from new work. During '
+      + 'these days they keep working and HR is reminded; after them, planning will not offer them and '
+      + 'no new assignment can be created for them until the check is recorded.',
+    group: 'rechecks',
+    type: 'number',
+    default: 30,
+    min: 0,
+    max: 365,
+    unit: 'days',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.remindDaysBefore',
+    label: 'Re-check reminder lead time',
+    description: 'How many days before a re-check falls due HR starts being reminded about it.',
+    group: 'rechecks',
+    type: 'number',
+    default: 30,
+    min: 0,
+    max: 180,
+    unit: 'days',
+    applies: 'immediately',
+  },
+  {
+    key: 'recheck.firstRoundDueOn',
+    label: 'First re-check due by (YYYY-MM-DD)',
+    description: 'For a working appraiser who has never had a given check recorded, the date that '
+      + 'first check falls due. The roster predates these checks, so this is a date you choose rather '
+      + 'than "today" — otherwise the whole field would be held from work after one grace period.',
+    group: 'rechecks',
+    type: 'string',
+    default: '2026-12-31',
     applies: 'immediately',
   },
   {
@@ -1323,6 +1421,12 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     description: 'How long a candidate must wait before requesting another mobile verification code on the same registration link.',
     group: 'registration', type: 'number', default: 60, min: 15, max: 600, unit: 'seconds', applies: 'immediately',
   },
+  {
+    key: 'references.notifyOnApproval',
+    label: 'Tell referees when a candidate is approved',
+    description: 'When an application is approved, each person the candidate named as a reference is told that HR may call them — by email where there is an address, and by text where there is a mobile number and the text has a registered DLT template. Anybody who could not be reached is shown as such on the record, where HR can send it again. Switch off to contact referees only by hand.',
+    group: 'registration', type: 'boolean', default: true, applies: 'immediately',
+  },
   // ── Email Templates ───────────────────────────────────────────────────────
   {
     key: 'email.template.otp-verification',
@@ -1352,6 +1456,18 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     key: 'email.template.application-rejected',
     label: 'Template: Application Rejected',
     description: 'Versioned configuration and overrides for application rejection email.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.application-info-requested',
+    label: 'Template: Application Needs Attention',
+    description: 'Versioned configuration and overrides for the email listing what HR asked a candidate to fix.',
+    group: 'email_templates', type: 'json', default: null, applies: 'immediately',
+  },
+  {
+    key: 'email.template.reference-notice',
+    label: 'Template: Reference Heads-up',
+    description: 'Versioned configuration and overrides for the email telling a referee that HR may call them.',
     group: 'email_templates', type: 'json', default: null, applies: 'immediately',
   },
   {

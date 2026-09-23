@@ -32,6 +32,7 @@ import type { StorageEngine } from '../../infrastructure/storage/storage-engine.
 // The one place the upload rules live — see modules/document/upload-validation.ts. A second copy
 // here is how four upload paths came to disagree about what they accept.
 import { assertUploadAllowed, uploadMulterOptions, SCAN_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { CheckType, CHECK_ISSUER_LABEL, checkTypeForReport } from '@fapoms/shared';
 
 /**
  * Same shape as `documentUploadMulterOptions` in document.controller.ts. All three routes below
@@ -51,6 +52,12 @@ import { Type } from 'class-transformer';
  * empty objects because the inner properties carry no validation metadata to keep — the same
  * defect that once stored query attachments as `[[]]`. `@ValidateNested` + `@Type` preserve them.
  */
+/** Who referred this assayer — checked in full by the shared `normalizeSourceReferral`. */
+class SetSourceReferralRequestDto {
+  @IsOptional() @IsObject()
+  sourceReferral?: Record<string, unknown> | null;
+}
+
 class LeavePeriodDto {
   @IsDateString()
   startDate: string;
@@ -82,6 +89,10 @@ import {
   HR_MAINTAINED_ASSAYER_FIELDS,
   isValidPan,
   isValidIfsc,
+  isBankAccountNumber,
+  BANK_ACCOUNT_NUMBER_RULE,
+  OnboardingDocument,
+  looksMasked,
   isValidAadhaar,
   isPlaceholderAadhaar,
   pincodeFromAddress,
@@ -95,7 +106,7 @@ import {
 import { withCode } from '../../infrastructure/http/api-error';
 import { deriveFileIntegrity } from '../document/document-integrity';
 import {
-  buildIdCardPdf, idCardDownloadVerdict, idCardPdfInput, idCardPreview, streamToBuffer, type IdCardPreview,
+  idCardFace, type IdCardFace,
 } from './id-card';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -239,6 +250,18 @@ class VerifyDocumentRequestDto {
   @IsOptional() @IsString() @MaxLength(2000)
   nameMismatchNote?: string;
 
+  /**
+   * For a passbook: the account number and IFSC read off the page. Compared with the record, never
+   * stored on the document — see `RosterRecordsService.verifyDocument`. Declared here because the
+   * validation pipe refuses undeclared properties, which is exactly how an undeclared field once
+   * made every verification fail (see `expectedContentHash` below).
+   */
+  @IsOptional() @IsString() @MaxLength(40)
+  accountNumber?: string;
+
+  @IsOptional() @IsString() @MaxLength(20)
+  ifscCode?: string;
+
   /** Explicit document version to bind verification to */
   @IsOptional() @IsUUID()
   targetVersionId?: string;
@@ -324,6 +347,22 @@ const identityFormatRule = formatRule;
 
 const IsPanFormat = identityFormatRule('isPanFormat', isValidPan,
   "This PAN doesn't look right — it should be 5 letters, 4 digits, 1 letter, like ABCDE1234F.");
+
+/**
+ * The account number's shape: 9 to 18 digits once spaces and hyphens are taken out.
+ *
+ * The note above said `bankAccountNumber` "has no format rule here and never could". It has one
+ * now, because it has a shape after all — just not a checksum — and "any string at all" let a
+ * phone number, a name or half a number be saved as the place someone is paid. It cannot catch a
+ * mistyped digit; typing it twice on the forms and verifying the passbook do that.
+ *
+ * A masked value passes HERE on purpose, so `assertNoMaskedPii` refuses it with the sentence that
+ * says what actually happened — the copy shown on screen being sent back — instead of this one
+ * calling it a malformed number.
+ */
+const IsBankAccountFormat = identityFormatRule('isBankAccountFormat',
+  (value) => looksMasked(value) || isBankAccountNumber(value),
+  BANK_ACCOUNT_NUMBER_RULE);
 
 const IsIfscFormat = identityFormatRule('isIfscFormat', isValidIfsc,
   "This IFSC code doesn't look right — it should be 4 letters, then a zero, then 6 letters or digits, like SBIN0001234.");
@@ -443,7 +482,7 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsString() @IsPanFormat()
   panNumber?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsBankAccountFormat()
   bankAccountNumber?: string;
 
   @IsOptional() @IsString() @IsIfscFormat()
@@ -625,7 +664,7 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsString() @IsPanFormat()
   panNumber?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsBankAccountFormat()
   bankAccountNumber?: string;
 
   @IsOptional() @IsString() @IsIfscFormat()
@@ -2423,6 +2462,25 @@ export class AssayerController {
     return { success: true, data };
   }
 
+  /**
+   * Tell a referee — again — that HR may call them. The record's "Tell them"/"Tell them again":
+   * after a corrected number or address, or once the text has a registered DLT template.
+   */
+  @Post(':assayerId/reference/:id/notify')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Tell a referee that HR may call them' })
+  async notifyReference(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    // Returned bare: the envelope is applied once, globally — see the response-envelope guard.
+    return await this.rosterRecords.notifyReferee(assayerId, id, req.user.id, { force: true });
+  }
+
   @Post('reference/:id/checked')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
@@ -2494,6 +2552,24 @@ export class AssayerController {
    * vault on a given date, and a later, different finding is a second fact rather than a
    * correction of the first.
    */
+  /**
+   * Who referred this person — the source reference. One per person; `null` clears it. Not the
+   * references they gave for background verification, which are on the Background tab.
+   */
+  @Put(':assayerId/source-referral')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Record who referred this assayer' })
+  async setSourceReferral(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Body() body: SetSourceReferralRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    return await this.assayerService.setSourceReferral(assayerId, body.sourceReferral ?? null, req.user.id);
+  }
+
   @Post(':assayerId/background-check')
   @HttpCode(201)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
@@ -2644,6 +2720,23 @@ export class AssayerController {
      * value here: `assertUploadAllowed` above has already refused anything that is not a picture
      * or a PDF, and the version row has no column to hold the two separately.
      */
+    /*
+      Who issued it — the agency, for a background verification report. Read off the multipart body
+      rather than through a validated DTO: the API refuses undeclared properties, and a body DTO on
+      this route would put every existing uploader (the phone app among them) one stray field away
+      from a 400. Refused HERE, before the file is stored, so a missing agency leaves nothing behind;
+      `attachFile` refuses it again for any caller that does not come through this route.
+    */
+    const issuedBy = typeof req.body?.issuedBy === 'string' ? req.body.issuedBy.trim() : '';
+    // Every check's report — background, police, credit — is taken only with who issued it.
+    const reportFor = checkTypeForReport(requirement);
+    if (reportFor && CHECK_ISSUER_LABEL[reportFor] && !issuedBy) {
+      throw new BadRequestException(
+        reportFor === CheckType.BGV
+          ? 'Name the agency that carried out the background verification before uploading its report.'
+          : `Name the ${String(CHECK_ISSUER_LABEL[reportFor]).toLowerCase()} before uploading this report.`,
+      );
+    }
     const integrity = deriveFileIntegrity(file.buffer, file.mimetype);
     const key = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype, file.size);
     const data = await this.rosterRecords.attachFile(assayerId, requirement as any, key, req.user.id, {
@@ -2652,7 +2745,7 @@ export class AssayerController {
       fileSize: integrity.byteLength,
       mimeType: integrity.effectiveMimeType,
       storageObjectId: key,
-    });
+    }, issuedBy || null);
     return { success: true, data };
   }
 
@@ -2727,99 +2820,21 @@ export class AssayerController {
   }
 
   /**
-   * The Appraiser Recruitment spec's Module 8: a templated ID card, generated fresh on every
-   * request — nothing about it is persisted, so the same card downloaded in different years never
-   * carries a stale date. The download itself is what `@AuditRead` records — there is no separate
-   * "who downloaded this" table.
+   * What the ID card shows right now, and whether it is issued — HR's preview. There is no
+   * download (owner, 2026-09-23): the card lives only in the assayer's own app, with a live code.
+   * The preview screen blurs and watermarks what it draws, and carries no code.
    *
-   * This used to say expiry was "always December 31 of THIS calendar year (`idCardExpiry`)", which
-   * was the spec's rule and is no longer the code's: a card issued on December 31st expired the day
-   * it was printed, so validity became configurable (`id-card.ts:22`). `idCardExpiry` had not
-   * existed anywhere in the codebase for some time either, and the same method said the right thing
-   * eighteen lines lower — see the block inside `downloadIdCard` and `idCardIssuance` for the rule
-   * that actually applies.
-   */
-  @Get(':assayerId/id-card')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:view:organization')
-  @AuditRead({ resource: 'ASSAYER_ID_CARD', idParam: 'assayerId', eventType: 'ASSAYER_ID_CARD_DOWNLOADED' })
-  @ApiOperation({ summary: 'Download a templated ID card as a PDF' })
-  async downloadIdCard(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Res() res: any,
-    @Req() req?: any,
-    @GlobalScopeFilter() scope?: GlobalScope,
-  ): Promise<void> {
-    await this.regionGuard.assertAssayerInScope(assayerId, scope);
-    const assayer = await this.assayerService.findOne(assayerId);
-    if (!assayer) throw new NotFoundException('Assayer not found.');
-
-    /**
-     * The card is the identity artifact — the thing carried into a bank branch — so it is gated
-     * on what has actually been proven about the person, not on the row merely existing. Before
-     * this, the only check on this route was "no such record": a just-invited person with no
-     * verified document and no background check could be handed an official card. Not being
-     * ACTIVE refuses in every mode; unverified identity and an absent or failed background check
-     * refuse under `onboarding.identityGate.mode = enforce` and are issued-but-audited under
-     * `warn`, the same rollout shape as activation itself. Validity is configurable and computed
-     * fresh each download — see `idCardIssuance` for the December-31st grace rule.
-     */
-    const issuance = await this.rosterRecords.idCardIssuance(assayerId, req?.user?.id ?? 'unknown');
-    // `idCardDownloadVerdict` is the one statement of "may this card leave the building" — the
-    // preview route below reports the same verdict, so the screen and this route cannot disagree.
-    if (!idCardDownloadVerdict(issuance).canDownload) {
-      if (issuance.refusals.length > 0) {
-        throw new ConflictException(`This ID card cannot be issued: ${issuance.refusals.join('; ')}.`);
-      }
-      throw new ConflictException(
-        `This ID card cannot be issued until vetting is complete: ${issuance.gated.join('; ')}. `
-        + 'Finish the checks on the Documents and Background tabs of their record first.',
-      );
-    }
-
-    let photograph: Buffer | null = null;
-    if (assayer.photograph) {
-      try {
-        const stream = await this.storage.getFileStream(assayer.photograph);
-        photograph = await streamToBuffer(stream);
-      } catch {
-        // A missing or unreadable stored photo must not block issuing the card at all — the
-        // template already renders a "no photo on file" placeholder for exactly this case.
-        photograph = null;
-      }
-    }
-
-    // The PDF prints the preview's own values, built the same way the preview route builds them.
-    const face = idCardPreview(assayer, issuance, await this.rosterRecords.idCardPrintedText());
-    const pdf = await buildIdCardPdf(idCardPdfInput(face, assayer, issuance, photograph));
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${assayer.assayerCode}-id-card.pdf"`);
-    res.setHeader('Content-Length', String(pdf.length));
-    res.end(pdf);
-  }
-
-  /**
-   * What the ID card would print right now, and whether it may be downloaded — as JSON, so the
-   * on-screen card renders ONLY what the PDF prints. The screen used to invent its own validity
-   * date, signatory and helpline; this route is what replaces that.
-   *
-   * Read-only by construction: it calls `idCardTerms`, not `idCardIssuance`, so looking at a card
-   * never writes the "issued with gaps" audit row, and it carries no `@AuditRead` — nothing leaves
-   * the building here. Open to the same roles and permission as the photograph route above;
-   * `canDownload` reports the gate verdict, not whether THIS caller's role may download.
-   *
-   * `findOneForReading`, not `findOne`: an archived person's file still opens, and their card
-   * preview should say why it cannot be issued rather than 404.
+   * Read-only by construction: `idCardTerms`, not `idCardIssuance` — looking is not issuing.
+   * `findOneForReading`: an archived person's card still says why it is not issued rather than 404.
    */
   @RequirePermissions('assayer:view:organization')
   @Get(':assayerId/id-card/preview')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
-  @ApiOperation({ summary: 'Preview the ID card: what it would print, and whether it can be downloaded' })
+  @ApiOperation({ summary: 'Preview the ID card: what it shows, and whether it is issued' })
   async previewIdCard(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @GlobalScopeFilter() scope?: GlobalScope,
-  ): Promise<IdCardPreview> {
+  ): Promise<IdCardFace> {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.findOneForReading(assayerId);
     if (!assayer) throw new NotFoundException('Assayer not found.');
@@ -2827,7 +2842,7 @@ export class AssayerController {
       this.rosterRecords.idCardTerms(assayerId),
       this.rosterRecords.idCardPrintedText(),
     ]);
-    return idCardPreview(assayer, terms, printed);
+    return idCardFace(assayer, terms, printed);
   }
 
   /**
@@ -2935,6 +2950,8 @@ export class AssayerController {
         holderAddress: body?.holderAddress,
         rejectionReason: body?.rejectionReason,
         nameMismatchNote: body?.nameMismatchNote,
+        accountNumber: body?.accountNumber,
+        ifscCode: body?.ifscCode,
         targetVersionId: body?.targetVersionId,
         expectedDocVersion: body?.expectedDocVersion,
         expectedContentHash: body?.expectedContentHash,

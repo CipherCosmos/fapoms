@@ -91,21 +91,30 @@ function makeService(overrides: { application?: Row | null; cache?: Record<strin
     remove: jest.fn(async (v: unknown) => v),
     create: jest.fn((v: Row) => ({ ...v })),
     save: jest.fn(async (v: Row) => ({ ...v, id: 'doc-1' })),
+    // A complete application's scans: the face approval needs, and the passbook submit needs.
     find: jest.fn(async () => ([
       { requirement: OnboardingDocument.PHOTOGRAPH, filePaths: ['uploads/face.jpg'] },
+      { requirement: OnboardingDocument.BANK_PASSBOOK, filePaths: ['uploads/passbook.jpg'] },
     ] as Row[])),
   };
   const assayerService = {
-    create: jest.fn(async (_dto: Row, _userId?: string, _org?: string | null, _roles?: string[]) =>
+    create: jest.fn(async (_dto: Row, _userId?: string, _org?: string | null, _roles?: string[]): Promise<Row> =>
       ({ id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni' })),
+    /**
+     * The hiring-review handoff: a hired candidate starts at document verification, not invited.
+     * A no-op by default — the default `create` above returns no lifecycle status, so the
+     * promotion's guarded hop skips and these tests keep asserting what they are about.
+     */
+    verifyDocuments: jest.fn(async (id: string) => ({ id })),
     /**
      * Approving now mints and sends the credential (see `promote`). Stubbed as delivered by both
      * channels so these tests keep asserting what they are about — which gaps the profile and the
      * terms produce — rather than picking up the "app access could not be sent" follow-up gap.
      */
     issueAndDeliverAppAccess: jest.fn(async () => ({ channels: ['EMAIL', 'SMS'] as ('EMAIL' | 'SMS')[], emailId: 'em-cred', smsId: 'sms-cred' })),
+    setSourceReferral: jest.fn(async (_id: string, raw: unknown) => raw),
   };
-  const rosterRecords = { attachFile: jest.fn(async () => ({})) };
+  const rosterRecords = { attachFile: jest.fn(async () => ({})), notifyUntoldReferees: jest.fn(async () => undefined) };
   const auditService = { recordEventSafe: jest.fn(async () => undefined) };
   const notificationDispatch = { emitSafe: jest.fn(async () => undefined) };
   /**
@@ -662,6 +671,10 @@ describe('submitting', () => {
     status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH,
     tokenExpiresAt: new Date(Date.now() + 3_600_000),
     employmentCategory: EmploymentCategory.PROPRIETOR, consentAcceptedAt: new Date(),
+    // A candidate who reaches submit named somebody who can be rung — the form requires it.
+    extendedProfile: {
+      references: [{ fullName: 'Meera Rao', phone: '9822014455', relationship: 'Former manager' }],
+    },
     ...extra,
   });
 
@@ -670,6 +683,148 @@ describe('submitting', () => {
       const { service } = makeService({ application: ready(missing), cache: verified() });
       await expect(service.submit(RAW_TOKEN)).rejects.toBeInstanceOf(BadRequestException);
     }
+  });
+
+  it('refuses without anybody to vouch for them — a name with no number is not a reference', async () => {
+    for (const references of [
+      undefined,
+      [],
+      [{ fullName: 'Meera Rao' }],
+      [{ fullName: 'Meera Rao', phone: '123' }],
+    ]) {
+      const profile = references === undefined ? null : { references };
+      const { service } = makeService({
+        application: ready({ extendedProfile: profile }),
+        cache: verified(),
+      });
+      await expect(service.submit(RAW_TOKEN)).rejects.toThrow(/reference/i);
+    }
+  });
+
+  /**
+   * The passbook is the evidence of the account a payout goes to; a candidate cannot file without
+   * one. Judged on what is attached — a row with a file — not on a form's tick.
+   */
+  it('refuses without a passbook scan, and says a cheque or statement will do', async () => {
+    for (const docs of [
+      [{ requirement: OnboardingDocument.PHOTOGRAPH, filePaths: ['uploads/face.jpg'] }],
+      [{ requirement: OnboardingDocument.BANK_PASSBOOK, filePaths: [] }],
+    ]) {
+      const ctx = makeService({ application: ready(), cache: verified() });
+      (ctx.applicationDocuments.find as jest.Mock).mockResolvedValue(docs);
+      await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/Upload Bank passbook before submitting.*cancelled cheque/i);
+      expect(ctx.application!.status).toBe(ApplicationStatus.DRAFT);
+    }
+  });
+
+  it('asks every candidate for the passbook, whichever way they practise', async () => {
+    for (const category of [null, EmploymentCategory.FREELANCER, EmploymentCategory.PROPRIETOR]) {
+      expect(documentsRequestedFor(category)).toContain(OnboardingDocument.BANK_PASSBOOK);
+    }
+  });
+
+  /** The account number's shape, at the door every application answer comes through. */
+  it('stores an account number as its digits, and refuses one that cannot be an account', async () => {
+    const { service, application } = makeService({ cache: verified() });
+    await service.updateDraft(RAW_TOKEN, { record: { bankAccountNumber: '1234 5678-9012' } } as never);
+    expect(((application!.extendedProfile as Row).fields as Row).bankAccountNumber).toBe('123456789012');
+
+    for (const bad of ['12345', 'ABCD12345678', '1234567890123456789']) {
+      await expect(service.updateDraft(RAW_TOKEN, { record: { bankAccountNumber: bad } } as never))
+        .rejects.toThrow(/9 to 18 digits/);
+    }
+  });
+
+  it('stores references trimmed and capped when the draft is saved', async () => {
+    const { service, application } = makeService({ cache: verified() });
+    await service.updateDraft(RAW_TOKEN, {
+      references: [
+        { fullName: '  Meera Rao ', phone: '98 220 14455', relationship: 'Former manager', email: 'Meera@Example.com' },
+        { fullName: '', phone: '' },
+      ],
+    } as never);
+
+    expect((application!.extendedProfile as Row).references).toEqual([
+      { fullName: 'Meera Rao', phone: '9822014455', relationship: 'Former manager', email: 'meera@example.com' },
+    ]);
+  });
+
+  it('refuses a fourth reference on the draft rather than silently dropping it', async () => {
+    const { service } = makeService({ cache: verified() });
+    const four = [1, 2, 3, 4].map((n) => ({ fullName: `Ref ${n}`, phone: '9822014455' }));
+    await expect(service.updateDraft(RAW_TOKEN, { references: four } as never))
+      .rejects.toThrow(/Only 3 references/);
+  });
+
+  /**
+   * HR's field asks leave the to-do list when the field is actually corrected.
+   *
+   * Document asks cleared themselves on a fresh scan; field asks never did, so "Date of birth —
+   * please correct" stayed on the candidate's link and on HR's "waiting on candidate" list after it
+   * had been fixed.
+   */
+  describe('what HR asked to have corrected', () => {
+    const asked = (extra: Row = {}) => ready({
+      status: ApplicationStatus.AWAITING_INFO,
+      dateOfBirth: new Date('1985-03-14T00:00:00Z'),
+      extendedProfile: {
+        references: [{ fullName: 'Meera Rao', phone: '9822014455' }],
+        fields: { ifscCode: 'SBIN0000001' },
+      },
+      infoRequests: [
+        { kind: 'field', key: 'dateOfBirth', label: 'Date of birth', message: 'Does not match the PAN.' },
+        { kind: 'field', key: 'ifscCode', label: 'IFSC code', message: 'Does not match the passbook.' },
+        { kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'Retake in better light.' },
+      ],
+      ...extra,
+    });
+    const keys = (app: Row | null) => ((app?.infoRequests ?? []) as Row[]).map((i) => `${i.kind}:${i.key}`);
+
+    it('drops an ask once its field actually changes', async () => {
+      const { service, application } = makeService({ application: asked(), cache: verified() });
+
+      await service.updateDraft(RAW_TOKEN, { dateOfBirth: '1986-01-02' } as never);
+      expect(keys(application)).toEqual(['field:ifscCode', 'document:PAN_CARD']);
+
+      await service.updateDraft(RAW_TOKEN, { record: { ifscCode: 'SBIN0001234' } } as never);
+      expect(keys(application)).toEqual(['document:PAN_CARD']);
+    });
+
+    /**
+     * The form saves every box on blur. Tabbing past the date of birth sends the same day back —
+     * as a string, against a stored Date — and must not count as having fixed it.
+     */
+    it('keeps an ask when the same value is merely saved again', async () => {
+      const { service, application } = makeService({ application: asked(), cache: verified() });
+
+      await service.updateDraft(RAW_TOKEN, { dateOfBirth: '1985-03-14', record: { ifscCode: 'SBIN0000001' } } as never);
+
+      expect(keys(application)).toEqual(['field:dateOfBirth', 'field:ifscCode', 'document:PAN_CARD']);
+    });
+
+    /**
+     * Resubmitting is the candidate's answer to every field ask; HR reads the whole form again. A
+     * document whose sent-back scan was never replaced is still genuinely owed, so it stays.
+     */
+    it('settles the field asks on resubmission and keeps a document still owed', async () => {
+      const { service, application } = makeService({ application: asked(), cache: verified() });
+
+      await service.submit(RAW_TOKEN);
+
+      expect(application!.status).toBe(ApplicationStatus.PENDING_VALIDATION);
+      expect(keys(application)).toEqual(['document:PAN_CARD']);
+    });
+
+    it('clears the list entirely when nothing is left owed', async () => {
+      const { service, application } = makeService({
+        application: asked({ infoRequests: [{ kind: 'field', key: 'ifscCode', label: 'IFSC code', message: 'x' }] }),
+        cache: verified(),
+      });
+
+      await service.submit(RAW_TOKEN);
+
+      expect(application!.infoRequests).toBeNull();
+    });
   });
 
   it('moves to Pending Validation and tells the HR desk there is something to review', async () => {
@@ -770,19 +925,19 @@ describe('HR review', () => {
   });
 
   /**
-   * HR's note is the whole point of this email. It used to be written only into the call site's own
-   * copy of the letter, which the template renderer then replaced — so the candidate got a fresh
-   * link and no word of what was wanted.
+   * HR's asks are the whole point of this email. They travel as an item list the candidate's SAME
+   * link renders as a to-do list — never as a fresh link, because minting one would kill the link
+   * the candidate already holds at exactly the moment they are asked to use it.
    */
-  it('tells the candidate what HR asked for, in the invite that carries the fresh link', async () => {
+  it('tells the candidate what HR asked for, without minting a new link', async () => {
     const { service, emailService, mailbox } = makeService({ application: submitted() });
     await service.requestMoreInfo('app-1', 'user-1', 'Attach the shop entity proof.');
 
     expect(emailService.queue).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'REGISTRATION_INVITE',
+      kind: 'APPLICATION_INFO_REQUESTED',
       content: {
-        template: 'registration-invite',
-        data: expect.objectContaining({ intro: expect.stringContaining('Attach the shop entity proof.') }),
+        template: 'application-info-requested',
+        data: expect.objectContaining({ itemsText: expect.stringContaining('Attach the shop entity proof.') }),
       },
     }));
     expect(mailbox.send).toHaveBeenCalledWith(
@@ -790,20 +945,105 @@ describe('HR review', () => {
     );
   });
 
-  it('rotates the link when asking for more information, so the old one stops working', async () => {
-    // Only the hash was ever stored, so "resend the same link" is not a thing this can do — and
-    // rotating is the better answer anyway. What must not happen is the OLD link still opening.
+  it('keeps the SAME link working when asking for more information', async () => {
+    // The link the candidate holds (or has open in a tab) must survive the request: only the
+    // hash was ever stored, so "send them the same link" is not a thing this can do — keeping
+    // the stored hash untouched while extending its window is.
     const { service, application } = makeService({ application: submitted() });
     await service.requestMoreInfo('app-1', 'user-1', 'Attach the shop entity proof.');
 
     expect(application!.status).toBe(ApplicationStatus.AWAITING_INFO);
-    expect(application!.tokenHash).not.toBe(TOKEN_HASH);
-    expect(application!.tokenConsumedAt).toBeNull();
+    expect(application!.tokenHash).toBe(TOKEN_HASH);
+    expect(new Date(application!.tokenExpiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('stores ticked documents and fields as the candidate to-do list', async () => {
+    const { service, application, applicationDocuments } = makeService({ application: submitted() });
+    await service.requestMoreInfo('app-1', 'user-1', {
+      notes: 'Two things to fix.',
+      documents: [{ requirement: OnboardingDocument.PAN_CARD, reason: 'ILLEGIBLE' }],
+      fields: [{ key: 'ifscCode', message: 'Does not match the passbook.' }],
+    });
+
+    const saved = application!;
+    expect(saved.status).toBe(ApplicationStatus.AWAITING_INFO);
+    expect(saved.infoRequests).toEqual([
+      expect.objectContaining({ kind: 'document', key: 'PAN_CARD', message: expect.stringContaining('better light') }),
+      expect.objectContaining({ kind: 'field', key: 'ifscCode', label: 'IFSC code' }),
+    ]);
+    // The flagged document row carries the verdict for the review queue to read back.
+    const rows = applicationDocuments.save.mock.calls.map((c: any[]) => c[0]);
+    expect(rows).toContainEqual(expect.objectContaining({
+      requirement: 'PAN_CARD', reviewStatus: 'NEEDS_RESUBMIT', rejectionReason: 'ILLEGIBLE',
+    }));
+  });
+
+  it('refuses a structured request that names nothing the candidate can fix', async () => {
+    const { service } = makeService({ application: submitted() });
+    await expect(service.requestMoreInfo('app-1', 'user-1', {
+      documents: [{ requirement: 'BIRTH_CERTIFICATE' as any }],
+    })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.requestMoreInfo('app-1', 'user-1', {
+      fields: [{ key: 'assayerCode', message: 'fix it' }],
+    })).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('refuses a request for more information with nothing asked for', async () => {
     const { service } = makeService({ application: submitted() });
     await expect(service.requestMoreInfo('app-1', 'user-1', '')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('sends back one document without rejecting the application', async () => {
+    const { service, application } = makeService({ application: submitted() });
+    const row = await service.reviewApplicationDocument(
+      'app-1', OnboardingDocument.PAN_CARD, 'NEEDS_RESUBMIT',
+      { reason: 'ILLEGIBLE', note: '' }, 'user-1',
+    );
+
+    expect(row.reviewStatus).toBe('NEEDS_RESUBMIT');
+    expect(row.rejectionReason).toBe('ILLEGIBLE');
+    expect(application!.status).toBe(ApplicationStatus.AWAITING_INFO);
+    // Same link: the stored hash is untouched, only its window is extended.
+    expect(application!.tokenHash).toBe(TOKEN_HASH);
+    expect(application!.infoRequests).toEqual([
+      expect.objectContaining({ kind: 'document', key: 'PAN_CARD' }),
+    ]);
+  });
+
+  it('refuses to approve a document nobody attached', async () => {
+    const { service, applicationDocuments } = makeService({ application: submitted() });
+    applicationDocuments.findOne.mockResolvedValueOnce(null);
+    await expect(service.reviewApplicationDocument(
+      'app-1', OnboardingDocument.PAN_CARD, 'APPROVED', {}, 'user-1',
+    )).rejects.toThrow(/no scan/i);
+  });
+
+  it('a resubmitted scan clears its own send-back', async () => {
+    const sentBack = {
+      applicationId: 'app-1',
+      requirement: OnboardingDocument.PAN_CARD,
+      filePaths: ['uploads/blurry.png'],
+      reviewStatus: 'NEEDS_RESUBMIT',
+      rejectionReason: 'ILLEGIBLE',
+      rejectionNote: null,
+    };
+    const ctx = makeService({
+      application: {
+        ...submitted(),
+        status: ApplicationStatus.AWAITING_INFO,
+        infoRequests: [{ kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'Retake.' }],
+      },
+      cache: { [`regotp:verified:${TOKEN_HASH}`]: { phone: '9822014455' } },
+    });
+    (ctx.applicationDocuments.findOne as jest.Mock).mockResolvedValueOnce(sentBack);
+
+    await ctx.service.uploadDocument(RAW_TOKEN, OnboardingDocument.PAN_CARD, {
+      originalname: 'pan.png', buffer: Buffer.from('x'), mimetype: 'image/png', size: 10,
+    });
+
+    const savedRow = ctx.applicationDocuments.save.mock.calls[ctx.applicationDocuments.save.mock.calls.length - 1][0];
+    expect(savedRow.reviewStatus).toBe('PENDING');
+    expect(savedRow.rejectionReason).toBeNull();
   });
 
   describe('resending a lost link', () => {
@@ -908,6 +1148,33 @@ describe('promotion to a real assayer', () => {
 
     expect(application!.status).toBe(ApplicationStatus.APPROVED);
     expect(application!.promotedAssayerId).toBe('assayer-1');
+  });
+
+  it('lands a hired candidate at document verification, not invited', async () => {
+    // INVITED means "on the roster, nothing reviewed yet" — untrue of somebody HR just
+    // reviewed, asked, and approved. Landing there asked the desk to verify the same scans
+    // twice: once off-stage to leave INVITED, once in the stage flow.
+    const ctx = makeService({ application: approved() });
+    ctx.assayerService.create.mockResolvedValueOnce({
+      id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni',
+      lifecycleStatus: 'INVITED',
+    });
+    await ctx.service.approve('app-1', 'user-1', ['ADMIN']);
+
+    expect(ctx.assayerService.verifyDocuments).toHaveBeenCalledWith('assayer-1', 'user-1');
+  });
+
+  it('does not re-take the handoff hop when a retried promotion finds the person moved on', async () => {
+    // Same idempotency key, second attempt: `create` answers with the existing person, already
+    // past INVITED. Re-taking the hop would fail on a transition that already happened.
+    const ctx = makeService({ application: approved() });
+    ctx.assayerService.create.mockResolvedValueOnce({
+      id: 'assayer-1', assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni',
+      lifecycleStatus: 'DOCUMENT_VERIFICATION',
+    });
+    await ctx.service.approve('app-1', 'user-1', ['ADMIN']);
+
+    expect(ctx.assayerService.verifyDocuments).not.toHaveBeenCalled();
   });
 
   it('carries the candidate-only fields across, and keeps free text out of columns that have none', async () => {
@@ -1208,6 +1475,43 @@ describe('the extended profile the wizard collects', () => {
       const location = sent.find((dto: Record<string, unknown>) => 'latitude' in dto);
       expect(location).toEqual({ latitude: 19.07, longitude: 72.87, district: 'Mumbai' });
     });
+  });
+});
+
+/**
+ * Referees hear when the candidate is hired — the moment they become references FOR somebody on
+ * the record, which is where HR's call to them is recorded.
+ */
+describe('an approved candidate’s referees are told', () => {
+  const candidate = () => ({
+    id: 'app-x', mobile: '9822014455', fullName: 'Full Payload', state: 'Maharashtra',
+    status: ApplicationStatus.PENDING_VALIDATION, organizationId: 'org-1',
+    source: ApplicationSource.HR_DESK, createdBy: 'hr-maker', email: 'candidate@example.com',
+  });
+
+  it('tells them once the person exists, after the approval letter, by the reviewer', async () => {
+    const order: string[] = [];
+    const ctx = makeService({ application: candidate() });
+    ctx.emailService.queue.mockImplementation(async (r: Row) => {
+      order.push(`email:${r.kind}`);
+      return { id: 'e', status: 'QUEUED', to: r.to };
+    });
+    (ctx.rosterRecords as any).notifyUntoldReferees = jest.fn(async () => { order.push('referees'); });
+
+    await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect((ctx.rosterRecords as any).notifyUntoldReferees).toHaveBeenCalledWith('assayer-1', 'hr-checker');
+    // The candidate learns they are hired before their referees learn they may be rung.
+    expect(order.indexOf('email:APPLICATION_APPROVED')).toBeLessThan(order.indexOf('referees'));
+  });
+
+  it('does not fail the hire when the referees cannot be told', async () => {
+    const ctx = makeService({ application: candidate() });
+    (ctx.rosterRecords as any).notifyUntoldReferees = jest.fn(async () => { throw new Error('outbox down'); });
+
+    const result = await ctx.service.approve('app-x', 'hr-checker', ['ADMIN']);
+
+    expect(result.assayer.id).toBe('assayer-1');
   });
 });
 
@@ -1733,16 +2037,35 @@ describe('the desk completes the person as it approves', () => {
   it('gives the reviewer what the interviewer wrote', async () => {
     const ctx = makeService({ application: { ...ready(), interviewId: 'iv-1' } });
     const when = new Date('2026-09-02T10:00:00.000Z');
+    const paper = { storageKey: 'uploads/test.pdf', fileName: 'test.pdf' };
     ctx.interviews.findOne.mockResolvedValue({
-      mobile: '9822014455', outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
-      interviewedAt: when, interviewedByName: 'Meera Rao',
+      id: 'iv-1', mobile: '9822014455', outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
+      interviewedAt: when, interviewedByName: 'Meera Rao', attachments: [paper], previousInterviewId: null,
     } as never);
 
     const detail = await ctx.service.getApplication('app-1');
 
     expect(detail.interview).toEqual({
-      outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
+      id: 'iv-1', outcome: 'PASS', notes: 'Steady hands; knows the acid test.',
       interviewedAt: when, interviewedByName: 'Meera Rao',
+      // The test papers the pass rested on, for the person deciding the application.
+      attachments: [paper], earlier: null,
+    });
+  });
+
+  /** Passed only when interviewed again: the reviewer sees the attempt that did not, papers and all. */
+  it('shows the earlier interview that did not pass, when they passed on a second one', async () => {
+    const ctx = makeService({ application: { ...ready(), interviewId: 'iv-2' } });
+    const first = new Date('2026-09-01T10:00:00.000Z');
+    const second = new Date('2026-09-20T10:00:00.000Z');
+    (ctx.interviews.findOne as jest.Mock).mockImplementation(async ({ where }: any) => (where.id === 'iv-2'
+      ? { id: 'iv-2', mobile: '9822014455', outcome: 'PASS', notes: null, interviewedAt: second, interviewedByName: 'Meera Rao', attachments: [], previousInterviewId: 'iv-1' }
+      : { id: 'iv-1', mobile: '9822014455', outcome: 'FAIL', notes: 'Unsure on the acid test.', interviewedAt: first, interviewedByName: 'Meera Rao', attachments: [{ storageKey: 'k', fileName: 'first.pdf' }] }) as never);
+
+    const detail = await ctx.service.getApplication('app-1');
+
+    expect(detail.interview?.earlier).toMatchObject({
+      id: 'iv-1', outcome: 'FAIL', notes: 'Unsure on the acid test.', attachments: [{ fileName: 'first.pdf' }],
     });
   });
 
@@ -1812,7 +2135,8 @@ describe('approving is safe to repeat', () => {
     finishCreating();
     await expect(first).resolves.toMatchObject({ assayer: { id: 'assayer-1' } });
     expect(ctx.assayerService.create).toHaveBeenCalledTimes(1);
-    expect(ctx.rosterRecords.attachFile).toHaveBeenCalledTimes(1);
+    // Once per scan the application holds (the photograph and the passbook) — filed once, not twice.
+    expect(ctx.rosterRecords.attachFile).toHaveBeenCalledTimes(2);
     expect(ctx.emailService.queue).toHaveBeenCalledTimes(1);
   });
 
@@ -2140,13 +2464,15 @@ describe('the desk filling in an application', () => {
     const ctx = makeService({ application: draft() });
     const saved = await ctx.service.updateStaffDraft('app-1', {
       commercial: { baseFee: 900, currency: 'INR' },
-      references: [{ fullName: 'A Referee', phone: '9811100022' }],
+      references: [{ fullName: 'A Referee', phone: '9811100022', email: 'Ref@Example.com' }],
       empanelments: [{ clientId: 'client-1', status: 'EMPANELLED' }],
     }, 'hr-maker');
 
     const profile = saved.extendedProfile as any;
     expect(profile.commercial).toMatchObject({ baseFee: 900 });
-    expect(profile.references).toHaveLength(1);
+    expect(profile.references).toEqual([
+      { fullName: 'A Referee', phone: '9811100022', email: 'ref@example.com' },
+    ]);
     expect(profile.empanelments[0].clientId).toBe('client-1');
   });
 
@@ -2824,6 +3150,10 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
     status: ApplicationStatus.DRAFT, tokenHash: TOKEN_HASH,
     tokenExpiresAt: new Date(Date.now() + 3_600_000), tokenConsumedAt: null,
     employmentCategory: 'FREELANCER', consentAcceptedAt: new Date(), organizationId: 'org-1',
+    // Submit demands somebody ringable; these tests are about the checks after that gate.
+    extendedProfile: {
+      references: [{ fullName: 'Meera Rao', phone: '9822014455' }],
+    },
     ...over,
   });
 
@@ -2841,7 +3171,7 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
 
   it('reads the date of birth out of the form answers too, not only the column', async () => {
     const ctx = makeService({
-      application: ready({ extendedProfile: { fields: { dateOfBirth: seventeenYearsAgo() } } }),
+      application: ready({ extendedProfile: { fields: { dateOfBirth: seventeenYearsAgo() }, references: [{ fullName: 'Meera Rao', phone: '9822014455' }], } }),
       cache: verified(),
     });
     await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/at least 18/);
@@ -2856,7 +3186,7 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
 
   it('refuses a PAN that already belongs to somebody on the roster, naming nobody', async () => {
     const ctx = makeService({
-      application: ready({ dateOfBirth: '1990-06-15', extendedProfile: { fields: { panNumber: 'ABCDE1234F' } } }),
+      application: ready({ dateOfBirth: '1990-06-15', extendedProfile: { fields: { panNumber: 'ABCDE1234F' }, references: [{ fullName: 'Meera Rao', phone: '9822014455' }], } }),
       cache: verified(),
     });
     // Only the PAN lookup finds anybody: a blanket match would trip the phone check first and
@@ -2875,7 +3205,7 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
       application: ready({
         dateOfBirth: '1990-06-15',
         promotedAssayerId: 'assayer-from-this-application',
-        extendedProfile: { fields: { panNumber: 'ABCDE1234F' } },
+        extendedProfile: { fields: { panNumber: 'ABCDE1234F' }, references: [{ fullName: 'Meera Rao', phone: '9822014455' }], },
       }),
       cache: verified(),
     });
@@ -2893,5 +3223,65 @@ describe('what submit refuses that the roster sweep used to catch later', () => 
     ));
 
     await expect(ctx.service.submit(RAW_TOKEN)).rejects.toThrow(/email address is already registered/);
+  });
+});
+
+/**
+ * WHO REFERRED THEM — the source reference (owner, 2026-09-23). HR records it at intake; the
+ * candidate may fill it on their form when HR left it blank; approval keeps it on the person.
+ */
+describe('the source referral on an application', () => {
+  const ravi = { type: 'ASSAYER', name: 'Ravi Kumar', mobile: '9876543210', email: 'ravi@example.in' };
+  const draftWith = (sourceReferral?: Record<string, unknown>) => ({
+    id: 'app-1', mobile: '9822014455', fullName: 'Ramesh Kulkarni', status: ApplicationStatus.DRAFT,
+    organizationId: 'org-1', tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+    consentAcceptedAt: new Date(), consentVersion: CURRENT_CONSENT_NOTICE.version,
+    extendedProfile: sourceReferral ? { sourceReferral } : null,
+  });
+
+  it('lets the candidate name who referred them when HR has not', async () => {
+    const { service, application } = makeService({ application: draftWith() as never, cache: verified() });
+    await service.updateDraft(RAW_TOKEN, { sourceReferral: ravi } as never);
+    expect((application!.extendedProfile as Row).sourceReferral).toEqual({ ...ravi, recordedBy: 'CANDIDATE' });
+  });
+
+  it('does not let the candidate change what HR recorded', async () => {
+    const { service, application } = makeService({ application: draftWith({ ...ravi, recordedBy: 'HR' }) as never, cache: verified() });
+    await expect(service.updateDraft(RAW_TOKEN, { sourceReferral: { ...ravi, name: 'Someone Else' } } as never))
+      .rejects.toThrow(/HR has recorded who referred you/);
+    expect(((application!.extendedProfile as Row).sourceReferral as Row).name).toBe('Ravi Kumar');
+  });
+
+  it('refuses an entry nobody could reach, with the shared rule\'s words', async () => {
+    const { service } = makeService({ application: draftWith() as never, cache: verified() });
+    await expect(service.updateDraft(RAW_TOKEN, { sourceReferral: { ...ravi, mobile: '', email: '' } } as never))
+      .rejects.toThrow(/mobile or an email for Ravi Kumar/);
+  });
+
+  it('lets the desk record or correct it, as HR', async () => {
+    const ctx = makeService({ application: draftWith({ ...ravi, recordedBy: 'CANDIDATE' }) as never });
+    const saved = await ctx.service.updateStaffDraft('app-1', { sourceReferral: { ...ravi, type: 'STAFF' } } as never, 'hr-1');
+    expect((saved.extendedProfile as Row).sourceReferral).toMatchObject({ type: 'STAFF', recordedBy: 'HR' });
+  });
+
+  it('carries HR\'s intake entry onto the application an interview opens', async () => {
+    const { service, applications } = makeService();
+    const referral = { ...ravi, recordedBy: 'HR' } as never;
+    await service.createInviteRecord({ mobile: '9822014455', fullName: 'Ramesh Kulkarni', sourceReferral: referral });
+    expect(applications.create).toHaveBeenCalledWith(expect.objectContaining({ extendedProfile: { sourceReferral: referral } }));
+  });
+
+  it('keeps it on the person at approval, as whoever recorded it', async () => {
+    const ctx = makeService({
+      application: {
+        ...draftWith({ ...ravi, recordedBy: 'CANDIDATE' }),
+        status: ApplicationStatus.PENDING_VALIDATION, email: 'c@example.com', state: 'Maharashtra', city: 'Pune',
+        employmentCategory: EmploymentCategory.PROPRIETOR,
+      } as never,
+    });
+    await ctx.service.approve('app-1', 'user-1', ['ADMIN']);
+    expect(ctx.assayerService.setSourceReferral).toHaveBeenCalledWith(
+      'assayer-1', expect.objectContaining({ name: 'Ravi Kumar' }), 'user-1', 'CANDIDATE',
+    );
   });
 });

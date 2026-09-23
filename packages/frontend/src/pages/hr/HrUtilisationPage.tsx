@@ -134,6 +134,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
                     type="button"
                     onClick={() => setWorkloadPosture(f.key)}
                     aria-pressed={on}
+                    title={`${f.label} — ${f.count} people. Click to filter the workload table.`}
                     style={{
                       padding: '5px 10px', fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer',
                       borderRadius: '999px',

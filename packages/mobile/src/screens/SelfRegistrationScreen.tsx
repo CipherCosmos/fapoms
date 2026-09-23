@@ -1,9 +1,10 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import {
-  ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS, REGISTRATION_STEP_COUNT,
-  inferRegistrationStep, normaliseIdentifierOnBlur, registrationStepProblems, resumableRegistrationStep,
-  type OnboardingDocument, type RegistrationFormField, type RegistrationFormValues,
+  ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS, REGISTRATION_STEP_COUNT, REGISTRATION_REQUIRED_DOCUMENTS,
+  applicationFieldStep, inferRegistrationStep, normaliseIdentifierOnBlur, readApplicationInfoRequests, referenceSubmitProblem, registrationStepProblems,
+  resumableRegistrationStep,
+  type ApplicationInfoRequestItem, type OnboardingDocument, type RegistrationFormField, type RegistrationFormValues,
 } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AmbientGlow, AppText, Button, Card, Icon, IconButton, Input, ProgressBar } from '../components/ui/primitives';
@@ -14,6 +15,7 @@ import { DocumentScanner, type ScannedDocument } from '../components/DocumentSca
 import {
   SelfRegistrationApi, isVerificationLost,
   type DraftPatch, type RegistrationApplication, type RegistrationDocument, type RegistrationHydration,
+  type RegistrationReference,
 } from '../services/self-registration.service';
 import {
   STEP_TITLE_KEYS, applicationRef, problemMessage, registrationFieldPatch, renderMessage, seedRegistrationForm,
@@ -65,6 +67,11 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   const [application, setApplication] = useState<RegistrationApplication | null>(null);
   const [documents, setDocuments] = useState<RegistrationDocument[]>([]);
   const [documentsRequested, setDocumentsRequested] = useState<string[]>([]);
+  /** People who can vouch for the candidate — up to three, at least one with a number. */
+  const [references, setReferences] = useState<RegistrationReference[]>([]);
+  const [referencesError, setReferencesError] = useState<string | null>(null);
+  /** Exactly what HR asked for — rendered as the to-do list, not one free-text note. */
+  const [infoRequests, setInfoRequests] = useState<ApplicationInfoRequestItem[]>([]);
   const [consentNotice, setConsentNotice] = useState<RegistrationHydration['consentNotice'] | null>(null);
 
   const [form, setForm] = useState<RegistrationFormValues | null>(null);
@@ -119,6 +126,9 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     setApplication(data.application);
     setDocuments(data.documents);
     setDocumentsRequested(data.documentsRequested);
+    setInfoRequests(data.infoRequests ?? []);
+    setReferences(readReferences(data.application));
+    setReferencesError(null);
     setConsentNotice(data.consentNotice);
     updateForm(seeded);
     setPhone(data.application.mobile ?? '');
@@ -152,6 +162,10 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
         return;
       }
       setApplication(res.data);
+      // Read the to-do list back: the server drops an ask once its field actually changes.
+      if ('infoRequests' in (res.data as object)) {
+        setInfoRequests(readApplicationInfoRequests((res.data as { infoRequests?: unknown }).infoRequests));
+      }
       setSaved(true);
     });
   }, [token, feedback, tr, verificationLost]);
@@ -189,6 +203,25 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     save({ record: { latitude: next?.latitude ?? '', longitude: next?.longitude ?? '' } });
   }, [save]);
 
+  const handleReferencesChange = useCallback((next: RegistrationReference[]) => {
+    setReferences(next);
+    setReferencesError(null);
+    save({ references: next });
+  }, [save]);
+
+  const readReferences = (app: RegistrationApplication): RegistrationReference[] => {
+    const raw = app.extendedProfile?.references;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((r) => !!r && (String(r.fullName ?? '').trim() !== '' || String(r.phone ?? '').trim() !== '' || String(r.email ?? '').trim() !== ''))
+      .map((r) => ({
+        fullName: String(r.fullName ?? ''),
+        phone: String(r.phone ?? ''),
+        relationship: String(r.relationship ?? ''),
+        email: String(r.email ?? ''),
+      }));
+  };
+
   const handleCategoryChange = useCallback(async (category: EmploymentCategory) => {
     setField('employmentCategory', category);
     setSaving((n) => n + 1);
@@ -207,6 +240,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     if (!refreshed.success) return;
     setDocuments(refreshed.data.documents);
     setDocumentsRequested(refreshed.data.documentsRequested);
+    setInfoRequests(refreshed.data.infoRequests ?? []);
     const orphaned = refreshed.data.documents
       .filter((d) => d.filePaths.length > 0 && !refreshed.data.documentsRequested.includes(d.requirement))
       .map((d) => documentLabel(d.requirement));
@@ -263,6 +297,8 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
       return;
     }
     setDocuments((prev) => [...prev.filter((d) => d.requirement !== requirement), res.data]);
+    // The fresh scan answers its own send-back: drop the ask now, not on the next reload.
+    setInfoRequests((prev) => prev.filter((i) => !(i.kind === 'document' && i.key === requirement)));
   };
 
   const handleAcceptConsent = async () => {
@@ -291,6 +327,29 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   };
 
   const handleSubmit = async () => {
+    // Checked here too, so the candidate is taken to the document rather than told by the server.
+    const missingDoc = REGISTRATION_REQUIRED_DOCUMENTS.find(
+      (req) => documentsRequested.includes(req)
+        && !documents.some((d) => d.requirement === req && d.filePaths.length > 0),
+    );
+    if (missingDoc) {
+      feedback.error(
+        tr('selfRegistration.submit.failedTitle'),
+        tr('selfRegistration.documents.passbookRequired'),
+      );
+      goToStep(REGISTRATION_STEP_COUNT);
+      return;
+    }
+    const problem = referenceSubmitProblem(references);
+    if (problem) {
+      setReferencesError(problem);
+      feedback.error(
+        tr('selfRegistration.submit.failedTitle'),
+        tr('selfRegistration.form.referencesRequired'),
+      );
+      goToStep(2);
+      return;
+    }
     setSubmitting(true);
     const res = await SelfRegistrationApi.submit(token);
     setSubmitting(false);
@@ -418,9 +477,35 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
               <Card level={1} style={{ gap: t.space.sm, borderColor: t.colors.warning, borderWidth: 1 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
                   <Icon name="information-circle" size={20} color={t.colors.warning} />
-                  <AppText variant="bodyStrong" style={{ flex: 1 }}>{tr('selfRegistration.status.awaitingInfoTitle')}</AppText>
+                  <AppText variant="bodyStrong" style={{ flex: 1 }}>
+                    {tr('selfRegistration.status.awaitingInfoTitle')}
+                    {infoRequests.length > 0 ? ` (${infoRequests.length})` : ''}
+                  </AppText>
                 </View>
-                <AppText variant="body">{application.reviewNotes || tr('selfRegistration.status.awaitingInfoFallback')}</AppText>
+                {infoRequests.length > 0 ? (
+                  <View style={{ gap: t.space.xs }}>
+                    {infoRequests.map((item) => (
+                      <View key={`${item.kind}:${item.key}`} style={{ flexDirection: 'row', gap: t.space.xs, alignItems: 'center' }}>
+                        <AppText variant="body" tone="muted">•</AppText>
+                        <AppText variant="body" style={{ flex: 1 }}>
+                          <AppText variant="bodyStrong">{item.label}</AppText>
+                          {' — '}{item.message}
+                        </AppText>
+                        {/* The web link had a way to each fix; the phone only named them, leaving
+                            the candidate to hunt through four steps for the box. Same map both
+                            use — documents are always the last step. */}
+                        <Button
+                          label={tr('selfRegistration.status.fixItem')}
+                          variant="ghost"
+                          size="sm"
+                          onPress={() => goToStep(item.kind === 'document' ? REGISTRATION_STEP_COUNT : applicationFieldStep(item.key))}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <AppText variant="body">{application.reviewNotes || tr('selfRegistration.status.awaitingInfoFallback')}</AppText>
+                )}
               </Card>
             )}
 
@@ -459,6 +544,10 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 {...stepProps}
                 pin={pin}
                 onPinChange={handlePinChange}
+                references={references}
+                referencesError={referencesError}
+                onReferencesChange={handleReferencesChange}
+                sourceReferral={application?.extendedProfile?.sourceReferral ?? null}
                 onBack={() => goToStep(1)}
                 onContinue={() => goToStep(3)}
               />
@@ -480,6 +569,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
                 consentNotice={consentNotice}
                 documents={documents}
                 documentsRequested={documentsRequested}
+                infoRequests={infoRequests}
                 uploadingRequirement={uploadingRequirement}
                 uploadErrors={uploadErrors}
                 onCapture={setCapturingRequirement}

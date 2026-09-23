@@ -21,11 +21,12 @@ import {
  */
 
 describe('the joining stages', () => {
-  it('are the four an assayer walks before they may be given work', () => {
+  it('are the five an assayer walks before they may be given work', () => {
     expect(ONBOARDING_STAGES).toEqual([
       AssayerLifecycleStatus.INVITED,
       AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
       AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+      AssayerLifecycleStatus.FINAL_APPROVAL,
       AssayerLifecycleStatus.TRAINING,
     ]);
   });
@@ -95,11 +96,16 @@ describe('the forward step', () => {
   it('walks the chain one stage at a time, and ends at Active', () => {
     expect(nextOnboardingStep(AssayerLifecycleStatus.INVITED)).toBe(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
     expect(nextOnboardingStep(AssayerLifecycleStatus.DOCUMENT_VERIFICATION)).toBe(AssayerLifecycleStatus.BACKGROUND_VERIFICATION);
-    expect(nextOnboardingStep(AssayerLifecycleStatus.BACKGROUND_VERIFICATION)).toBe(AssayerLifecycleStatus.TRAINING);
+    expect(nextOnboardingStep(AssayerLifecycleStatus.BACKGROUND_VERIFICATION)).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
     expect(nextOnboardingStep(AssayerLifecycleStatus.TRAINING)).toBe(AssayerLifecycleStatus.ACTIVE);
   });
 
-  it('never skips a stage — four decisions stay four decisions', () => {
+  /** Approval → training is the approver's decision, taken on the approval — never a stage button. */
+  it('offers no stage button out of approval', () => {
+    expect(nextOnboardingStep(AssayerLifecycleStatus.FINAL_APPROVAL)).toBeNull();
+  });
+
+  it('never skips a stage — each decision stays its own', () => {
     // The button is a shortcut for a judgement somebody in HR makes about a real person; a single
     // press that walked INVITED to ACTIVE would have made three of those four judgements up.
     let at: string = AssayerLifecycleStatus.INVITED;
@@ -110,7 +116,11 @@ describe('the forward step', () => {
       walked.push(next);
       at = next;
     }
-    expect(walked).toEqual([...ONBOARDING_STAGES, AssayerLifecycleStatus.ACTIVE]);
+    // The walk stops at approval: the rest belongs to the approver.
+    expect(walked).toEqual([
+      AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+      AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.FINAL_APPROVAL,
+    ]);
   });
 
   it('is nothing for anybody who is not joining', () => {

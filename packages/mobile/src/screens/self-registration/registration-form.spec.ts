@@ -88,3 +88,31 @@ describe('the phone registration form', () => {
     expect(applicationRef(application.id)).toBe('APP-5854C1C1');
   });
 });
+
+/**
+ * The account number is typed twice on this form. What is already saved counts as confirmed — it
+ * was typed twice when it was saved — so resuming does not demand it again; a number typed now does.
+ */
+describe('the account-number confirmation', () => {
+  const app = (fields: Record<string, string>) => ({ extendedProfile: { fields } }) as never;
+
+  it('treats the number already saved as confirmed', () => {
+    expect(seedRegistrationForm(app({ bankAccountNumber: '123456789012' })).bankAccountNumberConfirm).toBe('123456789012');
+    expect(seedRegistrationForm(app({})).bankAccountNumberConfirm).toBe('');
+  });
+
+  it('speaks the shared rule’s own sentence when the two disagree', () => {
+    expect(problemMessage('bankAccountNumberConfirm', { code: 'mismatch', message: 'The two account numbers do not match.' }))
+      .toEqual({ text: 'The two account numbers do not match.' });
+  });
+
+  /** The API refuses unknown properties: the second typing leaving the phone would fail every step change. */
+  it('never sends the second typing, even when the whole form is saved', () => {
+    const form = seedRegistrationForm(app({ bankAccountNumber: '123456789012' }));
+    const patch = wholeFormPatch(form) as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('bankAccountNumberConfirm');
+    expect(patch.record as Record<string, unknown>).not.toHaveProperty('bankAccountNumberConfirm');
+    expect((patch.record as Record<string, unknown>).bankAccountNumber).toBe('123456789012');
+  });
+});
+

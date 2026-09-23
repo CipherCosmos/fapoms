@@ -273,11 +273,11 @@ export const CustomerMasterVersions: React.FC = () => {
         />
         {recordsTotal > RECORDS_PAGE_SIZE && recordsFor && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
-            <button type="button" disabled={recordsPage <= 1 || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage - 1)} style={btnStyle('var(--text-muted)')}>
+            <button type="button" disabled={recordsPage <= 1 || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage - 1)} title="Go to the previous page of records" style={btnStyle('var(--text-muted)')}>
               Previous
             </button>
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Page {recordsPage} of {totalRecordPages}</span>
-            <button type="button" disabled={recordsPage >= totalRecordPages || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage + 1)} style={btnStyle('var(--text-muted)')}>
+            <span title={`Page ${recordsPage} of ${totalRecordPages}`} style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Page {recordsPage} of {totalRecordPages}</span>
+            <button type="button" disabled={recordsPage >= totalRecordPages || recordsLoading} onClick={() => void openRecords(recordsFor, recordsPage + 1)} title="Go to the next page of records" style={btnStyle('var(--text-muted)')}>
               Next
             </button>
           </div>

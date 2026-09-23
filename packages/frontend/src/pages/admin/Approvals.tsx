@@ -47,7 +47,7 @@ const STATUS_STYLE: Record<DestructiveActionRequestStatus, { label: string; fg: 
 const StatusPill: React.FC<{ status: DestructiveActionRequestStatus }> = ({ status }) => {
   const s = STATUS_STYLE[status];
   return (
-    <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, letterSpacing: '0.03em', padding: '2px 8px', borderRadius: '10px', background: s.bg, color: s.fg, whiteSpace: 'nowrap' }}>
+    <span title={`Request status: ${s.label}`} style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, letterSpacing: '0.03em', padding: '2px 8px', borderRadius: '10px', background: s.bg, color: s.fg, whiteSpace: 'nowrap' }}>
       {s.label}
     </span>
   );
@@ -59,6 +59,7 @@ const DomainChips: React.FC<{ request: DestructiveActionRequest }> = ({ request 
     {request.domainKeys.map((key) => (
       <span
         key={key}
+        title={`${prettyDomain(key)} — about ${(request.previewCounts?.[key] ?? 0).toLocaleString()} rows would be wiped`}
         style={{
           fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '2px 9px', borderRadius: '10px',
           border: '1px solid var(--border-color)', color: 'var(--text-secondary)',
@@ -191,12 +192,14 @@ export const Approvals: React.FC = () => {
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="Why not — the developer reads this"
+                title="Rejection reason — the requesting developer will read this"
                 style={{ flex: '1 1 260px', padding: '7px 10px', fontSize: 'var(--text-xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none' }}
               />
               <button
                 className="btn btn-primary"
                 disabled={rejectReason.trim().length === 0 || reject.isPending}
                 onClick={() => reject.mutate({ id: r.id, reason: rejectReason.trim() })}
+                title={rejectReason.trim() ? `Reject this wipe request with your reason` : 'Type a reason first — the developer needs to know why'}
                 style={{ background: 'var(--danger)', border: 'none', padding: '7px 14px', fontSize: 'var(--text-xs)' }}
               >
                 {reject.isPending ? 'Rejecting…' : 'Reject request'}
@@ -205,6 +208,7 @@ export const Approvals: React.FC = () => {
                 className="btn btn-secondary"
                 style={{ padding: '7px 12px', fontSize: 'var(--text-xs)' }}
                 onClick={() => { setRejectingId(null); setRejectReason(''); }}
+                title="Cancel the rejection — keep this request waiting"
               >
                 Keep it pending
               </button>
@@ -215,6 +219,7 @@ export const Approvals: React.FC = () => {
                 className="btn btn-secondary"
                 style={{ padding: '7px 14px', fontSize: 'var(--text-xs)' }}
                 onClick={() => { setRejectingId(r.id); setRejectReason(''); }}
+                title="Reject this wipe request with a reason the developer will read"
               >
                 Reject…
               </button>
@@ -222,6 +227,7 @@ export const Approvals: React.FC = () => {
                 className="btn btn-primary"
                 disabled={approve.isPending}
                 onClick={() => onApprove(r)}
+                title={`Approve — ${r.requestedByName ?? 'the developer'} can then wipe about ${totalRows(r).toLocaleString()} rows. This cannot be undone.`}
                 style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', fontSize: 'var(--text-xs)' }}
               >
                 <CheckCircle2 size={13} /> Approve…
@@ -276,7 +282,7 @@ export const Approvals: React.FC = () => {
       ) : queueFailed ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
           <div>Couldn&apos;t load the approval queue. {userMessage(error)}</div>
-          <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }} onClick={() => refetch()}>Try again</button>
+          <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: 'var(--text-xs)' }} onClick={() => refetch()} title="Reload the approval queue from the server">Try again</button>
         </div>
       ) : (
         <>

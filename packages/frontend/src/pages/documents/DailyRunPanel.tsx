@@ -231,9 +231,10 @@ export const DailyRunPanel: React.FC<{
         <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', fontWeight: 600 }}>Audit date</label>
         <input
           type="date" value={auditDate} onChange={(e) => setAuditDate(e.target.value)}
+          title="Pick which audit date's daily run to show"
           style={{ padding: '7px 10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }}
         />
-        <button onClick={() => setAuditDate(tomorrowISO())} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '6px 11px' }}>
+        <button onClick={() => setAuditDate(tomorrowISO())} title="Jump back to tomorrow's audit date" className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '6px 11px' }}>
           Tomorrow
         </button>
         {loading && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Loading…</span>}
@@ -320,7 +321,7 @@ export const DailyRunPanel: React.FC<{
               )}
             </>
           )}
-          <button onClick={() => setRecon(null)} style={{ marginTop: 8, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
+          <button onClick={() => setRecon(null)} title="Dismiss this batch result message" style={{ marginTop: 8, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
             Dismiss
           </button>
         </div>
@@ -369,7 +370,7 @@ export const DailyRunPanel: React.FC<{
                   <strong>{u.fileName}</strong> — {u.reason}
                 </div>
               ))}
-              <button onClick={() => setUnmatched([])} style={{ marginTop: 6, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
+              <button onClick={() => setUnmatched([])} title="Dismiss the unmatched files list" style={{ marginTop: 6, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
                 Dismiss
               </button>
             </div>
@@ -404,7 +405,7 @@ export const DailyRunPanel: React.FC<{
                     <FileUploadButton label="Upload packet" busy={busy} onFile={(f) => uploadPacket(b, f)} />
                   )}
                   {b.nextAction === 'DISPATCH' && b.pdf && canDispatch && (
-                    <button onClick={() => withActing(b.projectBranchId, () => onDispatch([b.pdf!.id]))} disabled={busy}
+                    <button onClick={() => withActing(b.projectBranchId, () => onDispatch([b.pdf!.id]))} disabled={busy} title={`Send audit packet for ${b.branchName} to the assayer`}
                       className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5 }}>
                       <Send size={11} /> {busy ? '…' : 'Send'}
                     </button>
@@ -415,13 +416,13 @@ export const DailyRunPanel: React.FC<{
                     </span>
                   )}
                   {b.nextAction === 'SEND_TO_OCR' && b.pdf && canSendToOcr && (
-                    <button onClick={() => withActing(b.projectBranchId, () => onSendToOcr(b.pdf!.id))} disabled={busy}
+                    <button onClick={() => withActing(b.projectBranchId, () => onSendToOcr(b.pdf!.id))} disabled={busy} title={`Send ${b.branchName} return for text scanning`}
                       className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent)', borderColor: 'var(--status-pending-bg)' }}>
                       <ArrowRightCircle size={11} /> {busy ? '…' : 'Send for scanning'}
                     </button>
                   )}
                   {b.pdf && (
-                    <button onClick={() => onDownload(b.pdf!.id)} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
+                    <button onClick={() => onDownload(b.pdf!.id)} title={`Download paperwork file for ${b.branchName}`} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
                       Download
                     </button>
                   )}

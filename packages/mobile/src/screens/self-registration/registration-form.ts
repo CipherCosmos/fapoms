@@ -34,6 +34,9 @@ export function seedRegistrationForm(app: RegistrationApplication): Registration
     availability: app.availability ?? '',
     employmentCategory: app.employmentCategory ?? '',
     ...(record as Pick<RegistrationFormValues, typeof RECORD_FIELD_KEYS[number]>),
+    // What is already saved counts as confirmed — it was typed twice when it was saved. Only a
+    // number typed now has to be typed again (the same rule as the web form).
+    bankAccountNumberConfirm: String(fields.bankAccountNumber ?? ''),
   };
 }
 
@@ -45,6 +48,9 @@ export function seedRegistrationForm(app: RegistrationApplication): Registration
  * overwrite what the other had just written. Disjoint patches cannot.
  */
 export function registrationFieldPatch(key: RegistrationFormField, value: string): DraftPatch {
+  // The second typing of the account number exists only on this screen, to be compared. It is never
+  // sent: the API refuses properties it does not know, so leaking it would fail the whole save.
+  if (key === 'bankAccountNumberConfirm') return {};
   const trimmed = (value ?? '').trim();
   if (key === 'experienceYears') {
     if (trimmed === '') return { experienceYears: null };
@@ -115,6 +121,9 @@ export function problemMessage(field: RegistrationFormField, problem: Registrati
       return { key: TOO_SHORT[field] ?? 'selfRegistration.errors.checkAnswer' };
     case 'invalid':
       return { key: INVALID[field] ?? 'selfRegistration.errors.checkAnswer' };
+    case 'mismatch':
+      // The shared rule's own sentence, like `dateOfBirth`: one wording for web, phone and server.
+      return { text: problem.message };
   }
 }
 
@@ -124,6 +133,7 @@ export const FORMAT_HINT_KEYS: Record<IdentifierFormatIssue, TranslationKey> = {
   aadhaarLength: 'selfRegistration.errors.hintAadhaarLength',
   aadhaarChecksum: 'selfRegistration.errors.hintAadhaarChecksum',
   pincode: 'selfRegistration.errors.hintPincode',
+  bankAccount: 'selfRegistration.errors.hintBankAccount',
 };
 
 export function renderMessage(

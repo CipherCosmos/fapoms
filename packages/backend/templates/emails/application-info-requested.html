@@ -1,0 +1,79 @@
+<!--
+EMAIL_TEMPLATE: application-info-requested
+NAME: Application Needs Your Attention
+REQUIRED_TOKENS:
+  - fullName
+  - itemsText
+  - supportEmail
+  - logoUrl
+OPTIONAL_TOKENS:
+  - companyName
+  - greeting
+RAW_TOKENS:
+  - none
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Action Needed On Your Application</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F8F9FA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#F8F9FA;padding:32px 12px;">
+    <tr>
+      <td align="center">
+        <!--[if (gte mso 9)|(IE)]>
+        <table role="presentation" width="560" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>
+        <![endif]-->
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;background-color:#FFFFFF;border-radius:10px;overflow:hidden;border:1px solid #E5E7EB;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+          <!-- Header with Authentic Logo -->
+          <tr>
+            <td align="center" style="padding:28px 32px 20px 32px;border-bottom:1px solid #F3F4F6;">
+              <img src="{{logoUrl}}" alt="Sumeru Global" width="65" height="50" style="display:block;margin:0 auto;border:0;outline:none;" />
+            </td>
+          </tr>
+          <!-- Content Body -->
+          <tr>
+            <td style="padding:28px 32px 24px 32px;background-color:#FFFFFF;">
+              <h1 style="margin:0 0 14px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;font-weight:700;color:#111827;line-height:1.35;letter-spacing:-0.2px;">
+                Action Needed On Your Application
+              </h1>
+              <p style="margin:0 0 12px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;line-height:1.65;color:#374151;">
+                Hello {{fullName}},
+              </p>
+              <p style="margin:0 0 12px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14.5px;line-height:1.65;color:#374151;">
+                HR reviewed your application for Sumeru Global and needs a few specific things before it can proceed. Open your registration link — the same one you applied with — and fix only what is listed below. Once done, submit again from the same link.
+              </p>
+
+              <!-- What HR asked for -->
+              <div style="margin:16px 0 18px 0;padding:12px 14px;background-color:#FFFBEB;border-left:3px solid #F59E0B;border-radius:0 6px 6px 0;">
+                <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:600;color:#111827;margin-bottom:3px;">
+                  What HR asked for
+                </div>
+                <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#382F26;white-space:pre-line;">
+                  {{itemsText}}
+                </div>
+              </div>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding:20px 32px;background-color:#F9FAFB;border-top:1px solid #F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+              <div style="font-size:12px;font-weight:600;color:#4B5563;">
+                Sumeru Global &bull; Field Audit Operations Management
+              </div>
+              <div style="font-size:11.5px;color:#9CA3AF;margin-top:4px;line-height:1.5;">
+                Questions? Write to {{supportEmail}}.
+              </div>
+            </td>
+          </tr>
+        </table>
+        <!--[if (gte mso 9)|(IE)]>
+        </td></tr></table>
+        <![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

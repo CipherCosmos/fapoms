@@ -244,7 +244,7 @@ export const Zones: React.FC = () => {
         title="Territorial Zones"
         subtitle="Groupings of states and districts the coverage planner keeps audits within."
         actions={canManage && (
-          <button onClick={handleOpenCreate} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
+          <button onClick={handleOpenCreate} title="Create a new territorial zone for coverage planning" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', padding: '8px 14px' }}>
             <Plus size={14} /> Add Zone
           </button>
         )}
@@ -268,11 +268,11 @@ export const Zones: React.FC = () => {
           <table className="table" style={{ width: '100%', minWidth: '640px', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
-                <th style={{ padding: '10px' }}>Zone</th>
-                <th style={{ padding: '10px' }}>Client Scope</th>
-                <th style={{ padding: '10px' }}>States</th>
-                <th style={{ padding: '10px' }}>Districts</th>
-                {canManage && <th style={{ padding: '10px', textAlign: 'right' }}>Actions</th>}
+                <th title="Zone name and description" style={{ padding: '10px' }}>Zone</th>
+                <th title="Which client's branches this zone applies to" style={{ padding: '10px' }}>Client Scope</th>
+                <th title="States covered by this zone" style={{ padding: '10px' }}>States</th>
+                <th title="Districts covered by this zone" style={{ padding: '10px' }}>Districts</th>
+                {canManage && <th title="Edit or delete this zone" style={{ padding: '10px', textAlign: 'right' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -327,21 +327,21 @@ export const Zones: React.FC = () => {
         <Modal open onClose={() => setShowModal(false)} title={editingId ? 'Edit Zone' : 'Add New Zone'} width="520px" closeIcon={<X size={18} />} asForm onSubmit={handleSubmit}
           footer={
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '10px' }}>
-              <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={submitting}>{submitting ? 'Saving…' : 'Save Zone'}</button>
+              <button type="button" onClick={() => setShowModal(false)} title="Close without saving changes" className="btn btn-secondary" disabled={submitting}>Cancel</button>
+              <button type="submit" title={editingId ? 'Save changes to this zone' : 'Create this new zone'} className="btn btn-primary" disabled={submitting}>{submitting ? 'Saving…' : 'Save Zone'}</button>
             </div>
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
               <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Zone Name</label>
-              <input type="text" required placeholder="e.g. South Maharashtra" value={name} onChange={(e) => setName(e.target.value)}
+              <input type="text" required placeholder="e.g. South Maharashtra" value={name} onChange={(e) => setName(e.target.value)} title="Type a short name for this zone, e.g. South Maharashtra"
                 style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
             </div>
 
             <div>
               <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Description (Optional)</label>
-              <input type="text" placeholder="What this zone covers" value={description} onChange={(e) => setDescription(e.target.value)}
+              <input type="text" placeholder="What this zone covers" value={description} onChange={(e) => setDescription(e.target.value)} title="Type what area or purpose this zone covers"
                 style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
             </div>
 
@@ -375,7 +375,7 @@ export const Zones: React.FC = () => {
                 Districts (Optional){geoUnavailable ? <span style={{ fontWeight: 400 }}> — comma separated</span> : null}
               </label>
               {geoUnavailable ? (
-                <input type="text" placeholder="e.g. Kolhapur, Sangli, Satara" value={districtsText} onChange={(e) => setDistrictsText(e.target.value)}
+                <input type="text" placeholder="e.g. Kolhapur, Sangli, Satara" value={districtsText} onChange={(e) => setDistrictsText(e.target.value)} title="Type district names separated by commas"
                   style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)' }} />
               ) : selectedStates.length === 0 ? (
                 <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '9px', border: '1px dashed var(--border-color)', borderRadius: '6px' }}>

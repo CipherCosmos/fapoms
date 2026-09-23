@@ -156,6 +156,11 @@ export const ASSAYER_LIFECYCLE_STATUS_MAP: Record<AssayerLifecycleStatus, Status
     icon: 'shield-check',
     description: 'Undergoing third-party background screening',
   },
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: {
+    semantic: 'warning',
+    icon: 'check-check',
+    description: 'HR checks done; a senior approves before training',
+  },
   [AssayerLifecycleStatus.TRAINING]: {
     semantic: 'warning',
     icon: 'book-open',

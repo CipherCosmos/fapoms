@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Processor, Process } from '@nestjs/bull';
+import { CHECK_TYPE_LABELS } from '@fapoms/shared';
+import { ComplianceStandingService } from '../../modules/assayer/compliance-standing.service';
 import { Job } from 'bull';
 import { AssignmentService } from '../../modules/assignment/assignment.service';
 import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
@@ -45,6 +47,8 @@ export class SlaScannerWorker {
     private readonly dataIntegrity: DataIntegrityService,
     private readonly emailDigest: EmailDigestService,
     private readonly billingEngine: BillingEngineService,
+    /** Re-checks over time — who is due soon, due, or held from work. Optional for older specs. */
+    @Optional() private readonly compliance?: ComplianceStandingService,
   ) {}
 
   /**
@@ -110,6 +114,44 @@ export class SlaScannerWorker {
      * the figure was chosen for "long enough to actually renew, short enough that HR keeps
      * reading", and that reasoning does not change with the kind of credential.
      */
+    /**
+     * Re-checks over time (2026-09-23): tell HR as each check comes due, falls due, and starts
+     * holding somebody from new work. One notification per person, check and due date per step —
+     * the dedupe key carries all four — so this 15-minute pass says each thing once, and a check
+     * recorded moves the due date and so starts the cycle afresh. Collapsed per recipient in the
+     * catalog, because the first round falls due for the whole roster on one date.
+     */
+    await runPhase('re-check reminders', async () => {
+      if (!this.compliance) return;
+      const TYPE_FOR: Record<string, string> = {
+        DUE_SOON: 'ASSAYER_RECHECK_DUE_SOON', DUE: 'ASSAYER_RECHECK_DUE', BLOCKED: 'ASSAYER_RECHECK_BLOCKED',
+      };
+      let sent = 0;
+      for (const person of await this.compliance.attentionList(undefined, null)) {
+        for (const st of person.standings) {
+          const type = TYPE_FOR[st.status];
+          if (!type) continue;
+          this.notificationDispatch.emitSafe({
+            type,
+            entityType: 'ASSAYER',
+            entityId: person.assayerId,
+            assayerId: person.assayerId,
+            organizationId: person.organizationId ?? undefined,
+            dedupeKey: `${type}:${person.assayerId}:${st.type}:${st.dueOn}`,
+            payload: {
+              assayerName: person.displayName,
+              assayerId: person.assayerId,
+              checkLabel: CHECK_TYPE_LABELS[st.type],
+              dueOn: st.dueOn,
+              blockFrom: st.blockFrom,
+            },
+          });
+          sent += 1;
+        }
+      }
+      if (sent > 0) this.logger.log(`Re-check reminders considered for ${sent} check(s).`);
+    });
+
     await runPhase('credential expiry scan', async () => {
       const expiring = await this.hrWorkforceService.credentialsExpiringWithin(
         SlaScannerWorker.DOCUMENT_EXPIRY_LEAD_DAYS,

@@ -117,7 +117,7 @@ export const CompliancePanel: React.FC = () => {
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid var(--border-color)' }}>
         {(['INCIDENTS', 'RIGHTS'] as const).map((t) => (
-          <button key={t} onClick={() => setTab(t)}
+          <button key={t} onClick={() => setTab(t)} title={t === 'INCIDENTS' ? 'Security-incident register with CERT-In and DPDP clocks' : 'Data-principal rights requests under the DPDP Act'}
             className={`btn ${tab === t ? 'btn-primary' : 'btn-ghost'}`}
             style={{ padding: '8px 16px', fontSize: 'var(--text-sm)', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}>
             {t === 'INCIDENTS' ? 'Security incidents' : 'Data-principal requests (DPDP)'}
@@ -130,7 +130,7 @@ export const CompliancePanel: React.FC = () => {
       {tab === 'INCIDENTS' && (<>
       {canWrite && (
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary" onClick={() => setShowForm((s) => !s)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+        <button className="btn btn-primary" onClick={() => setShowForm((s) => !s)} title={showForm ? 'Hide the incident form' : 'Log a new security incident'} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           <Plus size={15} /> Raise incident
         </button>
       </div>
@@ -140,23 +140,25 @@ export const CompliancePanel: React.FC = () => {
         <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {raise.isError && <div style={{ color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>{userMessage(raise.error)}</div>}
           <input placeholder="What happened? (short title)" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
+            title="Short title for the incident — shown in the register"
             style={inputStyle} />
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={inputStyle}>
+            <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} title="What kind of incident this was" style={inputStyle}>
               {INCIDENT_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
             </select>
-            <select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })} style={inputStyle}>
+            <select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })} title="How serious this incident is" style={inputStyle}>
               {INCIDENT_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+            <label title="Tick if personal data was involved — starts the 72-hour Board report clock" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={form.personalDataInvolved} onChange={(e) => setForm({ ...form, personalDataInvolved: e.target.checked })} />
               Personal data involved (starts the DPDP Board's 72h report clock, and the without-delay duty to notify affected people)
             </label>
           </div>
           <textarea placeholder="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
+            title="What happened, in your own words — optional"
             style={{ ...inputStyle, minHeight: 70 }} />
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn btn-primary" disabled={!form.title.trim() || raise.isPending} onClick={() => raise.mutate()}>
+            <button className="btn btn-primary" disabled={!form.title.trim() || raise.isPending} onClick={() => raise.mutate()} title={form.title.trim() ? 'Log this incident in the register' : 'Type a title first'}>
               {raise.isPending ? 'Raising…' : 'Raise incident'}
             </button>
           </div>
@@ -203,18 +205,18 @@ export const CompliancePanel: React.FC = () => {
                 {!resolved && canWrite && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                     {!inc.certInReportedAt && (
-                      <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                      <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Record that this incident was reported to CERT-In within 6 hours"
                         onClick={() => act.mutate({ id: inc.id, body: { markCertInReported: true } })}>Mark CERT-In reported</button>
                     )}
                     {inc.personalDataInvolved && !inc.boardNotifiedAt && (
-                      <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                      <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Record that the DPDP Board received the full breach report within 72 hours"
                         onClick={() => act.mutate({ id: inc.id, body: { markBoardNotified: true } })}>Mark Board notified</button>
                     )}
                     {inc.personalDataInvolved && !inc.principalsNotifiedAt && (
-                      <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                      <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Record that every affected person was notified without delay"
                         onClick={() => act.mutate({ id: inc.id, body: { markPrincipalsNotified: true } })}>Mark people notified</button>
                     )}
-                    <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                    <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Close this incident as resolved"
                       onClick={() => act.mutate({ id: inc.id, body: { status: 'RESOLVED' } })}>Resolve</button>
                   </div>
                 )}
@@ -258,7 +260,7 @@ const RightsRequestsSection: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {canWrite && (
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary" onClick={() => setShow((s) => !s)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+        <button className="btn btn-primary" onClick={() => setShow((s) => !s)} title={show ? 'Hide the request form' : 'Log a new data-principal rights request'} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           <Plus size={15} /> Log a request
         </button>
       </div>
@@ -267,15 +269,15 @@ const RightsRequestsSection: React.FC = () => {
         <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {log.isError && <div style={{ color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>{userMessage(log.error)}</div>}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <select value={form.requestType} onChange={(e) => setForm({ ...form, requestType: e.target.value })} style={inputStyle}>
+            <select value={form.requestType} onChange={(e) => setForm({ ...form, requestType: e.target.value })} title="Access, correction, erasure, nomination or grievance" style={inputStyle}>
               {RIGHTS_REQUEST_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
-            <input placeholder="Who is asking (name)" value={form.requesterName} onChange={(e) => setForm({ ...form, requesterName: e.target.value })} style={inputStyle} />
-            <input placeholder="Their identifier (assayer code / email / phone)" value={form.subjectRef} onChange={(e) => setForm({ ...form, subjectRef: e.target.value })} style={{ ...inputStyle, minWidth: 260 }} />
+            <input placeholder="Who is asking (name)" value={form.requesterName} onChange={(e) => setForm({ ...form, requesterName: e.target.value })} title="Name of the person making the request" style={inputStyle} />
+            <input placeholder="Their identifier (assayer code / email / phone)" value={form.subjectRef} onChange={(e) => setForm({ ...form, subjectRef: e.target.value })} title="How to find their records — code, email or phone" style={{ ...inputStyle, minWidth: 260 }} />
           </div>
-          <textarea placeholder="Details of the request" value={form.details} onChange={(e) => setForm({ ...form, details: e.target.value })} style={{ ...inputStyle, minHeight: 60 }} />
+          <textarea placeholder="Details of the request" value={form.details} onChange={(e) => setForm({ ...form, details: e.target.value })} title="What they are asking for, in their words" style={{ ...inputStyle, minHeight: 60 }} />
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn btn-primary" disabled={log.isPending} onClick={() => log.mutate()}>{log.isPending ? 'Logging…' : 'Log request'}</button>
+            <button className="btn btn-primary" disabled={log.isPending} onClick={() => log.mutate()} title="Save this rights request and start its SLA clock">{log.isPending ? 'Logging…' : 'Log request'}</button>
           </div>
         </div>
       )}
@@ -307,16 +309,16 @@ const RightsRequestsSection: React.FC = () => {
             {!terminal && canWrite && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                 {r.status === 'RECEIVED' && (
-                  <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                  <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Start working on this request"
                     onClick={() => act.mutate({ id: r.id, body: { status: 'IN_PROGRESS' } })}>Start</button>
                 )}
                 {r.requestType === 'ERASURE' && (
-                  <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                  <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Complete with a legal-retention hold — data kept per retention duty, not deleted blindly"
                     onClick={() => act.mutate({ id: r.id, body: { status: 'COMPLETED', legalHoldApplied: true } })}>Complete (retention hold)</button>
                 )}
-                <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Mark this request as answered and complete"
                   onClick={() => act.mutate({ id: r.id, body: { status: 'COMPLETED' } })}>Mark completed</button>
-                <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending} title="Reject this request with the reason recorded"
                   onClick={() => act.mutate({ id: r.id, body: { status: 'REJECTED' } })}>Reject</button>
               </div>
             )}

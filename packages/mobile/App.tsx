@@ -46,6 +46,7 @@ import { PdfDocsScreen } from './src/screens/PdfDocsScreen';
 import { QueriesScreen } from './src/screens/QueriesScreen';
 import { EarningsScreen } from './src/screens/EarningsScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
+import { IdCardModal } from './src/components/IdCardModal';
 
 // Modals
 import { NotificationsModal } from './src/components/NotificationsModal';
@@ -989,6 +990,7 @@ function AppMain() {
             onUpdateProfileField={handleUpdateProfileField}
             onSaveProfile={handleSaveProfile}
             onOpenAvailability={() => overlay.open({ name: 'availability' })}
+            onOpenIdCard={() => overlay.open({ name: 'idCard' })}
             onOpenFeedback={() => overlay.open({ name: 'feedback' })}
             onLogout={logout}
           />
@@ -1257,6 +1259,9 @@ function AppMain() {
           }}
         />
       )}
+
+      {/* The digital ID card — see IdCardModal. Mounted only while open, so its live code stops refreshing. */}
+      {overlay.current('idCard') && <IdCardModal visible onClose={overlay.close} />}
 
       {overlay.current('availability') && (
         <AvailabilityModal

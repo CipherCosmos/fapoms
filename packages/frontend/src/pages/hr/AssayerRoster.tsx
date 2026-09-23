@@ -552,6 +552,7 @@ export const AssayerRoster: React.FC<{
             <button
               type="button"
               onClick={() => setNoticeExpanded((v) => !v)}
+              title={noticeExpanded ? 'Collapse the import summary' : `Expand to see all ${notice.details!.length} import details`}
               style={{
                 marginTop: '6px',
                 background: 'none',
@@ -723,6 +724,7 @@ export const AssayerRoster: React.FC<{
             type="button"
             onClick={() => setShowImport(false)}
             className="btn btn-secondary"
+            title="Close the import dialog without uploading"
             style={{ fontSize: 'var(--text-xs)', padding: '8px 14px' }}
           >
             Close
@@ -749,6 +751,7 @@ export const AssayerRoster: React.FC<{
             type="checkbox"
             checked={overwriteConflicts}
             onChange={(e) => setOverwriteConflicts(e.target.checked)}
+            title="When on, values in the sheet overwrite existing records; when off, conflicts are filed for review"
             style={{ marginTop: '3px' }}
           />
           <span>

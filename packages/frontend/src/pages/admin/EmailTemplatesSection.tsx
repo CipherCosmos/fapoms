@@ -181,8 +181,7 @@ Output ONLY the clean, raw HTML code.`,
       'Preserve exact tokens: {{fullName}}, {{reviewNotes}}, {{supportEmail}}, {{logoUrl}}.',
       'Maintain an empathetic, professional, and respectful tone.',
       'Highlight review committee feedback in a clean callout box.',
-    ],
-    prompt: `You are an expert HTML email designer. Create a dignified, professional, and respectful transactional HTML email for Sumeru Global (Field Assayer & Portfolio Operations Management System - FAPOMS).
+    ],    prompt: `You are an expert HTML email designer. Create a dignified, professional, and respectful transactional HTML email for Sumeru Global (Field Assayer & Portfolio Operations Management System - FAPOMS).
 
 The email purpose is informing an appraiser candidate that their onboarding application was not approved following committee review.
 
@@ -200,6 +199,62 @@ TECHNICAL REQUIREMENTS:
 
 CRITICAL TOKEN RULES:
 You MUST include: {{fullName}}, {{reviewNotes}}, {{supportEmail}}, {{logoUrl}}.
+
+Do NOT use any <script>, <iframe>, <form>, or onclick handlers.
+Output ONLY the clean, raw HTML code.`,
+  },
+  'application-info-requested': {
+    tips: [
+      'Preserve exact tokens: {{fullName}}, {{itemsText}}, {{supportEmail}}, {{logoUrl}}.',
+      'List each requested item on its own line inside {{itemsText}} — one document or field per line.',
+      'Never add a link or button: the candidate reopens the registration link they already hold.',
+    ],
+    prompt: `You are an expert HTML email designer. Create a clear, action-oriented transactional HTML email for Sumeru Global (Field Assayer & Portfolio Operations Management System - FAPOMS).
+
+The email purpose is telling an appraiser candidate exactly which documents or corrections HR needs, so they can fix only those on their existing registration link.
+
+BRAND GUIDELINES:
+- Primary Accent: #ED6714 (Flame Orange)
+- Background: #F8FAFC, Card: #FFFFFF (max 560px width, 10px radius).
+
+TECHNICAL REQUIREMENTS:
+- 100% Inline CSS.
+- Header with Sumeru Global logo (src="{{logoUrl}}").
+- Direct request copy addressed to {{fullName}}: open the same registration link and fix only what is listed.
+- Request list callout box displaying {{itemsText}} with preserved line breaks and a subtle left border (#F59E0B).
+- Support contact: {{supportEmail}}.
+
+CRITICAL TOKEN RULES:
+You MUST include: {{fullName}}, {{itemsText}}, {{supportEmail}}, {{logoUrl}}.
+Do NOT add any link, button, or invite URL token — this email carries no link by design.
+
+Do NOT use any <script>, <iframe>, <form>, or onclick handlers.
+Output ONLY the clean, raw HTML code.`,
+  },
+  'reference-notice': {
+    tips: [
+      'Preserve exact tokens: {{refereeName}}, {{candidateName}}, {{contactLine}}, {{logoUrl}}.',
+      'Keep it short and calm: the reader is not our candidate or our employee, and has nothing to do.',
+      'Never add a link or button, and never add anything about the candidate beyond their name.',
+    ],
+    prompt: `You are an expert HTML email designer. Create a short, courteous transactional HTML email for Sumeru Global (Field Assayer & Portfolio Operations Management System - FAPOMS).
+
+The email tells a person that a job candidate named them as a professional reference, and that our HR team may call them. The reader is a stranger to us: they have nothing to do, and must be told why we hold their details and who to write to if they object.
+
+BRAND GUIDELINES:
+- Primary Accent: #ED6714 (Flame Orange)
+- Background: #F8FAFC, Card: #FFFFFF (max 560px width, 10px radius).
+
+TECHNICAL REQUIREMENTS:
+- 100% Inline CSS.
+- Header with Sumeru Global logo (src="{{logoUrl}}").
+- Greeting to {{refereeName}}.
+- One paragraph: {{candidateName}} has named you as a professional reference; our HR team may call you shortly; you do not need to do anything now.
+- A quiet callout titled "Why you are receiving this": the candidate gave us your details for this reason only; if you do not know them or would rather not be contacted, write to {{contactLine}} and we will stop.
+
+CRITICAL TOKEN RULES:
+You MUST include: {{refereeName}}, {{candidateName}}, {{contactLine}}, {{logoUrl}}.
+Do NOT add any link, button, or other detail about the candidate — this email carries only their name, by design.
 
 Do NOT use any <script>, <iframe>, <form>, or onclick handlers.
 Output ONLY the clean, raw HTML code.`,
@@ -427,6 +482,32 @@ export const VISUAL_DEFAULTS: Record<string, VisualTemplateData> = {
     companyName: 'Sumeru Global',
     logoUrl: '/sumeru-logo@2x.png',
     supportEmail: 'support@sumeruglobal.com',
+  },
+  'application-info-requested': {
+    subject: 'Action needed: your Appraiser application',
+    headline: 'Action Needed On Your Application',
+    greeting: 'Hello {{fullName}},',
+    leadMessage: 'HR reviewed your application and needs a few specific things before it can proceed. Open your registration link — the same one you applied with — and fix only what is listed below.',
+    // The list itself is the template's own callout now (`email-template-html.ts`), not a footer line.
+    footerNotice: 'Questions? Write to {{supportEmail}}.',
+    primaryColor: '#ED6714',
+    accentBg: '#FFF7ED',
+    headerStyle: 'gradient-banner',
+    companyName: 'Sumeru Global',
+    logoUrl: '/sumeru-logo@2x.png',
+    supportEmail: 'support@sumeruglobal.com',
+  },
+  'reference-notice': {
+    subject: 'You have been named as a reference',
+    headline: 'You Have Been Named As A Reference',
+    greeting: 'Hello {{refereeName}},',
+    leadMessage: '{{candidateName}} has named you as a professional reference in their application to join Sumeru Global as an appraiser. A member of our HR team may call you shortly to ask a few questions about them. You do not need to do anything now.',
+    footerNotice: 'Sumeru Global • Field Audit Operations Management',
+    primaryColor: '#ED6714',
+    accentBg: '#FFF7ED',
+    headerStyle: 'gradient-banner',
+    companyName: 'Sumeru Global',
+    logoUrl: '/sumeru-logo@2x.png',
   },
   'branch-audit-paperwork': {
     subject: 'Audit paperwork — {{fileName}}',
@@ -1919,6 +2000,8 @@ export const EmailTemplatesSection: React.FC<{ canEdit: boolean }> = ({ canEdit 
                     {selectedKey === 'app-credentials' && 'Structured secure credentials table ({{username}}, {{temporaryPassword}}, {{validDays}} days).'}
                     {selectedKey === 'application-approved' && 'Official Assayer Code banner ({{assayerCode}}, {{effectiveDate}}) and portal login link.'}
                     {selectedKey === 'application-rejected' && 'Review committee feedback block ({{reviewNotes}}) and re-application guidance.'}
+                    {selectedKey === 'application-info-requested' && 'Requested-items list ({{itemsText}}, one per line) and same-link resubmit guidance. No link or button by design.'}
+                    {selectedKey === 'reference-notice' && 'Heads-up to a referee ({{refereeName}}) that HR may call about {{candidateName}}, with who to write to if they object ({{contactLine}}). No link or button, and nothing about the candidate beyond their name, by design.'}
                     {selectedKey === 'branch-audit-paperwork' && 'Branch audit metadata table ({{bankName}}, {{branchName}}, {{fileName}}) and download link.'}
                     {selectedKey === 'morning-digest' && 'Executive morning header ({{briefDate}}, {{subjectCounts}}) and digest sections ({{{digestSectionsHtml}}}).'}
                   </div>

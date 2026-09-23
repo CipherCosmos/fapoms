@@ -409,7 +409,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
       {confirmDialog}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-        <button onClick={onBack} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <button onClick={onBack} className="btn btn-secondary" title="Return to the data-entry board without changing this case" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <ArrowLeft size={14} /> Back to the board
         </button>
         {branchName && (
@@ -418,13 +418,13 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           </div>
         )}
         {status && (
-          <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: tone, display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <span title={`Case status: ${status} — ${status === 'SUBMITTED' ? 'sent to the client, read-only' : status === 'APPROVED' ? 'checked and ready to send' : status === 'HUMAN_REVIEW' ? 'waiting for a reviewer decision' : 'still being worked'}`} style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: tone, display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
             <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: tone }} />
             {validationStatusLabel(status)}
           </span>
         )}
         {validationCase?.id && (
-          <button onClick={toggleTrail} className="btn btn-secondary"
+          <button onClick={toggleTrail} className="btn btn-secondary" title={showTrail ? 'Hide the audit trail for this case' : 'Show every upload, edit, clarification and approval on this case'}
             style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto' }}>
             <HistoryIcon size={13} /> {showTrail ? 'Hide history' : 'History'}
           </button>
@@ -531,6 +531,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                     onChange={(e) => setNotes(e.target.value)}
                     list="correction-note-suggestions"
                     placeholder="Notes (required if requesting a correction)"
+                    title="Decision note — required when requesting a correction, optional when approving"
                     style={{
                       width: '100%', boxSizing: 'border-box', padding: '7px 9px', fontSize: 'var(--text-xs)',
                       borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit',
@@ -550,7 +551,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                       this way; this now matches it.
                     */}
                     {status === 'HUMAN_REVIEW' && (
-                      <button onClick={() => decide('APPROVED')} disabled={busy} className="btn btn-primary"
+                      <button onClick={() => decide('APPROVED')} disabled={busy} className="btn btn-primary" title="Approve this report — it moves to ready-to-submit"
                         style={{ fontSize: 'var(--text-2xs)', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Check size={12} /> Approve
                       </button>
@@ -570,13 +571,13 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                       </span>
                     )}
                     {(status === 'HUMAN_REVIEW') && (
-                      <button onClick={() => decide('CORRECTION_REQUIRED')} disabled={busy || !notes.trim()} className="btn btn-secondary"
+                      <button onClick={() => decide('CORRECTION_REQUIRED')} disabled={busy || !notes.trim()} className="btn btn-secondary" title={notes.trim() ? 'Send this report back for correction with your note' : 'Type a note above first — the assayer needs to know what to correct'}
                         style={{ fontSize: 'var(--text-2xs)', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
                         <RotateCcw size={12} /> Request correction
                       </button>
                     )}
                     {status === 'APPROVED' && canSubmit && (
-                      <button onClick={() => decide('SUBMITTED')} disabled={busy} className="btn btn-primary"
+                      <button onClick={() => decide('SUBMITTED')} disabled={busy} className="btn btn-primary" title="Send this final report to the client — this cannot be recalled"
                         style={{ fontSize: 'var(--text-2xs)', padding: '6px 11px', display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--success)', borderColor: 'var(--success)' }}>
                         <SubmitIcon size={12} /> Submit to client
                       </button>
@@ -609,7 +610,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
               </span>
             </div>
             {canAskAssayer && (
-              <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-primary"
+              <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-primary" title={showNewQuery ? 'Close the question form without sending' : 'Ask the assayer a question about this packet'}
                 style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
                 <MessageSquarePlus size={13} /> {showNewQuery ? 'Cancel' : 'Ask the assayer'}
               </button>
@@ -623,6 +624,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                 onChange={(e) => setNewQueryText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') void raiseQuery(); }}
                 placeholder="Type your question for the assayer… e.g. Gross weight mismatch on row 3"
+                title="Type the question for the assayer — press Enter to send"
                 style={{ padding: '8px 11px', fontSize: 'var(--text-xs)', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
               />
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -633,6 +635,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                   placeholder={fieldSuggestions.length
                     ? 'Which field? (optional) — pick one or type your own'
                     : 'Which field? (optional) — e.g. Gross weight'}
+                  title="Optional: anchor the question to a report field so the assayer can jump to it"
                   style={{ flex: '1 1 180px', padding: '7px 10px', fontSize: 'var(--text-xs)', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
                 />
                 {fieldSuggestions.length > 0 && (
@@ -640,11 +643,11 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                     {fieldSuggestions.map((f) => <option key={f} value={f} />)}
                   </datalist>
                 )}
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', cursor: 'pointer' }} title="Urgent questions get a 2-hour reply deadline and sort first">
                   {/* "(2h)" was the SLA in shorthand; say what the deadline actually is. */}
                   <input type="checkbox" checked={newQueryUrgent} onChange={(e) => setNewQueryUrgent(e.target.checked)} /> Urgent — answer needed within 2 hours
                 </label>
-                <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', fontWeight: 600, marginLeft: 'auto' }}>
+                <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" title={newQueryText.trim() ? 'Send this question to the assayer' : 'Type a question first'} style={{ fontSize: 'var(--text-xs)', padding: '8px 14px', fontWeight: 600, marginLeft: 'auto' }}>
                   {busy ? <Loader2 size={13} className="spin" /> : 'Send the question'}
                 </button>
               </div>
@@ -680,6 +683,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                   <button
                     key={q.id}
                     onClick={() => setSelectedQuery(q.id)}
+                    title={`${isResolved ? 'Resolved' : 'Open'}: ${q.queryText} — click to open the thread`}
                     style={{
                       display: 'flex', flexDirection: 'column', gap: '6px', width: '100%', textAlign: 'left',
                       padding: '12px 14px', borderRadius: '10px', cursor: 'pointer', fontSize: 'var(--text-sm)',
@@ -720,7 +724,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
               <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)' }}>
-                <button onClick={() => setSelectedQuery(null)} className="btn btn-secondary"
+                <button onClick={() => setSelectedQuery(null)} className="btn btn-secondary" title="Back to the list of all questions on this case"
                   style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
                   <ArrowLeft size={12} /> Back to all questions
                 </button>

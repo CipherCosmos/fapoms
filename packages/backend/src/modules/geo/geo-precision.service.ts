@@ -16,7 +16,8 @@
  *     final — nothing automated overwrites it.
  */
 
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -115,7 +116,33 @@ export class GeoPrecisionService {
     private readonly zoneRepository: Repository<ZoneEntity>,
     private readonly auditService: AuditService,
     @InjectQueue(GEO_PRECISION_QUEUE) private readonly queue: Queue,
+    /**
+     * Announces a moved pin. Every other write to an assayer or branch publishes its
+     * `*:updated` event, and the maps refresh on it; this service wrote coordinates and said
+     * nothing, so a person created and then placed — by the address lookup or a manual pin — did
+     * not appear on an open map until its cache ran out and it was opened again.
+     */
+    @Optional() private readonly events?: DomainEventPublisher,
   ) {}
+
+  /** Tell every open screen that this row's place changed. Never lets a publish failure undo the write. */
+  private announceMoved(target: GeoTarget, row: { id: string; organizationId?: string | null; name?: string; displayName?: string; clientId?: string | null }): void {
+    try {
+      if (target === 'branch') {
+        this.events?.publish('branch:updated', {
+          eventType: 'branch:updated', branchId: row.id, name: row.name, clientId: row.clientId ?? null,
+          organizationId: row.organizationId ?? null, timestamp: new Date(),
+        });
+      } else {
+        this.events?.publish('assayer:updated', {
+          eventType: 'assayer:updated', aggregateId: row.id, organizationId: row.organizationId ?? null,
+          payload: { id: row.id, displayName: row.displayName, located: true },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Could not announce the new position of ${target} ${row.id}: ${(err as Error).message}`);
+    }
+  }
 
   /** A zone per (client, name), created once and cached in-run — the same rule the importer uses. */
   private async zoneIdFor(state: string, clientId: string | null, cache: Map<string, string>): Promise<string | null> {
@@ -218,6 +245,7 @@ export class GeoPrecisionService {
 
       if (changed) {
         await this.branchRepository.save(b);
+        this.announceMoved('branch', b);
         report.updated++;
       }
     }
@@ -433,6 +461,7 @@ export class GeoPrecisionService {
       Object.assign(row, geo);
       if (target === 'branch') await this.branchRepository.save(row);
       else await this.assayerRepository.save(row);
+      this.announceMoved(target, row);
 
       report.improved++;
       report.movedKm.push({
@@ -516,6 +545,7 @@ export class GeoPrecisionService {
     Object.assign(row, geo);
     row.updatedBy = userId;
     await repo.save(row);
+    this.announceMoved(target, row);
 
     await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,

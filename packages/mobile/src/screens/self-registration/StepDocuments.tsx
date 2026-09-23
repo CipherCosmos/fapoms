@@ -3,9 +3,10 @@ import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, View } from 
 import {
   EmploymentCategory,
   ONBOARDING_DOCUMENT_LABELS,
-  REGISTRATION_CONDITIONAL_DOCUMENTS,
+  REGISTRATION_CONDITIONAL_DOCUMENTS, REGISTRATION_REQUIRED_DOCUMENTS,
   scanMimeType,
   storedScanFileName,
+  type ApplicationInfoRequestItem,
   type OnboardingDocument,
   type RegistrationFormValues,
 } from '@fapoms/shared';
@@ -28,6 +29,8 @@ export interface StepDocumentsProps {
   consentNotice: RegistrationHydration['consentNotice'];
   documents: RegistrationDocument[];
   documentsRequested: string[];
+  /** Exactly what HR asked for — sent-back rows render their own instruction. */
+  infoRequests?: ApplicationInfoRequestItem[];
   uploadingRequirement: string | null;
   uploadErrors: Record<string, string | undefined>;
   /** Opens the camera/file scanner for a requirement; the orchestrator uploads the result. */
@@ -118,7 +121,8 @@ const ChecklistRow: React.FC<{ done: boolean; label: string; detail?: string; li
 };
 
 export const StepDocuments: React.FC<StepDocumentsProps> = ({
-  token, form, application, consentNotice, documents, documentsRequested, uploadingRequirement, uploadErrors,
+  token, form, application, consentNotice, documents, documentsRequested, infoRequests = [],
+  uploadingRequirement, uploadErrors,
   onCapture, otpVerified, phone, withdrawing, onWithdraw, submitting, onSubmit, goToStep, onBack,
 }) => {
   const t = useTheme();
@@ -182,18 +186,28 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
         ) : (
           <View>
             {documentsRequested.map((requirement, index) => {
+              const doc = documents.find((d) => d.requirement === requirement);
               const files = filesFor(requirement);
               const uploaded = files.length > 0;
               const busy = uploadingRequirement === requirement;
               const isPhoto = requirement === 'PHOTOGRAPH';
               const isConditional = REGISTRATION_CONDITIONAL_DOCUMENTS.includes(requirement);
-              const highlight = isPhoto && !uploaded;
+              // Sent back by HR: flagged until a fresh scan lands, with HR's own words.
+              const sentBack = doc?.reviewStatus === 'NEEDS_RESUBMIT';
+              const sentBackMessage = infoRequests.find((i) => i.kind === 'document' && i.key === requirement)?.message
+                ?? doc?.rejectionNote
+                ?? null;
+              const highlight = (isPhoto && !uploaded) || sentBack;
               const hintKey = uploaded ? null : hintKeyFor(requirement);
               const error = uploadErrors[requirement];
 
+              // Enforced at submit — the other "Required" badges are advice, this one is a refusal.
+              const blocksSubmit = REGISTRATION_REQUIRED_DOCUMENTS.includes(requirement);
               const badge = isPhoto
                 ? <Badge label={tr('selfRegistration.documents.badgePhoto')} tone="primary" />
-                : isConditional
+                : blocksSubmit
+                  ? <Badge label={tr('selfRegistration.documents.badgeNeededToSubmit')} tone="primary" />
+                  : isConditional
                   ? <Badge label={tr('selfRegistration.documents.badgeIfApplicable')} tone="neutral" />
                   : <Badge label={tr('selfRegistration.documents.badgeRequired')} tone="accent" />;
 
@@ -203,6 +217,8 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                   : tr('selfRegistration.documents.added'))
                 : isPhoto
                   ? tr('selfRegistration.documents.photoPending')
+                  : requirement === 'BANK_PASSBOOK'
+                    ? tr('selfRegistration.documents.passbookNote')
                   : requirement === 'RENT_AGREEMENT'
                     ? tr('selfRegistration.documents.rentAgreementNote')
                     : requirement === 'ELECTRICITY_BILL'
@@ -216,7 +232,9 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                     { gap: t.space.sm, paddingVertical: t.space.md },
                     highlight
                       ? {
-                          borderWidth: 1.5, borderColor: t.colors.primary, borderRadius: t.radius.lg,
+                          borderWidth: 1.5,
+                          borderColor: sentBack ? t.colors.warning : t.colors.primary,
+                          borderRadius: t.radius.lg,
                           paddingHorizontal: t.space.md, marginVertical: t.space.xs,
                         }
                       : index > 0
@@ -239,6 +257,11 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                     </View>
                   )}
                   {error ? <AppText variant="caption" tone="danger">{error}</AppText> : null}
+                  {sentBack && sentBackMessage ? (
+                    <AppText variant="small" style={{ color: t.colors.warning, fontWeight: '700' }}>
+                      {sentBackMessage}
+                    </AppText>
+                  ) : null}
 
                   {uploaded ? (
                     <View style={{ flexDirection: 'row', gap: t.space.sm }}>

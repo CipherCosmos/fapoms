@@ -105,6 +105,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           <button
             type="button"
             onClick={this.reset}
+            title="Try showing this part again without reloading the page"
             className="btn btn-primary"
             style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', fontSize: 'var(--text-sm)', fontWeight: 700 }}
           >
@@ -113,6 +114,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           <button
             type="button"
             onClick={() => window.location.reload()}
+            title="Reload the whole page to recover"
             className="btn btn-secondary"
             style={{ padding: '8px 16px', fontSize: 'var(--text-sm)', fontWeight: 600 }}
           >

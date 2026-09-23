@@ -230,10 +230,10 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
 
   const count = preview.data?.count;
   return (
-    <Modal open onClose={onClose} title={<><RefreshCw size={18} /> Repair missing money records</>} width="520px" footer={
+      <Modal open onClose={onClose} title={<><RefreshCw size={18} /> Repair missing money records</>} width="520px" footer={
       <>
-        <button type="button" onClick={onClose} className="btn btn-secondary">Close</button>
-        <button type="button" onClick={run} disabled={!!jobId || reconcile.isPending || !count} className="btn btn-primary">
+        <button type="button" onClick={onClose} title="Close without booking anything" className="btn btn-secondary">Close</button>
+        <button type="button" onClick={run} disabled={!!jobId || reconcile.isPending || !count} title={count ? `Book ${count} missing money records now` : 'Nothing missing, nothing to book'} className="btn btn-primary">
           {jobId ? 'Running…' : count ? `Book ${count} assignment${count === 1 ? '' : 's'}` : 'Nothing to book'}
         </button>
       </>
@@ -243,7 +243,7 @@ const ReconcileModal: React.FC<{ onClose: () => void; onDone: (msg: string) => v
       </div>
       <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
         Only assignments completed on or after <span style={{ fontWeight: 400 }}>(blank = the whole book)</span>
-        <StyledInput type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 200 }} />
+        <StyledInput type="date" value={since} onChange={(e) => setSince(e.target.value)} title="Only check assignments completed on or after this date" style={{ width: 200 }} />
       </label>
       {/*
         "Could not count." was the whole of what this said when the preview failed — no reason, no

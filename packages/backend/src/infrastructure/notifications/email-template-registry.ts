@@ -14,6 +14,8 @@ export type EmailTemplateKey =
   | 'app-credentials'
   | 'application-approved'
   | 'application-rejected'
+  | 'application-info-requested'
+  | 'reference-notice'
   | 'branch-audit-paperwork'
   | 'morning-digest'
   | 'account-setup-link'
@@ -313,6 +315,88 @@ export const EMAIL_TEMPLATE_REGISTRY: Record<EmailTemplateKey, EmailTemplateDefi
           tone: 'crimson',
         },
         footer: `Questions regarding this decision may be directed to ${supportEmail}.`,
+      });
+      return { html, text, subject };
+    },
+  },
+
+  'reference-notice': {
+    key: 'reference-notice',
+    name: 'Reference Heads-up',
+    category: 'Recruitment',
+    description: 'Tells somebody a candidate named as a reference that HR may call them. Sent when the candidate is approved.',
+    defaultSubjectTemplate: 'You have been named as a reference',
+    // Every reference carries a name — the form refuses one without — so the greeting can rely on it.
+    requiredTokens: ['refereeName', 'candidateName', 'contactLine', 'logoUrl'],
+    optionalTokens: ['companyName'],
+    rawTokens: [],
+    allowRawHtmlTokens: false,
+    sampleData: {
+      candidateName: 'Ramesh Kulkarni',
+      refereeName: 'Meera Rao',
+      contactLine: 'Priya Nair, grievance officer — privacy@sumeruglobal.com',
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      companyName: 'Sumeru Global',
+    },
+    /*
+      What it says, and what it deliberately does not. The referee learns who named them, why we
+      hold their details and who to write to — the notice a person is owed when somebody else hands
+      us their contact details. Nothing else about the candidate: no phone, no role detail, nothing a
+      referee needs in order to take a call.
+    */
+    fallbackRenderer: (data) => {
+      const greeting = data.refereeName ? `Hello ${data.refereeName},` : 'Hello,';
+      const candidate = String(data.candidateName || 'A candidate');
+      const contact = String(data.contactLine || 'the office that contacted you');
+      const subject = 'You have been named as a reference';
+      const lines = [
+        greeting,
+        `${candidate} has named you as a professional reference in their application to join Sumeru Global as an appraiser.`,
+        'A member of our HR team may call you shortly to ask a few questions about them. You do not need to do anything now.',
+        `They gave us your name and contact details for this reason only, and we keep them with their record. If you do not know them, or would rather not be contacted, write to ${contact} and we will stop.`,
+      ];
+      const text = lines.join('\n\n');
+      const html = renderEmailHtml({ title: 'You Have Been Named As A Reference', bodyLines: lines });
+      return { html, text, subject };
+    },
+  },
+
+  'application-info-requested': {
+    key: 'application-info-requested',
+    name: 'Application Needs Your Attention',
+    category: 'Recruitment',
+    description: 'Sent when HR asks a candidate for specific documents or corrections. Carries the item list, never a link — the candidate reopens the registration link they already hold.',
+    defaultSubjectTemplate: 'Action needed: your Appraiser application',
+    requiredTokens: ['fullName', 'itemsText', 'supportEmail', 'logoUrl'],
+    optionalTokens: ['companyName', 'greeting'],
+    rawTokens: [],
+    allowRawHtmlTokens: false,
+    sampleData: {
+      fullName: 'Rajesh Kumar',
+      itemsText: '• PAN card: The photo was too blurred to read. Please take it again in better light.\n• Bank account number: Please check and correct this field.',
+      supportEmail: 'recruitment@sumeruglobal.com',
+      logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+      companyName: 'Sumeru Global',
+      greeting: 'Hello Rajesh Kumar,',
+    },
+    fallbackRenderer: (data) => {
+      const greeting = data.greeting || (data.fullName ? `Hello ${data.fullName},` : 'Hello,');
+      const items = String(data.itemsText || 'Please review your application details.');
+      const supportEmail = String(data.supportEmail || 'recruitment@sumeruglobal.com');
+      const subject = 'Action needed: your Appraiser application';
+      const text = `${greeting}\n\nHR reviewed your application and needs a few specific things before it can proceed. Open your registration link — the same one you applied with — and fix only what is listed:\n\n${items}\n\nOnce done, submit again from the same link.`;
+      const html = renderEmailHtml({
+        title: 'Action Needed On Your Application',
+        bodyLines: [
+          greeting,
+          'HR reviewed your application and needs a few specific things before it can proceed. Open your registration link — the same one you applied with — and fix only what is listed below.',
+        ],
+        callout: {
+          title: 'What HR asked for',
+          text: items,
+          tone: 'gold',
+        },
+        footer: `Once done, submit again from the same link. Questions? Write to ${supportEmail}.`,
       });
       return { html, text, subject };
     },

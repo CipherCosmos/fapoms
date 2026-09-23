@@ -104,33 +104,43 @@ describe('who may be handed the artifact', () => {
 });
 
 describe('the background-verification exit rule', () => {
-  it('a clear verdict passes both sites', () => {
-    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, 'leave-bgv')).toEqual({ refusal: null, gated: null });
-    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, 'activate')).toEqual({ refusal: null, gated: null });
+  /**
+   * MANDATORY (owner, 2026-09-23). Finishing onboarding needs a completed, clear check AND the
+   * report it came from. There is no warn mode any more — it defaulted to warn, which let anybody
+   * out of background verification with no check at all.
+   */
+  const ONBOARDING_EXITS = ['leave-bgv', 'finish-onboarding'] as const;
+
+  it.each(ONBOARDING_EXITS)('%s passes with a clear verdict and the report on file', (site) => {
+    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, site, true)).toEqual({ refusal: null });
+  });
+
+  it.each(ONBOARDING_EXITS)('%s refuses when no completed check is on file, whatever the settings', (site) => {
+    expect(assessBackgroundGate(null, site, true).refusal).toMatch(/mandatory and no completed check/);
+    expect(assessBackgroundGate(BackgroundCheckVerdict.NOT_CHECKED, site, true).refusal).toMatch(/mandatory/);
+  });
+
+  it.each(ONBOARDING_EXITS)('%s refuses a clear verdict whose report was never uploaded', (site) => {
+    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, site, false).refusal).toMatch(/report has not been uploaded/);
   });
 
   it.each([
     BackgroundCheckVerdict.CIVIL_CASE,
     BackgroundCheckVerdict.CRIMINAL_CASE,
     BackgroundCheckVerdict.ADVERSE_FINDING,
-  ])('an adverse verdict (%s) refuses in EVERY mode, at both sites', (verdict) => {
-    // refusal, not gated: somebody recorded this on purpose. Warn-mode must not be able to
-    // quietly onboard a criminal-case record with only an audit row to show for it.
-    expect(assessBackgroundGate(verdict, 'leave-bgv').refusal).toContain('adverse');
-    expect(assessBackgroundGate(verdict, 'activate').refusal).toBeTruthy();
-    expect(assessBackgroundGate(verdict, 'activate').gated).toBeNull();
+  ])('an adverse verdict (%s) refuses at every site, report or not', (verdict) => {
+    for (const site of [...ONBOARDING_EXITS, 'activate'] as const) {
+      expect(assessBackgroundGate(verdict, site, true).refusal).toContain('adverse');
+    }
   });
 
-  it('an absent check gates the onboarding exit — enforce refuses, warn audits', () => {
-    expect(assessBackgroundGate(null, 'leave-bgv').gated).toContain('no completed background check');
-    expect(assessBackgroundGate(BackgroundCheckVerdict.NOT_CHECKED, 'leave-bgv').gated).toBeTruthy();
-  });
-
-  it('an absent check does NOT gate activation — a return from leave is not onboarding', () => {
-    // The estate has never run a check on most of the working roster. The day the mode turns to
-    // enforce, people coming back from leave must not find the door locked over a check that was
-    // never part of their joining. The adverse arm above still guards this site.
-    expect(assessBackgroundGate(null, 'activate')).toEqual({ refusal: null, gated: null });
-    expect(assessBackgroundGate(BackgroundCheckVerdict.NOT_CHECKED, 'activate')).toEqual({ refusal: null, gated: null });
+  /**
+   * A return from leave or suspension is not onboarding, and most of the working roster predates
+   * these checks — locking their returns would stop the business without vetting anybody. The
+   * adverse arm above still guards this site.
+   */
+  it('a working return to active needs no check, only the absence of an adverse one', () => {
+    expect(assessBackgroundGate(null, 'activate', false)).toEqual({ refusal: null });
+    expect(assessBackgroundGate(BackgroundCheckVerdict.NOT_CHECKED, 'activate', false)).toEqual({ refusal: null });
   });
 });

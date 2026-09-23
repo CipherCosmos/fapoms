@@ -75,13 +75,13 @@ interface ByAssayerResponse { groups: AuditorGroup[]; total: number }
 const ClarificationCard: React.FC<{ row: ClarificationRow; onOpen: () => void }> = ({ row, onOpen }) => {
   const sla = slaLabel(row);
   return (
-    <button onClick={onOpen}
+    <button onClick={onOpen} title={`Open the case for ${row.branchName ?? 'this branch'} — ${row.queryText}`}
       style={{ ...card, textAlign: 'left', cursor: 'pointer', display: 'flex', gap: 12, alignItems: 'flex-start', borderLeft: `3px solid ${row.slaOverdue ? 'var(--danger)' : row.awaiting === 'US' ? 'var(--warning)' : 'var(--border-color)'}` }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
-          <strong style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)' }}>{row.branchName ?? 'Unknown branch'}</strong>
-          {row.targetField && <span style={{ fontSize: 'var(--text-2xs)', padding: '1px 7px', borderRadius: 999, background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>About: {row.targetField}</span>}
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+          <strong title={row.branchName ?? 'Unknown branch'} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)' }}>{row.branchName ?? 'Unknown branch'}</strong>
+          {row.targetField && <span title={`This question is about the ${row.targetField} field`} style={{ fontSize: 'var(--text-2xs)', padding: '1px 7px', borderRadius: 999, background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>About: {row.targetField}</span>}
+          <span title={row.assayerName ? `Assayer: ${row.assayerName}${row.assayerCode ? ` (${row.assayerCode})` : ''}` : 'Assayer not assigned'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
             <User size={11} /> {row.assayerName ?? '—'}{row.assayerCode ? ` · ${row.assayerCode}` : ''}
           </span>
         </div>
@@ -91,7 +91,7 @@ const ClarificationCard: React.FC<{ row: ClarificationRow; onOpen: () => void }>
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', fontWeight: 700, color: sla.tone }}>
+        <span title={row.slaDueDate ? `Reply deadline: ${fmtWhen(row.slaDueDate)}` : 'No reply deadline set'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-2xs)', fontWeight: 700, color: sla.tone }}>
           {row.slaOverdue ? <AlertTriangle size={11} /> : <Clock size={11} />} {sla.text}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-xs)', color: 'var(--accent)' }}>
@@ -154,16 +154,16 @@ export const ClarificationsPage: React.FC = () => {
   /** True when the server had more for this tab than it sent — say so rather than imply a total. */
   const truncated = counts[filter] > shown.length;
 
-  const TABS: { key: Filter; label: string; tone?: string }[] = [
-    { key: 'US', label: 'Awaiting us', tone: 'var(--warning)' },
-    { key: 'ASSAYER', label: 'Awaiting assayer' },
-    { key: 'OVERDUE', label: 'Overdue', tone: 'var(--danger)' },
-    { key: 'DONE', label: 'Resolved' },
+  const TABS: { key: Filter; label: string; tone?: string; hint: string }[] = [
+    { key: 'US', label: 'Awaiting us', tone: 'var(--warning)', hint: 'Assayer replied — the desk needs to act' },
+    { key: 'ASSAYER', label: 'Awaiting assayer', hint: 'Question sent — waiting on the field to reply' },
+    { key: 'OVERDUE', label: 'Overdue', tone: 'var(--danger)', hint: 'Past the agreed reply deadline' },
+    { key: 'DONE', label: 'Resolved', hint: 'Answered and accepted — kept as a record' },
   ];
 
-  const VIEWS: { key: View; label: string }[] = [
-    { key: 'status', label: 'By status' },
-    { key: 'auditor', label: 'By auditor' },
+  const VIEWS: { key: View; label: string; hint: string }[] = [
+    { key: 'status', label: 'By status', hint: 'Deadline-ordered list grouped by whose move it is' },
+    { key: 'auditor', label: 'By auditor', hint: 'Group open questions by assayer so you can clear them in one call' },
   ];
 
   return (
@@ -173,7 +173,7 @@ export const ClarificationsPage: React.FC = () => {
         {VIEWS.map((v) => {
           const active = view === v.key;
           return (
-            <button key={v.key} onClick={() => setView(v.key)}
+            <button key={v.key} onClick={() => setView(v.key)} title={v.hint}
               style={{
                 padding: '6px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
                 background: active ? 'var(--accent)' : 'transparent',
@@ -200,7 +200,7 @@ export const ClarificationsPage: React.FC = () => {
               const active = filter === t.key;
               const n = counts[t.key];
               return (
-                <button key={t.key} onClick={() => setFilter(t.key)}
+                <button key={t.key} onClick={() => setFilter(t.key)} title={`${t.hint} — ${n} question${n === 1 ? '' : 's'}`}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderRadius: 10, cursor: 'pointer',
                     background: active ? 'var(--bg-card)' : 'transparent',
@@ -251,7 +251,7 @@ export const ClarificationsPage: React.FC = () => {
               const isOpen = !!expanded[key];
               return (
                 <div key={key} style={{ ...card, padding: 0, overflow: 'hidden' }}>
-                  <button onClick={() => setExpanded((e) => ({ ...e, [key]: !e[key] }))}
+                  <button onClick={() => setExpanded((e) => ({ ...e, [key]: !e[key] }))} title={isOpen ? `Collapse ${g.assayerName ?? 'unassigned'} — hide their questions` : `Expand to see all ${g.openCount} open questions for ${g.assayerName ?? 'unassigned'}`}
                     style={{
                       width: '100%', textAlign: 'left', cursor: 'pointer', background: 'transparent', border: 'none',
                       display: 'flex', alignItems: 'center', gap: 10, padding: 14,

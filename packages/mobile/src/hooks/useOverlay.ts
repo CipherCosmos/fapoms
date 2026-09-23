@@ -50,7 +50,9 @@ export type Overlay =
   /** The durable upload outbox — carries no subject; it lists every packet, across branches. */
   | { name: 'uploads' }
   /** The assayer's own registration paperwork. No subject: it is always about themselves. */
-  | { name: 'registration' };
+  | { name: 'registration' }
+  /** Their digital ID card, with its live code. No subject: only ever their own. */
+  | { name: 'idCard' };
 
 export type OverlayName = Overlay['name'];
 

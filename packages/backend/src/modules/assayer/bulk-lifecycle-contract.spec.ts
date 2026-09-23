@@ -28,7 +28,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { BackgroundCheckVerdict, AssayerLifecycleStatus } from '@fapoms/shared';
 import { AssayerService } from './assayer.service';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
@@ -73,6 +73,8 @@ describe('bulk lifecycle — the contract between the response and the database'
   let sabotage: Map<string, Error>;
   let identityOk: boolean;
   let identityGateMode: string;
+  /** Whether the person's background verification is complete — a clear check and its report. */
+  let bgvDone: boolean;
 
   const seed = (id: string, lifecycleStatus: AssayerLifecycleStatus): string => {
     rows.set(id, {
@@ -178,6 +180,7 @@ describe('bulk lifecycle — the contract between the response and the database'
     sabotage = new Map();
     identityOk = true;
     identityGateMode = 'warn';
+    bgvDone = true;
 
     const module = await Test.createTestingModule({
       providers: [
@@ -200,7 +203,8 @@ describe('bulk lifecycle — the contract between the response and the database'
           provide: RosterRecordsService,
           useValue: {
             identityStanding: jest.fn(async () => ({ ok: identityOk, verified: [], missing: identityOk ? [] : ['PAN_CARD'], rejected: [] })),
-            latestBackgroundVerdict: jest.fn(async () => null),
+            latestBackgroundVerdict: jest.fn(async () => (bgvDone ? BackgroundCheckVerdict.CLEAR : null)),
+            bgvReportOnFile: jest.fn(async () => bgvDone),
           },
         },
         { provide: PlatformSettingsService, useValue: { get: jest.fn(async () => identityGateMode) } },
@@ -276,11 +280,11 @@ describe('bulk lifecycle — the contract between the response and the database'
      */
     it('never reports a moved row as failed — a hop that dies mid-walk is PARTIAL', async () => {
       const id = seed('a3', AssayerLifecycleStatus.INVITED);
-      sabotage.set(`${id}:${AssayerLifecycleStatus.TRAINING}`, new Error(
+      sabotage.set(`${id}:${AssayerLifecycleStatus.FINAL_APPROVAL}`, new Error(
         "This assayer changed while you were acting on it — they are now 'INACTIVE', not 'BACKGROUND_VERIFICATION'.",
       ));
 
-      const result = await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.ACTIVE, 'op');
+      const result = await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.FINAL_APPROVAL, 'op');
 
       expect(result.failed).toEqual([]);
       expect(result.succeeded).toEqual([]);
@@ -288,7 +292,7 @@ describe('bulk lifecycle — the contract between the response and the database'
       const [row] = result.partial;
       expect(row.id).toBe(id);
       expect(row.from).toBe(AssayerLifecycleStatus.INVITED);
-      expect(row.target).toBe(AssayerLifecycleStatus.ACTIVE);
+      expect(row.target).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
       expect(row.via).toEqual([
         AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
         AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
@@ -301,14 +305,14 @@ describe('bulk lifecycle — the contract between the response and the database'
 
     it('puts the abandonment on the audit trail, not only the hops that landed', async () => {
       const id = seed('a4', AssayerLifecycleStatus.INVITED);
-      sabotage.set(`${id}:${AssayerLifecycleStatus.TRAINING}`, new Error('the database went away'));
+      sabotage.set(`${id}:${AssayerLifecycleStatus.FINAL_APPROVAL}`, new Error('the database went away'));
 
-      await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.ACTIVE, 'op');
+      await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.FINAL_APPROVAL, 'op');
 
       const abandoned = auditFor(id).filter((e) => e.eventType === 'ASSAYER_LIFECYCLE_WALK_ABANDONED');
       expect(abandoned).toHaveLength(1);
       // Six months later, "why is this person half way through onboarding" has an answer.
-      expect(abandoned[0].remarks).toContain('INVITED → ACTIVE');
+      expect(abandoned[0].remarks).toContain('INVITED → FINAL_APPROVAL');
       expect(abandoned[0].remarks).toContain(`stopped at ${AssayerLifecycleStatus.BACKGROUND_VERIFICATION}`);
       expect(abandoned[0].newState).toBe(AssayerLifecycleStatus.BACKGROUND_VERIFICATION);
     });
@@ -395,19 +399,35 @@ describe('bulk lifecycle — the contract between the response and the database'
     });
 
     /**
-     * The identity gate under `enforce`. `INVITED → ACTIVE` is four hops and the gate only bites
-     * on the last one, so this was the most likely partial in production: three committed hops
-     * and a queue of people parked in TRAINING.
+     * A new joiner cannot be walked to work at all any more: the approval before training is a
+     * senior's decision, taken one person at a time (2026-09-23). The refusal says so and names the
+     * next step, and nothing moves. (This used to be where the identity gate's rehearsal bit —
+     * three committed hops and a queue of people parked in TRAINING; that walk no longer exists.)
      */
-    it('refuses the whole onboarding walk when the identity gate would refuse its last hop', async () => {
-      identityGateMode = 'enforce';
-      identityOk = false;
+    it('refuses to walk a new joiner to work, naming the approval that stands in the way', async () => {
       const id = seed('b3', AssayerLifecycleStatus.INVITED);
 
       const result = await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.ACTIVE, 'op');
 
       expect(result.skipped).toHaveLength(1);
-      expect(result.skipped[0].reason).toMatch(/cannot be activated yet/);
+      expect(result.skipped[0].reason).toMatch(/approval before training/);
+      expect(result.skipped[0].reason).toMatch(/Nothing was changed/);
+      expect(stateOf(id)).toBe(AssayerLifecycleStatus.INVITED);
+      expect(transitionsFor(id)).toHaveLength(0);
+    });
+
+    /**
+     * Background verification is mandatory — no mode. A batch walking through it is refused before
+     * it starts, so nobody is left in background verification with a response calling them failed.
+     */
+    it('refuses the whole onboarding walk when background verification is not done', async () => {
+      bgvDone = false;
+      const id = seed('b5', AssayerLifecycleStatus.INVITED);
+
+      const result = await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.FINAL_APPROVAL, 'op');
+
+      expect(result.skipped).toHaveLength(1);
+      expect(result.skipped[0].reason).toMatch(/background verification is mandatory/);
       expect(result.skipped[0].reason).toMatch(/Nothing was changed/);
       expect(stateOf(id)).toBe(AssayerLifecycleStatus.INVITED);
       expect(transitionsFor(id)).toHaveLength(0);
@@ -417,15 +437,15 @@ describe('bulk lifecycle — the contract between the response and the database'
      * …and only under enforce. `warn` is what ships, and pre-empting a refusal the funnel would
      * not make would refuse work the operator is entitled to do.
      */
-    it('lets the same walk through when the gate is only warning', async () => {
+    it('walks a new joiner up to the approval when the identity gate is only warning', async () => {
       identityGateMode = 'warn';
       identityOk = false;
       const id = seed('b4', AssayerLifecycleStatus.INVITED);
 
-      const result = await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.ACTIVE, 'op');
+      const result = await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.FINAL_APPROVAL, 'op');
 
       expect(result.succeeded).toHaveLength(1);
-      expect(stateOf(id)).toBe(AssayerLifecycleStatus.ACTIVE);
+      expect(stateOf(id)).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
     });
 
     /**
@@ -519,13 +539,13 @@ describe('bulk lifecycle — the contract between the response and the database'
       sabotage.set(`${stalls}:${AssayerLifecycleStatus.BACKGROUND_VERIFICATION}`, new Error('lost the race'));
 
       const result = await service.bulkTransitionLifecycle(
-        [clean, stalls], AssayerLifecycleStatus.TRAINING, 'op',
+        [clean, stalls], AssayerLifecycleStatus.FINAL_APPROVAL, 'op',
       );
 
       expect(result.succeeded.map((s) => s.id)).toEqual([clean]);
       expect(result.partial.map((p) => p.id)).toEqual([stalls]);
       expect(result.failed).toEqual([]);
-      expect(stateOf(clean)).toBe(AssayerLifecycleStatus.TRAINING);
+      expect(stateOf(clean)).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
       expect(stateOf(stalls)).toBe(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
       expect(result.partial[0].reached).toBe(AssayerLifecycleStatus.DOCUMENT_VERIFICATION);
     });
@@ -551,16 +571,16 @@ describe('bulk lifecycle — the contract between the response and the database'
     it('is idempotent on a repeated submission — the second call writes no transition', async () => {
       const ids = [seed('c13', AssayerLifecycleStatus.INVITED), seed('c14', AssayerLifecycleStatus.INVITED)];
 
-      const first = await service.bulkTransitionLifecycle(ids, AssayerLifecycleStatus.TRAINING, 'op');
+      const first = await service.bulkTransitionLifecycle(ids, AssayerLifecycleStatus.FINAL_APPROVAL, 'op');
       const auditAfterFirst = ids.flatMap((id) => transitionsFor(id)).length;
-      const second = await service.bulkTransitionLifecycle(ids, AssayerLifecycleStatus.TRAINING, 'op');
+      const second = await service.bulkTransitionLifecycle(ids, AssayerLifecycleStatus.FINAL_APPROVAL, 'op');
 
       expect(first.succeeded).toHaveLength(2);
       expect(first.succeeded[0].via).toHaveLength(3);
       expect(second.succeeded).toHaveLength(2);
       expect(second.succeeded.every((s) => s.via.length === 0)).toBe(true);
       expect(ids.flatMap((id) => transitionsFor(id))).toHaveLength(auditAfterFirst);
-      for (const id of ids) expect(stateOf(id)).toBe(AssayerLifecycleStatus.TRAINING);
+      for (const id of ids) expect(stateOf(id)).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
     });
   });
 

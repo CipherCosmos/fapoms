@@ -218,6 +218,26 @@ describe('verifying an identity document', () => {
     await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1', undefined,
       { rejectionReason: 'INCOMPLETE_CAPTURE' as any })).resolves.toBeTruthy();
   });
+
+  /**
+   * Review opens at document verification — never while INVITED.
+   *
+   * Letting a verdict land earlier meant the same scans were verified twice: once off-stage on
+   * the record, and again when the stage flow asked for it. Collecting scans stays open at
+   * every stage; only the verdict needs the stage to have started.
+   */
+  it.each(['VERIFIED', 'REJECTED'] as const)('refuses a %s verdict while the person is still invited', async (verdict) => {
+    const svc = serviceFor(rowWith(), { id: 'asr-1', panNumber: 'ABCDE1234F', lifecycleStatus: 'INVITED' });
+    await expect(svc.verifyDocument('doc-1', verdict, 'actor-1', undefined,
+      { rejectionReason: 'ILLEGIBLE' as any })).rejects.toThrow(/document verification first/i);
+  });
+
+  it('reviews once the stage has started', async () => {
+    const svc = serviceFor(rowWith(),
+      { id: 'asr-1', panNumber: 'ABCDE1234F', displayName: 'Ramesh Kumar', lifecycleStatus: 'DOCUMENT_VERIFICATION' });
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, printed))
+      .resolves.toMatchObject({ verificationStatus: 'VERIFIED' });
+  });
 });
 
 /**
@@ -419,5 +439,80 @@ describe('withdrawing a verification whose evidence no longer stands', () => {
     const s = svc([verifiedRow({ filePaths: ['page1.jpg'] })]);
     const saved = await s.attachFile('asr-1', OnboardingDocument.AADHAAR_FRONT, 'page2.jpg', 'actor-1');
     expect(saved.filePaths).toEqual(['page1.jpg', 'page2.jpg']);
+  });
+});
+
+/**
+ * Verifying a passbook — the one evidence of the account a payout goes to.
+ *
+ * Until 2026-09-23 a passbook could not be verified at all ("not an identity document"): it only
+ * "arrived", so nothing ever checked the typed account number against it. Now the reviewer types
+ * the number and IFSC off the page and the record must agree, digit for digit.
+ */
+describe('verifying a bank passbook', () => {
+  const passbook = (over: Record<string, unknown> = {}) => ({
+    id: 'doc-pb', assayerId: 'asr-1', requirement: OnboardingDocument.BANK_PASSBOOK,
+    filePaths: ['scans/passbook.jpg'], verificationStatus: null, documentNumber: null,
+    holderName: null, holderDateOfBirth: null, holderGender: null,
+    holderGuardianName: null, holderAddress: null, remarks: null, rejectionReason: null,
+    ...over,
+  });
+
+  const svcFor = (row: any, person: Record<string, unknown> = {}) => {
+    const svc: any = Object.create(RosterRecordsService.prototype);
+    svc.onboarding = { findOne: jest.fn().mockResolvedValue(row), find: jest.fn().mockResolvedValue([]), save: jest.fn(async (d: any) => d) };
+    svc.assayers = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'asr-1', displayName: 'Ramesh Kumar', bankAccountNumber: '123456789012', ifscCode: 'SBIN0001234', ...person,
+      }),
+      update: jest.fn(),
+    };
+    svc.auditService = { recordEventSafe: jest.fn() };
+    svc.notifications = { emitSafe: jest.fn() };
+    return svc;
+  };
+
+  const read = (over: Record<string, unknown> = {}) => ({
+    holderName: 'Ramesh Kumar', accountNumber: '1234 5678 9012', ifscCode: 'sbin0001234', ...over,
+  });
+
+  it('verifies when the page agrees with the record, however the number was spaced', async () => {
+    await expect(svcFor(passbook()).verifyDocument('doc-pb', 'VERIFIED', 'actor-1', undefined, read()))
+      .resolves.toMatchObject({ verificationStatus: 'VERIFIED', nameMatchGrade: 'EXACT' });
+  });
+
+  it('refuses when the passbook shows another account, naming only the last digits', async () => {
+    await expect(svcFor(passbook()).verifyDocument('doc-pb', 'VERIFIED', 'actor-1', undefined,
+      read({ accountNumber: '123456789099' })))
+      .rejects.toThrow(/passbook shows account …9099, but the record has …9012/);
+  });
+
+  it('refuses when the IFSC differs', async () => {
+    await expect(svcFor(passbook()).verifyDocument('doc-pb', 'VERIFIED', 'actor-1', undefined,
+      read({ ifscCode: 'HDFC0000001' })))
+      .rejects.toThrow(/IFSC HDFC0000001, but the record has SBIN0001234/);
+  });
+
+  it('insists the number and IFSC are read off the page, not skipped', async () => {
+    await expect(svcFor(passbook()).verifyDocument('doc-pb', 'VERIFIED', 'actor-1', undefined,
+      read({ accountNumber: '' })))
+      .rejects.toThrow(/exactly as they are printed on the passbook/);
+  });
+
+  it('refuses when the record has no account to check against', async () => {
+    await expect(svcFor(passbook(), { bankAccountNumber: null }).verifyDocument('doc-pb', 'VERIFIED', 'actor-1', undefined, read()))
+      .rejects.toThrow(/no bank account on the record/);
+  });
+
+  /** A relative's account is exactly what the name check is for. */
+  it('refuses an account holder who is somebody else, unless the reviewer says why', async () => {
+    await expect(svcFor(passbook()).verifyDocument('doc-pb', 'VERIFIED', 'actor-1', undefined,
+      read({ holderName: 'Sunita Devi' })))
+      .rejects.toThrow(/does not match the name on the record/);
+  });
+
+  it('can still be sent back without reading any numbers', async () => {
+    await expect(svcFor(passbook()).verifyDocument('doc-pb', 'REJECTED', 'actor-1', undefined, { rejectionReason: 'ILLEGIBLE' }))
+      .resolves.toMatchObject({ verificationStatus: 'REJECTED' });
   });
 });

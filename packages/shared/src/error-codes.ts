@@ -105,6 +105,12 @@ export const ASSIGNMENT_ERROR_CODES = {
   OVERRIDE_REASON_REQUIRED: 'OVERRIDE_REASON_REQUIRED',
   /** No reason will get past this one — see `NOT_OVERRIDABLE_BECAUSE` for what to tell them. */
   RULE_NOT_OVERRIDABLE: 'RULE_NOT_OVERRIDABLE',
+  /**
+   * The assayer is held from new work on compliance grounds — a re-check overdue past its grace
+   * period, or an adverse re-check awaiting a senior (see `periodic-checks.ts`). Not overridable by
+   * a reason: the remedy is recording the check, or the senior's decision, on their record.
+   */
+  ASSAYER_COMPLIANCE_BLOCKED: 'ASSAYER_COMPLIANCE_BLOCKED',
 } as const;
 
 export const ASSAYER_ERROR_CODES = {

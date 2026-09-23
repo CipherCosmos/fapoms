@@ -4,11 +4,11 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
-import { EventCategory, ApplicationStatus, APPLICATION_TERMINAL_STATUSES, applicationIsEditableByCandidate, EmploymentCategory, OnboardingDocument, ApplicationSource, ASSAYER_ERROR_CODES, pickRegistrationRecordFields, groupRegistrationRecordFields, REGISTRATION_SECRET_FIELD_KEYS, CURRENT_CONSENT_NOTICE, CURRENT_CONSENT_VERSION, consentNoticeFor, type ConsentNotice, REGISTRATION_FIELD_GROUPS, maskRegistrationFields, looksMasked, pickEmploymentTermFields, mergedRegistrationView, missingRegistrationFields, isValidPan, isValidIfsc, isValidAadhaar, normalisePhone, dateOfBirthProblem, maskTail, type OutboundMessageReceipt, businessDateKey, businessTodayDateKey } from '@fapoms/shared';
+import { EventCategory, ApplicationStatus, APPLICATION_TERMINAL_STATUSES, applicationIsEditableByCandidate, EmploymentCategory, OnboardingDocument, ONBOARDING_DOCUMENT_LABELS, DocumentRejectionReason, DOCUMENT_REJECTION_GUIDANCE, ApplicationDocumentReviewStatus, APPLICATION_INFO_REQUESTABLE_FIELDS, readApplicationInfoRequests, type ApplicationInfoRequestItem, normalizeApplicationReferences, referenceSubmitProblem, AssayerLifecycleStatus, ApplicationSource, ASSAYER_ERROR_CODES, pickRegistrationRecordFields, groupRegistrationRecordFields, REGISTRATION_SECRET_FIELD_KEYS, CURRENT_CONSENT_NOTICE, CURRENT_CONSENT_VERSION, consentNoticeFor, type ConsentNotice, REGISTRATION_FIELD_GROUPS, maskRegistrationFields, looksMasked, pickEmploymentTermFields, mergedRegistrationView, missingRegistrationFields, isValidPan, isValidIfsc, isValidAadhaar, isBankAccountNumber, normaliseBankAccountNumber, BANK_ACCOUNT_NUMBER_RULE, REGISTRATION_REQUIRED_DOCUMENTS, normalisePhone, dateOfBirthProblem, maskTail, type OutboundMessageReceipt, businessDateKey, businessTodayDateKey, normalizeSourceReferral, candidateMayEditSourceReferral, type SourceReferral, type ReferralRecordedBy } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
-import { AssayerInterviewEntity } from './assayer-interview.entity';
+import { AssayerInterviewEntity, type InterviewAttachment } from './assayer-interview.entity';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerService, CreateAssayerDto } from './assayer.service';
 import { RosterRecordsService } from './roster-records.service';
@@ -95,6 +95,109 @@ function readOpenedWithoutInterview(
 }
 
 /**
+ * One document HR wants re-uploaded: which requirement, why (structured), and what to do.
+ *
+ * `reason` is a `DocumentRejectionReason` value when given — the same list the roster's vetting
+ * tab offers, so a reviewer learns one set of words and the candidate gets actionable guidance
+ * (`DOCUMENT_REJECTION_GUIDANCE`) instead of a paragraph to decode.
+ */
+export interface DocumentInfoRequestInput {
+  requirement: OnboardingDocument;
+  reason?: string;
+  note?: string;
+}
+
+/** One form field HR wants corrected: which field, and what is wrong with it. */
+export interface FieldInfoRequestInput {
+  key: string;
+  message?: string;
+}
+
+/**
+ * The targeted replacement for one free-text "request info" note: the exact documents and
+ * fields HR ticked, plus an optional overall note. A plain string is still accepted anywhere
+ * this goes (treated as `{notes}`), so older callers keep working.
+ */
+export interface StructuredInfoRequestInput {
+  notes?: string;
+  documents?: DocumentInfoRequestInput[];
+  fields?: FieldInfoRequestInput[];
+}
+
+/** HR's ticked field key → the words both screens use for it. Falls back to the raw key. */
+function fieldRequestLabel(key: string): string {
+  return APPLICATION_INFO_REQUESTABLE_FIELDS.find((f) => f.key === key)?.label ?? key;
+}
+
+/** Is this a tickable field — something the candidate can actually fix on their link? */
+function isRequestableField(key: string): boolean {
+  return APPLICATION_INFO_REQUESTABLE_FIELDS.some((f) => f.key === key);
+}
+
+function isValidRejectionReason(reason: string): boolean {
+  return (Object.values(DocumentRejectionReason) as string[]).includes(reason);
+}
+
+/**
+ * Validate HR's ticked documents and fields into the to-do list the candidate's link renders.
+ *
+ * Throws on anything the candidate could not act on: an unknown document, an unknown reason, a
+ * field the form never asks for. A request that names nothing real is worse than no request —
+ * the candidate's link would reopen with an empty checklist and no idea what to do.
+ */
+function buildInfoRequestItems(input: StructuredInfoRequestInput): ApplicationInfoRequestItem[] {
+  const items: ApplicationInfoRequestItem[] = [];
+  for (const doc of input.documents ?? []) {
+    if (!Object.values(OnboardingDocument).includes(doc.requirement)) {
+      throw new BadRequestException('That is not a recognised document type.');
+    }
+    const reason = doc.reason?.trim() || null;
+    if (reason && !isValidRejectionReason(reason)) {
+      throw new BadRequestException('That is not a recognised send-back reason.');
+    }
+    const note = doc.note?.trim() || '';
+    const guidance = reason ? DOCUMENT_REJECTION_GUIDANCE[reason as DocumentRejectionReason] : '';
+    const message = note || guidance || 'Please re-upload a clear scan of this document.';
+    if (message.length > 1000) {
+      throw new BadRequestException('Keep each document instruction under 1000 characters.');
+    }
+    items.push({
+      kind: 'document',
+      key: doc.requirement,
+      label: ONBOARDING_DOCUMENT_LABELS[doc.requirement] ?? doc.requirement,
+      message,
+      reason,
+    });
+  }
+  const seenFields = new Set<string>();
+  for (const field of input.fields ?? []) {
+    const key = field.key?.trim() || '';
+    if (!key || !isRequestableField(key)) {
+      throw new BadRequestException(`"${field.key ?? ''}" is not something the candidate can fix on their form.`);
+    }
+    if (seenFields.has(key)) continue;
+    seenFields.add(key);
+    const message = field.message?.trim() || 'Please check and correct this field.';
+    if (message.length > 1000) {
+      throw new BadRequestException('Keep each field instruction under 1000 characters.');
+    }
+    items.push({ kind: 'field', key, label: fieldRequestLabel(key), message });
+  }
+  return items;
+}
+
+/** Merge new asks into the stored to-do list: same kind+key is replaced, the rest is kept. */
+function mergeInfoRequestItems(
+  existing: ApplicationInfoRequestItem[],
+  incoming: ApplicationInfoRequestItem[],
+): ApplicationInfoRequestItem[] {
+  const next = existing.filter(
+    (item) => !incoming.some((ask) => ask.kind === item.kind && ask.key === item.key),
+  );
+  return [...next, ...incoming];
+}
+
+/**
  * The documents the Appraiser Recruitment spec asks for beyond the common set, split by
  * `EmploymentCategory`. A presentation-layer list, not a vocabulary change — same precedent as
  * `SELF_SERVICE_REQUIRED`/`SELF_SERVICE_OPTIONAL` in `assayer-self-service.controller.ts`. Lives
@@ -120,6 +223,12 @@ const COMMON_REGISTRATION_DOCUMENTS: readonly OnboardingDocument[] = [
   OnboardingDocument.PAN_CARD,
   OnboardingDocument.AADHAAR_FRONT,
   OnboardingDocument.AADHAAR_BACK,
+  /**
+   * The account the pay goes to, evidenced. Required at submit (`REGISTRATION_REQUIRED_DOCUMENTS`):
+   * the page of the passbook — or a cancelled cheque or statement page — showing their name, the
+   * account number and the IFSC, which is what the reviewer checks the typed numbers against.
+   */
+  OnboardingDocument.BANK_PASSBOOK,
   OnboardingDocument.OFFICE_ADDRESS_PROOF,
   OnboardingDocument.RENT_AGREEMENT,
   OnboardingDocument.ELECTRICITY_BILL,
@@ -208,6 +317,51 @@ function openProfile(profile: Record<string, unknown> | null | undefined): Recor
   return { ...profile, fields: openSecretFields(fields) };
 }
 
+/**
+ * The current value of every field HR asked to have corrected, as comparable text.
+ *
+ * Columns are read off the application; record answers off `extendedProfile.fields`, OPENED first
+ * — a PAN is stored encrypted, and comparing ciphertext would call every save a change. A date is
+ * read as its calendar day, so a `Date` and the "1985-03-14" that produced it compare equal.
+ */
+function askedFieldValues(
+  application: AssayerApplicationEntity,
+  asks: ApplicationInfoRequestItem[],
+): Record<string, string> {
+  const fields = (openProfile(application.extendedProfile as Record<string, unknown> | null)?.fields ?? {}) as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  for (const { key } of asks) {
+    const raw = (EDITABLE_DRAFT_FIELDS as readonly string[]).includes(key)
+      ? (application as unknown as Record<string, unknown>)[key]
+      : fields[key];
+    out[key] = raw instanceof Date
+      ? (Number.isNaN(raw.getTime()) ? '' : businessDateKey(raw))
+      : String(raw ?? '').trim();
+  }
+  return out;
+}
+
+/**
+ * A field ask leaves the to-do list when the candidate (or the desk) actually changes that field.
+ *
+ * Document asks already cleared themselves on a fresh scan; field asks never did, so "Date of
+ * birth — please correct" stayed on the candidate's link and on HR's "waiting on candidate" list
+ * after it had been corrected. "Changed", not "saved": the form saves every box on blur, so a
+ * candidate tabbing past the date of birth would otherwise have cleared the ask without touching
+ * it. A field they deliberately leave as it was stays asked — and `submit` settles those.
+ */
+function dropAnsweredFieldAsks(
+  application: AssayerApplicationEntity,
+  asks: ApplicationInfoRequestItem[],
+  before: Record<string, string>,
+): void {
+  const after = askedFieldValues(application, asks);
+  const answered = new Set(asks.filter((a) => before[a.key] !== after[a.key]).map((a) => a.key));
+  if (answered.size === 0) return;
+  application.infoRequests = readApplicationInfoRequests(application.infoRequests)
+    .filter((i) => !(i.kind === 'field' && answered.has(i.key))) as unknown as Array<Record<string, unknown>>;
+}
+
 /** The stored answers as a staff screen may see them: last four digits, never the number. */
 function maskProfile(profile: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
   if (!profile) return null;
@@ -292,6 +446,18 @@ export interface UpdateApplicationDraftDto {
    * not reach half of it.
    */
   record?: Record<string, unknown>;
+  /**
+   * People who can vouch for the candidate — up to three, at least one with a number before
+   * submit. Held under `extendedProfile.references`, which promotion replays onto the record.
+   * Normalized on the way in (trimmed, empties dropped, capped), so no door stores a fourth
+   * reference or a number with no name.
+   */
+  references?: Array<Record<string, unknown>>;
+  /**
+   * Who referred them — the source reference, under `extendedProfile.sourceReferral`. The
+   * candidate may write it only while HR has not (`candidateMayEditSourceReferral`).
+   */
+  sourceReferral?: unknown;
 }
 
 /**
@@ -652,6 +818,8 @@ export class RegistrationApplicationService {
       mobile: string;
       email?: string | null;
       organizationId?: string | null;
+      /** Who referred them, as HR recorded it at intake — already in the shared shape. */
+      sourceReferral?: SourceReferral | null;
     },
     manager?: EntityManager,
   ): Promise<{ application: AssayerApplicationEntity; rawToken: string }> {
@@ -662,6 +830,7 @@ export class RegistrationApplicationService {
       email: input.email ?? null,
       organizationId: input.organizationId ?? null,
       status: ApplicationStatus.DRAFT,
+      ...(input.sourceReferral ? { extendedProfile: { sourceReferral: input.sourceReferral } as never } : {}),
     });
     const rawToken = await this.mintToken(application);
     const saved = manager
@@ -725,7 +894,7 @@ export class RegistrationApplicationService {
    * pipeline with no record of why they are in it.
    */
   async openWithoutInterview(
-    input: { fullName: string; mobile: string; email?: string | null; reason: string },
+    input: { fullName: string; mobile: string; email?: string | null; reason: string; sourceReferral?: unknown },
     actor: { id: string; name?: string | null; organizationId?: string | null },
   ): Promise<{ applicationId: string; emailDelivery: OutboundMessageReceipt | null; inviteLink: string }> {
     const fullName = (input.fullName ?? '').trim();
@@ -733,6 +902,8 @@ export class RegistrationApplicationService {
     const reason = (input.reason ?? '').trim();
     if (!fullName) throw new BadRequestException('Candidate name is required.');
     if (!mobile) throw new BadRequestException('Mobile number is required.');
+    const { referral: sourceReferral, error: referralError } = normalizeSourceReferral(input.sourceReferral, 'HR');
+    if (referralError) throw new BadRequestException(referralError);
     if (reason.length < MIN_NO_INTERVIEW_REASON_LENGTH) {
       throw new BadRequestException(
         'Say why this candidate is being added without an interview. The reason is stamped on '
@@ -772,6 +943,7 @@ export class RegistrationApplicationService {
       mobile,
       email: input.email?.trim() || null,
       organizationId: actor.organizationId ?? null,
+      sourceReferral,
     });
 
     /*
@@ -820,8 +992,9 @@ export class RegistrationApplicationService {
    * application sits in DRAFT, the roster never gains the person, and the only route back was a
    * second interview record.
    *
-   * It mints a new token rather than re-sending the old one, for the same reason `requestMoreInfo`
-   * does: only the hash was ever stored, so the original raw token no longer exists anywhere.
+   * It mints a new token rather than re-sending the old one because only the hash was ever
+   * stored, so the original raw token no longer exists anywhere. This stays the ONE place that
+   * rotates the link: `requestMoreInfo` deliberately keeps the candidate's link working instead.
    */
   async resendInvite(id: string, actorUserId: string): Promise<{ application: AssayerApplicationEntity; emailDelivery: OutboundMessageReceipt | null; inviteLink: string }> {
     const application = await this.applications.findOne({ where: { id } });
@@ -874,6 +1047,11 @@ export class RegistrationApplicationService {
     otpVerified: boolean;
     /** What the form must show, and agree to, before it collects anything. */
     consentNotice: ConsentNotice & { grievanceContact: string };
+    /**
+     * Exactly what HR asked for, when the link reopened as `AWAITING_INFO` — the to-do list the
+     * form renders instead of one free-text banner. Empty on a first fill and once submitted.
+     */
+    infoRequests: ApplicationInfoRequestItem[];
   }> {
     const application = await this.findByRawToken(rawToken);
     if (!application.tokenConsumedAt) {
@@ -910,6 +1088,7 @@ export class RegistrationApplicationService {
         // Still shown after submission: what they agreed to is theirs to re-read, and the page
         // offers withdrawal from here until a decision is made.
         consentNotice: await this.consentNotice(),
+        infoRequests: [],
       };
     }
 
@@ -921,6 +1100,7 @@ export class RegistrationApplicationService {
       documentsRequested: documentsRequestedFor(application.employmentCategory),
       otpVerified: Boolean(verified),
       consentNotice: await this.consentNotice(),
+      infoRequests: readApplicationInfoRequests(application.infoRequests),
     };
   }
 
@@ -1194,7 +1374,7 @@ export class RegistrationApplicationService {
         throw new ConflictException(conflict.message);
       }
     }
-    this.applyDraftPatch(application, patch);
+    this.applyDraftPatch(application, patch, 'CANDIDATE');
     const stored = await this.applications.save(application);
     /*
       The candidate gets their own answers back readable.
@@ -1216,7 +1396,16 @@ export class RegistrationApplicationService {
    * this loop, and the duplication is most of why it was deleted again a day later: two places
    * deciding which fields an application may hold is two places to forget one.
    */
-  private applyDraftPatch(application: AssayerApplicationEntity, patch: UpdateApplicationDraftDto): void {
+  private applyDraftPatch(
+    application: AssayerApplicationEntity,
+    patch: UpdateApplicationDraftDto,
+    /** Whose door this came through — decides whether HR's source referral may be changed. */
+    by: ReferralRecordedBy,
+  ): void {
+    // Snapshot what HR asked to have corrected BEFORE the patch lands, so an ask is dropped only
+    // when its value actually changed — see `dropAnsweredFieldAsks` below.
+    const fieldAsks = readApplicationInfoRequests(application.infoRequests).filter((i) => i.kind === 'field');
+    const before = fieldAsks.length > 0 ? askedFieldValues(application, fieldAsks) : null;
     for (const key of EDITABLE_DRAFT_FIELDS) {
       const incoming = (patch as Record<string, unknown>)[key];
       if (incoming === undefined) continue;
@@ -1234,6 +1423,26 @@ export class RegistrationApplicationService {
       }
     }
     this.mergeRecordFields(application, patch.record);
+    if (patch.references !== undefined) {
+      const { references, error } = normalizeApplicationReferences(patch.references);
+      if (error) throw new BadRequestException(error);
+      const profile = ((application.extendedProfile ?? {}) as Record<string, unknown>);
+      profile.references = references;
+      application.extendedProfile = profile as never;
+    }
+    if (patch.sourceReferral !== undefined) {
+      const profile = ((application.extendedProfile ?? {}) as Record<string, unknown>);
+      const current = (profile.sourceReferral ?? null) as SourceReferral | null;
+      // HR's entry is HR's: the candidate sees it on their form but does not change it.
+      if (by === 'CANDIDATE' && !candidateMayEditSourceReferral(current)) {
+        throw new BadRequestException('HR has recorded who referred you. Ask them if it needs changing.');
+      }
+      const { referral, error } = normalizeSourceReferral(patch.sourceReferral, by);
+      if (error) throw new BadRequestException(error);
+      if (referral) profile.sourceReferral = referral; else delete profile.sourceReferral;
+      application.extendedProfile = profile as never;
+    }
+    if (before) dropAnsweredFieldAsks(application, fieldAsks, before);
   }
 
   /**
@@ -1264,7 +1473,7 @@ export class RegistrationApplicationService {
     }
 
     this.stampDeskAuthorship(application, actorUserId);
-    this.applyDraftPatch(application, patch);
+    this.applyDraftPatch(application, patch, 'HR');
 
     /*
       The three groups only a desk decides, and the reason this method is worth having.
@@ -1277,7 +1486,6 @@ export class RegistrationApplicationService {
     */
     const profile = (application.extendedProfile ?? {}) as Record<string, unknown>;
     if (patch.commercial !== undefined) profile.commercial = patch.commercial;
-    if (patch.references !== undefined) profile.references = patch.references;
     if (patch.empanelments !== undefined) profile.empanelments = patch.empanelments;
     application.extendedProfile = profile as never;
     application.updatedBy = actorUserId;
@@ -1392,9 +1600,17 @@ export class RegistrationApplicationService {
 
     const invalid: string[] = [];
     const filled = (v: unknown) => v != null && String(v).trim() !== '';
+    // Stored as its digits, so the record, the duplicate check and the passbook comparison all see
+    // one spelling of one account. Normalised before judging, so a pasted "1234 5678 9012" passes.
+    if (typeof accepted.bankAccountNumber === 'string' && filled(accepted.bankAccountNumber)) {
+      accepted.bankAccountNumber = normaliseBankAccountNumber(accepted.bankAccountNumber);
+    }
     if (filled(accepted.panNumber) && !isValidPan(accepted.panNumber)) invalid.push('PAN');
     if (filled(accepted.ifscCode) && !isValidIfsc(accepted.ifscCode)) invalid.push('IFSC');
     if (filled(accepted.aadhaarNumber) && !isValidAadhaar(accepted.aadhaarNumber)) invalid.push('Aadhaar');
+    if (filled(accepted.bankAccountNumber) && !isBankAccountNumber(String(accepted.bankAccountNumber))) {
+      throw new BadRequestException(BANK_ACCOUNT_NUMBER_RULE);
+    }
     if (invalid.length > 0) {
       throw new BadRequestException(
         `Check the ${invalid.join(' and ')} — ${invalid.length > 1 ? 'those do' : 'that does'} not look right.`,
@@ -1575,7 +1791,9 @@ export class RegistrationApplicationService {
       allowed: SCAN_UPLOAD_TYPES,
       hint: 'Photograph the document in better light rather than at higher resolution.',
     });
-    return this.attachDocumentRow(application, requirement, file);
+    const row = await this.attachDocumentRow(application, requirement, file);
+    await this.clearResubmittedFlag(application, row);
+    return row;
   }
 
   /**
@@ -1609,6 +1827,7 @@ export class RegistrationApplicationService {
     this.stampDeskAuthorship(application, actorUserId);
     await this.applications.save(application);
     const row = await this.attachDocumentRow(application, requirement, file);
+    await this.clearResubmittedFlag(application, row);
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: 'ASSAYER_APPLICATION_DOCUMENT_ATTACHED',
@@ -1692,6 +1911,27 @@ export class RegistrationApplicationService {
     const row = existing ?? this.applicationDocuments.create({ applicationId: application.id, requirement, filePaths: [] });
     row.filePaths = [...(row.filePaths ?? []), key];
     return this.applicationDocuments.save(row);
+  }
+
+  /**
+   * A fresh scan answers its own send-back: the requirement stops being flagged the moment new
+   * bytes land — whether the candidate uploaded them on their link or the desk attached them —
+   * and the matching ask leaves the candidate's to-do list. Without this a resubmission would
+   * inherit its own rejection and HR's queue would keep demanding what already arrived.
+   */
+  private async clearResubmittedFlag(
+    application: AssayerApplicationEntity,
+    row: AssayerApplicationDocumentEntity,
+  ): Promise<void> {
+    if (row.reviewStatus === ApplicationDocumentReviewStatus.NEEDS_RESUBMIT) {
+      row.reviewStatus = ApplicationDocumentReviewStatus.PENDING;
+      row.rejectionReason = null;
+      row.rejectionNote = null;
+      row.reviewedBy = null;
+      row.reviewedAt = null;
+      await this.applicationDocuments.save(row);
+    }
+    await this.dropInfoRequestItem(application, 'document', row.requirement);
   }
 
   // ── Submit ───────────────────────────────────────────────────────────────
@@ -1784,11 +2024,45 @@ export class RegistrationApplicationService {
     if (!application.consentAcceptedAt) {
       throw new BadRequestException('You must accept the declaration and consent before submitting.');
     }
+    // At least one person who can vouch for them, reachable by phone. Checked here rather than
+    // at approval because the candidate is the one who knows these people — HR chasing referees
+    // the candidate never named is the delay this rule exists to prevent.
+    const storedReferences = ((application.extendedProfile ?? {}) as Record<string, unknown>).references;
+    const referencesProblem = referenceSubmitProblem(
+      Array.isArray(storedReferences) ? storedReferences as never : [],
+    );
+    if (referencesProblem) {
+      throw new BadRequestException(referencesProblem);
+    }
+    /*
+      The documents nobody may file without — the passbook, today. Checked against what is actually
+      attached (a row with a file on it), not against the form's own tick, because the form can be
+      resumed, reloaded or filled by the desk.
+    */
+    const attached = await this.applicationDocuments.find({ where: { applicationId: application.id } });
+    const missingDocs = REGISTRATION_REQUIRED_DOCUMENTS.filter(
+      (req) => !attached.some((d) => d.requirement === req && (d.filePaths?.length ?? 0) > 0),
+    );
+    if (missingDocs.length > 0) {
+      throw new BadRequestException(
+        `Upload ${missingDocs.map((d) => ONBOARDING_DOCUMENT_LABELS[d as OnboardingDocument] ?? d).join(' and ')} `
+        + 'before submitting — the page showing your name, account number and IFSC. A cancelled '
+        + 'cheque or the first page of a bank statement is fine if you have no passbook.',
+      );
+    }
     // The checks that used to arrive as review-queue findings days later.
     await this.assertRegistrationIsAcceptable(application);
 
     const wasAwaitingInfo = application.status === ApplicationStatus.AWAITING_INFO;
     application.status = ApplicationStatus.PENDING_VALIDATION;
+    /*
+      Resubmitting settles every field ask: the candidate has had the form in front of them and
+      handed it back, and HR now reads the whole thing again — a field they left as it was is their
+      answer to that ask, not an item still owed. A document ask stays while its scan is still the
+      one that was sent back, because that genuinely is outstanding and HR should see it at once.
+    */
+    const remainingAsks = readApplicationInfoRequests(application.infoRequests).filter((i) => i.kind === 'document');
+    application.infoRequests = (remainingAsks.length > 0 ? remainingAsks : null) as never;
     const saved = await this.applications.save(application);
 
     const interview = saved.interviewId
@@ -1909,30 +2183,43 @@ export class RegistrationApplicationService {
      * approving somebody could not see that the interviewer had written "could not tell 22K from
      * 18K on the touchstone", and had to go and ask. Null when nobody interviewed them.
      */
-    interview: {
-      outcome: string;
-      notes: string | null;
-      interviewedAt: Date;
-      interviewedByName: string | null;
-    } | null;
+    interview: InterviewSummary | null;
+    /**
+     * Exactly what HR ticked the last time they asked for more — one entry per document or
+     * field, each with its own instruction. The review drawer renders this as the outstanding
+     * checklist, so a second reviewer sees what was already asked instead of asking it again.
+     */
+    infoRequests: ApplicationInfoRequestItem[];
   }> {
     const application = await this.applications.findOne({ where: { id } });
     if (!application) throw new NotFoundException('Application not found.');
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
 
     let invitedMobile: string | null = null;
-    let interviewSummary: {
-      outcome: string; notes: string | null; interviewedAt: Date; interviewedByName: string | null;
-    } | null = null;
+    let interviewSummary: InterviewSummary | null = null;
     if (application.interviewId) {
       const interview = await this.interviews.findOne({ where: { id: application.interviewId } });
       invitedMobile = interview?.mobile ?? null;
       if (interview) {
+        // The attempt before, when they passed only on being interviewed again — the reviewer
+        // should know the first one did not go their way, and be able to read why.
+        const earlier = interview.previousInterviewId
+          ? await this.interviews.findOne({ where: { id: interview.previousInterviewId } })
+          : null;
         interviewSummary = {
+          id: interview.id,
           outcome: interview.outcome,
           notes: interview.notes ?? null,
           interviewedAt: interview.interviewedAt,
           interviewedByName: interview.interviewedByName ?? null,
+          attachments: interview.attachments ?? [],
+          earlier: earlier
+            ? {
+              id: earlier.id, outcome: earlier.outcome, notes: earlier.notes ?? null,
+              interviewedAt: earlier.interviewedAt, interviewedByName: earlier.interviewedByName ?? null,
+              attachments: earlier.attachments ?? [],
+            }
+            : null,
         };
       }
     }
@@ -1953,6 +2240,7 @@ export class RegistrationApplicationService {
         ? { message: conflict.detail, assayerCode: conflict.assayerCode, displayName: conflict.displayName }
         : null,
       openedWithoutInterview: readOpenedWithoutInterview(application),
+      infoRequests: readApplicationInfoRequests(application.infoRequests),
     };
   }
 
@@ -2008,25 +2296,210 @@ export class RegistrationApplicationService {
     return saved;
   }
 
-  async requestMoreInfo(id: string, actorUserId: string, notes: string): Promise<AssayerApplicationEntity> {
-    if (!notes?.trim()) {
+  /**
+   * Keep the candidate's SAME link usable: extend its expiry rather than minting a new token.
+   *
+   * Rotating the token on every request-for-info is what broke resubmission — the link the
+   * candidate already holds (or has open in a tab) stopped working at exactly the moment they
+   * were asked to use it. The token stays a bearer credential with an expiry; this just gives
+   * it a fresh window from the moment HR asks for more.
+   */
+  private async ensureInviteUsable(application: AssayerApplicationEntity): Promise<void> {
+    const expiryHours = await this.settings.getNumber('registration.inviteExpiryHours', 72);
+    const freshUntil = Date.now() + expiryHours * 60 * 60 * 1000;
+    if (!application.tokenExpiresAt || application.tokenExpiresAt.getTime() < freshUntil) {
+      application.tokenExpiresAt = new Date(freshUntil);
+    }
+  }
+
+  /**
+   * Tell the candidate exactly what HR ticked — one line per document or field — without any
+   * link in it. The candidate reopens the link they already hold; there is no raw token left
+   * to embed (only its hash was ever stored), and minting a new one would kill the old link.
+   */
+  private async sendInfoRequestedEmail(
+    application: AssayerApplicationEntity,
+    items: ApplicationInfoRequestItem[],
+    overallNote: string | null,
+    actorUserId: string,
+  ): Promise<void> {
+    if (!application.email) return;
+    const lines = items.map((item) => `• ${item.label}: ${item.message}`);
+    if (overallNote) lines.push(`Note from HR: ${overallNote}`);
+    await this.emails.queue({
+      kind: 'APPLICATION_INFO_REQUESTED',
+      to: application.email,
+      content: {
+        template: 'application-info-requested',
+        data: {
+          fullName: application.fullName || 'Candidate',
+          greeting: application.fullName ? `Hello ${application.fullName},` : 'Hello,',
+          itemsText: lines.join('\n'),
+          supportEmail: 'recruitment@sumeruglobal.com',
+          logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+          companyName: 'Sumeru Global',
+        },
+      },
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: application.id,
+      requestedBy: actorUserId,
+    });
+  }
+
+  /** Drop one resolved ask from the stored to-do list (a doc re-uploaded, a field corrected). */
+  private async dropInfoRequestItem(
+    application: AssayerApplicationEntity,
+    kind: 'document' | 'field',
+    key: string,
+  ): Promise<void> {
+    const existing = readApplicationInfoRequests(application.infoRequests);
+    if (!existing.some((item) => item.kind === kind && item.key === key)) return;
+    application.infoRequests = existing.filter(
+      (item) => !(item.kind === kind && item.key === key),
+    ) as unknown as Array<Record<string, unknown>>;
+    await this.applications.save(application);
+  }
+
+  /**
+   * HR's verdict on ONE document requirement inside a hiring application.
+   *
+   * Approving records that the scans were actually looked at. Sending back flags the requirement
+   * (`NEEDS_RESUBMIT` with a structured reason) and reopens the candidate's SAME link as
+   * `AWAITING_INFO` with that item on their to-do list — one blurry scan no longer costs a whole
+   * application rejection, and a missing requirement can be asked for the same way (a row with no
+   * scans yet is created to carry the verdict).
+   */
+  async reviewApplicationDocument(
+    id: string,
+    requirement: OnboardingDocument,
+    decision: 'APPROVED' | 'NEEDS_RESUBMIT',
+    opts: { reason?: string; note?: string },
+    actorUserId: string,
+  ): Promise<AssayerApplicationDocumentEntity> {
+    const application = await this.mustBeReviewable(id);
+    if (!Object.values(OnboardingDocument).includes(requirement)) {
+      throw new BadRequestException('That is not a recognised document type.');
+    }
+    if (decision !== 'APPROVED' && decision !== 'NEEDS_RESUBMIT') {
+      throw new BadRequestException('Decision must be APPROVED or NEEDS_RESUBMIT.');
+    }
+    let row = await this.applicationDocuments.findOne({ where: { applicationId: id, requirement } });
+    if (decision === 'APPROVED') {
+      if (!row || (row.filePaths ?? []).length === 0) {
+        throw new BadRequestException('There is no scan to approve for this document yet.');
+      }
+      row.reviewStatus = ApplicationDocumentReviewStatus.APPROVED;
+      row.rejectionReason = null;
+      row.rejectionNote = null;
+      row.reviewedBy = actorUserId;
+      row.reviewedAt = new Date();
+      const saved = await this.applicationDocuments.save(row);
+      await this.dropInfoRequestItem(application, 'document', requirement);
+      await this.auditService.recordEventSafe({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSAYER_APPLICATION_DOCUMENT_APPROVED',
+        entityType: 'ASSAYER_APPLICATION',
+        entityId: application.id,
+        userId: actorUserId,
+        remarks: `${requirement} scans approved.`,
+      });
+      return saved;
+    }
+
+    const reason = opts.reason?.trim() || null;
+    if (reason && !isValidRejectionReason(reason)) {
+      throw new BadRequestException('That is not a recognised send-back reason.');
+    }
+    const note = opts.note?.trim() || '';
+    if (note.length > 1000) {
+      throw new BadRequestException('Keep the send-back note under 1000 characters.');
+    }
+    const guidance = reason ? DOCUMENT_REJECTION_GUIDANCE[reason as DocumentRejectionReason] : '';
+    const message = note || guidance || 'Please re-upload a clear scan of this document.';
+    row ??= this.applicationDocuments.create({ applicationId: id, requirement, filePaths: [] });
+    row.reviewStatus = ApplicationDocumentReviewStatus.NEEDS_RESUBMIT;
+    row.rejectionReason = reason;
+    row.rejectionNote = note || null;
+    row.reviewedBy = actorUserId;
+    row.reviewedAt = new Date();
+    const saved = await this.applicationDocuments.save(row);
+
+    const item: ApplicationInfoRequestItem = {
+      kind: 'document',
+      key: requirement,
+      label: ONBOARDING_DOCUMENT_LABELS[requirement] ?? requirement,
+      message,
+      reason,
+    };
+    application.status = ApplicationStatus.AWAITING_INFO;
+    application.reviewedBy = actorUserId;
+    application.reviewedAt = new Date();
+    application.infoRequests = mergeInfoRequestItems(
+      readApplicationInfoRequests(application.infoRequests), [item],
+    ) as unknown as Array<Record<string, unknown>>;
+    await this.ensureInviteUsable(application);
+    await this.applications.save(application);
+
+    await this.sendInfoRequestedEmail(application, [item], null, actorUserId);
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_APPLICATION_DOCUMENT_SENT_BACK',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: application.id,
+      userId: actorUserId,
+      remarks: `${item.label} sent back: ${message}`,
+    });
+    return saved;
+  }
+
+  /**
+   * Ask the candidate for exactly what is needed — ticked documents and fields, each with its
+   * own instruction — on the SAME link they already hold.
+   *
+   * Accepts the old plain-string call as `{notes}`. At least one of an overall note, a document
+   * or a field is required; a request that names nothing real is refused by `buildInfoRequestItems`
+   * rather than reopening the link with an empty checklist.
+   */
+  async requestMoreInfo(
+    id: string,
+    actorUserId: string,
+    notesOrInput: string | StructuredInfoRequestInput,
+  ): Promise<AssayerApplicationEntity> {
+    const input: StructuredInfoRequestInput =
+      typeof notesOrInput === 'string' ? { notes: notesOrInput } : (notesOrInput ?? {});
+    const overallNote = input.notes?.trim() || '';
+    const items = buildInfoRequestItems(input);
+    if (!overallNote && items.length === 0) {
       throw new BadRequestException('Say what is needed from the candidate before requesting more information.');
     }
     const application = await this.mustBeReviewable(id);
     application.status = ApplicationStatus.AWAITING_INFO;
     application.reviewedBy = actorUserId;
     application.reviewedAt = new Date();
-    application.reviewNotes = notes.trim();
-    // A fresh link, not a resend of the old one — only the token's hash was ever stored, and
-    // rotating it on every request-for-info is the more secure choice anyway.
-    const rawToken = await this.mintToken(application);
+    application.reviewNotes = overallNote || items.map((item) => `${item.label}: ${item.message}`).join('\n');
+    application.infoRequests = mergeInfoRequestItems(
+      readApplicationInfoRequests(application.infoRequests), items,
+    ) as unknown as Array<Record<string, unknown>>;
+
+    for (const item of items) {
+      if (item.kind !== 'document') continue;
+      const requirement = item.key as OnboardingDocument;
+      const existing = await this.applicationDocuments.findOne({ where: { applicationId: id, requirement } });
+      const row = existing
+        ?? this.applicationDocuments.create({ applicationId: id, requirement, filePaths: [] });
+      row.reviewStatus = ApplicationDocumentReviewStatus.NEEDS_RESUBMIT;
+      row.rejectionReason = item.reason ?? null;
+      row.rejectionNote = null;
+      row.reviewedBy = actorUserId;
+      row.reviewedAt = new Date();
+      await this.applicationDocuments.save(row);
+    }
+
+    // The SAME link, given a fresh window — see `ensureInviteUsable` for why no new token.
+    await this.ensureInviteUsable(application);
     const saved = await this.applications.save(application);
 
-    await this.sendInviteEmail(
-      saved,
-      rawToken,
-      `HR needs something more before your application can proceed: ${saved.reviewNotes}\n\nUse the link below to continue where you left off.`,
-    );
+    await this.sendInfoRequestedEmail(saved, items, overallNote || null, actorUserId);
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: 'ASSAYER_APPLICATION_INFO_REQUESTED',
@@ -2059,6 +2532,7 @@ export class RegistrationApplicationService {
       commercial?: Record<string, unknown>;
       references?: Array<Record<string, unknown>>;
       empanelments?: Array<{ clientId: string; status: string; statusReason?: string }>;
+      sourceReferral?: SourceReferral | null;
     } | null;
     if (!profile) return { gaps: [], failedGroups: [] };
 
@@ -2114,11 +2588,24 @@ export class RegistrationApplicationService {
       }
     }
 
+    // Who referred them, kept as whoever recorded it — HR's entry stays HR's, the candidate's theirs.
+    if (profile.sourceReferral) {
+      try {
+        await this.assayerService.setSourceReferral(
+          assayerId, profile.sourceReferral, actorUserId, profile.sourceReferral.recordedBy ?? 'HR',
+        );
+      } catch (err: any) {
+        gaps.push(`who referred them (${err?.message ?? 'refused'})`);
+      }
+    }
+
     for (const reference of profile.references ?? []) {
       try {
         await this.rosterRecords.saveReference(assayerId, reference as never, actorUserId);
       } catch (err: any) {
-        gaps.push(`reference ${(reference as { name?: string }).name ?? ''} (${err?.message ?? 'refused'})`);
+        // `fullName` — the key every door stores. This read `.name`, which no reference has ever
+        // carried, so the desk was told "reference  (refused)" with the one useful word missing.
+        gaps.push(`reference ${(reference as { fullName?: string }).fullName ?? ''} (${err?.message ?? 'refused'})`);
       }
     }
 
@@ -2402,6 +2889,20 @@ export class RegistrationApplicationService {
     const assayer = await this.assayerService.create(createDto, actorUserId, application.organizationId ?? organizationId, actorRoles);
 
     /**
+     * A hired candidate skips INVITED and starts at document verification.
+     *
+     * INVITED means "on the roster, nothing reviewed yet" — true for somebody the desk typed in
+     * directly, but not for a candidate HR just reviewed, asked, and approved through the hiring
+     * queue (including per-document send-backs). Landing them at INVITED asked the desk to verify
+     * the same scans twice: once implicitly to leave INVITED, once at document verification.
+     * The hop is guarded rather than assumed so a retried promotion (same idempotency key, person
+     * already moved on) does not fail on a transition that already happened.
+     */
+    if (assayer.lifecycleStatus === AssayerLifecycleStatus.INVITED) {
+      await this.assayerService.verifyDocuments(assayer.id, actorUserId);
+    }
+
+    /**
      * The declaration follows the person.
      *
      * Submitting is refused without it, and it was then left behind on a row whose purpose ends at
@@ -2456,6 +2957,8 @@ export class RegistrationApplicationService {
       both places and the desk would have to ask the person for it again.
     */
     clearAppliedSecrets(application, failedGroups);
+    // The to-do list died with the decision: every ask was either answered or judged.
+    application.infoRequests = null;
     await this.applications.save(application);
 
     /**
@@ -2563,6 +3066,19 @@ export class RegistrationApplicationService {
       });
     }
 
+    /**
+     * The referees hear now — the moment they became references FOR somebody, which is when HR's
+     * call to them becomes possible (the record's "Spoken to" lives here, not on the application).
+     * After the approval letter, because the candidate should not learn their referees were
+     * contacted before learning they were hired. Each referee's outcome is recorded on their own
+     * row for the record to show; nothing here can refuse the hire.
+     */
+    try {
+      await this.rosterRecords.notifyUntoldReferees(assayer.id, actorUserId);
+    } catch (err) {
+      this.logger.warn(`Application ${application.id} approved, but its referees could not be told: ${(err as Error)?.message ?? err}`);
+    }
+
     return { assayer, gaps: profileGaps };
   }
 }
@@ -2579,4 +3095,16 @@ function inviteDeliveryRemark(email: OutboundMessageReceipt | null, address: str
     return `the invite email to ${address} could not be queued, so the link was handed to the desk.`;
   }
   return `the invite email to ${address} was queued, and the link was also handed to the desk.`;
+}
+
+/** An interview as the application review shows it: the verdict, the notes and the test papers. */
+export interface InterviewSummary {
+  id: string;
+  outcome: string;
+  notes: string | null;
+  interviewedAt: Date;
+  interviewedByName: string | null;
+  attachments: InterviewAttachment[];
+  /** The interview that did not pass before this one, when there was one. */
+  earlier?: Omit<InterviewSummary, 'earlier'> | null;
 }

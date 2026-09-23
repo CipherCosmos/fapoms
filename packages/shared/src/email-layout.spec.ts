@@ -309,3 +309,11 @@ describe('shadeColor', () => {
     expect(shadeColor('#12', -18)).toBe('#12');
   });
 });
+
+describe('a callout that is a list', () => {
+  it('keeps one item per line instead of running them into a paragraph', () => {
+    const html = renderEmailLayout({ title: 'T', bodyLines: ['Hi'], callout: { title: 'Asked for', text: '• PAN card: retake\n• IFSC: fix it' } });
+    expect(html).toMatch(/white-space:pre-line;">• PAN card: retake\n• IFSC: fix it<\/div>/);
+  });
+});
+

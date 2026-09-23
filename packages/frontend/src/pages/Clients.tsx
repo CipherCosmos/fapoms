@@ -326,7 +326,7 @@ const Clients: React.FC = () => {
         <FilterSelect value={clientType} onChange={(v) => setClientType(v)} options={[{ value: '', label: 'All types' }, ...CLIENT_TYPE_FILTERS.map((t) => ({ value: t, label: clientTypeLabel(t) }))]} label="Type" />
         <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={[{ value: '', label: 'All priorities' }, ...PRIORITY_FILTERS.map((p) => ({ value: p, label: priorityLabel(p) }))]} label="Priority" />
         {(status || clientType || priority || debouncedSearch) && (
-          <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)' }}>Clear</button>
+          <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} title="Clear search and all filters" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)' }}>Clear</button>
         )}
       </FilterBar>
 
@@ -357,7 +357,7 @@ const Clients: React.FC = () => {
                 placeholder="Change all to…"
                 compact
               />
-              <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+              <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} title={bulkTarget ? `Move ${selectedClients.length} selected clients to the chosen stage` : 'Pick a stage first, then apply'} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                 {bulkBusy ? `Applying to ${selectedClients.length}…` : `Apply to ${selectedClients.length}`}
               </button>
               {/*
@@ -382,7 +382,7 @@ const Clients: React.FC = () => {
           ) : (
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>No stage is reachable from the selected clients.</span>
           )}
-          <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
+          <button onClick={() => setSelectedIds(new Set())} title="Untick all selected clients" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', marginLeft: 'auto' }}>Clear</button>
         </div>
       )}
 
@@ -392,7 +392,7 @@ const Clients: React.FC = () => {
             <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded} moved</span>
             <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
             {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
-            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+            <button onClick={() => setBulkReport(null)} title="Dismiss this bulk result" className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
           </div>
           {bulkReport.skipped.length > 0 && (
             <div style={{ marginTop: '6px' }}>
@@ -454,7 +454,7 @@ const Clients: React.FC = () => {
               <Building2 size={34} style={{ color: 'var(--danger)', opacity: 0.5 }} />
               <div style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>Couldn&apos;t load clients</div>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>This is not saying there are none — the request failed.</div>
-              <button onClick={() => refetch()} className="btn btn-secondary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={() => refetch()} title="Try loading the client list again" className="btn btn-secondary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <RefreshCw size={13} /> Retry
               </button>
             </div>
@@ -468,7 +468,7 @@ const Clients: React.FC = () => {
                 : 'Add your first client to start booking audits.'}
             </div>
             {!(status || clientType || priority || debouncedSearch) && canManage && (
-              <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={() => setShowCreate(true)} title="Add your first client to start booking audits" className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Plus size={13} /> Add Client
               </button>
             )}
@@ -589,9 +589,10 @@ const Clients: React.FC = () => {
         <Modal open={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)} title="Delete Client" width="400px"
           footer={
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowDeleteConfirm(false)} className="btn btn-secondary">Cancel</button>
+              <button onClick={() => setShowDeleteConfirm(false)} title="Close without deleting" className="btn btn-secondary">Cancel</button>
               <button 
                 onClick={handleDelete} 
+                title={`Permanently delete ${selectedClient.clientCode}`}
                 className="btn btn-primary" 
                 style={{ background: 'var(--danger)', border: 'none' }}
                 disabled={deleteConfirmText !== selectedClient.clientCode}
@@ -613,6 +614,7 @@ const Clients: React.FC = () => {
               value={deleteConfirmText}
               onChange={(e) => setDeleteConfirmText(e.target.value)}
               placeholder={selectedClient.clientCode}
+              title={`Type ${selectedClient.clientCode} to confirm deletion`}
               className="form-control"
               style={{
                 width: '100%',

@@ -1,8 +1,10 @@
 import {
   ApplicationStatus, EmploymentCategory, OnboardingDocument, type ConsentNotice,
+  type ApplicationInfoRequestItem,
 } from '@fapoms/shared';
-import { AppError, fromNetwork, fromResponse } from './errors';
-import { fetchWithTimeout, DEFAULT_TIMEOUT_MS, LONG_TIMEOUT_MS } from './http';
+import { AppError, fromResponse } from './errors';
+import { fetchWithTimeout, LONG_TIMEOUT_MS } from './http';
+import { publicCall } from './public-fetch';
 
 /**
  * The candidate self-registration API — public, unauthenticated, token-in-the-URL-path only.
@@ -58,6 +60,13 @@ export interface RegistrationApplicationDocument {
   applicationId: string;
   requirement: OnboardingDocument;
   filePaths: string[];
+  /**
+   * HR's verdict on this requirement. `NEEDS_RESUBMIT` means this file was sent back — the
+   * form flags it with HR's instruction until a fresh scan lands.
+   */
+  reviewStatus?: string | null;
+  rejectionReason?: string | null;
+  rejectionNote?: string | null;
 }
 
 export interface RegistrationHydrateResult {
@@ -65,6 +74,11 @@ export interface RegistrationHydrateResult {
   documents: RegistrationApplicationDocument[];
   documentsRequested: OnboardingDocument[];
   otpVerified?: boolean;
+  /**
+   * Exactly what HR asked for, when the link reopened — one entry per document or field,
+   * each with its own instruction. Empty on a first fill.
+   */
+  infoRequests?: ApplicationInfoRequestItem[];
   /**
    * What this candidate must be shown, and agree to, before the form collects anything.
    *
@@ -98,46 +112,18 @@ export interface UpdateRegistrationDraftInput {
   employmentCategory?: EmploymentCategory;
   /** Record-shaped answers. Filtered server-side against the one shared allow-list. */
   record?: Record<string, string | number>;
+  /** Who referred them — only while HR has not recorded it. `null` clears their own entry. */
+  sourceReferral?: { type: string; name: string; mobile: string; email: string } | null;
+  /**
+   * People who can vouch for the candidate — up to three. Normalized server-side; submit
+   * refuses an application with nobody ringable on it.
+   */
+  references?: Array<{ fullName?: string; phone?: string; relationship?: string; email?: string }>;
 }
 
 const basePath = (token: string) => `/api/v1/public/registration/${encodeURIComponent(token)}`;
 
-/**
- * `fetch`, a deadline, envelope-unwrapping and error translation — everything `ApiClient.send`
- * does, minus the auth header and the 401→refresh→redirect dance neither applies here.
- */
-async function call<T>(
-  path: string,
-  init?: RequestInit & { timeoutMs?: number },
-): Promise<T> {
-  const isForm = init?.body instanceof FormData;
-  const timeoutMs = init?.timeoutMs ?? (isForm ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
-  const headers: Record<string, string> = {
-    ...(isForm ? {} : { 'Content-Type': 'application/json' }),
-    ...((init?.headers as Record<string, string>) || {}),
-  };
-
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(path, { ...init, headers, timeoutMs });
-  } catch (err) {
-    throw fromNetwork(err);
-  }
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw fromResponse(response.status, body);
-  }
-
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return undefined as unknown as T;
-  }
-
-  const json = await response.json();
-  const enveloped = json !== null && typeof json === 'object' && !Array.isArray(json)
-    && 'success' in json && 'data' in json;
-  return (enveloped ? json.data : json) as T;
-}
+const call = publicCall;
 
 export function hydrateRegistration(token: string): Promise<RegistrationHydrateResult> {
   return call<RegistrationHydrateResult>(basePath(token));

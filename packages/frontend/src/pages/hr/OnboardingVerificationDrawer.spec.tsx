@@ -83,6 +83,12 @@ const identityDoc = (requirement: string, label: string, verificationStatus: str
   filePaths: withScan ? [`assayers/cand-1/${requirement}.jpg`] : [],
 });
 
+/** The background verification report, uploaded. */
+const bgvReport = () => ({
+  requirement: 'BGV_REPORT', label: 'Background verification report', identity: false,
+  id: 'd-bgv', filePaths: ['scans/bgv.pdf'], verificationStatus: null,
+});
+
 const dossier = (over: Record<string, unknown> = {}) => ({
   references: [], empanelments: [], backgroundChecks: [], currentCheck: null, openIssues: [],
   onboarding: [
@@ -181,16 +187,31 @@ describe('Background check step', () => {
 
     expect(await screen.findByTestId('vetting-checks')).toBeInTheDocument();
     expect(await screen.findByText('Background check recorded')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Move to training/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
 
-    current.dossier = dossier({ currentCheck: { verdict: 'CLEAR' } });
+    // The report uploaded, then the clear result recorded against it — both are mandatory, and the
+    // report is the one the CHECK carries (a pass cannot lean on an earlier check's report).
+    current.dossier = dossier({
+      currentCheck: { verdict: 'CLEAR', reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null }] },
+      onboarding: [...dossier().onboarding, bgvReport()],
+    });
     fireEvent.click(screen.getByRole('button', { name: /stub: saved in checks/ }));
 
-    const move = screen.getByRole('button', { name: /Move to training/ });
+    const move = screen.getByRole('button', { name: /Send for approval/ });
     await waitFor(() => expect(move).toBeEnabled());
     fireEvent.click(move);
     await waitFor(() => expect(lifecycleCalls()).toHaveLength(1));
-    expect(JSON.parse(lifecycleCalls()[0][1].body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.TRAINING });
+    // HR's last step is sending them up: a senior approves them before training (2026-09-23).
+    expect(JSON.parse(lifecycleCalls()[0][1].body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.FINAL_APPROVAL });
+  });
+
+  /** Background verification's report is mandatory too: a clear result alone does not let them on. */
+  it('holds them at a clear result until the background verification report is uploaded', async () => {
+    current.dossier = dossier({ currentCheck: { verdict: 'CLEAR' } });
+    renderDrawer();
+
+    expect(await screen.findByText('Background verification report uploaded')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
   });
 
   it('says an adverse result stops them, and offers to stop their joining with a reason', async () => {
@@ -198,7 +219,7 @@ describe('Background check step', () => {
     renderDrawer();
 
     expect(await screen.findByText('Background check result: Criminal case — they cannot move on')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Move to training/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop their joining' }));
     await waitFor(() => expect(lifecycleCalls()).toHaveLength(1));
@@ -232,6 +253,8 @@ describe('Training step — everything Active needs is fillable in the drawer', 
 
     // Bank details, through the same edit rules as the record page.
     fireEvent.change(screen.getByPlaceholderText('e.g. 50100123456789'), { target: { value: '50100123456789' } });
+    // Typed twice — a new account number is not saved on one typing.
+    fireEvent.change(screen.getByPlaceholderText('Type it again, from the passbook'), { target: { value: '50100123456789' } });
     fireEvent.change(screen.getByPlaceholderText('e.g. HDFC0001234'), { target: { value: 'HDFC0001234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save bank details' }));
     await waitFor(() => expect(request).toHaveBeenCalledWith('/assayers/cand-1', expect.objectContaining({ method: 'PUT' })));

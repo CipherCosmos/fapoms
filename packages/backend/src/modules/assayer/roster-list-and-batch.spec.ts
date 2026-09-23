@@ -105,8 +105,9 @@ describe('GET /assayers — the per-row document summary', () => {
     page([{ id: 'a-1' }]);
     const { assayers: [row] } = await service.findAll(1, 20);
     expect((row as any).documents.required).toBe(Object.keys(ONBOARDING_DOCUMENT_COLUMNS).length);
-    // 21 original + BGV_REPORT + the 5 Appraiser Recruitment freelancer/proprietor documents.
-    expect((row as any).documents.required).toBe(27);
+    // 21 original + BGV_REPORT + the 5 Appraiser Recruitment freelancer/proprietor documents
+    // + the police certificate and credit report the re-checks over time are read from (2026-09-23).
+    expect((row as any).documents.required).toBe(29);
   });
 
   /**

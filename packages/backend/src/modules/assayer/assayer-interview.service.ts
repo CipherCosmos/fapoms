@@ -1,8 +1,8 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ApplicationStatus, EventCategory, InterviewOutcome, type OutboundMessageReceipt } from '@fapoms/shared';
-import { AssayerInterviewEntity } from './assayer-interview.entity';
+import { ApplicationStatus, EventCategory, InterviewOutcome, normalizeSourceReferral, type OutboundMessageReceipt } from '@fapoms/shared';
+import { AssayerInterviewEntity, type InterviewAttachment } from './assayer-interview.entity';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { RegistrationApplicationService } from './registration-application.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -15,7 +15,23 @@ export interface RecordInterviewDto {
   email?: string;
   notes?: string;
   outcome: InterviewOutcome;
+  /** The interview that did not pass, when this is the candidate being interviewed again. */
+  previousInterviewId?: string;
+  /** Who referred the candidate — see `normalizeSourceReferral`. */
+  sourceReferral?: unknown;
 }
+
+/** A file already stored and scanned, to be kept with an interview. */
+export interface InterviewFileInput {
+  storageKey: string;
+  fileName: string;
+  mimeType: string | null;
+  size: number | null;
+  sha256: string | null;
+}
+
+/** Enough for a whole test paper and its answer sheets; more is somebody uploading the wrong folder. */
+export const MAX_INTERVIEW_FILES = 10;
 
 /** What may be corrected on a record that has already been written. See `amend`. */
 export interface AmendInterviewDto {
@@ -80,6 +96,30 @@ export class AssayerInterviewService {
 
     const mobile = dto.mobile.trim();
     const isPass = dto.outcome === InterviewOutcome.PASS;
+    // Refused before anything is written, like every other bad field.
+    const { referral: sourceReferral, error: referralError } = normalizeSourceReferral(dto.sourceReferral, 'HR');
+    if (referralError) throw new BadRequestException(referralError);
+
+    /*
+      Interviewed again after not passing. The new interview names the one before it, so the two
+      attempts read as one story — the failed one and its papers stay exactly as they were. Only a
+      "did not pass" can be followed, and only once: a second follow-up would fork the story.
+    */
+    let previous: AssayerInterviewEntity | null = null;
+    if (dto.previousInterviewId) {
+      previous = await this.interviews.findOne({ where: tenantWhere<AssayerInterviewEntity>({ id: dto.previousInterviewId }) });
+      if (!previous) throw new NotFoundException('The earlier interview was not found.');
+      if (previous.outcome !== InterviewOutcome.FAIL) {
+        throw new BadRequestException('Only an interview that did not pass is followed by another.');
+      }
+      const followUp = await this.interviews.findOne({ where: { previousInterviewId: previous.id } });
+      if (followUp) {
+        throw new ConflictException(
+          `${previous.candidateName} has already been interviewed again after this one`
+          + ` (${followUp.outcome === InterviewOutcome.PASS ? 'passed' : 'did not pass'}). Open that interview instead.`,
+        );
+      }
+    }
 
     if (isPass && typeof this.registrationApplications.checkMobileConflict === 'function') {
       const conflict = await this.registrationApplications.checkMobileConflict(mobile, organizationId);
@@ -117,6 +157,9 @@ export class AssayerInterviewService {
         interviewedByName: userName ?? null,
         interviewedAt: new Date(),
         organizationId: organizationId ?? null,
+        previousInterviewId: previous?.id ?? null,
+        attachments: [],
+        sourceReferral,
       }));
 
       if (!isPass) return { interview: created, invite: null };
@@ -132,6 +175,7 @@ export class AssayerInterviewService {
         mobile: created.mobile,
         email: created.email,
         organizationId,
+        sourceReferral: created.sourceReferral,
       }, manager);
       created.spawnedApplicationId = minted.application.id;
       return { interview: await manager.save(AssayerInterviewEntity, created), invite: minted };
@@ -174,7 +218,22 @@ export class AssayerInterviewService {
           : `${interview.candidateName} passed; a registration invite was minted and handed to the desk`
             + `${emailDelivery?.status === 'QUEUED' ? ', and an email with it was queued' : ''}.`
         : `${interview.candidateName} was not taken forward. No registration invite was created.`,
+      ...(previous
+        ? { metadata: { previousInterviewId: previous.id, previousOutcome: previous.outcome, previousInterviewedAt: previous.interviewedAt } }
+        : {}),
     });
+    if (previous) {
+      // Said on the earlier interview's own trail too, so either record leads to the other.
+      await this.auditService.recordEventSafe({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSAYER_INTERVIEW_RETAKEN',
+        entityType: 'ASSAYER_INTERVIEW',
+        entityId: previous.id,
+        userId,
+        remarks: `${previous.candidateName} was interviewed again and ${isPass ? 'passed' : 'did not pass'}.`,
+        metadata: { followUpInterviewId: interview.id, outcome: interview.outcome },
+      });
+    }
 
     return Object.assign(interview, {
       emailDelivery,
@@ -241,6 +300,52 @@ export class AssayerInterviewService {
         + ` → ${saved.candidateName} / ${saved.mobile}.`,
     });
     return saved;
+  }
+
+  /**
+   * Keep a file with an interview — the test paper, an answer sheet, the interviewer's scoring.
+   *
+   * The file has already been through the upload door (type, size, virus scan) and into storage by
+   * the time it gets here. Appended, never replaced, and there is no removal: these are the grounds
+   * for a hiring decision. Either outcome takes them; a "did not pass" needs them most.
+   */
+  async attachFile(id: string, file: InterviewFileInput, userId: string, userName?: string | null): Promise<AssayerInterviewEntity> {
+    const interview = await this.interviews.findOne({ where: tenantWhere<AssayerInterviewEntity>({ id }) });
+    if (!interview) throw new NotFoundException('Interview not found.');
+    const attachments = interview.attachments ?? [];
+    if (attachments.length >= MAX_INTERVIEW_FILES) {
+      throw new BadRequestException(`An interview keeps at most ${MAX_INTERVIEW_FILES} files.`);
+    }
+    const entry: InterviewAttachment = {
+      storageKey: file.storageKey,
+      fileName: file.fileName.slice(0, 200),
+      mimeType: file.mimeType,
+      size: file.size,
+      sha256: file.sha256,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: userId,
+      uploadedByName: userName ?? null,
+    };
+    interview.attachments = [...attachments, entry];
+    const saved = await this.interviews.save(interview);
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_INTERVIEW_FILE_ATTACHED',
+      entityType: 'ASSAYER_INTERVIEW',
+      entityId: saved.id,
+      userId,
+      remarks: `"${entry.fileName}" kept with ${saved.candidateName}'s interview (${saved.outcome === InterviewOutcome.PASS ? 'passed' : 'did not pass'}).`,
+      metadata: { storageKey: entry.storageKey, sha256: entry.sha256, size: entry.size },
+    });
+    return saved;
+  }
+
+  /** The stored key of one of an interview's files, for streaming it. Null when there is none. */
+  async fileKey(id: string, index: number): Promise<{ key: string; fileName: string } | null> {
+    const interview = await this.interviews.findOne({ where: tenantWhere<AssayerInterviewEntity>({ id }) });
+    if (!interview) throw new NotFoundException('Interview not found.');
+    const file = Number.isInteger(index) ? interview.attachments?.[index] : undefined;
+    return file ? { key: file.storageKey, fileName: file.fileName } : null;
   }
 
   /**

@@ -120,6 +120,7 @@ export const AssignmentQueueHeader: React.FC<AssignmentQueueHeaderProps> = ({
             Could not load assignments. Check your connection and try again.
             <button
               onClick={refetchList}
+              title="Try loading the assignment list again"
               className="btn btn-secondary"
               style={{ padding: '3px 10px', fontSize: 'var(--text-2xs)' }}
             >

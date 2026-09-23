@@ -12,7 +12,8 @@ import {
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { queryKeys } from '../../hooks/queryKeys';
-import { canManageAssayers, useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { canManageAssayers, canApproveJoiners, useCurrentRoles, useCurrentPermissions, useCurrentUserId } from '../../hooks/useCurrentRoles';
+import { ApprovalPanel } from './record/ApprovalPanel';
 import { DetailDrawer, AlertBanner, useConfirm } from '../../components/ui';
 import { useToast } from '../../components/ui/Toast';
 import { LocationPicker } from '../../components/LocationPicker';
@@ -34,6 +35,7 @@ const STEPS: Array<{ key: AssayerLifecycleStatus; title: string }> = [
   { key: AssayerLifecycleStatus.INVITED, title: 'Invited' },
   { key: AssayerLifecycleStatus.DOCUMENT_VERIFICATION, title: 'Documents' },
   { key: AssayerLifecycleStatus.BACKGROUND_VERIFICATION, title: 'Background check' },
+  { key: AssayerLifecycleStatus.FINAL_APPROVAL, title: 'Approval' },
   { key: AssayerLifecycleStatus.TRAINING, title: 'Training' },
   { key: AssayerLifecycleStatus.ACTIVE, title: 'Active' },
 ];
@@ -50,6 +52,7 @@ const AREA_FOR_STAGE: Partial<Record<string, WorkArea>> = {
   [AssayerLifecycleStatus.INVITED]: 'documents',
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'documents',
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'background',
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: 'background',
   [AssayerLifecycleStatus.TRAINING]: 'bank',
   [AssayerLifecycleStatus.ACTIVE]: 'bank',
 };
@@ -129,9 +132,18 @@ export function planStep(candidate: Assayer, dossier: AssayerDossier | undefined
     }
     case AssayerLifecycleStatus.BACKGROUND_VERIFICATION:
       return {
-        next: AssayerLifecycleStatus.TRAINING,
-        actionLabel: 'Move to training',
+        // HR's last step: a senior approves them before training (2026-09-23).
+        next: AssayerLifecycleStatus.FINAL_APPROVAL,
+        actionLabel: 'Send for approval',
         items: [
+          // Mandatory, like the check itself: the server will not let them out of this stage without
+          // it — and it asks the CHECK for its own report, not the document, so this does too.
+          {
+            label: 'Background verification report uploaded',
+            done: ((dossier?.currentCheck as { reportFiles?: unknown[] } | null | undefined)?.reportFiles?.length ?? 0) > 0,
+            blocking: true,
+            area: 'background',
+          },
           { label: 'Background check recorded', done: !!verdict && verdict !== 'NOT_CHECKED', blocking: true, area: 'background' },
           {
             label: adverse ? `Background check result: ${VERDICT_LABELS[verdict!] ?? verdict} — they cannot move on` : 'Background check result is clear',
@@ -190,7 +202,10 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { confirm, confirmWithReason, confirmDialog } = useConfirm();
-  const canManage = canManageAssayers(useCurrentRoles());
+  const roles = useCurrentRoles();
+  const canManage = canManageAssayers(roles);
+  const canApprove = canApproveJoiners(roles, useCurrentPermissions());
+  const currentUserId = useCurrentUserId();
 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -254,6 +269,17 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
 
   const advance = async () => {
     if (!plan?.next || !candidate) return;
+    // Sending up for approval carries an optional note for the approver, which opens the round.
+    if (plan.next === AssayerLifecycleStatus.FINAL_APPROVAL) {
+      const sent = await confirmWithReason({
+        title: `Send ${candidate.displayName} for approval?`,
+        message: STAGE_CONSEQUENCE[plan.next] ?? '',
+        confirmLabel: plan.actionLabel,
+        reasonPrompt: { label: 'Note for the approver (optional)', placeholder: 'Anything they should know about this file', optional: true },
+      });
+      if (sent.confirmed) await moveTo(plan.next, sent.reason.trim() || 'Sent for approval before training');
+      return;
+    }
     const ok = await confirm({
       title: `Move ${candidate.displayName} to ${assayerLifecycleLabel(plan.next)}?`,
       message: STAGE_CONSEQUENCE[plan.next] ?? '',
@@ -337,6 +363,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
             <button
               type="button"
               onClick={() => { onClose(); void navigate(`/hr/roster/${candidateId}`); }}
+              title={`Open the full roster record for ${candidate?.displayName ?? 'this candidate'}`}
               style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: 'var(--text-xs)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 500 }}
             >
               Full profile <ExternalLink size={12} />
@@ -346,7 +373,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
         footer={(
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '12px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <button type="button" className="btn btn-secondary" onClick={onClose} style={{ fontSize: 'var(--text-sm)', padding: '8px 16px' }}>
+              <button type="button" className="btn btn-secondary" onClick={onClose} title="Close this verification panel without changing anything" style={{ fontSize: 'var(--text-sm)', padding: '8px 16px' }}>
                 Close
               </button>
               {canManage && canStop && (
@@ -354,6 +381,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                   type="button"
                   disabled={busy}
                   onClick={() => void stopJoining()}
+                  title="Stop this candidate's onboarding — they will not join the roster"
                   style={{ background: 'none', border: 'none', color: 'var(--danger)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '6px 4px' }}
                 >
                   Stop their joining
@@ -372,6 +400,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                   className="btn btn-primary"
                   disabled={busy || outstanding.length > 0}
                   onClick={() => void advance()}
+                  title={outstanding.length > 0 ? `Finish ${outstanding.length} remaining item${outstanding.length === 1 ? '' : 's'} above first` : plan.next ? `Move to: ${plan.next}` : plan.actionLabel}
                   style={{ fontSize: 'var(--text-sm)', padding: '8px 18px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
                   <CheckCircle2 size={15} /> {busy ? 'Saving…' : plan.actionLabel}
@@ -419,6 +448,20 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
           <AlertBanner type="error" message={actionError} onClose={() => setActionError(null)} style={{ marginBottom: '14px' }} />
         )}
 
+        {/* The approval before training — decided here too, so the approver need not leave the list. */}
+        {candidate && (
+          <div style={{ marginBottom: '14px' }}>
+            <ApprovalPanel
+              assayerId={candidate.id}
+              lifecycleStatus={candidate.lifecycleStatus}
+              canManage={canManage}
+              canApprove={canApprove}
+              currentUserId={currentUserId}
+              onChanged={() => { onSuccess(); void refreshAll(); }}
+            />
+          </div>
+        )}
+
         {/* What this step still needs */}
         {candidate && plan && (
           <section
@@ -448,6 +491,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                           <button
                             type="button"
                             onClick={() => setArea(item.area!)}
+                            title={`Jump to the ${item.area} section to complete: ${item.label}`}
                             style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: 0 }}
                           >
                             Go there
@@ -484,6 +528,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                     role="tab"
                     aria-selected={on}
                     onClick={() => setArea(w.key)}
+                    title={`Verify: ${w.label}`}
                     style={{
                       display: 'flex', alignItems: 'center', gap: '5px', padding: '8px 12px', whiteSpace: 'nowrap',
                       fontSize: 'var(--text-xs)', fontWeight: 600, cursor: 'pointer', background: 'none', border: 'none',
@@ -503,6 +548,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                 canManage={canManage}
                 section="documents"
                 lifecycleStatus={stage}
+                person={candidate ?? null}
                 onGoToChecks={() => setArea('background')}
                 onChanged={() => void refreshAll()}
               />
@@ -514,6 +560,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                 canManage={canManage}
                 section="checks"
                 lifecycleStatus={stage}
+                person={candidate ?? null}
                 onGoToDocuments={() => setArea('documents')}
                 onChanged={() => void refreshAll()}
               />
@@ -575,10 +622,10 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                       />
                       {pickedPin && (
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap' }}>
-                          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void savePin()} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+                          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void savePin()} title="Save this map pin as their home location" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                             Save this pin
                           </button>
-                          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setPickedPin(null)} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
+                          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setPickedPin(null)} title="Throw away the moved pin and keep the old location" style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}>
                             Discard
                           </button>
                         </div>

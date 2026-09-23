@@ -5,7 +5,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsEmail, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { SystemRole, ApplicationStatus, OnboardingDocument } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
@@ -22,18 +22,16 @@ const staffUploadMulterOptions = {
 /**
  * The desk filling a candidate's own form in for them.
  *
- * Every box the candidate has, plus the three groups only a desk decides. Those three are left
- * loose for the reason `ApproveApplicationDto` below states: each is filtered server-side against
- * an allow-list, so re-declaring them as twenty decorators here is how the controller drifted from
- * the service in the first place.
+ * Every box the candidate has (references included — they ride the same normalized rule),
+ * plus the two groups only a desk decides. Those two are left loose for the reason
+ * `ApproveApplicationDto` below states: each is filtered server-side against an allow-list,
+ * so re-declaring them as twenty decorators here is how the controller drifted from the
+ * service in the first place.
  */
 export class StaffDraftRequestDto extends UpdateDraftRequestDto {
   /** The rate card, filed in the same draft. */
   @IsOptional() @IsObject()
   commercial?: Record<string, unknown>;
-
-  @IsOptional() @IsArray()
-  references?: Array<Record<string, unknown>>;
 
   /** Client standing, filed in the same draft. */
   @IsOptional() @IsArray()
@@ -81,8 +79,28 @@ class UpdateMobileDto {
 }
 
 class RequestMoreInfoDto {
-  @IsString() @MinLength(1) @MaxLength(2000)
-  notes: string;
+  /** Overall note. Optional now: a request can be only ticked documents/fields. */
+  @IsOptional() @IsString() @MaxLength(2000)
+  notes?: string;
+
+  /** Document requirements to send back, each with its own instruction. */
+  @IsOptional() @IsArray()
+  documents?: Array<{ requirement: string; reason?: string; note?: string }>;
+
+  /** Form fields to correct, each with its own instruction. */
+  @IsOptional() @IsArray()
+  fields?: Array<{ key: string; message?: string }>;
+}
+
+class ReviewApplicationDocumentDto {
+  @IsString() @IsIn(['APPROVED', 'NEEDS_RESUBMIT'])
+  decision: 'APPROVED' | 'NEEDS_RESUBMIT';
+
+  @IsOptional() @IsString() @MaxLength(40)
+  reason?: string;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  note?: string;
 }
 
 /**
@@ -106,6 +124,10 @@ export class OpenWithoutInterviewDto {
 
   @IsString() @MinLength(10) @MaxLength(500)
   reason: string;
+
+  /** Who referred the candidate. Checked in full by the shared `normalizeSourceReferral`. */
+  @IsOptional() @IsObject()
+  sourceReferral?: Record<string, unknown> | null;
 }
 
 /**
@@ -292,8 +314,39 @@ export class HrApplicationsController {
   @Post(':id/request-info')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Ask the candidate for a correction or an additional document' })
+  @ApiOperation({ summary: 'Ask the candidate for specific documents or corrections on the same link' })
   async requestMoreInfo(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RequestMoreInfoDto, @Req() req: any) {
-    return await this.registrationApplications.requestMoreInfo(id, req.user.id, dto.notes);
+    return await this.registrationApplications.requestMoreInfo(id, req.user.id, {
+      notes: dto.notes,
+      documents: (dto.documents ?? []).map((d) => ({
+        requirement: d.requirement as OnboardingDocument,
+        reason: d.reason,
+        note: d.note,
+      })),
+      fields: (dto.fields ?? []).map((f) => ({ key: f.key, message: f.message })),
+    });
+  }
+
+  /**
+   * One document requirement judged on its own — approve the scans, or send just this file
+   * back with a structured reason so the candidate re-uploads it on the same link.
+   */
+  @Post(':id/documents/:requirement/review')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Approve or send back one document of a candidate application' })
+  async reviewDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('requirement') requirement: string,
+    @Body() dto: ReviewApplicationDocumentDto,
+    @Req() req: any,
+  ) {
+    return await this.registrationApplications.reviewApplicationDocument(
+      id,
+      requirement as OnboardingDocument,
+      dto.decision,
+      { reason: dto.reason, note: dto.note },
+      req.user.id,
+    );
   }
 }

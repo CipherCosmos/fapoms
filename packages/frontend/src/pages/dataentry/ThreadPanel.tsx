@@ -230,7 +230,7 @@ export const ThreadPanel: React.FC<Props> = ({
           </button>
         )}
         {!resolved ? (
-          <button onClick={resolve} disabled={busy} className="btn btn-secondary"
+          <button onClick={resolve} disabled={busy} className="btn btn-secondary" title="Accept the answer and close this question"
             style={{ fontSize: 'var(--text-2xs)', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
             {busy ? <Loader2 size={12} className="spin" /> : <CheckCircle2 size={12} />} Mark Resolved
           </button>
@@ -387,7 +387,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 Marked area on page {pending.pageNumber}
                 <div style={{ color: 'var(--text-muted)' }}>the assayer sees this spot on the PDF</div>
               </div>
-              <button onClick={onClearPending} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+              <button onClick={onClearPending} title="Remove the marked area without sending" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
                 <X size={14} />
               </button>
             </div>
@@ -409,6 +409,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void send(); } }}
                 placeholder="What is wrong with this area?"
+                title="Describe what is wrong with the marked area — Enter to send"
                 list="region-flag-suggestions"
                 style={{
                   flex: 1, padding: '8px 10px', fontSize: 'var(--text-xs)', borderRadius: '8px',
@@ -422,6 +423,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
                 placeholder="Ask the assayer…"
+                title="Type your message to the assayer — Enter to send, Shift+Enter for a new line"
                 rows={2}
                 style={{
                   flex: 1, resize: 'none', padding: '8px 10px', fontSize: 'var(--text-xs)', borderRadius: '8px',
@@ -435,7 +437,7 @@ export const ThreadPanel: React.FC<Props> = ({
                 {REGION_FLAG_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
               </datalist>
             )}
-            <button onClick={send} disabled={busy || (!draft.trim() && !pending)} className="btn btn-primary"
+            <button onClick={send} disabled={busy || (!draft.trim() && !pending)} className="btn btn-primary" title={draft.trim() || pending ? 'Send this message to the assayer' : 'Type a message first'}
               style={{ padding: '8px 13px', alignSelf: 'stretch' }}>
               {busy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
             </button>

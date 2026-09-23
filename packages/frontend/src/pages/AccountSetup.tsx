@@ -109,7 +109,7 @@ export const AccountSetup: React.FC<{ token: string }> = ({ token }) => {
             You can sign in now. Nobody else knows this password — not even the person who set up
             your account.
           </p>
-          <PrimaryButton onClick={() => { window.location.href = '/login'; }} style={{ alignSelf: 'flex-start' }}>
+          <PrimaryButton onClick={() => { window.location.href = '/login'; }} title="Go to the sign-in page" style={{ alignSelf: 'flex-start' }}>
             Go to sign in
           </PrimaryButton>
         </Card>
@@ -132,7 +132,7 @@ export const AccountSetup: React.FC<{ token: string }> = ({ token }) => {
         <Field label="New password">
           <div style={{ display: 'flex', gap: '8px' }}>
             <StyledInput
-              
+              title="Choose a password with at least 10 characters, known only to you"
               type={reveal ? 'text' : 'password'}
               value={password}
               autoFocus
@@ -158,7 +158,7 @@ export const AccountSetup: React.FC<{ token: string }> = ({ token }) => {
 
         <Field label="Type it again">
           <StyledInput
-            
+            title="Type the same password again to confirm it matches"
             type={reveal ? 'text' : 'password'}
             value={confirm}
             autoComplete="new-password"
@@ -173,7 +173,7 @@ export const AccountSetup: React.FC<{ token: string }> = ({ token }) => {
           </div>
         )}
 
-        <PrimaryButton onClick={() => void submit()} disabled={!ready} busy={busy} style={{ alignSelf: 'flex-start' }}>
+        <PrimaryButton onClick={() => void submit()} disabled={!ready} busy={busy} title="Save this password and activate your account" style={{ alignSelf: 'flex-start' }}>
           <Check size={16} strokeWidth={3} /> Set my password
         </PrimaryButton>
       </Card>

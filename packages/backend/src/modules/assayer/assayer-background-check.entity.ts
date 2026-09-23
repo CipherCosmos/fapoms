@@ -1,6 +1,6 @@
 import { Entity, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
-import { BackgroundCheckVerdict, RiskGrade, CibilBand } from '@fapoms/shared';
+import { BackgroundCheckVerdict, RiskGrade, CibilBand, CheckType } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 
 /**
@@ -28,6 +28,14 @@ export class AssayerBackgroundCheckEntity extends BaseEntity {
   @JoinColumn({ name: 'assayer_id' })
   assayer: AssayerEntity;
 
+  /**
+   * Which check this was — background verification, police verification, a credit check or an
+   * identity-documents re-check (2026-09-23). They repeat over time on their own schedules; see
+   * `periodic-checks.ts` in shared.
+   */
+  @Column({ name: 'check_type', type: 'varchar', length: 20, default: CheckType.BGV })
+  checkType: CheckType;
+
   @Column({ type: 'varchar', length: 30, default: BackgroundCheckVerdict.NOT_CHECKED })
   verdict: BackgroundCheckVerdict;
 
@@ -50,4 +58,38 @@ export class AssayerBackgroundCheckEntity extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   findings: string | null;
+
+  /**
+   * The report files this check was read from — the evidence for its result, kept per check so a
+   * "not passed" and the later "passed" each point at their own report. Filled when the check is
+   * recorded, from the report files no earlier check has claimed; never changed afterwards, and a
+   * file listed here cannot be removed from the record.
+   */
+  @Column({ name: 'report_files', type: 'jsonb', default: () => "'[]'::jsonb" })
+  reportFiles: BackgroundCheckReportFile[];
+
+  /**
+   * An adverse re-check on somebody already working goes to a senior: PENDING until they decide,
+   * then KEPT or SUSPENDED. Null for everything else — a check at joining is decided by onboarding.
+   */
+  @Column({ name: 'review_status', type: 'varchar', length: 20, nullable: true })
+  reviewStatus: 'PENDING' | 'KEPT' | 'SUSPENDED' | null;
+
+  @Column({ name: 'reviewed_by', type: 'uuid', nullable: true })
+  reviewedBy: string | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt: Date | null;
+
+  @Column({ name: 'review_reason', type: 'text', nullable: true })
+  reviewReason: string | null;
+}
+
+/** One file of a check's report: where it sits on the BGV_REPORT document, and which upload it was. */
+export interface BackgroundCheckReportFile {
+  documentId: string;
+  /** The upload's version row — what the retained-file route serves. Null only without versioning. */
+  versionId: string | null;
+  path: string;
+  uploadedAt: string | null;
 }

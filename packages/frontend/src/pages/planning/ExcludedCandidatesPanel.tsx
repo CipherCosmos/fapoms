@@ -158,7 +158,7 @@ export const ExcludedCandidatesPanel: React.FC<{
 
   return (
     <div style={{ marginTop: '10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface-2)' }}>
-      <button onClick={() => setOpen(!open)}
+      <button onClick={() => setOpen(!open)} title={open ? 'Hide the list of people not eligible for this date' : `Show ${excluded.length} people not eligible for this date`}
         style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', fontSize: 'var(--text-2xs)', fontWeight: 600, cursor: 'pointer' }}>
         <span>
           {excluded.length} assayer{excluded.length > 1 ? 's' : ''} not eligible for this date
@@ -188,7 +188,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                       {e.displayName}
                       {badge && (
-                        <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: badge.bg, color: badge.color, letterSpacing: '0.03em' }}>
+                        <span title={e.kind === 'DATE' ? 'This person is fine on another day, just not this one' : e.kind === 'ONBOARDING' ? 'This person has not finished joining checks yet' : `Excluded by ${badge.label.toLowerCase()} rule`} style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: badge.bg, color: badge.color, letterSpacing: '0.03em' }}>
                           {badge.label}
                         </span>
                       )}
@@ -239,6 +239,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                   {onAssignAnyway && !isOverriding && !isOnboarding && !notOverridable && (
                     <button
                       onClick={() => startOverride(e)}
+                      title={isDate ? `Offer this branch to ${e.displayName} on another date` : `Assign ${e.displayName} anyway with a recorded reason`}
                       className="btn btn-secondary"
                       style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', whiteSpace: 'nowrap', flexShrink: 0, width: 'auto', ...(isDate ? { color: 'var(--success)', borderColor: 'var(--status-active-bg)' } : {}) }}
                     >
@@ -265,6 +266,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                       autoFocus={!isDate}
                       value={reason}
                       onChange={(ev) => setReason(ev.target.value)}
+                      title="Type the reason for overriding this filter, it will be saved on record"
                       // The value starts pre-filled with a suggested justification (see
                       // OVERRIDE_SUGGESTIONS above) that looks identical to operator-typed text
                       // once it's sitting in the box. Selecting it on focus means the first
@@ -280,12 +282,13 @@ export const ExcludedCandidatesPanel: React.FC<{
                     <button
                       onClick={() => confirmOverride(e)}
                       disabled={!reason.trim() || busy || (isDate && !date)}
+                      title={isDate ? `Confirm offer to ${e.displayName} for the chosen date` : `Confirm assigning ${e.displayName} with this reason`}
                       className="btn btn-primary"
                       style={{ padding: '4px 9px', fontSize: 'var(--text-3xs)', width: 'auto', opacity: !reason.trim() || busy || (isDate && !date) ? 0.6 : 1 }}
                     >
                       {busy ? 'Assigning…' : isDate ? `Offer for ${date || '…'}` : 'Confirm'}
                     </button>
-                    <button onClick={() => { setOverrideFor(null); setOverrideError(null); }} className="btn btn-secondary" style={{ padding: '4px 9px', fontSize: 'var(--text-3xs)', width: 'auto' }}>
+                    <button onClick={() => { setOverrideFor(null); setOverrideError(null); }} title="Close without assigning" className="btn btn-secondary" style={{ padding: '4px 9px', fontSize: 'var(--text-3xs)', width: 'auto' }}>
                       Cancel
                     </button>
                   </div>

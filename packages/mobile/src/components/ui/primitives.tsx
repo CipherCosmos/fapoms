@@ -573,6 +573,8 @@ export const Input: React.FC<{
   /** For a multiline field that grows as it is typed into, up to this height. */
   maxHeight?: number;
   maxLength?: number;
+  /** Hides the copy/paste menu — for a box whose point is to be typed, like a confirmation. */
+  contextMenuHidden?: boolean;
   returnKeyType?: 'done' | 'go' | 'next' | 'search' | 'send';
   blurOnSubmit?: boolean;
   onSubmitEditing?: () => void;
@@ -589,7 +591,7 @@ export const Input: React.FC<{
 }> = ({
   label, value, onChangeText, onBlur, onFocus, placeholder, icon, prefix, rightAccessory, hint, error,
   secureTextEntry, keyboardType = 'default', autoCapitalize = 'sentences', autoCorrect = true,
-  multiline, maxHeight, maxLength, returnKeyType, blurOnSubmit, onSubmitEditing, selectTextOnFocus,
+  multiline, maxHeight, maxLength, contextMenuHidden, returnKeyType, blurOnSubmit, onSubmitEditing, selectTextOnFocus,
   size = 'md', readOnly, lockedReason, accessibilityLabel, style, inputRef,
 }) => {
   const t = useTheme();
@@ -649,6 +651,7 @@ export const Input: React.FC<{
         autoCorrect={autoCorrect}
         multiline={multiline}
         maxLength={maxLength}
+        contextMenuHidden={contextMenuHidden}
         returnKeyType={returnKeyType}
         blurOnSubmit={blurOnSubmit}
         onSubmitEditing={onSubmitEditing}

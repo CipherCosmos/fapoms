@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { lookupIfsc, type IfscLookupResult } from '../geo/ifsc-lookup.helper'; import * as xlsx from 'xlsx'; import {   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, stateFromAddressAndPincode, canonicalStateName, canonicalState, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked, canTransitionAssayerLifecycle, EventCategory,
+  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { lookupIfsc, type IfscLookupResult } from '../geo/ifsc-lookup.helper'; import * as xlsx from 'xlsx'; import { isBankAccountNumber, normaliseBankAccountNumber, BANK_ACCOUNT_NUMBER_RULE,   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, stateFromAddressAndPincode, canonicalStateName, canonicalState, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked, canTransitionAssayerLifecycle, EventCategory,
   businessDateKey,
 } from '@fapoms/shared';
 import {
@@ -1207,9 +1207,17 @@ export class RosterImportService {
           + 'has been left as it was rather than overwriting the real one. Reveal the field on the '
           + 'record and copy the full number if it needs changing.',
       });
+    } else if (rawAccount !== null && !isBankAccountNumber(rawAccount)) {
+      // The same shape rule the API now holds every write to — reported, and the old value kept,
+      // like every other unusable cell. A payout destination is not something to guess at.
+      issues.push({
+        sourceSheet: sheet, sourceRow, sourceColumn: 'A/c Number',
+        rawValue: rawAccount.slice(0, 100),
+        reason: `${BANK_ACCOUNT_NUMBER_RULE} This cell does not, so it was not imported.`,
+      });
     } else {
       a.bankAccountNumber = this.resolveOverwritableField(
-        a.bankAccountNumber, rawAccount, overwrite,
+        a.bankAccountNumber, rawAccount === null ? null : normaliseBankAccountNumber(rawAccount), overwrite,
         { issues, sourceRow, sheet, column: 'A/c Number', label: 'Bank Account' },
       );
     }

@@ -2,12 +2,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, Plus, Check, Trash2, Lock, Eye } from 'lucide-react';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, HARD_COPY_LOCATIONS,
+  AssayerLifecycleStatus,
   onboardingNextStep, standingAllowsPlanning, scanMimeType, isDrawableScan, identityDocumentFacts,
-  isValidPan, isValidAadhaar, storedScanFileName,
+  isValidPan, isValidAadhaar, storedScanFileName, referenceEmailProblem, referencePhoneForDisplay,
   EMPANELMENT_STANDING_LABELS,
+  BACKGROUND_CHECK_VERDICT_LABELS, CheckType, CHECK_TYPES, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL,
+  RECHECK_STATUS_LABELS, CheckReviewDecision, ONBOARDING_DOCUMENT_LABELS as REPORT_LABELS,
+  isAdverseVerdict, checkTypeForReport, type RecheckStanding, type ComplianceHold,
 } from '@fapoms/shared';
 
 import { ScanOrAttach } from '../../components/scanner/ScanOrAttach';
+import { canApproveJoiners, useCurrentRoles, useCurrentPermissions, useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { api } from '../../services/api';
 import { Select, useConfirm, useToast, AlertBanner, SkeletonList, DataTable, StatusBadge } from '../../components/ui';
 import { RejectDocumentModal } from './RejectDocumentModal';
@@ -41,13 +46,8 @@ import { invalidateKycMutation } from '../../services/queryInvalidation';
 
 // Exported so the record's own move-confirm (AssayerRecord.tsx) can name a verdict in the exact
 // words this tab already uses, instead of growing a second, smaller copy of the same five lines.
-export const VERDICT_LABELS: Record<string, string> = {
-  [BackgroundCheckVerdict.CLEAR]: 'Clear',
-  [BackgroundCheckVerdict.CRIMINAL_CASE]: 'Criminal case',
-  [BackgroundCheckVerdict.CIVIL_CASE]: 'Civil case',
-  [BackgroundCheckVerdict.ADVERSE_FINDING]: 'Adverse finding',
-  [BackgroundCheckVerdict.NOT_CHECKED]: 'Not checked',
-};
+// The wording itself lives in shared now, where the server's messages read it too.
+export const VERDICT_LABELS: Record<string, string> = BACKGROUND_CHECK_VERDICT_LABELS;
 
 /**
  * The plain word HR actually asks for, on top of the same five verdict values.
@@ -268,6 +268,27 @@ interface Dossier {
   currentCheck: any | null;
   onboarding: any[];
   openIssues: any[];
+  /** Report files uploaded and not yet recorded against a check — the report for the next one. */
+  bgvReportPending?: ReportFile[];
+  /** The same, for every check type that has a report, keyed by the report document. */
+  reportPending?: Record<string, ReportFile[]>;
+  /** Where they stand on every re-check over time, and anything holding them from new work. */
+  compliance?: {
+    rechecked: boolean;
+    standings: RecheckStanding[];
+    hold: ComplianceHold | null;
+    blockers: string[];
+  } | null;
+}
+
+/** One file of a background check's report, as the dossier gives it. */
+interface ReportFile {
+  documentId: string;
+  versionId: string | null;
+  path: string;
+  uploadedAt: string | null;
+  /** Its position on the report document — present only while it waits for a result. */
+  index?: number;
 }
 
 /**
@@ -394,7 +415,16 @@ const Attachments: React.FC<{
   onError: (message: string) => void;
   /** Which document these scans belong to, so the viewer and the remove button can name it. */
   documentLabel: string;
-}> = ({ documentId, filePaths, canManage, onRemoved, onError, documentLabel }) => {
+  /**
+   * Where each file is fetched from, when not the document's current file list — a background
+   * check's report is served by the upload it was, so it stays viewable whatever happens after.
+   */
+  urlFor?: (index: number) => string;
+  /** The file's position on the document when `filePaths` is a subset of it — what Remove sends. */
+  indexFor?: (index: number) => number;
+  /** What one file is called on the buttons. */
+  noun?: string;
+}> = ({ documentId, filePaths, canManage, onRemoved, onError, documentLabel, urlFor, indexFor, noun = 'scan' }) => {
   const [preview, setPreview] = useState<{ items: DocumentPreviewItem[]; index: number } | null>(null);
   const [opening, setOpening] = useState(false);
 
@@ -407,7 +437,7 @@ const Attachments: React.FC<{
     const made: string[] = [];
     try {
       const items = await Promise.all(filePaths.map(async (key, i) => {
-        const bytes = await api.request<Blob>(`/assayers/document/${documentId}/file/${i}`, { raw: true });
+        const bytes = await api.request<Blob>(urlFor ? urlFor(i) : `/assayers/document/${documentId}/file/${indexFor ? indexFor(i) : i}`, { raw: true });
         const type = scanMimeType(key) ?? undefined;
         const url = URL.createObjectURL(type ? new Blob([bytes], { type }) : bytes);
         made.push(url);
@@ -433,7 +463,7 @@ const Attachments: React.FC<{
   const remove = async (index: number) => {
     if (!documentId) return;
     try {
-      await api.request(`/assayers/document/${documentId}/file/${index}`, { method: 'DELETE' });
+      await api.request(`/assayers/document/${documentId}/file/${indexFor ? indexFor(index) : index}`, { method: 'DELETE' });
       onRemoved();
     } catch (e) { onError(userMessage(e)); }
   };
@@ -449,15 +479,15 @@ const Attachments: React.FC<{
             onClick={() => { void open(i); }}
             disabled={opening}
             icon={<Eye size={12} />}
-            label={several ? `View scan ${i + 1} of ${documentLabel}` : `View scan of ${documentLabel}`}
+            label={several ? `View ${noun} ${i + 1} of ${documentLabel}` : `View ${noun} of ${documentLabel}`}
           >
-            {opening ? 'Opening…' : several ? `View scan ${i + 1}` : 'View scan'}
+            {opening ? 'Opening…' : several ? `View ${noun} ${i + 1}` : `View ${noun}`}
           </LinkButton>
           {canManage && (
             <LinkButton
               onClick={() => { void remove(i); }}
               tone="muted"
-              label={several ? `Remove scan ${i + 1} of ${documentLabel}` : `Remove scan of ${documentLabel}`}
+              label={several ? `Remove ${noun} ${i + 1} of ${documentLabel}` : `Remove ${noun} of ${documentLabel}`}
               icon={<Trash2 size={11} />}
             >
               Remove
@@ -472,6 +502,39 @@ const Attachments: React.FC<{
         initialIndex={preview?.index ?? 0}
       />
     </div>
+  );
+};
+
+/**
+ * The report one background check was read from — "passed" and "not passed" alike.
+ *
+ * Served by the upload it was (the version route), not by its place on the document, so a
+ * failed check's report stays viewable after a new report arrives for the next check. Never
+ * removable: the check cannot be edited or deleted, and neither can its evidence.
+ */
+const CheckReport: React.FC<{
+  files: ReportFile[];
+  /** The report document's current file list — where a file with no recorded upload is found. */
+  documentPaths: string[];
+  onError: (message: string) => void;
+}> = ({ files, documentPaths, onError }) => {
+  if (files.length === 0) {
+    return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>No report on file</span>;
+  }
+  const documentId = files[0].documentId;
+  return (
+    <Attachments
+      documentId={documentId}
+      filePaths={files.map((f) => f.path)}
+      canManage={false}
+      onRemoved={() => undefined}
+      onError={onError}
+      documentLabel="Background verification report"
+      noun="report"
+      urlFor={(i) => (files[i].versionId
+        ? `/assayers/document/${documentId}/version/${files[i].versionId}/file`
+        : `/assayers/document/${documentId}/file/${Math.max(0, documentPaths.indexOf(files[i].path))}`)}
+    />
   );
 };
 
@@ -583,8 +646,8 @@ const StatusReasonField: React.FC<{ value: string; onChange: (v: string) => void
  * hand-styled Save. One nullable union cannot hold two, and it renders through one `Editor`.
  */
 type EditorState =
-  | { kind: 'check'; verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; checkedByName: string; findings: string }
-  | { kind: 'reference'; id?: string; fullName: string; relationship: string; phone: string }
+  | { kind: 'check'; checkType: CheckType; verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; checkedByName: string; findings: string }
+  | { kind: 'reference'; id?: string; fullName: string; relationship: string; phone: string; email: string }
   | { kind: 'identity'; requirement: string; label: string; documentNumber: string; expiryDate: string }
   | { kind: 'standing'; clientId: string; clientName: string; status: string; statusReason: string; adding: boolean };
 
@@ -671,13 +734,75 @@ const ScanBeside: React.FC<{ documentId: string; filePaths: string[] }> = ({ doc
   );
 };
 
+/**
+ * One line for "was this referee told HR may call them?" — what went, and what did not and why.
+ *
+ * Exported for its spec. The why matters as much as the what: a referee not texted because the
+ * text has no registered DLT template needs a different fix from one with no phone at all.
+ */
+export function referenceNoticeLine(r: { notifiedAt?: string | null; notifiedVia?: string | null; noticeProblem?: string | null }): string {
+  const via = (r.notifiedVia ?? '').split(',').filter(Boolean).map((c) => (c === 'SMS' ? 'text' : 'email'));
+  const told = r.notifiedAt && via.length > 0 ? `By ${via.join(' and ')}, ${fmtDate(r.notifiedAt)}` : '';
+  if (told && r.noticeProblem) return `${told} — ${r.noticeProblem}`;
+  if (told) return told;
+  if (r.noticeProblem) return `Not told — ${r.noticeProblem}`;
+  return 'Not yet';
+}
+
+/**
+ * The record's address as ONE line, the way an Aadhaar or a utility bill prints it.
+ *
+ * The record keeps it in parts — street, city, district, state, PIN — and the card prints them
+ * run together. Prefilling only the street line left the reviewer to type the other four back in
+ * off the card, which is the typing this prefill exists to remove. A part the street line already
+ * contains is not repeated ("Pune" twice reads as a mistake to correct).
+ */
+export function printedAddressFromRecord(person: {
+  address?: string | null; city?: string | null; district?: string | null;
+  state?: string | null; pincode?: string | null;
+} | null | undefined): string | null {
+  if (!person) return null;
+  const street = (person.address ?? '').trim();
+  const lower = street.toLowerCase();
+  const parts = [street];
+  for (const part of [person.city, person.district, person.state]) {
+    const p = (part ?? '').trim();
+    if (p && !lower.includes(p.toLowerCase()) && !parts.some((x) => x.toLowerCase() === p.toLowerCase())) parts.push(p);
+  }
+  const line = parts.filter(Boolean).join(', ');
+  const pin = (person.pincode ?? '').trim();
+  const withPin = pin && !line.includes(pin) ? (line ? `${line} - ${pin}` : pin) : line;
+  return withPin || null;
+}
+
 const PrintedDetailsModal: React.FC<{
   label: string;
   prints: { name: boolean; dateOfBirth: boolean; gender: boolean; guardianName: boolean; address: boolean };
   existing: any;
+  /**
+   * What the record already says, used to pre-fill boxes the document has never had read off
+   * it. The reviewer then checks rather than types: anything the card shows differently gets
+   * corrected in the box, which is faster and cannot invent a spelling the record never held.
+   */
+  fallback?: {
+    holderName?: string | null;
+    holderDateOfBirth?: string | null;
+    holderGender?: string | null;
+    holderGuardianName?: string | null;
+    holderAddress?: string | null;
+  } | null;
+  /**
+   * For a passbook: the record's IFSC, prefilled, and the last digits of the record's account, shown
+   * as a hint. The account number itself opens EMPTY and is typed off the page — prefilling it would
+   * turn the one check this document exists for into a button that compares the record with itself.
+   */
+  bank?: { ifscCode?: string | null; accountTail?: string | null } | null;
   onCancel: () => void;
   onSubmit: (values: Record<string, string>) => void;
-}> = ({ label, prints, existing, onCancel, onSubmit }) => {
+}> = ({ label, prints, existing, fallback, bank, onCancel, onSubmit }) => {
+  const isPassbook = existing?.requirement === 'BANK_PASSBOOK';
+  const [accountRead, setAccountRead] = useState('');
+  const [ifscRead, setIfscRead] = useState(() => String(bank?.ifscCode ?? '').toUpperCase());
   const wanted: Array<[string, 'name' | 'dateOfBirth' | 'gender' | 'guardianName' | 'address']> = ([
     ['holderName', 'name'],
     ['holderDateOfBirth', 'dateOfBirth'],
@@ -685,17 +810,46 @@ const PrintedDetailsModal: React.FC<{
     ['holderGuardianName', 'guardianName'],
     ['holderAddress', 'address'],
   ] as Array<[string, 'name' | 'dateOfBirth' | 'gender' | 'guardianName' | 'address']>).filter(([, flag]) => prints[flag]);
+  const read = (key: string): string => {
+    const fromDoc = key === 'holderDateOfBirth'
+      ? String(existing?.[key] ?? '').slice(0, 10)
+      : String(existing?.[key] ?? '');
+    if (fromDoc.trim() !== '') return fromDoc;
+    const fromRecord = key === 'holderDateOfBirth'
+      ? String(fallback?.[key as keyof NonNullable<typeof fallback>] ?? '').slice(0, 10)
+      : String(fallback?.[key as keyof NonNullable<typeof fallback>] ?? '');
+    return fromRecord;
+  };
   const [values, setValues] = useState<Record<string, string>>(() => ({
-    holderName: existing?.holderName ?? '',
-    holderDateOfBirth: (existing?.holderDateOfBirth ?? '').slice(0, 10),
-    holderGender: existing?.holderGender ?? '',
-    holderGuardianName: existing?.holderGuardianName ?? '',
-    holderAddress: existing?.holderAddress ?? '',
+    holderName: read('holderName'),
+    holderDateOfBirth: read('holderDateOfBirth'),
+    holderGender: read('holderGender'),
+    holderGuardianName: read('holderGuardianName'),
+    holderAddress: read('holderAddress'),
   }));
+  /**
+   * The boxes that opened with the RECORD's answer rather than one read off this card.
+   *
+   * Named per box, not as one line over the form: the reviewer's job is to compare exactly these
+   * against the scan, and a single "some of this was prefilled" left them guessing which. Frozen
+   * at open, so the marker stays put while they correct a box — it records where the value came
+   * from, not whether they have touched it since.
+   */
+  const [fromRecord] = useState<Set<string>>(() => new Set(
+    wanted
+      .filter(([key]) => String(existing?.[key] ?? '').trim() === '' && read(key).trim() !== '')
+      .map(([key]) => key),
+  ));
+  const prefilled = fromRecord.size > 0;
   const submit = () => {
     const out: Record<string, string> = {};
     for (const [key] of wanted) {
       if (String(values[key] ?? '').trim()) out[key] = String(values[key]).trim();
+    }
+    if (isPassbook) {
+      // Compared with the record by the server, digit for digit — not stored on the document.
+      out.accountNumber = accountRead.trim();
+      out.ifscCode = ifscRead.trim().toUpperCase();
     }
     onSubmit(out);
   };
@@ -705,9 +859,13 @@ const PrintedDetailsModal: React.FC<{
   return (
     <Editor
       title={`What does the ${label} say?`}
-      intro={hasScan
-        ? 'The scan is here beside the boxes. Read each value off it — this is what the record is checked against.'
-        : 'No scan has been attached yet, so read from the original document in front of you.'}
+      intro={prefilled
+        ? (hasScan
+          ? 'Prefilled from their record — check each marked box against the scan beside it, and correct anything the card shows differently.'
+          : 'Prefilled from their record — check each marked box against the original document in front of you, and correct anything it shows differently.')
+        : (hasScan
+          ? 'The scan is here beside the boxes. Read each value off it — this is what the record is checked against.'
+          : 'No scan has been attached yet, so read from the original document in front of you.')}
       onCancel={onCancel}
       onSave={submit}
       saveLabel="Use these details"
@@ -729,15 +887,74 @@ const PrintedDetailsModal: React.FC<{
             type={key === 'holderDateOfBirth' ? 'date' : 'text'}
             value={values[key] ?? ''}
             onChange={(e) => setValues({ ...values, [key]: e.target.value })}
+            aria-describedby={fromRecord.has(key) ? `vetting-printed-${key}-source` : undefined}
             style={{
               width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)',
               background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
+              border: `1px solid ${fromRecord.has(key) ? 'var(--warning)' : 'var(--border-color)'}`,
+              borderRadius: 'var(--radius-sm)',
               outline: 'none', boxSizing: 'border-box',
             }}
           />
+          {fromRecord.has(key) && (
+            <div
+              id={`vetting-printed-${key}-source`}
+              style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px' }}
+            >
+              From their record — check it against the card
+            </div>
+          )}
         </div>
       ))}
+      {isPassbook && (
+        <>
+          <div>
+            <label htmlFor="vetting-passbook-account" style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
+              Account number, as printed
+            </label>
+            <input
+              id="vetting-passbook-account"
+              value={accountRead}
+              inputMode="numeric"
+              autoComplete="off"
+              onChange={(e) => setAccountRead(e.target.value)}
+              // Read off the page, not pasted from the record — that would compare it with itself.
+              onPaste={(e) => e.preventDefault()}
+              aria-describedby="vetting-passbook-account-hint"
+              style={{
+                width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)', fontFamily: 'monospace',
+                background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', boxSizing: 'border-box',
+              }}
+            />
+            <div id="vetting-passbook-account-hint" style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
+              Type it from the passbook. {bank?.accountTail ? `The record's account ends ${bank.accountTail}.` : ''}
+            </div>
+          </div>
+          <div>
+            <label htmlFor="vetting-passbook-ifsc" style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
+              IFSC, as printed
+            </label>
+            <input
+              id="vetting-passbook-ifsc"
+              value={ifscRead}
+              autoComplete="off"
+              onChange={(e) => setIfscRead(e.target.value.toUpperCase())}
+              aria-describedby={bank?.ifscCode ? 'vetting-passbook-ifsc-source' : undefined}
+              style={{
+                width: '100%', padding: '8px 10px', fontSize: 'var(--text-sm)', fontFamily: 'monospace', textTransform: 'uppercase',
+                background: 'var(--bg-surface-2)', color: 'var(--text-primary)', boxSizing: 'border-box',
+                border: `1px solid ${bank?.ifscCode ? 'var(--warning)' : 'var(--border-color)'}`, borderRadius: 'var(--radius-sm)',
+              }}
+            />
+            {bank?.ifscCode && (
+              <div id="vetting-passbook-ifsc-source" style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '3px' }}>
+                From their record — check it against the passbook
+              </div>
+            )}
+          </div>
+        </>
+      )}
       </div>
     </Editor>
   );
@@ -774,6 +991,23 @@ export const AssayerVettingTab: React.FC<{
    */
   onGoToDocuments?: () => void;
   /**
+   * The person's record, when the caller has it — what the verification boxes pre-fill from.
+   * The dossier carries the documents but not the person, so without this the reviewer types
+   * the name off the card even when the record already holds the same spelling.
+   */
+  person?: {
+    displayName?: string | null;
+    dateOfBirth?: string | null;
+    gender?: string | null;
+    address?: string | null;
+    city?: string | null;
+    district?: string | null;
+    state?: string | null;
+    pincode?: string | null;
+    /** The record's IFSC — what a passbook's IFSC is compared with, so it opens prefilled. */
+    ifscCode?: string | null;
+  } | null;
+  /**
    * The same pointer the other way: switches the record over to the Background half.
    *
    * The background check report is a document, but the check it records and each bank's decision
@@ -787,7 +1021,12 @@ export const AssayerVettingTab: React.FC<{
    * step checklist — needs to hear about a check recorded or a document verified here.
    */
   onChanged?: () => void;
-}> = ({ assayerId, canManage, section, lifecycleStatus, onGoToDocuments, onGoToChecks, onChanged }) => {
+  /**
+   * Takes somebody parked for not passing background verification back into it — the record's
+   * own move, with its confirmation. Given only when that move is open to this person.
+   */
+  onReopenBackgroundVerification?: () => void;
+}> = ({ assayerId, canManage, section, lifecycleStatus, person, onGoToDocuments, onGoToChecks, onChanged, onReopenBackgroundVerification }) => {
   const [data, setData] = useState<Dossier | null>(null);
   /**
    * Everything on this tab that failed and wants a decision, in one strip at the top.
@@ -805,8 +1044,43 @@ export const AssayerVettingTab: React.FC<{
   const [busy, setBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [editor, setEditor] = useState<EditorState | null>(null);
+  /** The background verification report document — every report file ever uploaded, all checks'. */
+  const bgvReport = (data?.onboarding ?? [])
+    .find((d: { requirement: string }) => d.requirement === 'BGV_REPORT') as { id?: string; filePaths?: string[]; issuedBy?: string | null } | undefined;
+  /**
+   * The report for the NEXT check: files uploaded that no recorded check was read from. A result
+   * is recorded against these and nothing else — the reports of earlier checks stay with them.
+   */
+  const bgvPending = data?.bgvReportPending ?? [];
+  /** The agency named when the report was uploaded — what the check's own agency box opens with. */
+  const bgvReportIssuer = bgvReport?.issuedBy ?? '';
+  /**
+   * The same four facts for any check type that has a report of its own (police certificate,
+   * credit report) — what the check dialog shows for the type being recorded. Null for the
+   * identity re-check, which re-verifies the identity documents themselves.
+   */
+  const reportFor = (type: CheckType) => {
+    const requirement = CHECK_REPORT_DOCUMENT[type];
+    if (!requirement) return null;
+    const doc = (data?.onboarding ?? []).find((d: { requirement: string }) => d.requirement === requirement) as
+      { id?: string; filePaths?: string[]; issuedBy?: string | null } | undefined;
+    const pending = (type === CheckType.BGV ? data?.bgvReportPending : undefined) ?? data?.reportPending?.[requirement] ?? [];
+    return {
+      requirement,
+      label: REPORT_LABELS[requirement as keyof typeof REPORT_LABELS] ?? requirement,
+      doc,
+      pending,
+      earlier: (doc?.filePaths?.length ?? 0) - pending.length,
+      issuer: doc?.issuedBy ?? '',
+    };
+  };
   const { confirm, confirmWithReason, confirmDialog } = useConfirm();
   const { toast } = useToast();
+  /** The senior's decision on an adverse re-check — ASSAYER:APPROVE, never whoever recorded it. */
+  const canApprove = canApproveJoiners(useCurrentRoles(), useCurrentPermissions());
+  const currentUserId = useCurrentUserId();
+  const [reviewText, setReviewText] = useState('');
+  const [reviewErr, setReviewErr] = useState<string | null>(null);
   /** The document a "Send it back" click is choosing a reason for — the dialog is open exactly when this is set. */
   const [rejectTarget, setRejectTarget] = useState<any | null>(null);
   /** Why the dossier itself is not here — kept apart from `err`, which every write reports to. */
@@ -893,8 +1167,10 @@ export const AssayerVettingTab: React.FC<{
     // The server decides which are identity documents — one definition, in @fapoms/shared.
     return {
       rows,
-      identity: rows.filter((r) => r.identity),
-      joining: rows.filter((r) => !r.identity),
+      // Everything a reviewer VERIFIES against the original sits together — the identity documents,
+      // and the passbook, which is checked against the account the pay goes to.
+      identity: rows.filter((r) => r.identity || r.verifiable),
+      joining: rows.filter((r) => !(r.identity || r.verifiable)),
       inHand, withScan, claimedNoScan, total: rows.length,
     };
   }, [data]);
@@ -952,6 +1228,27 @@ export const AssayerVettingTab: React.FC<{
   };
 
   const saveCheck = async (draft: Extract<EditorState, { kind: 'check' }>) => {
+    // Said here, in the dialog, rather than after a round trip — the server refuses the same thing.
+    const completed = draft.verdict !== BackgroundCheckVerdict.NOT_CHECKED;
+    const report = reportFor(draft.checkType);
+    if (completed && CHECK_ISSUER_LABEL[draft.checkType] && !draft.checkedByName.trim()) {
+      setEditorErr(draft.checkType === CheckType.BGV
+        ? 'Name the agency that carried out the background verification.'
+        : `Name the ${String(CHECK_ISSUER_LABEL[draft.checkType]).toLowerCase()}.`);
+      return;
+    }
+    if (completed && report && report.pending.length === 0) {
+      setEditorErr(report.earlier > 0
+        ? 'Upload the report for this check. The report already on file belongs to the check recorded before, and stays with it.'
+        : draft.checkType === CheckType.BGV
+          ? 'Upload the background verification report first — the result is only as good as the report it came from.'
+          : `Upload the ${report.label.toLowerCase()} first — the result is only as good as the report it came from.`);
+      return;
+    }
+    if (completed && draft.checkType === CheckType.IDENTITY && draft.findings.trim().length < 10) {
+      setEditorErr('Say which identity documents were re-checked against the originals, and what was found.');
+      return;
+    }
     setBusy(true);
     try {
       const score = Number(draft.cibilScore.replace(/[^\d]/g, ''));
@@ -965,19 +1262,33 @@ export const AssayerVettingTab: React.FC<{
           checkedOn: draft.checkedOn || undefined,
           checkedByName: draft.checkedByName?.trim() || undefined,
           findings: draft.findings || undefined,
+          checkType: draft.checkType,
         }),
       });
-      toast({ type: 'success', title: 'Check recorded', message: 'It is now the operative one; the previous check is kept below it.' });
+      toast({
+        type: 'success',
+        title: 'Check recorded',
+        message: isAdverseVerdict(draft.verdict) && data?.compliance?.rechecked
+          ? 'Recorded. It came back adverse, so they are held from new work until a senior decides.'
+          : 'It is now the operative one, with its report. Earlier checks and their reports are kept below it.',
+      });
       closeEditor();
       reload();
     } catch (e) { setEditorErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const saveReference = async (draft: Extract<EditorState, { kind: 'reference' }>) => {
+    // Into the dialog (`editorErr`), not the page banner: the banner sits BEHIND the open dialog,
+    // so a refusal written there is one nobody reads — see `Editor`'s own `error` prop.
     if (!draft.fullName.trim()) {
-      setErr('A reference needs a name.');
+      setEditorErr('A reference needs a name.');
       return;
     }
+    if (draft.email.trim() && referenceEmailProblem(draft.email.trim().toLowerCase())) {
+      setEditorErr('That email does not look right.');
+      return;
+    }
+    setEditorErr(null);
     const editingExisting = !!draft.id;
     setBusy(true);
     setErr(null);
@@ -995,6 +1306,7 @@ export const AssayerVettingTab: React.FC<{
             // back — which is exactly the correction somebody opens this form to make.
             relationship: draft.relationship || null,
             phone: draft.phone.trim() || null,
+            email: draft.email.trim().toLowerCase() || null,
           }),
         },
       );
@@ -1007,7 +1319,7 @@ export const AssayerVettingTab: React.FC<{
       });
       closeEditor();
       reload();
-    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+    } catch (e) { setEditorErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const saveIdentity = async (draft: Extract<EditorState, { kind: 'identity' }>) => {
@@ -1214,6 +1526,41 @@ export const AssayerVettingTab: React.FC<{
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
+  /** The check dialog — also where the report is uploaded, since it needs the agency named there. */
+  const openCheckEditor = (checkType: CheckType = CheckType.BGV) => setEditor({
+    kind: 'check',
+    checkType,
+    verdict: BackgroundCheckVerdict.CLEAR, riskGrade: '', cibilScore: '',
+    cibilBand: '', checkedOn: '', checkedByName: reportFor(checkType)?.issuer ?? '', findings: '',
+  });
+
+  /**
+   * The report, uploaded from the check dialog WITH the agency that produced it — the server will
+   * not take one without. Its own handler rather than `attach`, because `attach` reports into the
+   * page banner behind the dialog, where a refusal is one nobody reads.
+   */
+  const attachBgvReport = async (file: File) => {
+    const type = editor?.kind === 'check' ? editor.checkType : CheckType.BGV;
+    const report = reportFor(type);
+    if (!report) return;
+    const agency = editor?.kind === 'check' ? editor.checkedByName.trim() : '';
+    if (!agency) {
+      setEditorErr(type === CheckType.BGV
+        ? 'Name the agency that carried out the background verification, then upload its report.'
+        : `Name the ${String(CHECK_ISSUER_LABEL[type]).toLowerCase()}, then upload the ${report.label.toLowerCase()}.`);
+      return;
+    }
+    setBusy(true);
+    setEditorErr(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('issuedBy', agency);
+      await api.request(`/assayers/${assayerId}/document/${report.requirement}/file`, { method: 'POST', body: form });
+      reload();
+    } catch (e) { setEditorErr(userMessage(e)); } finally { setBusy(false); }
+  };
+
   /** Where the signed original is kept. A picked office, never a typed one — see the migration. */
   const setWhere = async (requirement: string, hardCopyLocation: string) => {
     setBusy(true);
@@ -1231,6 +1578,24 @@ export const AssayerVettingTab: React.FC<{
       await api.request(`/assayers/${assayerId}/document/${requirement}`, {
         method: 'PUT', body: JSON.stringify({ [field]: value }),
       });
+      reload();
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+  };
+
+  /**
+   * Tell (again) a referee that HR may call them. Reports what actually went, including a text the
+   * gateway could not carry, so "Tell them" never looks like it worked when it did not.
+   */
+  const notifyReferee = async (ref: any) => {
+    setBusy(true);
+    try {
+      const out = await api.request<{ channels: string[]; problem: string | null }>(
+        `/assayers/${assayerId}/reference/${ref.id}/notify`, { method: 'POST', body: JSON.stringify({}) },
+      );
+      const how = out.channels.map((c) => (c === 'SMS' ? 'text' : 'email')).join(' and ');
+      toast(out.channels.length > 0
+        ? { type: 'success', title: `${ref.fullName} told by ${how}`, message: out.problem ? `Not every way went: ${out.problem}.` : 'They know HR may call them.' }
+        : { type: 'error', title: `Could not tell ${ref.fullName}`, message: out.problem ?? 'Nothing could be sent.' });
       reload();
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
@@ -1288,6 +1653,16 @@ export const AssayerVettingTab: React.FC<{
     lifecycleStatus,
   });
 
+  /**
+   * No verdicts while INVITED — review opens at document verification.
+   *
+   * Collecting scans stays open at every stage; only the verdict needs the stage to have
+   * started, or the same scans get verified twice (once here, once in the stage flow). The
+   * server refuses it too — this keeps the buttons from promising what the API will not do.
+   */
+  const reviewLocked = lifecycleStatus === AssayerLifecycleStatus.INVITED;
+  const reviewLockHint = 'Start document verification first';
+
   return (
     <div style={{ opacity: busy ? 0.6 : 1, transition: 'opacity .15s' }}>
       {confirmDialog}
@@ -1307,6 +1682,17 @@ export const AssayerVettingTab: React.FC<{
           label={printedTarget.label}
           prints={printedTarget.prints ?? { name: true, dateOfBirth: false, gender: false, guardianName: false, address: false }}
           existing={printedTarget}
+          fallback={person ? {
+            holderName: person.displayName ?? null,
+            holderDateOfBirth: person.dateOfBirth ?? null,
+            holderGender: person.gender ?? null,
+            holderAddress: printedAddressFromRecord(person),
+          } : null}
+          bank={printedTarget.requirement === 'BANK_PASSBOOK' ? {
+            ifscCode: person?.ifscCode ?? null,
+            // The dossier shows the record's account masked; its last digits are all this needs.
+            accountTail: printedTarget.documentNumber ? `…${String(printedTarget.documentNumber).slice(-4)}` : null,
+          } : null}
           onCancel={() => setPrintedTarget(null)}
           onSubmit={(printed) => {
             const doc = printedTarget;
@@ -1394,17 +1780,92 @@ export const AssayerVettingTab: React.FC<{
         </Editor>
       )}
 
-      {editor?.kind === 'check' && (
+      {editor?.kind === 'check' && (() => {
+        const type = editor.checkType;
+        const report = reportFor(type);
+        const issuerLabel = CHECK_ISSUER_LABEL[type];
+        const isBgv = type === CheckType.BGV;
+        return (
         <Editor
           error={editorErr}
-          title="Record a background check"
-          intro="This becomes the operative check. The one it replaces is kept below it — a picture that changed is the reason to look at a second one."
+          title={isBgv ? 'Record a background check' : `Record a ${CHECK_TYPE_LABELS[type].toLowerCase()}`}
+          intro={type === CheckType.IDENTITY
+            ? 'Record re-checking their identity documents against the originals — and what was found. Each check is kept for good; this one does not replace an earlier one.'
+            : 'Record the result with its report — passed or not, the report is kept with it. This becomes the operative check of its kind; earlier ones and their reports stay below it.'}
           onCancel={closeEditor}
           onSave={saveEditor}
           saveLabel="Record check"
           busy={busy}
           width={560}
         >
+          {/*
+            Which check. Buttons rather than a dropdown — four choices, all visible, and the
+            result below stays the first list in the dialog.
+          */}
+          <Field title="Which check" wide>
+            <div role="group" aria-label="Which check" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {CHECK_TYPES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  aria-pressed={t === type}
+                  onClick={() => setEditor({ ...editor, checkType: t, checkedByName: reportFor(t)?.issuer ?? '' })}
+                  style={{
+                    padding: '4px 10px', fontSize: 'var(--text-xs)', fontWeight: 600, borderRadius: '999px', cursor: 'pointer',
+                    border: `1px solid ${t === type ? 'var(--accent)' : 'var(--border-color)'}`,
+                    background: t === type ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+                    color: t === type ? 'var(--accent)' : 'var(--text-secondary)',
+                  }}
+                >
+                  {CHECK_TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          </Field>
+          {/* Who issued it first: the report is not taken without that name. */}
+          {issuerLabel && (
+            <Field title={issuerLabel}>
+              <input style={fieldInput}
+                aria-label={issuerLabel}
+                placeholder={isBgv ? 'e.g. AuthBridge / First Advantage' : type === CheckType.POLICE ? 'e.g. Shivajinagar Police Station' : 'e.g. TransUnion CIBIL'}
+                value={editor.checkedByName}
+                onChange={(e) => setEditor({ ...editor, checkedByName: e.target.value })} />
+            </Field>
+          )}
+          {/*
+            The report for THIS check — passed or not, it is kept with the result. Files already
+            recorded against an earlier check are not offered: a re-check needs its own.
+          */}
+          {report && (
+            <Field title="Report for this check" wide>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 'var(--text-xs)', color: report.pending.length > 0 ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
+                  {report.pending.length > 0
+                    ? `Uploaded (${report.pending.length} file${report.pending.length === 1 ? '' : 's'})${report.issuer ? ` — from ${report.issuer}` : ''}`
+                    : report.earlier > 0
+                      ? 'Upload the new report — the one on file belongs to the check recorded before'
+                      : 'Not uploaded yet — required before a result can be recorded'}
+                </span>
+                {report.pending.length > 0 && report.doc?.id && (
+                  <Attachments
+                    documentId={report.doc.id}
+                    filePaths={report.pending.map((f) => f.path)}
+                    indexFor={(i) => report.pending[i].index ?? i}
+                    canManage={canManage}
+                    onRemoved={reload}
+                    onError={setEditorErr}
+                    documentLabel={report.label}
+                    noun="report"
+                  />
+                )}
+                {editor.checkedByName.trim()
+                  ? <UploadButton requirement={report.requirement} onPick={(_req, file) => void attachBgvReport(file)} documentLabel={report.label} />
+                  : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                    {isBgv ? 'Name the agency above to upload its report.' : `Name the ${String(issuerLabel).toLowerCase()} above to upload the report.`}
+                  </span>}
+              </div>
+            </Field>
+          )}
           <Field title="Result">
             {/* The same words the chip will show once it is saved — see `verdictResultLabel`. */}
             <Select
@@ -1416,44 +1877,48 @@ export const AssayerVettingTab: React.FC<{
               }))}
             />
           </Field>
-          <Field title="Risk">
-            <Select
-              value={editor.riskGrade}
-              onChange={(v) => setEditor({ ...editor, riskGrade: String(v) })}
-              options={[{ value: '', label: 'Not graded' }, ...Object.values(RiskGrade).map((v) => ({ value: v, label: RISK_LABELS[v] ?? v }))]}
-            />
-          </Field>
-          <Field title="Credit band">
-            <Select
-              value={editor.cibilBand}
-              onChange={(v) => setEditor({ ...editor, cibilBand: String(v) })}
-              options={[{ value: '', label: 'Not recorded' }, ...Object.values(CibilBand).map((v) => ({ value: v, label: CIBIL_LABELS[v] ?? v }))]}
-            />
-          </Field>
-          <Field title="Credit score">
-            <input style={fieldInput} inputMode="numeric" placeholder="e.g. 747"
-              value={editor.cibilScore}
-              onChange={(e) => setEditor({ ...editor, cibilScore: e.target.value })} />
-          </Field>
+          {(isBgv || type === CheckType.POLICE) && (
+            <Field title="Risk">
+              <Select
+                value={editor.riskGrade}
+                onChange={(v) => setEditor({ ...editor, riskGrade: String(v) })}
+                options={[{ value: '', label: 'Not graded' }, ...Object.values(RiskGrade).map((v) => ({ value: v, label: RISK_LABELS[v] ?? v }))]}
+              />
+            </Field>
+          )}
+          {(isBgv || type === CheckType.CREDIT) && (
+            <>
+              <Field title="Credit band">
+                <Select
+                  value={editor.cibilBand}
+                  onChange={(v) => setEditor({ ...editor, cibilBand: String(v) })}
+                  options={[{ value: '', label: 'Not recorded' }, ...Object.values(CibilBand).map((v) => ({ value: v, label: CIBIL_LABELS[v] ?? v }))]}
+                />
+              </Field>
+              <Field title="Credit score">
+                <input style={fieldInput} inputMode="numeric" placeholder="e.g. 747"
+                  value={editor.cibilScore}
+                  onChange={(e) => setEditor({ ...editor, cibilScore: e.target.value })} />
+              </Field>
+            </>
+          )}
           <Field title="Checked on">
             <input style={fieldInput} type="date"
               value={editor.checkedOn}
               onChange={(e) => setEditor({ ...editor, checkedOn: e.target.value })} />
           </Field>
-          <Field title="Background check agency">
+          <Field title={type === CheckType.IDENTITY ? 'What was re-checked, and what was found' : 'Findings'} wide>
             <input style={fieldInput}
-              placeholder="e.g. AuthBridge / First Advantage"
-              value={editor.checkedByName}
-              onChange={(e) => setEditor({ ...editor, checkedByName: e.target.value })} />
-          </Field>
-          <Field title="Findings" wide>
-            <input style={fieldInput}
-              placeholder="What the check actually turned up. Leave empty if it turned up nothing."
+              aria-label={type === CheckType.IDENTITY ? 'What was re-checked, and what was found' : 'Findings'}
+              placeholder={type === CheckType.IDENTITY
+                ? 'e.g. PAN and Aadhaar seen in original; both match the record'
+                : 'What the check actually turned up. Leave empty if it turned up nothing.'}
               value={editor.findings}
               onChange={(e) => setEditor({ ...editor, findings: e.target.value })} />
           </Field>
         </Editor>
-      )}
+        );
+      })()}
 
       {editor?.kind === 'reference' && (
         <Editor
@@ -1478,6 +1943,15 @@ export const AssayerVettingTab: React.FC<{
           <Field title="Phone">
             <input style={fieldInput} inputMode="tel" value={editor.phone}
               onChange={(e) => setEditor({ ...editor, phone: e.target.value })} />
+          </Field>
+          <Field title="Email (optional)">
+            {/* `inputMode`, not `type="email"`: this dialog is a <form>, and a typed email box
+                hands a mistyped address to the browser's own validation bubble — which blocks the
+                save before ours runs and says nothing in this app's words. The phone keyboard is
+                the same either way. */}
+            <input style={fieldInput} inputMode="email" autoCapitalize="none" autoCorrect="off"
+              aria-label="Email of the reference" value={editor.email}
+              onChange={(e) => setEditor({ ...editor, email: e.target.value })} />
           </Field>
         </Editor>
       )}
@@ -1573,6 +2047,23 @@ export const AssayerVettingTab: React.FC<{
 
       {section === 'checks' && (
         <>
+      {/*
+        Parked for not passing. The failed check and its report stay on file; re-verification is a
+        new check with a new report, recorded once they are back in background verification.
+      */}
+      {onReopenBackgroundVerification && (
+        <Notice tone="warning" style={{ marginBottom: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+            <span>
+              Background verification was not passed
+              {check ? ` (${verdictResultLabel(check.verdict)}${check.checkedOn ? `, ${fmtDate(check.checkedOn)}` : ''})` : ''}.
+              {' '}That check and its report stay on the record. If the agency verifies them again,
+              re-open background verification and record the new check with its report.
+            </span>
+            <LinkButton onClick={onReopenBackgroundVerification}>Re-open background verification</LinkButton>
+          </div>
+        </Notice>
+      )}
       <Section
         title="Background check"
         icon={check && verdictTone(check.verdict) === 'var(--danger)' ? ShieldAlert : ShieldCheck}
@@ -1580,11 +2071,7 @@ export const AssayerVettingTab: React.FC<{
         action={canManage ? (
           <LinkButton
             icon={<Plus size={11} />}
-            onClick={() => setEditor({
-              kind: 'check',
-              verdict: BackgroundCheckVerdict.CLEAR, riskGrade: '', cibilScore: '',
-              cibilBand: '', checkedOn: '', checkedByName: '', findings: '',
-            })}
+            onClick={() => openCheckEditor()}
           >
             Record a check
           </LinkButton>
@@ -1614,6 +2101,12 @@ export const AssayerVettingTab: React.FC<{
             {check.checkedByName && (
               <div><div style={label}>Background check agency</div><div style={{ fontSize: 'var(--text-sm)' }}>{check.checkedByName}</div></div>
             )}
+            {check.verdict !== BackgroundCheckVerdict.NOT_CHECKED && (
+              <div>
+                <div style={label}>Report</div>
+                <CheckReport files={check.reportFiles ?? []} documentPaths={bgvReport?.filePaths ?? []} onError={setErr} />
+              </div>
+            )}
             {check.findings && (
               <div style={{ flexBasis: '100%' }}>
                 <div style={label}>Findings</div>
@@ -1624,64 +2117,76 @@ export const AssayerVettingTab: React.FC<{
         )}
 
         {/*
-          The report the check is based on, where the check is. It is filed as the `BGV_REPORT`
-          document, so it also appears in the Documents tab's paperwork table — this is the same
-          row, not a second copy, and uploading here or there lands in the same place.
+          A report uploaded whose result is not recorded yet — the next check's evidence, still
+          removable because nothing rests on it. Once its result is recorded it moves onto that
+          check (above, or in the list below) and is kept there for good.
         */}
-        {(() => {
-          const bgvDoc = paperwork.rows.find((r) => r.requirement === 'BGV_REPORT');
-          const hasScans = (bgvDoc?.filePaths ?? []).length > 0;
-          return (
-            <div style={{
-              marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-hair)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px',
-            }}>
-              <div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                  Background check report
-                </div>
-                <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  {hasScans
-                    ? `${counted(bgvDoc!.filePaths.length, 'scan')} of the signed report on file`
-                    : 'No scan of the signed report yet'}
-                </div>
+        {bgvPending.length > 0 && (
+          <div style={{
+            marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-hair)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px',
+          }}>
+            <div>
+              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--warning)' }}>
+                Report uploaded — result not recorded yet
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {hasScans && bgvDoc?.id && (
-                  <Attachments
-                    documentId={bgvDoc.id}
-                    filePaths={bgvDoc.filePaths ?? []}
-                    canManage={canManage}
-                    onRemoved={reload}
-                    onError={setErr}
-                    documentLabel="Background verification report"
-                  />
-                )}
-                {canManage && (
-                  <UploadButton
-                    requirement="BGV_REPORT"
-                    onPick={attach}
-                    documentLabel="Background verification report"
-                  />
-                )}
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
+                {counted(bgvPending.length, 'file')}{bgvReportIssuer ? ` from ${bgvReportIssuer}` : ''}
               </div>
             </div>
-          );
-        })()}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {bgvReport?.id && (
+                <Attachments
+                  documentId={bgvReport.id}
+                  filePaths={bgvPending.map((f) => f.path)}
+                  indexFor={(i) => bgvPending[i].index ?? i}
+                  canManage={canManage}
+                  onRemoved={reload}
+                  onError={setErr}
+                  documentLabel="Background verification report"
+                  noun="report"
+                />
+              )}
+              {canManage && <LinkButton onClick={() => openCheckEditor()}>Record its result</LinkButton>}
+            </div>
+          </div>
+        )}
 
-        {data.backgroundChecks.length > 1 && (
+        {/*
+          Every other check on file — earlier background checks and every re-check over time
+          (police, credit, identity), newest first, each with its own report and, for an adverse
+          re-check on somebody working, what the senior decided.
+        */}
+        {data.backgroundChecks.filter((c) => c.id !== check?.id).length > 0 && (
           <DataTable
             density="compact"
             minWidth={false}
-            rows={data.backgroundChecks.slice(1)}
+            rows={data.backgroundChecks.filter((c) => c.id !== check?.id)}
             rowKey={(c) => c.id}
             columns={[
               { key: 'date', header: 'Date', render: (c) => <>{fmtDate(c.checkedOn) || '—'}</> },
+              { key: 'type', header: 'Check', render: (c) => <>{CHECK_TYPE_LABELS[(c.checkType ?? CheckType.BGV) as CheckType]}</> },
               { key: 'verdict', header: 'Result', render: (c) => <VerdictChip verdict={c.verdict} /> },
               { key: 'risk', header: 'Risk', render: (c) => <>{c.riskGrade ? (RISK_LABELS[c.riskGrade] ?? humanizeEnum(c.riskGrade)) : '—'}</> },
+              { key: 'agency', header: 'Agency', render: (c) => <>{c.checkedByName || '—'}</> },
               // Free prose written by whoever did the check — the one column here that is a
               // paragraph rather than a value, so it wraps instead of stretching the table.
               { key: 'findings', header: 'Findings', wrap: true, render: (c) => <>{c.findings || '—'}</> },
+              // The report each earlier result was read from — a "not passed" keeps its report.
+              {
+                key: 'report', header: 'Report',
+                render: (c) => (c.verdict === BackgroundCheckVerdict.NOT_CHECKED || (c.checkType ?? CheckType.BGV) === CheckType.IDENTITY
+                  ? <>—</>
+                  : <CheckReport files={c.reportFiles ?? []} documentPaths={reportFor((c.checkType ?? CheckType.BGV) as CheckType)?.doc?.filePaths ?? []} onError={setErr} />),
+              },
+              {
+                key: 'decision', header: 'Decision', wrap: true,
+                render: (c) => (c.reviewStatus === 'PENDING'
+                  ? <span style={{ color: 'var(--danger)', fontWeight: 600 }}>Awaiting a senior</span>
+                  : c.reviewStatus
+                    ? <>{c.reviewStatus === 'KEPT' ? 'Kept working' : 'Suspended'}{c.reviewReason ? ` — ${c.reviewReason}` : ''}</>
+                    : <>—</>),
+              },
             ]}
           />
         )}
@@ -1703,13 +2208,113 @@ export const AssayerVettingTab: React.FC<{
           }}>
             <Lock size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
             <span>
-              Checks cannot be edited or deleted — each one is the record of what was found on the
-              day it was done. If this is wrong or out of date, record a new check: it becomes the
-              operative one and this drops into the list above.
+              Checks and their reports cannot be edited or deleted — each one is the record of what
+              was found on the day it was done. If this is wrong or out of date, or the person has
+              been verified again, record a new check with its report: it becomes the operative one
+              and this drops into the list above.
             </span>
           </div>
         )}
       </Section>
+
+      {/*
+        RE-CHECKS OVER TIME (2026-09-23). Background, police, credit and identity documents are
+        re-checked on the schedule in Settings; this says where each one stands, and — when one came
+        back adverse — holds the decision a senior has to take.
+      */}
+      {data.compliance && (data.compliance.rechecked || data.compliance.hold) && (() => {
+        const compliance = data.compliance!;
+        const holdCheck = compliance.hold ? data.backgroundChecks.find((c) => c.id === compliance.hold!.checkId) : null;
+        const mayDecide = !!compliance.hold && canApprove && holdCheck?.createdBy !== currentUserId;
+        const decide = async (decision: CheckReviewDecision) => {
+          if (!compliance.hold) return;
+          if (reviewText.trim().length < 10) { setReviewErr('Say why — it is kept on their record with the decision.'); return; }
+          setBusy(true); setReviewErr(null);
+          try {
+            await api.request(`/assayers/${assayerId}/checks/${compliance.hold.checkId}/review`, {
+              method: 'POST', body: JSON.stringify({ decision, reason: reviewText.trim() }),
+            });
+            setReviewText('');
+            toast({
+              type: 'success',
+              title: decision === CheckReviewDecision.KEEP ? 'Kept working' : 'Suspended',
+              message: decision === CheckReviewDecision.KEEP ? 'The hold on new work is lifted.' : 'They are suspended; the reason is on their record.',
+            });
+            reload();
+          } catch (e) { setReviewErr(userMessage(e)); } finally { setBusy(false); }
+        };
+        const tone: Record<string, string> = { OK: 'var(--success)', DUE_SOON: 'var(--accent)', DUE: 'var(--warning)', BLOCKED: 'var(--danger)' };
+        return (
+          <Section
+            title="Re-checks over time"
+            icon={compliance.blockers.length > 0 ? ShieldAlert : ShieldCheck}
+            hint="Each check repeats on the schedule set in Settings. Overdue past the grace period, or adverse, holds them from new work — work already assigned continues."
+            style={{ marginBottom: '14px' }}
+          >
+            {compliance.hold && (
+              <Notice tone="warning" style={{ marginBottom: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <span>
+                    <strong>{CHECK_TYPE_LABELS[compliance.hold.checkType as CheckType]}</strong> came back{' '}
+                    {(VERDICT_LABELS[compliance.hold.verdict] ?? compliance.hold.verdict).toLowerCase()}
+                    {holdCheck?.findings ? `: ${holdCheck.findings}` : ''}. Held from new work since {compliance.hold.since} until a senior decides.
+                  </span>
+                  {mayDecide ? (
+                    <>
+                      <textarea
+                        aria-label="Why — kept on their record"
+                        value={reviewText}
+                        maxLength={2000}
+                        onChange={(e) => { setReviewText(e.target.value); setReviewErr(null); }}
+                        placeholder="Why you are keeping them working, or suspending them"
+                        style={{ ...fieldInput, minHeight: '56px', resize: 'vertical' }}
+                      />
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button type="button" className="btn btn-primary" disabled={busy} style={{ fontSize: 'var(--text-xs)', padding: '6px 12px' }}
+                          onClick={() => void decide(CheckReviewDecision.KEEP)}>Keep them working</button>
+                        <button type="button" className="btn" disabled={busy}
+                          style={{ fontSize: 'var(--text-xs)', padding: '6px 12px', background: 'var(--danger)', color: '#fff', borderColor: 'var(--danger)' }}
+                          onClick={() => void decide(CheckReviewDecision.SUSPEND)}>Suspend them</button>
+                      </div>
+                      {reviewErr && <div role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--danger)' }}>{reviewErr}</div>}
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                      {canApprove ? 'You recorded this check, so somebody else has to decide it.' : 'A senior decides this — keep them working, or suspend them.'}
+                    </span>
+                  )}
+                </div>
+              </Notice>
+            )}
+            {compliance.standings.length > 0 && (
+              <DataTable
+                density="compact"
+                minWidth={false}
+                rows={compliance.standings}
+                rowKey={(r) => r.type}
+                columns={[
+                  { key: 'check', header: 'Check', render: (r) => <>{CHECK_TYPE_LABELS[r.type]}</> },
+                  {
+                    key: 'last', header: 'Last done',
+                    render: (r) => (r.lastCheckedOn
+                      ? <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>{fmtDate(r.lastCheckedOn)}{r.lastVerdict && <VerdictChip verdict={r.lastVerdict} />}</span>
+                      : <span style={{ color: 'var(--text-muted)' }}>Never</span>),
+                  },
+                  { key: 'due', header: 'Next due', render: (r) => <>{fmtDate(r.dueOn)}{r.because ? <span style={{ color: 'var(--text-muted)' }}> · {r.because}</span> : null}</> },
+                  {
+                    key: 'status', header: 'Where it stands',
+                    render: (r) => <span style={{ fontWeight: 700, color: tone[r.status] }}>{RECHECK_STATUS_LABELS[r.status]}</span>,
+                  },
+                  ...(canManage ? [{
+                    key: 'act', header: '',
+                    render: (r: RecheckStanding) => <LinkButton onClick={() => openCheckEditor(r.type)}>Record</LinkButton>,
+                  }] : []),
+                ]}
+              />
+            )}
+          </Section>
+        );
+      })()}
 
       <Section
         title="Standing with each bank"
@@ -1822,7 +2427,7 @@ export const AssayerVettingTab: React.FC<{
         action={canManage ? (
           <LinkButton
             icon={<Plus size={11} />}
-            onClick={() => setEditor({ kind: 'reference', fullName: '', relationship: '', phone: '' })}
+            onClick={() => setEditor({ kind: 'reference', fullName: '', relationship: '', phone: '', email: '' })}
           >
             Add reference
           </LinkButton>
@@ -1839,13 +2444,20 @@ export const AssayerVettingTab: React.FC<{
             columns={[
               { key: 'name', header: 'Name', render: (r) => <>{r.fullName}</> },
               { key: 'rel', header: 'Relationship', render: (r) => <>{r.relationship || '—'}</> },
-              { key: 'phone', header: 'Phone', render: (r) => <>{r.phone || '—'}</> },
+              { key: 'phone', header: 'Phone', render: (r) => <>{referencePhoneForDisplay(r.phone) || '—'}</> },
+              { key: 'email', header: 'Email', wrap: true, render: (r) => <>{r.email || '—'}</> },
               {
                 key: 'checked',
                 header: 'Spoken to',
                 render: (r) => (r.checkedAt
                   ? <span style={{ color: 'var(--success)' }}><Check size={12} style={{ verticalAlign: '-2px' }} /> {fmtDate(r.checkedAt)}</span>
                   : <span style={{ color: 'var(--text-muted)' }}>Not yet</span>),
+              },
+              {
+                key: 'told',
+                header: 'Told to expect a call',
+                wrap: true,
+                render: (r) => <>{referenceNoticeLine(r)}</>,
               },
               ...(canManage ? [{
                 key: 'act',
@@ -1870,10 +2482,16 @@ export const AssayerVettingTab: React.FC<{
                         fullName: r.fullName ?? '',
                         relationship: r.relationship ?? '',
                         phone: r.phone ?? '',
+                        email: r.email ?? '',
                       })}
                     >
                       Change
                     </LinkButton>
+                    {!r.checkedAt && (r.email || r.phone) && (
+                      <LinkButton onClick={() => void notifyReferee(r)}>
+                        {r.notifiedAt ? 'Tell them again' : 'Tell them'}
+                      </LinkButton>
+                    )}
                     <LinkButton tone="danger" onClick={() => removeReference(r)}>Remove</LinkButton>
                   </RowActions>
                 ),
@@ -1905,7 +2523,7 @@ export const AssayerVettingTab: React.FC<{
           ignore the columns; showing an expiry box against a code-of-conduct letter taught them
           to ignore the expiry.
         */}
-        <div style={{ ...label, marginBottom: '8px' }}>Identity</div>
+        <div style={{ ...label, marginBottom: '8px' }}>Identity and bank</div>
         <DataTable
           density="compact"
           minWidth={false}
@@ -1922,7 +2540,11 @@ export const AssayerVettingTab: React.FC<{
               header: 'Number',
               render: (d) => (d.documentNumber
                 ? <code style={{ fontSize: 'var(--text-xs)' }}>{d.documentNumber}</code>
-                : <span style={{ color: 'var(--text-muted)' }}>—</span>),
+                : d.requirement === 'BANK_PASSBOOK'
+                  // The number a passbook is checked against is the record's account, which is set
+                  // on the record's own bank details — not typed here.
+                  ? <span style={{ color: 'var(--text-muted)' }}>No account on the record</span>
+                  : <span style={{ color: 'var(--text-muted)' }}>—</span>),
             },
             {
               key: 'expires',
@@ -1954,7 +2576,8 @@ export const AssayerVettingTab: React.FC<{
               header: '',
               render: (d: typeof paperwork.identity[number]) => (
                 <RowActions>
-                  <LinkButton onClick={() => setEditor({
+                  {/* Not for the passbook: its number is the record's account, changed on the bank details. */}
+                  {d.identity && <LinkButton onClick={() => setEditor({
                     kind: 'identity',
                     requirement: d.requirement, label: d.label,
                     // Empty, never the stored value: what the row holds is a mask (see
@@ -1966,11 +2589,23 @@ export const AssayerVettingTab: React.FC<{
                     {/* "Edit" promised the stored number in the box. It cannot be there — it is
                         masked — so the button says what actually happens: you type a new one. */}
                     {d.documentNumber ? 'Replace number' : 'Add number'}
-                  </LinkButton>
+                  </LinkButton>}
                   {d.id && d.documentNumber && d.verificationStatus !== 'VERIFIED' && (
                     <>
-                      <LinkButton onClick={() => setPrintedTarget(d)}>Verify</LinkButton>
-                      <LinkButton onClick={() => setRejectTarget(d)}>Send back</LinkButton>
+                      <LinkButton
+                        onClick={() => setPrintedTarget(d)}
+                        disabled={reviewLocked}
+                        label={reviewLocked ? `Verify — ${reviewLockHint}` : undefined}
+                      >
+                        Verify
+                      </LinkButton>
+                      <LinkButton
+                        onClick={() => setRejectTarget(d)}
+                        disabled={reviewLocked}
+                        label={reviewLocked ? `Send back — ${reviewLockHint}` : undefined}
+                      >
+                        Send back
+                      </LinkButton>
                     </>
                   )}
                   <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />
@@ -1994,7 +2629,9 @@ export const AssayerVettingTab: React.FC<{
               // The scan itself where there is one; the tick only where somebody said a copy
               // arrived without attaching it. A column that can show the document should.
               render: (d) => ((d.filePaths ?? []).length > 0
-                ? <Attachments documentId={d.id} filePaths={d.filePaths} canManage={canManage} onRemoved={reload} onError={setErr} documentLabel={d.label} />
+                // A background check's report is removed, if at all, on the Background tab, where it
+                // is plain which files a recorded check rests on (those cannot be removed).
+                ? <Attachments documentId={d.id} filePaths={d.filePaths} canManage={canManage && !checkTypeForReport(d.requirement)} onRemoved={reload} onError={setErr} documentLabel={d.label} />
                 : <NoScan claimed={d.softCopyReceived} />),
             },
             { key: 'hard', header: 'Hard copy', render: (d) => <>{yesNo(d.hardCopyReceived)}</> },
@@ -2011,7 +2648,12 @@ export const AssayerVettingTab: React.FC<{
               header: '',
               render: (d: typeof paperwork.joining[number]) => (
                 <RowActions>
-                  <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />
+                  {checkTypeForReport(d.requirement)
+                    // Uploaded with the agency that produced it, which is asked on the Background tab.
+                    ? (onGoToChecks
+                      ? <LinkButton onClick={onGoToChecks}>Upload on the Background tab</LinkButton>
+                      : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Uploaded on the Background tab</span>)
+                    : <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />}
                   {/*
                     "Original in" / "Original out" is filing-room shorthand for a toggle: it does
                     not say what pressing it records, and the two read as a pair of opposite

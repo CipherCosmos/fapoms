@@ -647,8 +647,8 @@ export const Branches: React.FC = () => {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>SOL ID</th>
-                    <th>Branch Name</th><th>City / State</th><th>Region</th><th>Risk</th><th>Type</th><th>Actions</th>
+                    <th title="Branch service code from the client register">SOL ID</th>
+                    <th title="Branch name">Branch Name</th><th title="City and state where this branch sits">City / State</th><th title="Planning region derived from the state">Region</th><th title="Risk level, higher means priority auditing">Risk</th><th title="Branch size and complexity type">Type</th><th title="Edit or delete this branch">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -673,7 +673,7 @@ export const Branches: React.FC = () => {
                       <td style={{ fontSize: 'var(--text-sm)' }}>{b.city}, {b.state}</td>
                       <td style={{ fontSize: 'var(--text-sm)' }}>{regionLabel(b.region)}</td>
                       <td>
-                        <StatusBadge label={riskCategoryLabel(b.riskCategory)} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
+                        <StatusBadge label={riskCategoryLabel(b.riskCategory)} title={`${riskCategoryLabel(b.riskCategory)} risk — ${b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'needs priority auditing' : 'routine auditing'}`} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
                       </td>
                       <td style={{ fontSize: 'var(--text-xs)' }}>{branchTypeLabel(b.branchType)}</td>
                       <td onClick={(e) => e.stopPropagation()}>
@@ -745,7 +745,7 @@ export const Branches: React.FC = () => {
                           of confidence. */}
                       <GeoPrecisionBadge source={branchDetail.geoSource} matchedName={branchDetail.geoMatchedName} />
                       <a href={`https://www.openstreetmap.org/?mlat=${branchDetail.latitude}&mlon=${branchDetail.longitude}#map=17/${branchDetail.latitude}/${branchDetail.longitude}`}
-                        target="_blank" rel="noopener noreferrer"
+                        target="_blank" rel="noopener noreferrer" title="Open this branch location on OpenStreetMap in a new tab"
                         style={{ fontSize: 'var(--text-2xs)', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
                         <Map size={14} /> Check on the map
                       </a>
@@ -1067,6 +1067,7 @@ export const BranchFormModal: React.FC<{
         <Select value={form[key]} onChange={opts.onChange ?? set(key)}
           placeholder={opts?.placeholder || 'Select...'}
           options={opts.options}
+          title={`Choose the ${label.toLowerCase()} for this branch`}
           style={{ width: '100%' }}
         />
       ) : opts?.geo ? (
@@ -1081,7 +1082,7 @@ export const BranchFormModal: React.FC<{
           filterType={(r) => (opts.geo === 'pincode' ? !!r.pincode : true)}
         />
       ) : (
-        <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => (opts?.onChange ?? set(key))(e.target.value)} required={opts?.required} placeholder={opts?.placeholder}
+        <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => (opts?.onChange ?? set(key))(e.target.value)} required={opts?.required} placeholder={opts?.placeholder} title={`Type the ${label.toLowerCase()} for this branch`}
           style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)' }} />
       )}
       {opts?.hint && <span style={{ display: 'block', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '3px' }}>{opts.hint}</span>}
@@ -1140,8 +1141,8 @@ export const BranchFormModal: React.FC<{
   return (
     <Modal open onClose={onClose} title={<><Building2 size={18} /> {title}</>} width="640px" maxHeight="90vh" asForm onSubmit={handleSubmit} bodyStyle={{ overflowY: 'auto' }} footer={
       <>
-        <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-        <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save'}</button>
+        <button type="button" onClick={onClose} title="Close without saving changes" className="btn btn-secondary" disabled={submitting}>Cancel</button>
+        <button type="submit" disabled={submitting} title={branchId ? 'Save changes to this branch' : 'Create this new branch'} className="btn btn-primary">{submitting ? 'Saving...' : 'Save'}</button>
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -1204,6 +1205,7 @@ export const BranchFormModal: React.FC<{
         <button
           type="button"
           onClick={() => setShowAdvanced(v => !v)}
+          title={showAdvanced ? 'Hide extra branch fields' : 'Show zone, dates and other extra fields'}
           style={{ gridColumn: '1 / -1', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: 'var(--text-xs)', fontWeight: 600 }}
         >
           <ChevronDown size={13} style={{ transform: showAdvanced ? 'rotate(180deg)' : '' }} />
@@ -1312,8 +1314,8 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
   return (
     <Modal open onClose={onClose} title={<><User size={16} /> Add Branch Contact</>} width="480px" asForm onSubmit={handleSubmit} footer={
       <>
-        <button type="button" onClick={onClose} className="btn btn-secondary" disabled={submitting}>Cancel</button>
-        <button type="submit" disabled={submitting} className="btn btn-primary">{submitting ? 'Saving...' : 'Save Contact'}</button>
+        <button type="button" onClick={onClose} title="Close without adding this contact" className="btn btn-secondary" disabled={submitting}>Cancel</button>
+        <button type="submit" disabled={submitting} title="Save this contact on the branch" className="btn btn-primary">{submitting ? 'Saving...' : 'Save Contact'}</button>
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -1335,7 +1337,7 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
             </label>
             <div style={{ position: 'relative' }}>
               {f.tel && <span aria-hidden style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', pointerEvents: 'none' }}>+91</span>}
-              <input id={`branch-contact-${f.label}`} placeholder={f.placeholder} type={f.tel ? 'tel' : f.type || 'text'} inputMode={f.tel ? 'numeric' : undefined}
+              <input id={`branch-contact-${f.label}`} placeholder={f.placeholder} type={f.tel ? 'tel' : f.type || 'text'} inputMode={f.tel ? 'numeric' : undefined} title={`Type the contact's ${f.label.toLowerCase()}`}
                 value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
                 style={{ width: '100%', boxSizing: 'border-box', padding: '8px', paddingLeft: f.tel ? '38px' : '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)' }} />
             </div>
@@ -1343,7 +1345,7 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
         ))}
         <div style={{ gridColumn: '1 / -1' }}>
           <label htmlFor="branch-contact-notes" style={{ display: 'block', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Notes</label>
-          <textarea id="branch-contact-notes" placeholder="Anything worth remembering about this contact" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+          <textarea id="branch-contact-notes" placeholder="Anything worth remembering about this contact" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} title="Type anything worth remembering about this contact"
             style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)', resize: 'vertical' }} />
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>

@@ -49,6 +49,13 @@ export class AssayerDocumentEntity extends BaseEntity {
   @Column({ name: 'hard_copy_location', type: 'varchar', length: 120, nullable: true })
   hardCopyLocation: string | null;
 
+  /**
+   * Who issued it, where that matters and is typed — today the agency behind a background
+   * verification report, which cannot be uploaded without it. Replaced by each new upload.
+   */
+  @Column({ name: 'issued_by', type: 'varchar', length: 200, nullable: true })
+  issuedBy: string | null;
+
   @Column({ name: 'courier_reference', type: 'varchar', length: 200, nullable: true })
   courierReference: string | null;
 

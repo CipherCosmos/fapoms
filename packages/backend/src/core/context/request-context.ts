@@ -69,6 +69,18 @@ export function runWithRequestContext<T>(context: RequestContext, fn: () => T): 
   return storage.run(context, fn);
 }
 
+/**
+ * Run `fn` as if outside any request — the SYSTEM scope a worker has (unscoped by tenant).
+ *
+ * For exactly one kind of caller: a signed-out public route whose own proof — a signed token, a
+ * live code — has ALREADY named the one record it may read. Without it, such a route cannot read
+ * that record at all, because an anonymous request has no organisation and tenant-scoped reads
+ * refuse it (rightly: they cannot tell who is asking). Keep what runs inside to that one record.
+ */
+export function runOutsideRequestContext<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 /** The current request's context, or `undefined` outside any request (a worker, a cron job, boot). */
 export function getRequestContext(): RequestContext | undefined {
   return storage.getStore();

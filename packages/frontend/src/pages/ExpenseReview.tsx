@@ -382,11 +382,12 @@ export const ExpenseReview: React.FC = () => {
             type="button"
             onClick={() => void runBulkApprove()}
             disabled={!!bulkProgress || !!busyId}
+            title={`Approve ${picked.rows.length} selected claims totalling ${formatRupees(pickedTotal)}`}
             style={btnStyle('var(--success, #16a34a)')}
           >
             <CheckCircle2 size={15} /> {bulkProgress ?? `Approve ${picked.rows.length} (${formatRupees(pickedTotal)})`}
           </button>
-          <button type="button" onClick={() => setSelected(new Set())} disabled={!!bulkProgress} style={btnStyle('var(--text-muted)')}>
+          <button type="button" onClick={() => setSelected(new Set())} disabled={!!bulkProgress} title="Untick all selected claims" style={btnStyle('var(--text-muted)')}>
             Clear selection
           </button>
           {/* Rejecting is per claim on purpose: the reason is written for that assayer. */}
@@ -424,13 +425,14 @@ export const ExpenseReview: React.FC = () => {
         title="Reject expense claim"
         footer={
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" onClick={() => { setRejecting(null); setRejectPreset(''); setRejectReason(''); }} style={btnStyle('var(--text-muted)')}>
+            <button type="button" onClick={() => { setRejecting(null); setRejectPreset(''); setRejectReason(''); }} title="Close without rejecting this claim" style={btnStyle('var(--text-muted)')}>
               Cancel
             </button>
             <button
               type="button"
               onClick={() => void confirmReject()}
               disabled={!effectiveRejectReason || busyId === rejecting?.id}
+              title="Reject this claim with the reason above"
               style={btnStyle('var(--danger, #dc2626)')}
             >
               <X size={15} /> Reject claim
@@ -465,6 +467,7 @@ export const ExpenseReview: React.FC = () => {
             onChange={(e) => setRejectReason(e.target.value)}
             rows={3}
             placeholder="Explain why this claim is being rejected — the assayer will see this."
+            title="Type the rejection reason the assayer will see"
             style={{
               width: '100%', marginTop: 8, padding: 10, borderRadius: 8, resize: 'vertical',
               border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 'var(--text-sm)',
@@ -479,7 +482,7 @@ export const ExpenseReview: React.FC = () => {
         title="Recorded movement trail"
         footer={
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" onClick={() => setInspecting(null)} style={btnStyle('var(--text-muted)')}>
+            <button type="button" onClick={() => setInspecting(null)} title="Close the movement trail view" style={btnStyle('var(--text-muted)')}>
               Close
             </button>
           </div>

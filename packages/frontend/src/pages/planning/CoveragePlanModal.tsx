@@ -201,7 +201,7 @@ export const CoveragePlanModal: React.FC<{
         ) : previewError ? (
           <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>
             <AlertTriangle size={18} /> {previewError}
-            <button onClick={loadPreview} className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Retry</button>
+            <button onClick={loadPreview} title="Try loading the coverage preview again" className="btn btn-secondary" style={{ fontSize: 'var(--text-2xs)', padding: '4px 10px' }}>Retry</button>
           </div>
         ) : preview ? (
           <>
@@ -321,20 +321,20 @@ export const CoveragePlanModal: React.FC<{
                 </div>
               </details>
             )}
-            <button onClick={onClose} className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: '4px', fontSize: 'var(--text-xs)', padding: '6px 14px' }}>Done</button>
+            <button onClick={onClose} title="Close without deploying anything" className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: '4px', fontSize: 'var(--text-xs)', padding: '6px 14px' }}>Done</button>
           </div>
         ) : (
           /* Lifecycle actions */
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
             {!plan && (
-              <button onClick={doGenerate} disabled={busy != null || loadingPreview || !!previewError} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={doGenerate} disabled={busy != null || loadingPreview || !!previewError} title="Create a first draft plan for the whole project" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 {busy === 'generate' ? <Loader2 size={14} className="spin" /> : null} Generate plan version
               </button>
             )}
             {plan && !approved && (
               <>
                 <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Version {plan.currentVersion} · <b>{plan.status}</b></span>
-                <button onClick={doApprove} disabled={busy != null} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button onClick={doApprove} disabled={busy != null} title="Approve this plan so it can be deployed" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   {busy === 'approve' ? <Loader2 size={14} className="spin" /> : <CheckCircle2 size={14} />} Approve plan
                 </button>
               </>
@@ -354,7 +354,7 @@ export const CoveragePlanModal: React.FC<{
                   over a range instead of stacking on one day. Deploying creates <b>pending offers</b> at the
                   approved fees; every assayer still has to accept.
                 </div>
-                <button onClick={doDeploy} disabled={busy != null} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success)' }}>
+                <button onClick={doDeploy} disabled={busy != null} title="Create all assignments in this approved plan" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success)' }}>
                   {busy === 'deploy' ? <Loader2 size={14} className="spin" /> : <Rocket size={14} />} Deploy whole project
                 </button>
               </>

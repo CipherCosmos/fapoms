@@ -423,6 +423,9 @@ export const EMAIL_TEMPLATE_TOKEN_HELP: Record<string, string> = {
   intro: 'The standard opening paragraph for this email — leave it out and write your own instead',
   inviteUrl: 'The personal registration link. Every candidate gets a different one',
   loginUrl: 'Where to sign in to FAPOMS',
+  refereeName: 'The name of the person the candidate gave as a reference',
+  contactLine: 'Who a referee writes to if they object — the grievance officer named in Platform Settings',
+  itemsText: 'The list of what HR asked the candidate to fix — one line per document or field, each with its own instruction',
   appDownloadUrl: 'Where a field appraiser installs the phone app from — the one stable link, whatever build is behind it',
   effectiveDate: 'The date the appraiser code takes effect',
   logoUrl: 'Your company logo. Use it as an image source, not as text',
@@ -533,3 +536,29 @@ export function countSmsSegments(text: string): SmsSegmentCount {
   const segments = units <= 70 ? 1 : Math.ceil(units / 67);
   return { encoding: 'UCS-2', length: units, segments, perSegment: segments > 1 ? 67 : 70 };
 }
+
+/**
+ * A bank account number as it should be stored: the digits, with the spaces, hyphens and dots
+ * people copy out of a passbook taken out. Anything else is left in, so the shape rule below can
+ * refuse it rather than have it quietly deleted.
+ */
+export function normaliseBankAccountNumber(value: string | null | undefined): string {
+  return String(value ?? '').replace(/[\s.-]/g, '');
+}
+
+/**
+ * The only thing that can be checked about an Indian bank account number without asking a bank.
+ *
+ * There is no national check digit — unlike an IBAN, a mistyped digit still "looks right" — and
+ * lengths run from 9 to 18 depending on the bank's core system, so this refuses garbage (letters,
+ * a phone number's 10 digits are still allowed, a 6-digit fragment is not) and nothing more. The
+ * typo is caught by typing it twice (`bankAccountConfirmProblem`), and the account is proven by
+ * checking the passbook against it (`BANK_PASSBOOK` verification).
+ */
+export function isBankAccountNumber(value: string): boolean {
+  return /^\d{9,18}$/.test(normaliseBankAccountNumber(value));
+}
+
+/** The one sentence every screen and the server use when an account number fails its shape. */
+export const BANK_ACCOUNT_NUMBER_RULE =
+  'A bank account number is 9 to 18 digits — numbers only, exactly as printed in the passbook.';

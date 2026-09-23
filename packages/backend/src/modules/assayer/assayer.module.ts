@@ -15,6 +15,14 @@ import { AssayerScoreOverrideEntity } from './assayer-score-override.entity';
 import { AssayerIdempotencyEntity } from './assayer-idempotency.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerInterviewEntity } from './assayer-interview.entity';
+import { AssayerOnboardingApprovalEntity } from './assayer-onboarding-approval.entity';
+import { OnboardingApprovalService } from './onboarding-approval.service';
+import { OnboardingApprovalController } from './onboarding-approval.controller';
+import { ComplianceStandingService } from './compliance-standing.service';
+import { ComplianceReviewService } from './compliance-review.service';
+import { ComplianceController } from './compliance.controller';
+import { IdCardService } from './id-card.service';
+import { MyIdCardController, PublicIdCardController } from './id-card.controller';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
 import { QualificationScoreService } from './qualification-score.service';
@@ -84,6 +92,7 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
       AssayerImportIssueEntity,
       AssayerScoreOverrideEntity,
       AssayerInterviewEntity,
+      AssayerOnboardingApprovalEntity,
       AssayerApplicationEntity,
       AssayerApplicationDocumentEntity,
       ClientEntity,
@@ -94,16 +103,17 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
   // long-established routes first means a new self-service path can never shadow one of them.
   controllers: [
     AssayerController, HrController, AssayerSelfServiceController,
-    AssayerInterviewController, PublicRegistrationController, HrApplicationsController,
+    AssayerInterviewController, PublicRegistrationController, HrApplicationsController, OnboardingApprovalController, ComplianceController, MyIdCardController, PublicIdCardController,
   ],
   providers: [
     AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker,
     RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService,
-    RegistrationApplicationService, AssayerInterviewService, WorkforceBulkJobsService, WorkforceBulkJobsWorker,
+    RegistrationApplicationService, AssayerInterviewService, OnboardingApprovalService, ComplianceStandingService, ComplianceReviewService, IdCardService, WorkforceBulkJobsService, WorkforceBulkJobsWorker,
   ],
   exports: [
     AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService,
     QualificationScoreService, DataIntegrityService, RosterQueryService, RegistrationApplicationService,
+    ComplianceStandingService,
     TypeOrmModule,
   ],
 })

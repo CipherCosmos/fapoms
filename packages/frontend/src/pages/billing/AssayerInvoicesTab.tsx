@@ -141,6 +141,7 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
               <button
                 key={f}
                 onClick={() => changeFilter(f)}
+                title={f === 'ALL' ? `Show all ${total} assayer bills` : f === AssayerInvoiceStatus.SUBMITTED ? `Confirmed by assayers and waiting for your approval — ${count}` : `${assayerInvoiceStatusLabel(f)} bills — ${count}`}
                 style={{
                   padding: '6px 12px',
                   borderRadius: 'var(--radius-sm)',
@@ -179,6 +180,7 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
               onClick={handleGenerateCycle}
               disabled={roundBusy}
               className="btn btn-primary"
+              title="Send this cycle's bills to all assayers with unbilled work for confirmation"
               style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)', padding: '6px 14px' }}
             >
               <Send size={13} /> {roundBusy ? 'Sending…' : 'Send bills'}
@@ -212,6 +214,7 @@ export const AssayerInvoicesTab: React.FC<{ filter: AssayerInvoiceFilter; onFilt
                 onClick={handleGenerateCycle}
                 disabled={roundBusy}
                 className="btn btn-secondary"
+                title="Send this cycle's bills to all assayers with unbilled work"
                 style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 'var(--text-xs)', marginTop: 6 }}
               >
                 <Send size={13} /> Send bills
@@ -486,17 +489,17 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
       footer={(canApprove || canCancel || canRevise) ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
           {canCancel && (
-            <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" title="Cancel this bill — the payouts return to unbilled" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <Ban size={14} /> Cancel invoice
             </button>
           )}
           {canRevise && (
-            <button onClick={() => setReviseOpen((o) => !o)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button onClick={() => setReviseOpen((o) => !o)} className="btn btn-secondary" title="Issue a corrected revision of this bill to the assayer" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <GitBranch size={14} /> Issue Corrected Revision
             </button>
           )}
           {canApprove && (
-            <button onClick={doApprove} disabled={approve.isPending} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button onClick={doApprove} disabled={approve.isPending} className="btn btn-primary" title={`Approve this bill — ${invoice.lineCount} lines totalling ${money(invoice.totalAmount)} become payable`} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <CheckCircle2 size={14} /> Approve ({invoice.lineCount} · {money(invoice.totalAmount)})
             </button>
           )}

@@ -183,7 +183,7 @@ export const Notifications: React.FC = () => {
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           {tab === 'inbox' && unreadCount > 0 && (
-            <button onClick={handleMarkAllRead} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)' }}>
+            <button onClick={handleMarkAllRead} title="Mark every notification as read" className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)' }}>
               <CheckCheck size={14} /> Mark all as read
             </button>
           )}
@@ -191,7 +191,7 @@ export const Notifications: React.FC = () => {
               on Preferences fetched the inbox list to update a header count and left the
               preference rows the user was looking at untouched — the one thing Refresh should
               have done there. */}
-          <button onClick={handleRefresh} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)' }}>
+          <button onClick={handleRefresh} title={tab === 'inbox' ? 'Reload the notification list' : 'Reload notification preferences'} className="btn btn-secondary" style={{ padding: '8px 14px', fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
@@ -202,6 +202,7 @@ export const Notifications: React.FC = () => {
           <button
             key={t}
             onClick={() => setTab(t)}
+            title={t === 'inbox' ? 'Show incoming notifications' : 'Choose which updates reach you and how'}
             style={{
               padding: '10px 4px', marginRight: '20px', background: 'none', border: 'none', cursor: 'pointer',
               fontSize: 'var(--text-sm)', fontWeight: 700, color: tab === t ? 'var(--text-primary)' : 'var(--text-muted)',
@@ -218,6 +219,7 @@ export const Notifications: React.FC = () => {
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
             <button
               onClick={() => setCategory(null)}
+              title="Show notifications from all categories"
               style={chipStyle(category === null)}
             >
               All
@@ -225,14 +227,14 @@ export const Notifications: React.FC = () => {
             {CATEGORIES.map((c) => {
               const meta = CATEGORY_META[c];
               return (
-                <button key={c} onClick={() => setCategory(c)} style={chipStyle(category === c)}>
+                <button key={c} onClick={() => setCategory(c)} title={`Show only ${meta.label} notifications`} style={chipStyle(category === c)}>
                   <meta.icon size={12} /> {meta.label}
                 </button>
               );
             })}
             <span style={{ width: '1px', height: '18px', background: 'var(--border-color)', margin: '0 4px' }} />
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
+              <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} title="Tick to show only unread notifications" />
               Unread only
             </label>
           </div>
@@ -243,7 +245,7 @@ export const Notifications: React.FC = () => {
             <div className="glass-card" style={{ padding: '40px', textAlign: 'center' }}>
               <div style={{ color: 'var(--danger)', fontSize: 'var(--text-base)' }}>Couldn't load notifications</div>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)', marginTop: '4px' }}>{error}</div>
-              <button onClick={() => load(0)} className="btn btn-primary" style={{ marginTop: '16px', padding: '8px 16px', fontSize: 'var(--text-xs)' }}>
+              <button onClick={() => load(0)} title="Try loading notifications again" className="btn btn-primary" style={{ marginTop: '16px', padding: '8px 16px', fontSize: 'var(--text-xs)' }}>
                 <RefreshCw size={14} /> Retry
               </button>
             </div>
@@ -284,7 +286,7 @@ export const Notifications: React.FC = () => {
                               {n.title}
                             </span>
                             {(n.priority === 'CRITICAL' || n.priority === 'HIGH') && (
-                              <span style={{
+                              <span title={n.priority === 'CRITICAL' ? 'Needs immediate attention' : 'Needs prompt attention'} style={{
                                 fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '2px 6px', borderRadius: '4px',
                                 color: n.priority === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)',
                                 background: n.priority === 'CRITICAL' ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
@@ -319,6 +321,7 @@ export const Notifications: React.FC = () => {
                 <button
                   onClick={() => load(offset + PAGE_SIZE)}
                   disabled={loadingMore}
+                  title={`Load next ${Math.min(PAGE_SIZE, total - notifications.length)} notifications`}
                   className="btn btn-secondary"
                   style={{ alignSelf: 'center', padding: '9px 20px', fontSize: 'var(--text-xs)' }}
                 >

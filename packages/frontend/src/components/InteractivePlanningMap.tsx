@@ -1476,7 +1476,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             </div>
           </div>
         ) : (
-          <button type="button" onClick={() => setShowLegend(true)} style={{
+          <button type="button" onClick={() => setShowLegend(true)} title="Show what the map colours and symbols mean" style={{
             position: 'absolute',
             bottom: '20px',
             left: '20px',

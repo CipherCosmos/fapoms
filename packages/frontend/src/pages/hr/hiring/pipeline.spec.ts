@@ -74,7 +74,7 @@ describe('what the row says is needed next', () => {
 
   it('names the joining step a person is on', () => {
     expect(assayerRow(person({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION })).needs)
-      .toBe('Record the result of their background check');
+      .toBe('Record the result of their background check, then send them for approval');
   });
 
   /** The same gaps the server refuses to activate without — not a vague "incomplete". */
@@ -170,9 +170,10 @@ describe('waiting time', () => {
 });
 
 describe('the chips', () => {
-  it('marks as a task only the two stages where somebody is waiting on this desk', () => {
+  it('marks as a task only the stages where somebody is waiting on a decision', () => {
     const alerting = PIPELINE_STAGES.filter((s) => s.tone === 'alert').map((s) => s.key);
-    expect(alerting).toEqual(['to-review', 'ready']);
+    // The approval before training is the approver's queue (2026-09-23).
+    expect(alerting).toEqual(['to-review', 'approval', 'ready']);
   });
 });
 
@@ -199,5 +200,14 @@ describe('a withdrawn application', () => {
   /** Closed, not a task: nobody is waiting on the desk for this one. */
   it('asks nothing of the desk', () => {
     expect(PIPELINE_STAGES.find((s) => s.key === 'closed')!.tone).not.toBe('alert');
+  });
+});
+
+describe('awaiting approval', () => {
+  it('is its own queue, saying who acts', () => {
+    const row = assayerRow(person({ lifecycleStatus: AssayerLifecycleStatus.FINAL_APPROVAL }));
+    expect(row.stage).toBe('approval');
+    expect(row.needs).toBe('A senior approves them before training');
+    expect(row.stageLabel).toBe('Awaiting Approval');
   });
 });

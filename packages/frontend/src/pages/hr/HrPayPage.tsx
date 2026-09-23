@@ -264,6 +264,7 @@ export const HrPayPage: React.FC = () => {
           onClick={refresh}
           disabled={refreshing}
           className="btn btn-secondary"
+          title={refreshing ? 'Reloading pay figures…' : 'Reload pay figures from the server'}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', padding: '4px 10px' }}
         >
           <RefreshCw size={12} className={refreshing ? 'spin' : undefined} /> {refreshing ? 'Refreshing…' : 'Refresh'}
@@ -271,15 +272,15 @@ export const HrPayPage: React.FC = () => {
       </div>
 
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-        <button onClick={() => setFilter('all')} style={tile(filter === 'all')}>
+        <button onClick={() => setFilter('all')} title={`Show all ${roster.length} people on the roster`} style={tile(filter === 'all')}>
           <div style={statValue}>{roster.length}</div>
           <div style={label}>On the roster</div>
         </button>
-        <button onClick={() => setFilter('priced')} style={tile(filter === 'priced')}>
+        <button onClick={() => setFilter('priced')} title="Show only people with their own agreed fee" style={tile(filter === 'priced')}>
           <div style={statValue}>{roster.length - unpricedCount}</div>
           <div style={label}>Paid their own agreed fee</div>
         </button>
-        <button onClick={() => setFilter('unpriced')} style={tile(filter === 'unpriced', unpricedCount > 0)}>
+        <button onClick={() => setFilter('unpriced')} title={unpricedCount > 0 ? `Show the ${unpricedCount} people paid at the client's default fee` : 'Nobody is on the default fee right now'} style={tile(filter === 'unpriced', unpricedCount > 0)}>
           <div style={{ ...statValue, color: unpricedCount > 0 ? 'var(--warning)' : undefined }}>{unpricedCount}</div>
           <div style={label}>Paid the client's default fee</div>
         </button>
@@ -490,7 +491,7 @@ export const HrPayPage: React.FC = () => {
               header: '',
               align: 'right',
               render: (a) => (canManage ? (
-                <button onClick={() => setEditing({ assayerId: a.id, profile: pay[a.id]?.profile ?? null })}
+                <button onClick={() => setEditing({ assayerId: a.id, profile: pay[a.id]?.profile ?? null })} title={pay[a.id]?.profile ? `Change the agreed pay for ${a.displayName}` : `Set the agreed pay for ${a.displayName}`}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-xs)', fontWeight: 600, padding: '5px 10px', borderRadius: '7px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
                   {pay[a.id]?.profile ? <><Pencil size={12} /> Change pay</> : <><Plus size={12} /> Set pay terms</>}
                 </button>

@@ -1,4 +1,5 @@
-import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException, Optional } from '@nestjs/common';
+import { ComplianceStandingService } from '../assayer/compliance-standing.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, In, LessThan, Raw, EntityManager, IsNull , Not } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -226,7 +227,25 @@ export class AssignmentService {
     private readonly cache: CacheService,
     private readonly billingEngine: BillingEngineService,
     private readonly targetEligibility: AssignmentTargetEligibilityService,
+    /** Re-checks over time: who is held from new work. Optional so older specs build unchanged. */
+    @Optional() private readonly compliance?: ComplianceStandingService,
   ) {}
+
+  /**
+   * Refuse NEW work for somebody held on compliance grounds — a re-check overdue past its grace
+   * period, or an adverse re-check waiting for a senior. Not overridable by a typed reason: the
+   * remedy is on their record (record the check, or decide it). Work already assigned is untouched,
+   * so this is asked where work is created, offered for acceptance, or moved to them — never at
+   * check-in.
+   */
+  private async assertNotComplianceHeld(assayerId: string, who: string): Promise<void> {
+    const blockers = (await this.compliance?.workBlockers(assayerId)) ?? [];
+    if (blockers.length === 0) return;
+    throw withCode(
+      new BadRequestException(`${who} cannot be given new work: ${blockers.join('; ')}. Record it on their Background tab.`),
+      ASSIGNMENT_ERROR_CODES.ASSAYER_COMPLIANCE_BLOCKED,
+    );
+  }
 
 
 
@@ -946,6 +965,7 @@ export class AssignmentService {
 
       // Lock assayer row to serialize concurrent assignments and prevent double-booking races
       await manager.query('SELECT id FROM assayers WHERE id = $1 FOR UPDATE', [dto.assayerId]);
+      await this.assertNotComplianceHeld(dto.assayerId, assayer.displayName ?? assayer.assayerCode ?? 'This assayer');
 
       /**
        * The authoritative evaluation, under the empanelment row's own lock.
@@ -1459,6 +1479,8 @@ export class AssignmentService {
             `Assayer ${assayer.assayerCode || assayer.id} is '${assayer.status}' and cannot accept assignments.`,
           );
         }
+        // Accepting an offer is taking on new work.
+        await this.assertNotComplianceHeld(assignment.assayerId, assayer?.displayName ?? 'This assayer');
       }
       if (fee !== undefined) {
         assignment.agreedFee = fee;
@@ -2323,6 +2345,7 @@ export class AssignmentService {
         `Cannot reassign to assayer ${newAssayer.assayerCode}: status is '${newAssayer.status}' (must be ACTIVE).`,
       );
     }
+    await this.assertNotComplianceHeld(newAssayer.id, newAssayer.displayName ?? newAssayer.assayerCode);
 
     return await this.uow.run(async (manager, emit) => {
       // Global Lock Ordering: Level 3 (Assayer ordered by ID) -> Level 4 (Assignment)

@@ -4,11 +4,15 @@ import {
   ASSAYER_TERMINAL_LIFECYCLE,
   canTransitionAssayerLifecycle,
   nextAssayerLifecycleStates,
+  mayReopenBackgroundVerification,
+  mayReopenFinalApproval,
+  reopenTargetFor,
   assayerLifecyclePath,
   ONBOARDING_STAGES,
   DEPARTED_LIFECYCLE_STATES,
 } from './assayer-lifecycle';
 import { operationalStatusFor } from './assayer-record';
+import { AssayerUnavailableReason } from './assayer-roster-vocabulary';
 
 /**
  * THE WHOLE LIFECYCLE GRAPH, WRITTEN OUT BY HAND.
@@ -36,7 +40,7 @@ import { operationalStatusFor } from './assayer-record';
  * illegal and are the pairs a naive `includes` check is most likely to get wrong.
  */
 
-/** The 23 edges the business actually permits, keyed `FROM->TO`. */
+/** The 27 edges the business actually permits, keyed `FROM->TO`. */
 const LEGAL_EDGES: ReadonlySet<string> = new Set([
   // Joining. One way in, one stage at a time; the chain cannot be short-circuited.
   'INVITED->DOCUMENT_VERIFICATION',
@@ -48,12 +52,16 @@ const LEGAL_EDGES: ReadonlySet<string> = new Set([
   'INVITED->ARCHIVED',
   'DOCUMENT_VERIFICATION->ARCHIVED',
   'DOCUMENT_VERIFICATION->BACKGROUND_VERIFICATION',
-  'BACKGROUND_VERIFICATION->TRAINING',
+  // The senior's approval sits between HR's checks and training (2026-09-23); TRAINING is
+  // reached only through it.
+  'BACKGROUND_VERIFICATION->FINAL_APPROVAL',
+  'FINAL_APPROVAL->TRAINING',
   'TRAINING->ACTIVE',
 
   // Abandoning the joining chain part-way. Every stage after INVITED can be parked.
   'DOCUMENT_VERIFICATION->INACTIVE',
   'BACKGROUND_VERIFICATION->INACTIVE',
+  'FINAL_APPROVAL->INACTIVE',
   'TRAINING->INACTIVE',
 
   // Working life.
@@ -67,6 +75,12 @@ const LEGAL_EDGES: ReadonlySet<string> = new Set([
   'ON_LEAVE->INACTIVE',
   'SUSPENDED->ACTIVE',
   'INACTIVE->ACTIVE',
+
+  // Re-verifying somebody who did not pass background verification — offered and allowed only
+  // for the BGV_FAILED reason (see `mayReopenBackgroundVerification`); the edge itself is here.
+  'INACTIVE->BACKGROUND_VERIFICATION',
+  // Putting somebody rejected at approval up for it again — only for APPROVAL_REJECTED.
+  'INACTIVE->FINAL_APPROVAL',
 
   // Leaving for good. Note the asymmetry: resignation is reachable from ACTIVE, dismissal is
   // not — a termination is only ever reached through a suspension, which is what puts the
@@ -91,11 +105,12 @@ describe('the assayer lifecycle graph', () => {
    * a twelfth state added to the enum without a line here would silently go untested, and the
    * "every pair" claim in this file's header would quietly become false.
    */
-  it('has exactly the eleven canonical states', () => {
+  it('has exactly the twelve canonical states', () => {
     expect(ALL_STATES).toEqual([
       AssayerLifecycleStatus.INVITED,
       AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
       AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+      AssayerLifecycleStatus.FINAL_APPROVAL,
       AssayerLifecycleStatus.TRAINING,
       AssayerLifecycleStatus.ACTIVE,
       AssayerLifecycleStatus.ON_LEAVE,
@@ -107,13 +122,13 @@ describe('the assayer lifecycle graph', () => {
     ]);
   });
 
-  it('permits exactly twenty-three edges and no others', () => {
+  it('permits exactly twenty-seven edges and no others', () => {
     const actual = new Set<string>();
     for (const from of ALL_STATES) {
       for (const to of ASSAYER_LIFECYCLE_TRANSITIONS[from] ?? []) actual.add(`${from}->${to}`);
     }
     expect([...actual].sort()).toEqual([...LEGAL_EDGES].sort());
-    expect(actual.size).toBe(23);
+    expect(actual.size).toBe(27);
   });
 
   /**
@@ -124,7 +139,54 @@ describe('the assayer lifecycle graph', () => {
     it.each(ALL_STATES)(`to %s`, (to) => {
       const expected = LEGAL_EDGES.has(`${from}->${to}`);
       expect(canTransitionAssayerLifecycle(from, to)).toBe(expected);
-      expect(nextAssayerLifecycleStates(from).includes(to)).toBe(expected);
+      // Offered as the map says, except the four edges that are decisions or re-opens, which
+      // `offered edges` below pins one by one.
+      const conditional = [
+        'FINAL_APPROVAL->TRAINING', 'FINAL_APPROVAL->INACTIVE', 'INACTIVE->BACKGROUND_VERIFICATION', 'INACTIVE->FINAL_APPROVAL',
+      ].includes(`${from}->${to}`);
+      if (!conditional) expect(nextAssayerLifecycleStates(from).includes(to)).toBe(expected);
+    });
+  });
+
+  /** The conditional edge: re-opening background verification is for those who did not pass it. */
+  /** The edges that exist but are not plain stage buttons. */
+  describe('offered edges', () => {
+    it('offers no stage button out of approval — both ways out are the approver\'s decision', () => {
+      expect(nextAssayerLifecycleStates(AssayerLifecycleStatus.FINAL_APPROVAL)).toEqual([]);
+    });
+
+    it('offers each re-open only for its own reason', () => {
+      const I = AssayerLifecycleStatus.INACTIVE;
+      expect(nextAssayerLifecycleStates(I, AssayerUnavailableReason.APPROVAL_REJECTED))
+        .toEqual([AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.FINAL_APPROVAL, AssayerLifecycleStatus.ARCHIVED]);
+      expect(nextAssayerLifecycleStates(I, AssayerUnavailableReason.BGV_FAILED))
+        .toEqual([AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.ARCHIVED]);
+      expect(reopenTargetFor(AssayerUnavailableReason.APPROVAL_REJECTED)).toBe(AssayerLifecycleStatus.FINAL_APPROVAL);
+      expect(mayReopenFinalApproval(I, AssayerUnavailableReason.APPROVAL_REJECTED)).toBe(true);
+      expect(mayReopenFinalApproval(I, AssayerUnavailableReason.BGV_FAILED)).toBe(false);
+    });
+  });
+
+  describe('re-opening background verification', () => {
+    const I = AssayerLifecycleStatus.INACTIVE;
+    const B = AssayerLifecycleStatus.BACKGROUND_VERIFICATION;
+
+    it('is offered to somebody parked because it was not passed', () => {
+      expect(mayReopenBackgroundVerification(I, AssayerUnavailableReason.BGV_FAILED)).toBe(true);
+      expect(nextAssayerLifecycleStates(I, AssayerUnavailableReason.BGV_FAILED)).toContain(B);
+    });
+
+    it.each([null, undefined, AssayerUnavailableReason.NOT_INTERESTED, AssayerUnavailableReason.DECEASED])(
+      'is not offered to anybody else inactive (reason %s)', (reason) => {
+        expect(mayReopenBackgroundVerification(I, reason)).toBe(false);
+        expect(nextAssayerLifecycleStates(I, reason)).not.toContain(B);
+        // Their other moves are untouched.
+        expect(nextAssayerLifecycleStates(I, reason)).toEqual([AssayerLifecycleStatus.ACTIVE, AssayerLifecycleStatus.ARCHIVED]);
+      },
+    );
+
+    it('is only a move out of INACTIVE', () => {
+      expect(mayReopenBackgroundVerification(AssayerLifecycleStatus.TRAINING, AssayerUnavailableReason.BGV_FAILED)).toBe(false);
     });
   });
 
@@ -148,10 +210,11 @@ describe('the assayer lifecycle graph', () => {
     for (const to of ALL_STATES) {
       expect(canTransitionAssayerLifecycle(AssayerLifecycleStatus.ARCHIVED, to)).toBe(false);
     }
-    // And nothing else is terminal: every other state can go somewhere.
+    // And nothing else is terminal: every other state can go somewhere — by the graph. (Awaiting
+    // approval offers no stage BUTTON, because both ways out are the approver's decision.)
     for (const from of ALL_STATES) {
       if (from === AssayerLifecycleStatus.ARCHIVED) continue;
-      expect(nextAssayerLifecycleStates(from).length).toBeGreaterThan(0);
+      expect((ASSAYER_LIFECYCLE_TRANSITIONS[from] ?? []).length).toBeGreaterThan(0);
     }
   });
 
@@ -299,13 +362,18 @@ describe('bulk path-finding', () => {
     }
   });
 
-  it('walks a new joiner through all four joining stages, never around them', () => {
-    expect(assayerLifecyclePath(AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.ACTIVE)).toEqual([
+  it('walks a new joiner up to the approval, never around it', () => {
+    expect(assayerLifecyclePath(AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.FINAL_APPROVAL)).toEqual([
       AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
       AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
-      AssayerLifecycleStatus.TRAINING,
-      AssayerLifecycleStatus.ACTIVE,
+      AssayerLifecycleStatus.FINAL_APPROVAL,
     ]);
+  });
+
+  /** A bulk move cannot "approve" anybody: the approval is a decision, not a corridor. */
+  it('finds no way through the approval to training or work', () => {
+    expect(assayerLifecyclePath(AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.ACTIVE)).toBeNull();
+    expect(assayerLifecyclePath(AssayerLifecycleStatus.BACKGROUND_VERIFICATION, AssayerLifecycleStatus.TRAINING)).toBeNull();
   });
 
   /**

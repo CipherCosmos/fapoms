@@ -251,7 +251,7 @@ export const DocumentPreviewModal: React.FC<{
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: '4px', marginBottom: '16px' }}>
               Preview is not available for this file type.
             </div>
-            <button type="button" onClick={handleDownload} className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '7px 14px' }}>
+            <button type="button" onClick={handleDownload} title="Download this file to view it" className="btn btn-primary" style={{ fontSize: 'var(--text-xs)', padding: '7px 14px' }}>
               Download to view
             </button>
           </div>

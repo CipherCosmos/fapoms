@@ -7,7 +7,7 @@ import { memoryStorage } from 'multer';
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import {
-  IsEnum, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, MinLength,
+  IsArray, IsEnum, IsInt, IsObject, IsOptional, IsString, Max, MaxLength, Min, MinLength,
 } from 'class-validator';
 import { OnboardingDocument, EmploymentCategory } from '@fapoms/shared';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
@@ -80,6 +80,20 @@ export class UpdateDraftRequestDto implements UpdateApplicationDraftDto {
 
   @IsOptional() @IsEnum(EmploymentCategory)
   employmentCategory?: EmploymentCategory;
+
+  /**
+   * People who can vouch for the candidate — up to three. Normalized server-side (trimmed,
+   * empties dropped, capped); submit refuses an application with nobody ringable on it.
+   */
+  @IsOptional() @IsArray()
+  references?: Array<Record<string, unknown>>;
+
+  /**
+   * Who referred them — the source reference. The candidate may fill it only while HR has not;
+   * the service refuses a change to HR's entry. `null` clears their own.
+   */
+  @IsOptional() @IsObject()
+  sourceReferral?: Record<string, unknown> | null;
 
   /**
    * The rest of the person, keyed by the assayer record's own field names.

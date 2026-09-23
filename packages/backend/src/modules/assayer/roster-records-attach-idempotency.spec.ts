@@ -93,6 +93,28 @@ describe('RosterRecordsService.attachFile, repeated with keys it already holds',
     return { service, documents, versions, assayers, auditService };
   };
 
+  /**
+   * A background verification report is produced by an outside agency, and is not accepted without
+   * its name — refused before anything is written, so nothing is left half-attached.
+   */
+  it('refuses a background verification report with no agency, writing nothing', async () => {
+    const ctx = harness();
+    await expect(ctx.service.attachFile('as-1', OnboardingDocument.BGV_REPORT, 'uploads/bgv.pdf', 'hr-1'))
+      .rejects.toThrow(/Name the agency/);
+    await expect(ctx.service.attachFile('as-1', OnboardingDocument.BGV_REPORT, 'uploads/bgv.pdf', 'hr-1', undefined, '   '))
+      .rejects.toThrow(/Name the agency/);
+    expect(ctx.documents).toHaveLength(0);
+    expect(ctx.versions).toHaveLength(0);
+  });
+
+  it('keeps the agency with the report, and asks no agency of any other document', async () => {
+    const ctx = harness();
+    await ctx.service.attachFile('as-1', OnboardingDocument.BGV_REPORT, 'uploads/bgv.pdf', 'hr-1', undefined, ' AuthBridge ');
+    expect(ctx.documents[0].issuedBy).toBe('AuthBridge');
+
+    await expect(ctx.service.attachFile('as-1', OnboardingDocument.PAN_CARD, 'uploads/pan.png', 'hr-1')).resolves.toBeDefined();
+  });
+
   it('files a scan it already holds only once, however often promotion is retried', async () => {
     const ctx = harness();
     await ctx.service.attachFile('as-1', OnboardingDocument.PAN_CARD, 'uploads/pan.png', 'hr-1');

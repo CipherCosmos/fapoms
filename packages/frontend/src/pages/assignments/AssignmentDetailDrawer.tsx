@@ -299,6 +299,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                     }
                   }}
                   disabled={actionBusy}
+                  title="Accept this offer on behalf of the assayer"
                   className="btn btn-primary"
                   style={{
                     padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-sm)',
@@ -317,6 +318,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                     }
                   }}
                   disabled={actionBusy}
+                  title="Mark this audit as complete"
                   className="btn btn-primary"
                   style={{
                     padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-sm)',
@@ -329,6 +331,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
               {canReassign && !canAcceptOffer && !canComplete && (
                 <button
                   onClick={() => navigate(planningLinkFor(assignment))}
+                  title="Open Planning to choose another assayer for this branch"
                   className="btn btn-primary"
                   style={{ padding: '8px 16px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-sm)', fontWeight: 700 }}
                 >
@@ -339,6 +342,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 <button
                   onClick={() => setShowMoreActions(v => !v)}
                   disabled={actionBusy}
+                  title={showMoreActions ? 'Hide extra actions' : 'Show reject, cancel and escalate actions'}
                   className="btn btn-secondary"
                   style={{ padding: '8px 12px', minHeight: 'var(--touch-target-min)', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 'auto' }}
                   aria-expanded={showMoreActions}
@@ -350,22 +354,22 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
             {showMoreActions && (
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', padding: '8px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-primary)', border: '1px solid var(--border-hair)' }}>
                 {canAcceptOffer && (
-                  <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
+                  <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} title="Reject this offer with a reason" className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
                     ✕ Reject Offer
                   </button>
                 )}
                 {canCancel && (
-                  <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                  <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} title="Cancel this assignment with a reason" className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-secondary)' }}>
                     🚫 Cancel Assignment
                   </button>
                 )}
                 {canReassign && (canAcceptOffer || canComplete) && (
-                  <button onClick={() => navigate(planningLinkFor(assignment))} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700 }}>
+                  <button onClick={() => navigate(planningLinkFor(assignment))} title="Open Planning to choose another assayer" className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700 }}>
                     🔄 Reassign Branch →
                   </button>
                 )}
                 {canEscalate && (
-                  <button onClick={() => setActionMode('ESCALATE')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
+                  <button onClick={() => setActionMode('ESCALATE')} disabled={actionBusy} title="Flag this assignment as urgent for operations" className="btn btn-secondary" style={{ padding: '6px 12px', minHeight: '36px', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
                     ⚠ Escalate
                   </button>
                 )}
@@ -380,6 +384,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 value={actionReason}
                 onChange={(e) => setActionReason(e.target.value)}
                 placeholder={actionMode === 'REJECT' ? 'Reason for rejecting...' : actionMode === 'CANCEL' ? 'Reason for cancelling...' : 'Reason for escalating (what went wrong?)...'}
+                title="Type the reason, it will be saved on the assignment record"
                 style={{ flex: 1, padding: '6px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-2xs)' }}
               />
               <button
@@ -387,12 +392,13 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                   ? onEscalate(actionReason || undefined)
                   : onTransition(actionMode === 'REJECT' ? 'REJECTED' : 'CANCELLED', actionReason || undefined)}
                 disabled={actionBusy || ((actionMode === 'REJECT' || actionMode === 'CANCEL') && !actionReason.trim())}
+                title="Confirm this action with the reason above"
                 className="btn btn-primary"
                 style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)', background: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)', borderColor: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)' }}
               >
                 Confirm
               </button>
-              <button onClick={resetActionState} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}>
+              <button onClick={resetActionState} title="Close without taking action" className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--text-2xs)' }}>
                 Cancel
               </button>
             </div>
@@ -563,8 +569,8 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
           <div>
             <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Quick Links</span>
             <div style={{ display: 'flex', gap: '4px', marginTop: '1px' }}>
-              <button onClick={() => navigate(planningLinkFor(assignment))} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Planning</button>
-              <button onClick={() => navigate(`/scheduling?assignmentId=${assignment.id}`)} className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Calendar</button>
+              <button onClick={() => navigate(planningLinkFor(assignment))} title="Open this branch in Planning to choose an assayer" className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Planning</button>
+              <button onClick={() => navigate(`/scheduling?assignmentId=${assignment.id}`)} title="Open this assignment on the calendar" className="btn btn-secondary" style={{ padding: '1px 6px', fontSize: 'var(--text-3xs)', background: 'var(--border-hair)' }}>Calendar</button>
             </div>
           </div>
         </div>
@@ -594,9 +600,9 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, color: tone }}>{anyStatusLabel(e.status)}</span>
                 {pending && canActOnAssignments && (
                   <span style={{ display: 'flex', gap: '4px' }}>
-                    <button onClick={() => reviewExpense(e.id, true)} disabled={reviewingExpenseId === e.id}
+                    <button onClick={() => reviewExpense(e.id, true)} disabled={reviewingExpenseId === e.id} title={`Approve this ₹${Number(e.amount).toLocaleString()} expense claim`}
                       className="btn btn-primary" style={{ padding: '2px 8px', fontSize: 'var(--text-3xs)' }}>Approve</button>
-                    <button onClick={() => reviewExpense(e.id, false)} disabled={reviewingExpenseId === e.id}
+                    <button onClick={() => reviewExpense(e.id, false)} disabled={reviewingExpenseId === e.id} title="Reject this expense claim with a reason"
                       className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 'var(--text-3xs)', color: 'var(--danger)' }}>Reject</button>
                   </span>
                 )}
@@ -732,6 +738,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
           onChange={(e) => setNewComment(e.target.value)}
           placeholder="Post comment..."
           required
+          title="Type a comment about this assignment for the team to see"
           style={{
             flex: 1,
             padding: '7px 10px',
@@ -745,6 +752,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
         />
         <button
           type="submit"
+          title="Post this comment on the assignment timeline"
           className="btn btn-primary"
           style={{
             padding: '7px 12px',

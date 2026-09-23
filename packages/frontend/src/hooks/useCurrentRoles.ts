@@ -196,6 +196,15 @@ export function canManageAssayers(roles: SystemRole[], permissions?: string[]): 
   return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:EDIT:ORGANIZATION', permissions);
 }
 
+/**
+ * The approval before training: approve, reject with a reason, or ask HR for more. Admin by name;
+ * any custom role given ASSAYER:APPROVE:ORGANIZATION (an HR Head, a Regional Manager). OPERATIONS
+ * deliberately not — HR prepares the file, somebody above HR decides it.
+ */
+export function canApproveJoiners(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN], 'ASSAYER:APPROVE:ORGANIZATION', permissions);
+}
+
 /** Soft deleting an assayer profile requires assayer:delete:organization. */
 export function canDeleteAssayers(roles: SystemRole[], permissions?: string[]): boolean {
   return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:DELETE:ORGANIZATION', permissions);

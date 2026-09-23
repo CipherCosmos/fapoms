@@ -43,6 +43,13 @@ describe('the verify request the reviewing screen sends', () => {
     })).resolves.toBeDefined();
   });
 
+  /** The passbook's two readings must cross the wire, or every passbook verification is a 400. */
+  it('accepts the account number and IFSC read off a passbook', async () => {
+    await expect(send({
+      verdict: 'VERIFIED', holderName: 'Ramesh Iyer', accountNumber: '1234 5678 9012', ifscCode: 'SBIN0001234',
+    })).resolves.toBeDefined();
+  });
+
   it('accepts a send-back with its reason', async () => {
     await expect(send({
       verdict: 'REJECTED',

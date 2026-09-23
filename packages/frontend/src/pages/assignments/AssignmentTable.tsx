@@ -194,8 +194,8 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                 textTransform: 'uppercase',
               }}
             >
-              <th scope="col" style={{ padding: '10px 14px' }}>Branch / Assignment</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Assayer</th>
+              <th scope="col" title="Branch and assignment this row is about" style={{ padding: '10px 14px' }}>Branch / Assignment</th>
+              <th scope="col" title="Assayer assigned to this audit" style={{ padding: '10px 14px' }}>Assayer</th>
               <th
                 scope="col"
                 aria-sort={dateSort === 'asc' ? 'ascending' : 'descending'}
@@ -210,9 +210,9 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
               >
                 Scheduled {dateSort === 'asc' ? '▲' : '▼'}
               </th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Fee</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Status & Progress</th>
-              <th scope="col" style={{ padding: '10px 14px' }}>Actions</th>
+              <th scope="col" title="Agreed audit fee for this assignment" style={{ padding: '10px 14px' }}>Fee</th>
+              <th scope="col" title="Current status and progress of this assignment" style={{ padding: '10px 14px' }}>Status & Progress</th>
+              <th scope="col" title="Quick actions you can take on this assignment" style={{ padding: '10px 14px' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -385,6 +385,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                           <button
                             onClick={() => onQuickAction(asn.id, 'ACCEPTED')}
                             disabled={rowBusy}
+                            title={`Accept ${asn.assignmentNumber} on behalf of the assayer`}
                             className="btn btn-primary"
                             style={{
                               padding: '3px 9px',
@@ -401,6 +402,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                           <button
                             onClick={() => onQuickAction(asn.id, 'COMPLETED', !!asn.checkedInAt, !!asn.checkedOutAt)}
                             disabled={rowBusy}
+                            title={`Mark ${asn.assignmentNumber} as complete`}
                             className="btn btn-primary"
                             style={{ padding: '3px 9px', minHeight: '32px', fontSize: 'var(--text-2xs)' }}
                           >
@@ -410,6 +412,7 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
                         {!canAccept && !canComplete && (
                           <button
                             onClick={() => onSelectAssignment(asn.id)}
+                            title={`Open details for ${asn.assignmentNumber}`}
                             className="btn btn-secondary"
                             style={{ padding: '3px 9px', minHeight: '32px', fontSize: 'var(--text-2xs)' }}
                           >

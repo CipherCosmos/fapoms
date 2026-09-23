@@ -213,11 +213,11 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
         display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', flexWrap: 'wrap',
         borderBottom: '1px solid var(--border-color)',
       }}>
-        <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
+        <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} title="Go to the previous page"
           className="btn btn-secondary" style={btn}><ChevronLeft size={14} /></button>
-        <span style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
+        <span title={`Page ${page} of ${pages || '…'}`} style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
           <input
-            type="number" value={page} min={1} max={pages || 1}
+            type="number" value={page} min={1} max={pages || 1} title="Type a page number to jump to it"
             onChange={(e) => {
               const n = Number(e.target.value);
               if (n >= 1 && n <= pages) setPage(n);
@@ -229,19 +229,20 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
             }}
           /> / {pages || '—'}
         </span>
-        <button onClick={() => setPage((p) => Math.min(pages, p + 1))} disabled={page >= pages}
+        <button onClick={() => setPage((p) => Math.min(pages, p + 1))} disabled={page >= pages} title="Go to the next page"
           className="btn btn-secondary" style={btn}><ChevronRight size={14} /></button>
 
         <span style={{ width: '1px', height: '18px', background: 'var(--border-color)' }} />
 
-        <button onClick={() => setScale((s) => Math.max(0.5, +(s - 0.2).toFixed(2)))} className="btn btn-secondary" style={btn}><ZoomOut size={14} /></button>
-        <span style={{ fontSize: 'var(--text-2xs)', minWidth: '38px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
-        <button onClick={() => setScale((s) => Math.min(3, +(s + 0.2).toFixed(2)))} className="btn btn-secondary" style={btn}><ZoomIn size={14} /></button>
+        <button onClick={() => setScale((s) => Math.max(0.5, +(s - 0.2).toFixed(2)))} className="btn btn-secondary" title="Zoom out" style={btn}><ZoomOut size={14} /></button>
+        <span title={`Zoom: ${Math.round(scale * 100)}%`} style={{ fontSize: 'var(--text-2xs)', minWidth: '38px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+        <button onClick={() => setScale((s) => Math.min(3, +(s + 0.2).toFixed(2)))} className="btn btn-secondary" title="Zoom in" style={btn}><ZoomIn size={14} /></button>
 
         {!viewOnly && (
           <button
             onClick={() => { setMarking((m) => !m); setDrag(null); }}
             className={marking ? 'btn btn-primary' : 'btn btn-secondary'}
+            title={marking ? 'Stop marking — click to cancel area selection' : 'Mark an area on the PDF to attach to your question'}
             style={{ ...btn, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', fontSize: 'var(--text-2xs)' }}
           >
             {marking ? <><X size={13} /> Cancel</> : <><Crop size={13} /> Mark an area</>}

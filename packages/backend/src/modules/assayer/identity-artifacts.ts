@@ -115,36 +115,34 @@ export function assessIdentityArtifact(f: IdentityArtifactFacts): IdentityArtifa
  *
  * The owner's process drawing has BGV branching to PASSED and FAILED, with FAILED ending in
  * "not onboarded". The states already exist — the lifecycle's BACKGROUND_VERIFICATION window and
- * the recorded verdict — so this adds the missing part: the EXIT rule.
+ * the recorded verdict — so this is the EXIT rule.
  *
- * Two arms with deliberately different strictness:
+ * MANDATORY since 2026-09-23 (owner: "background verification is mandatory and uploading the
+ * files for BGV is also mandatory"). The absent-check arm used to ride `onboarding.identityGate.mode`
+ * and default to WARN — so anybody could be moved out of background verification with no check at
+ * all, and only an activity row said so. Now onboarding cannot be finished without:
  *
- *  - An AFFIRMATIVELY ADVERSE verdict (civil case, criminal case, adverse finding) refuses in
- *    every mode, on every move it guards. Somebody wrote that verdict down on purpose; it is not
- *    a backlog artifact, and "warn" would let a criminal-case record be quietly onboarded with
- *    only an audit row to show for it. The one path forward is a newer check that clears them.
- *  - AN ABSENT check (none at all, or NOT_CHECKED) rides `onboarding.identityGate.mode`, exactly
- *    like the identity arm and for exactly its reason: on the day the gates shipped the estate
- *    had never run a check once, and enforce-from-boot is how a control gets switched off
- *    permanently instead of adopted.
+ *  - a completed check whose latest verdict is CLEAR, and
+ *  - the background verification report uploaded (`BGV_REPORT`) — the evidence the verdict came from.
  *
- * WHERE it bites is as deliberate as HOW:
+ * WHERE it bites:
  *
- *  - `leave-bgv` (BACKGROUND_VERIFICATION → TRAINING): both arms. This is the onboarding exit the
- *    drawing gates.
- *  - `activate`: the adverse arm only. Activation is also how a person parked as BGV_FAILED would
- *    re-enter, so the adverse arm is the "not onboarded until re-vetted" rule. The absent arm
- *    stays out of activation on purpose — returns from leave or suspension are not onboarding,
- *    and double-gating them on a check nobody ran would refuse half the working roster the day
- *    the mode turns to enforce.
+ *  - `leave-bgv` (BACKGROUND_VERIFICATION → TRAINING): all of it.
+ *  - `finish-onboarding` (INACTIVE → ACTIVE for somebody parked INACTIVE from an onboarding stage):
+ *    all of it too. Without this the gate had a side door — park a candidate inactive, then
+ *    "reactivate" somebody who was never active and never checked.
+ *  - `activate` (every other return to ACTIVE — from leave, suspension, or an inactive spell after
+ *    working): the adverse arm only. Returning from leave is not onboarding, and the working roster
+ *    predates these checks; refusing their returns would stop the business, not vet anybody.
+ *
+ * An AFFIRMATIVELY ADVERSE verdict (civil case, criminal case, adverse finding) refuses on every
+ * move this guards. The one path forward is a newer check that clears them.
  */
-export type BackgroundGateSite = 'leave-bgv' | 'activate';
+export type BackgroundGateSite = 'leave-bgv' | 'finish-onboarding' | 'activate';
 
 export interface BackgroundGateDecision {
-  /** Refused regardless of mode — an adverse verdict somebody recorded on purpose. */
+  /** Why the move is refused, as the end of "X cannot be moved: …" — or null. */
   refusal: string | null;
-  /** Refused under `enforce`, audited under `warn` — the check simply has not happened. */
-  gated: string | null;
 }
 
 const ADVERSE_VERDICTS: BackgroundCheckVerdict[] = [
@@ -156,6 +154,8 @@ const ADVERSE_VERDICTS: BackgroundCheckVerdict[] = [
 export function assessBackgroundGate(
   latestVerdict: BackgroundCheckVerdict | null,
   site: BackgroundGateSite,
+  /** Whether the background verification report is on file — a `BGV_REPORT` row with a scan. */
+  reportOnFile: boolean,
 ): BackgroundGateDecision {
   if (latestVerdict !== null && ADVERSE_VERDICTS.includes(latestVerdict)) {
     const said = latestVerdict.toLowerCase().replace(/_/g, ' ');
@@ -164,16 +164,22 @@ export function assessBackgroundGate(
         `the latest background check came back ${said}. A person with an adverse verdict on file `
         + 'is not onboarded — record a new background check that clears them, or park the record '
         + 'as inactive (background verification failed).',
-      gated: null,
     };
   }
-  if (site === 'leave-bgv' && (latestVerdict === null || latestVerdict === BackgroundCheckVerdict.NOT_CHECKED)) {
+  if (site === 'activate') return { refusal: null };
+  if (latestVerdict === null || latestVerdict === BackgroundCheckVerdict.NOT_CHECKED) {
     return {
-      refusal: null,
-      gated:
-        'no completed background check is on file. Record the check\'s outcome on the vetting '
-        + 'screen before moving them out of background verification.',
+      refusal:
+        'background verification is mandatory and no completed check is on file. Upload the '
+        + 'background verification report and record its result on the Background tab first.',
     };
   }
-  return { refusal: null, gated: null };
+  if (!reportOnFile) {
+    return {
+      refusal:
+        'the background verification report has not been uploaded. The result is only as good as '
+        + 'the report it came from — upload it on the Background tab first.',
+    };
+  }
+  return { refusal: null };
 }

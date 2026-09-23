@@ -219,6 +219,7 @@ export const RuleBypassPanel: React.FC = () => {
           </div>
           <button
             onClick={() => toggleGroup(items)}
+            title={allOn ? 'Untick every rule in this group' : someOn ? 'Tick the remaining rules in this group' : `Tick every rule in ${title}`}
             style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: 'var(--text-2xs)', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
           >
             {allOn ? 'Clear' : someOn ? 'Select rest' : 'Select all'}
@@ -239,6 +240,7 @@ export const RuleBypassPanel: React.FC = () => {
                 type="checkbox"
                 checked={selected.has(r.rule)}
                 onChange={() => toggle(r.rule)}
+                title={`${r.label} — blocks: ${r.blocks}. Protects: ${r.protects}`}
                 style={{ marginTop: '3px' }}
               />
               <span style={{ flex: 1, minWidth: 0 }}>
@@ -348,6 +350,7 @@ export const RuleBypassPanel: React.FC = () => {
             }}
             disabled={disable.isPending}
             className="btn btn-primary"
+            title="Turn every suspended rule back on immediately — anyone testing will be blocked again"
             style={{ marginTop: '12px', padding: '7px 14px', fontSize: 'var(--text-sm)', fontWeight: 700 }}
           >
             {disable.isPending ? 'Restoring…' : 'Restore all rules now'}
@@ -431,6 +434,7 @@ export const RuleBypassPanel: React.FC = () => {
             <button
               key={h}
               onClick={() => setHours(h)}
+              title={`Suspend for ${h} hour${h === 1 ? '' : 's'} — rules switch themselves back on after`}
               style={{
                 padding: '5px 12px', borderRadius: '999px', fontSize: 'var(--text-xs)', fontWeight: 700, cursor: 'pointer',
                 border: `1px solid ${hours === h ? 'transparent' : 'var(--border-color)'}`,
@@ -446,6 +450,7 @@ export const RuleBypassPanel: React.FC = () => {
             type="number" min={1} max={MAX_BYPASS_HOURS} value={hours}
             onChange={(e) => setHours(Math.min(MAX_BYPASS_HOURS, Math.max(1, Number(e.target.value) || 1)))}
             aria-label="Custom duration in hours"
+            title={`Custom suspension length in hours (1 to ${MAX_BYPASS_HOURS})`}
             style={{ width: '64px', padding: '6px 8px', fontSize: 'var(--text-xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none' }}
           />
           <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>hours</span>

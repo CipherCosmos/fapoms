@@ -23,7 +23,7 @@ export const RosterRowActions: React.FC<RosterRowActionsProps> = ({
   onDelete,
 }) => {
   const isJoining = isOnboardingStage(person.lifecycleStatus);
-  const legalNextStates = nextAssayerLifecycleStates(person.lifecycleStatus);
+  const legalNextStates = nextAssayerLifecycleStates(person.lifecycleStatus, person.unavailableReason);
 
   return (
     <div

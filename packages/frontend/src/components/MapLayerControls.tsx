@@ -166,6 +166,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
 
   const trigger = (
     <button type="button" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}
+      title="Open the map controls panel"
       style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap', font: 'inherit' }}>
       <Layers size={14} style={{ color: 'var(--accent-primary)' }} />
       <span>Map Controls</span>
@@ -187,6 +188,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
             </span>
             {(assayerFiltersActive || !!searchQuery) && (
               <button type="button" onClick={resetAssayerFilters}
+                title="Clear all assayer filters and search"
                 style={{ padding: 0, fontSize: 'var(--text-3xs)', background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}>
                 Reset
               </button>
@@ -195,6 +197,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
             {PRESETS.map((p) => (
               <button key={p.key} type="button" onClick={p.apply}
+                title={`Show ${p.label} on the map`}
                 style={{
                   padding: '4px 9px', fontSize: 'var(--text-3xs)', fontWeight: 700,
                   background: p.active ? 'var(--accent-primary)' : 'var(--bg-primary)',
@@ -215,6 +218,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
         <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
           {(['auto', 'voyager', 'dark', 'satellite'] as const).map(style => (
             <button key={style} type="button" onClick={() => setMapStyle(style)}
+              title={`Switch the map background to ${style}`}
               style={{
                 flex: 1, padding: '4px 6px', fontSize: 'var(--text-3xs)', textTransform: 'uppercase',
                 fontWeight: 600, background: mapStyle === style ? 'var(--accent-primary)' : 'transparent',
@@ -232,6 +236,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
         <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
           {([['status', 'Status'], ['client', 'Bank']] as const).map(([mode, label]) => (
             <button key={mode} type="button" onClick={() => setColorMode(mode)}
+              title={`Colour map pins by ${label.toLowerCase()}`}
               style={{
                 flex: 1, padding: '4px 6px', fontSize: 'var(--text-3xs)', textTransform: 'uppercase',
                 fontWeight: 600, background: colorMode === mode ? 'var(--accent-primary)' : 'transparent',
@@ -252,6 +257,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
           <span style={{ color: 'var(--text-secondary)' }}>Radius:</span>
           <input type="number" min="10" max="2000" value={radiusKm}
             onChange={(e) => setRadiusKm(Math.max(1, Number(e.target.value)))}
+            title="Type how far from the branch to search, in kilometres"
             style={{ width: '60px', background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-xs)', fontWeight: 600, textAlign: 'right' }}
           />
           <span style={{ color: 'var(--text-muted)' }}>km</span>
@@ -260,6 +266,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
         <button type="button" onClick={() => setFiltersOpen(!filtersOpen)} aria-expanded={filtersOpen}
+          title="Show or hide the search and branch filters"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', background: 'none', border: 'none', padding: 0, width: '100%', font: 'inherit' }}>
           <span>Search &amp; Filters</span>
           <span style={{ marginLeft: 'auto' }}>{filtersOpen ? '−' : '+'}</span>
@@ -268,10 +275,12 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <input type="text" placeholder="Search branch name..." value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              title="Type part of a branch name to filter the map"
               style={{ width: '100%', padding: '4px 8px', fontSize: 'var(--text-2xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
             />
             <input type="text" placeholder="Filter by city..." value={cityFilter}
               onChange={(e) => setCityFilter(e.target.value)}
+              title="Type part of a city name to filter branches"
               style={{ width: '100%', padding: '4px 8px', fontSize: 'var(--text-2xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
             />
             <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>Branch Status</span>
@@ -297,6 +306,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
             </div>
             {/* …and every individual state, unchanged, for the times the groups are too coarse. */}
             <button type="button" onClick={() => setAllStatusesOpen(o => !o)} aria-expanded={allStatusesOpen}
+              title={allStatusesOpen ? 'Hide the individual branch statuses' : 'Show every individual branch status'}
               style={{ alignSelf: 'flex-start', padding: 0, fontSize: 'var(--text-3xs)', background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', textDecoration: 'underline' }}>
               {allStatusesOpen ? 'Hide individual statuses' : 'Show all statuses'}
             </button>
@@ -305,6 +315,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
                 const active = branchStatusFilter.length === 0 || branchStatusFilter.includes(s);
                 return (
                   <button key={s} type="button" onClick={() => toggleStatus(s)}
+                    title={`Show only branches with status ${branchStatusLabel(s)}`}
                     style={{
                       padding: '2px 6px', fontSize: 'var(--text-3xs)', fontWeight: 600,
                       background: active ? 'var(--status-pending-bg)' : 'transparent',
@@ -320,6 +331,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
             </div>
             {branchStatusFilter.length > 0 && (
               <button type="button" onClick={() => setBranchStatusFilter([])}
+                title="Clear the branch status filter"
                 style={{ alignSelf: 'flex-start', padding: '2px 8px', fontSize: 'var(--text-3xs)', background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', textDecoration: 'underline' }}
               >
                 Clear status filter
@@ -331,6 +343,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
         <button type="button" onClick={() => setAssayerFiltersOpen(!assayerFiltersOpen)} aria-expanded={assayerFiltersOpen}
+          title="Show or hide the assayer filters"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', background: 'none', border: 'none', padding: 0, width: '100%', font: 'inherit' }}>
           <span>Assayer Filters{assayerFiltersActive ? ' •' : ''}</span>
           <span style={{ marginLeft: 'auto' }}>{assayerFiltersOpen ? '−' : '+'}</span>
@@ -339,12 +352,14 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <input type="text" placeholder="Search assayer name or code…" value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              title="Type an assayer name or code to filter the map"
               style={{ width: '100%', padding: '5px 8px', fontSize: 'var(--text-2xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
             />
             <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>Availability</span>
             <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
               {([['ALL', 'All', undefined], ['ASSIGNED', 'Working', counts?.assignedToday], ['FREE', 'Free', counts?.freeToday]] as const).map(([value, label, n]) => (
                 <button key={value} type="button" onClick={() => setAssayerAvailability(value)}
+                  title={`Show ${label.toLowerCase()} assayers on the map`}
                   style={{
                     flex: 1, padding: '4px 4px', fontSize: 'var(--text-3xs)', fontWeight: 700,
                     background: assayerAvailability === value ? 'var(--accent-primary)' : 'transparent',
@@ -383,6 +398,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
               <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>Bank / Client <span style={{ opacity: 0.7 }}>(pin fill)</span></span>
               {assayerClientFilter.length > 0 && (
                 <button type="button" onClick={() => setAssayerClientFilter([])}
+                  title="Clear the bank filter"
                   style={{ padding: 0, fontSize: 'var(--text-3xs)', background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}>
                   clear
                 </button>
@@ -391,6 +407,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
             {clientOptions.length > 8 && (
               <input type="text" placeholder="Find a bank…" value={bankSearch}
                 onChange={(e) => setBankSearch(e.target.value)}
+                title="Type part of a bank name to find it"
                 style={{ width: '100%', padding: '4px 8px', fontSize: 'var(--text-3xs)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
               />
             )}
@@ -405,6 +422,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
                   const dimmed = assayerClientFilter.length > 0 && !selected;
                   return (
                     <button key={c.id} type="button" onClick={() => toggleIn(assayerClientFilter, setAssayerClientFilter, c.id)}
+                      title={`Show only ${c.name} assayers`}
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: '5px',
                         padding: '2px 7px', fontSize: 'var(--text-3xs)', fontWeight: 600,
@@ -427,13 +445,13 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
         <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Data Layers</span>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-          <input type="checkbox" checked={showBranches} onChange={(e) => setShowBranches(e.target.checked)} /> Audit Branches
+          <input type="checkbox" checked={showBranches} onChange={(e) => setShowBranches(e.target.checked)} title="Show or hide branch pins on the map" /> Audit Branches
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-          <input type="checkbox" checked={showAssayers} onChange={(e) => setShowAssayers(e.target.checked)} /> Assayers (Auditors)
+          <input type="checkbox" checked={showAssayers} onChange={(e) => setShowAssayers(e.target.checked)} title="Show or hide assayer pins on the map" /> Assayers (Auditors)
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-          <input type="checkbox" checked={showRoutes} onChange={(e) => setShowRoutes(e.target.checked)} /> Route Lines
+          <input type="checkbox" checked={showRoutes} onChange={(e) => setShowRoutes(e.target.checked)} title="Show or hide travel route lines on the map" /> Route Lines
         </label>
       </div>
 
@@ -445,13 +463,14 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
           planning screen already said. Renamed to what it shows.
         */}
         <button type="button" onClick={() => setAdvancedOpen(o => !o)} aria-expanded={advancedOpen}
+          title="Show or hide the advanced map layers"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', background: 'none', border: 'none', padding: 0, width: '100%', font: 'inherit' }}>
           <span>Advanced</span>
           <span style={{ marginLeft: 'auto' }}>{advancedOpen ? '−' : '+'}</span>
         </button>
         <label style={{ display: advancedOpen ? 'flex' : 'none', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}
           title="Shades the area around each branch in which a person lives too close to audit it independently.">
-          <input type="checkbox" checked={showSlaRisk} onChange={(e) => setShowSlaRisk(e.target.checked)} /> ⚠️ Too close to branch
+          <input type="checkbox" checked={showSlaRisk} onChange={(e) => setShowSlaRisk(e.target.checked)} title="Shade areas where a person lives too close to audit the branch" /> ⚠️ Too close to branch
         </label>
         {advancedOpen && showSlaRisk && setSlaRadiusKm && (
           <div style={{ marginLeft: '22px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 8px', backgroundColor: 'var(--status-cancelled-bg)', borderRadius: '6px', border: '1px solid var(--status-cancelled)', marginBottom: '4px' }}>
@@ -465,6 +484,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
               step="1"
               value={slaRadiusKm || 15}
               onChange={(e) => setSlaRadiusKm(Number(e.target.value))}
+              title="Choose the minimum distance in kilometres"
               style={{ accentColor: 'var(--danger)', width: '100%', cursor: 'pointer' }}
             />
             <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
@@ -473,6 +493,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
                   key={preset}
                   type="button"
                   onClick={() => setSlaRadiusKm(preset)}
+                  title={`Set the minimum distance to ${preset} kilometres`}
                   style={{
                     flex: 1,
                     fontSize: 'var(--text-3xs)',
@@ -492,10 +513,10 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
           </div>
         )}
         <label style={{ display: advancedOpen ? 'flex' : 'none', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-          <input type="checkbox" checked={showWorkforceDensity} onChange={(e) => setShowWorkforceDensity(e.target.checked)} /> 👥 Workforce Density
+          <input type="checkbox" checked={showWorkforceDensity} onChange={(e) => setShowWorkforceDensity(e.target.checked)} title="Show or hide the workforce density shading" /> 👥 Workforce Density
         </label>
         <label style={{ display: advancedOpen ? 'flex' : 'none', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-          <input type="checkbox" checked={showRevenueDensity} onChange={(e) => setShowRevenueDensity(e.target.checked)} /> 💰 Revenue Density
+          <input type="checkbox" checked={showRevenueDensity} onChange={(e) => setShowRevenueDensity(e.target.checked)} title="Show or hide the finished-work density shading" /> 💰 Revenue Density
         </label>
       </div>
     </>
@@ -532,6 +553,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
       transition: 'all 0.2s', padding: collapsed ? '8px 12px' : '12px 16px',
     }}>
       <button type="button" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}
+        title="Open or close the map controls"
         style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', background: 'none', border: 'none', padding: 0, width: '100%', font: 'inherit' }}>
         <Layers size={14} style={{ color: 'var(--accent-primary)' }} />
         <span>{collapsed ? 'Map Controls' : 'Map Settings & Layers'}</span>

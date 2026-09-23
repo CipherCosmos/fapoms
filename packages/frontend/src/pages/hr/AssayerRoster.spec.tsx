@@ -21,6 +21,7 @@ import { downloadCsv } from '../../utils/csv';
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../services/socket', () => ({ connectSocket: () => null }));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   canManageAssayers: () => true,
   // Added when the roster began distinguishing creating from editing: the Add button and the

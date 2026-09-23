@@ -5,6 +5,7 @@ import {
   DomainEvent,
   AssayerDocumentVerificationStartedEvent,
   AssayerBackgroundCheckInitiatedEvent,
+  AssayerSentForApprovalEvent,
   AssayerTrainingStartedEvent,
   AssayerActivatedEvent,
   AssayerOnLeaveEvent,
@@ -81,6 +82,13 @@ export class AssayerStateMachine {
     const prev = assayer.lifecycleStatus;
     this.applyTransition(assayer, AssayerLifecycleStatus.BACKGROUND_VERIFICATION, userId);
     return new AssayerBackgroundCheckInitiatedEvent(assayer.id, prev, assayer.lifecycleStatus, userId);
+  }
+
+  static sendForApproval(assayer: AssayerEntity, userId: string): AssayerSentForApprovalEvent {
+    this.validateTransition(assayer, AssayerLifecycleStatus.FINAL_APPROVAL);
+    const prev = assayer.lifecycleStatus;
+    this.applyTransition(assayer, AssayerLifecycleStatus.FINAL_APPROVAL, userId);
+    return new AssayerSentForApprovalEvent(assayer.id, prev, assayer.lifecycleStatus, userId);
   }
 
   static startTraining(assayer: AssayerEntity, userId: string): AssayerTrainingStartedEvent {

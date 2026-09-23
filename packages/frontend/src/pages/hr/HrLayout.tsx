@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams, Link, useLocation } from 'react-router-dom';
 import {
   Users, MapPin, ClipboardList, Wallet, AlertTriangle, Plus, UserPlus,
+  ShieldCheck,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
@@ -119,6 +120,10 @@ const PAGES: readonly {
   },
   { to: '/hr/pay', label: 'Pay & terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms, side by side' },
   { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count', hint: () => 'Who is busy, which states are covered, and what changed recently' },
+  {
+    to: '/hr/rechecks', label: 'Re-checks', icon: ShieldCheck, badge: () => null, tone: 'alert',
+    hint: () => 'Background, police, credit and identity re-checks that are due, overdue, or awaiting a decision',
+  },
   {
     to: '/hr/issues', label: 'Review queue', icon: AlertTriangle, tone: 'alert',
     badge: (_d: HrWorkforceOverview, openIssues: number | null) => openIssues,

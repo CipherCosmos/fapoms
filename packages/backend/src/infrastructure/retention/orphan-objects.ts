@@ -44,6 +44,8 @@ export const STORAGE_KEY_SOURCES: readonly StorageKeySource[] = [
   { table: 'assayer_documents', column: 'file_paths', kind: 'jsonb-array', why: "A roster member's identity and qualification scans." },
   { table: 'assayer_application_documents', column: 'file_paths', kind: 'jsonb-array', why: "A candidate's scans, before they are on the roster." },
   { table: 'assayer_document_versions', column: 'file_path', kind: 'text', why: 'Superseded versions of a scan, kept for the audit trail.' },
+  { table: 'assayer_interviews', column: 'attachments', kind: 'jsonb-objects', keyField: 'storageKey', why: 'The test papers an interview decision rested on — kept with it for good.' },
+  { table: 'assayer_background_checks', column: 'report_files', kind: 'jsonb-objects', keyField: 'path', why: 'The report each background check was read from — kept with the check for good.' },
   { table: 'assayers', column: 'photograph', kind: 'text', why: 'The photograph on the identity card.' },
   { table: 'branch_documents', column: 'file_path', kind: 'text', why: 'Branch paperwork.' },
   { table: 'customer_master_versions', column: 'file_path', kind: 'text', why: 'Uploaded customer master sheets.' },

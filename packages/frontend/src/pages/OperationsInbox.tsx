@@ -412,6 +412,7 @@ export const OperationsInbox: React.FC = () => {
           type="button"
           onClick={() => toggleLane(key)}
           aria-expanded={!collapsedLanes[key]}
+          title={collapsedLanes[key] ? `Expand ${title} (${count})` : `Collapse ${title} (${count})`}
           style={{
             all: 'unset',
             cursor: 'pointer',
@@ -481,7 +482,7 @@ export const OperationsInbox: React.FC = () => {
 
   const miniInput = (placeholder: string, value: string, onChange: (v: string) => void, type = 'number') => (
     <input
-      autoFocus type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+      autoFocus type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} title={placeholder}
       style={{ width: type === 'number' ? '110px' : '220px', padding: '5px 9px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-xs)' }}
     />
   );

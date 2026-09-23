@@ -1676,7 +1676,7 @@ export class ProjectService implements OnModuleInit {
       const get = rowReader(r, askedFor);
 
       let name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name') || '';
-      let solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo',
+      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo',
                       'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code') || '';
       if (!name && !solId) continue;
 

@@ -75,6 +75,7 @@ describe('ID card terms vs issuance', () => {
         'idCard.signatoryTitle': '   ',
         'idCard.helplinePhone': null,
         'company.address': '12 MG Road,\r\nBengaluru 560001\n',
+        'company.legalName': ' Sumeru Global Pvt Ltd ',
       },
     });
     await expect(svc.idCardPrintedText()).resolves.toEqual({
@@ -82,18 +83,19 @@ describe('ID card terms vs issuance', () => {
       signatoryTitle: null,
       helplinePhone: null,
       officeAddress: '12 MG Road, Bengaluru 560001',
+      organisation: 'Sumeru Global Pvt Ltd',
     });
   });
 
   it('degrades to no printed text, rather than failing, when settings cannot be read', async () => {
     const svc = serviceWith({ gateMode: 'warn', settingsThrow: true });
     await expect(svc.idCardPrintedText()).resolves.toEqual({
-      signatoryName: null, signatoryTitle: null, helplinePhone: null, officeAddress: null,
+      signatoryName: null, signatoryTitle: null, helplinePhone: null, officeAddress: null, organisation: null,
     });
     const noStore: any = serviceWith({ gateMode: 'warn' });
     noStore.platformSettings = undefined;
     await expect(noStore.idCardPrintedText()).resolves.toEqual({
-      signatoryName: null, signatoryTitle: null, helplinePhone: null, officeAddress: null,
+      signatoryName: null, signatoryTitle: null, helplinePhone: null, officeAddress: null, organisation: null,
     });
   });
 });

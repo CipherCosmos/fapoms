@@ -137,6 +137,8 @@ export const DOCUMENT_SCAN_PROFILES: Record<OnboardingDocument, DocumentScanProf
   [OnboardingDocument.GOVERNANCE_AUDIT]: PAGE,
   [OnboardingDocument.ETHICAL_CONDUCT_LETTER]: PAGE,
   [OnboardingDocument.BGV_REPORT]: PAGE,
+  [OnboardingDocument.POLICE_CERTIFICATE]: PAGE,
+  [OnboardingDocument.CREDIT_REPORT]: PAGE,
   [OnboardingDocument.ID_PROOF]: PAGE,
   [OnboardingDocument.ADDRESS_PROOF]: PAGE,
   [OnboardingDocument.OFFICE_ADDRESS_PROOF]: PAGE,

@@ -86,6 +86,24 @@ describe('useSocketInvalidation — the assayer roster/workforce entries', () =>
     expect(keys).toContainEqual(['hr', 'workforce']);
   });
 
+  /**
+   * The maps. A person added, placed by the address lookup, pinned by hand, or moved a stage did
+   * not appear on an open map — neither the planning map's pin roster nor the Command Center was
+   * refreshed by any assayer event ("created assayer doesn't come on the map", 2026-09-23).
+   */
+  it.each(['assayer:created', 'assayer:updated', 'AssayerSentForApprovalEvent', 'AssayerActivatedEvent'])(
+    'refreshes both maps on %s', (event) => {
+      mount();
+
+      emit(event);
+      jest.advanceTimersByTime(PAST_SLOW_WAIT_MS);
+
+      const keys = invalidatedKeys();
+      expect(keys).toContainEqual(['assayers']);
+      expect(keys).toContainEqual(['command-center']);
+    },
+  );
+
   it('coalesces a burst of lifecycle events into one invalidation per key, not one per event', () => {
     mount();
 

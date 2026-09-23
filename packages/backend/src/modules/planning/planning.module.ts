@@ -48,6 +48,7 @@ import { ClientEntity } from '../client/client.entity';
 import { ConstraintEvaluator } from './constraint.evaluator';
 import {
   DeployabilityFilter,
+  ComplianceHoldFilter,
   AvailabilityFilter,
   ConsecutiveBranchAuditFilter,
   ClientEligibilityFilter,
@@ -151,6 +152,7 @@ import { AssayerRemarksModule } from '../assayer-remarks/assayer-remarks.module'
     { provide: 'WorkloadProvider', useClass: PlanningAntiCorruptionLayer },
     { provide: 'OperationsControlServiceInterface', useClass: OperationsPlanningService },
     DeployabilityFilter,
+    ComplianceHoldFilter,
     AvailabilityFilter,
     ConsecutiveBranchAuditFilter,
       ClientEligibilityFilter,

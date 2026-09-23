@@ -175,12 +175,12 @@ export const ExecutiveMap: React.FC = () => {
               {isFetching ? 'Updating…' : `As of ${updatedAt}`}
             </span>
           )}
-          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)' }}>
+          <button onClick={() => refetch()} className="btn btn-secondary" title="Reload the latest coverage, capacity and gap figures" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)' }}>
             <RefreshCw size={14} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
           {/* The command-centre sheet covers every branch in scope — slow enough that the
               button looked dead and got clicked twice. */}
-          <button onClick={handleExport} disabled={exporting} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--success)' }}>
+          <button onClick={handleExport} disabled={exporting} className="btn btn-secondary" title="Download every branch in scope as an Excel sheet" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-xs)', color: 'var(--success)' }}>
             <FileSpreadsheet size={14} /> {exporting ? 'Preparing…' : 'Export'}
           </button>
         </div>
@@ -225,7 +225,7 @@ export const ExecutiveMap: React.FC = () => {
             <Lens active={lens === 'GAPS'} onClick={() => setLens('GAPS')} label="Coverage gaps" count={t.isolatedBranches} color="var(--danger)" />
             <Lens active={lens === 'UNASSIGNED'} onClick={() => setLens('UNASSIGNED')} label="Unassigned" count={t.unassignedBranches} color="var(--warning)" />
             {selectedState && (
-              <button onClick={() => setSelectedState(null)}
+              <button onClick={() => setSelectedState(null)} title={`Clear the ${selectedState} filter and show all states`}
                 style={{ marginLeft: 4, padding: '6px 11px', fontSize: 'var(--text-2xs)', fontWeight: 600, background: 'rgba(216,174,71,0.12)', border: '1px solid var(--accent-primary)', color: 'var(--accent-primary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
                 {selectedState} ✕
               </button>
@@ -279,7 +279,7 @@ export const ExecutiveMap: React.FC = () => {
                       No assayer lives within serviceable range. This branch needs travel-and-stay costing, a partner, or a local hire — it cannot be scheduled normally.
                     </div>
                   )}
-                  <button onClick={() => navigate(`/planning?projectId=${selected.projectId}&branchId=${selected.projectBranchId}`)} className="btn btn-secondary"
+                  <button onClick={() => navigate(`/planning?projectId=${selected.projectId}&branchId=${selected.projectBranchId}`)} className="btn btn-secondary" title={`Open ${selected.name} in Planning to assign an assayer`}
                     style={{ marginTop: 'auto', fontSize: 'var(--text-xs)' }}>
                     Open in Planning
                   </button>
@@ -352,7 +352,7 @@ export const ExecutiveMap: React.FC = () => {
 };
 
 const Kpi: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?: string; color: string }> = ({ icon, label, value, sub, color }) => (
-  <div className="glass-card" style={{ padding: '13px 15px', borderLeft: `3px solid ${color}` }}>
+  <div className="glass-card" title={`${label}: ${value}${sub ? ` — ${sub}` : ''}`} style={{ padding: '13px 15px', borderLeft: `3px solid ${color}` }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-3xs)', textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 700 }}>
       <span style={{ color }}>{icon}</span>{label}
     </div>
@@ -362,7 +362,7 @@ const Kpi: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?:
 );
 
 const Lens: React.FC<{ active: boolean; onClick: () => void; label: string; count: number; color: string }> = ({ active, onClick, label, count, color }) => (
-  <button onClick={onClick} style={{
+  <button onClick={onClick} title={`${label} — ${count} branches. Click to re-frame the map.`} style={{
     padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
     background: active ? `${color}22` : 'transparent', color: active ? color : 'var(--text-secondary)',
     border: `1px solid ${active ? color : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: 7,

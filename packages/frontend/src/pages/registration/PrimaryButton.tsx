@@ -13,11 +13,13 @@ export const PrimaryButton: React.FC<{
   busy?: boolean;
   children: React.ReactNode;
   style?: React.CSSProperties;
-}> = ({ onClick, disabled, busy, children, style }) => (
+  title?: string;
+}> = ({ onClick, disabled, busy, children, style, title }) => (
   <button
     type="button"
     onClick={onClick}
     disabled={disabled || busy}
+    title={title}
     className="btn btn-primary"
     style={{
       padding: '12px 22px',

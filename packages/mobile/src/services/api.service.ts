@@ -1127,6 +1127,33 @@ export class MobileApiService {
   }
 
   /**
+   * The assayer's own digital ID card — its face, whether it is issued (and if not, why), and their
+   * photograph. There is no download: the card is shown only in this app (owner, 2026-09-23).
+   */
+  static async getMyIdCard(): Promise<{ success: boolean; data?: MyIdCard; error?: string; code?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/me/id-card`, {}, 15000);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body?.success === false) return { success: false, error: body?.message, code: body?.code };
+      return { success: true, data: (body?.data ?? body) as MyIdCard };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error loading your ID card' };
+    }
+  }
+
+  /** The live QR and 6-digit code — asked again every minute while the card is on screen. */
+  static async getIdCardCode(): Promise<{ success: boolean; data?: LiveIdCardCode; error?: string; code?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/me/id-card/code`, {}, 10000);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body?.success === false) return { success: false, error: body?.message, code: body?.code };
+      return { success: true, data: (body?.data ?? body) as LiveIdCardCode };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error refreshing your ID card code' };
+    }
+  }
+
+  /**
    * Flag a problem on an assignment to the operations desk.
    *
    * The field app cannot cancel or reassign work — that stays with the desk. This is the
@@ -2403,4 +2430,33 @@ export class MobileApiService {
       return false;
     }
   }
+}
+
+/** The digital ID card's face, as the server decides it (`idCardFace`) — plus the person's photo. */
+export interface MyIdCard {
+  issued: boolean;
+  blockedBecause: string[];
+  gaps: string[];
+  issuedOn: string;
+  validTill: string;
+  jobTitle: string;
+  fullName: string;
+  assayerCode: string;
+  department: string | null;
+  location: string | null;
+  organisation: string | null;
+  signatoryName: string | null;
+  signatoryTitle: string | null;
+  helplinePhone: string | null;
+  officeAddress: string | null;
+  photo: string | null;
+}
+
+/** The next minute's QR (a PNG data URL) and 6-digit code, and when they change. */
+export interface LiveIdCardCode {
+  verifyUrl: string;
+  qr: string;
+  code: string;
+  changesAt: number;
+  serverNow: number;
 }

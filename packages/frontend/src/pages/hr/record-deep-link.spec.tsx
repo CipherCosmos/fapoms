@@ -21,6 +21,7 @@ import { api } from '../../services/api';
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../services/socket', () => ({ connectSocket: () => null }));
 jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
   canManageAssayers: () => true,
   canCreateAssayers: () => true,
@@ -144,14 +145,14 @@ describe('arriving on the record with ?section=', () => {
     const base = mockRequest.getMockImplementation()!;
     mockRequest.mockImplementation((url: string) => (url.endsWith('/id-card/preview')
       ? Promise.resolve({
-        canDownload: true, blockedBecause: [], gaps: [], issuedOn: '2026-09-16T00:00:00.000Z', validTill: '2026-12-31T00:00:00.000Z',
+        issued: true, blockedBecause: [], gaps: [], issuedOn: '2026-09-16T00:00:00.000Z', validTill: '2026-12-31T00:00:00.000Z',
         jobTitle: 'Gold Appraiser', fullName: 'Person One', assayerCode: 'AS0001', department: null, location: 'Kochi, Kerala',
         signatoryName: null, signatoryTitle: null, helplinePhone: null, officeAddress: null,
       })
       : base(url)));
     renderRecordAt('/hr/roster/a-1?section=idcard');
 
-    await waitFor(() => expect(screen.getByTestId('appraiser-id-card')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('digital-id-card')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
   });
 

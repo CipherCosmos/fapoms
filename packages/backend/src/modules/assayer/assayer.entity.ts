@@ -2,7 +2,7 @@ import { Entity, Column, Index, BeforeInsert, BeforeUpdate } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import {
   AssayerStatus, AssayerLifecycleStatus,
-  AssayerEngagementType, AssayerUnavailableReason,
+  AssayerEngagementType, AssayerUnavailableReason, type SourceReferral, type ComplianceHold,
   EmploymentCategory,
   operationalStatusFor,
 } from '@fapoms/shared';
@@ -381,6 +381,22 @@ export class AssayerEntity extends BaseEntity {
    */
   @Column({ name: 'unavailable_reason', type: 'varchar', length: 40, nullable: true })
   unavailableReason: AssayerUnavailableReason | null;
+
+  /**
+   * Who referred this person to us — the source reference. Not one of the references they gave
+   * for background verification (those vouch for them; this brought them in). Written only through
+   * `AssayerService.setSourceReferral`, so it is always in the shared shape and on the audit trail.
+   */
+  @Column({ name: 'source_referral', type: 'jsonb', nullable: true })
+  sourceReferral: SourceReferral | null;
+
+  /**
+   * Held from NEW work because a re-check came back adverse while they were working — until a
+   * senior decides to keep them or suspend them. Set by `recordBackgroundCheck`, cleared only by
+   * `ComplianceReviewService.decide`. Work already assigned is untouched.
+   */
+  @Column({ name: 'compliance_hold', type: 'jsonb', nullable: true })
+  complianceHold: ComplianceHold | null;
 
   /**
    * The roster says somebody other than this person is doing their audits.

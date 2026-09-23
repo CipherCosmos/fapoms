@@ -3,7 +3,8 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, IsNull, SelectQueryBuilder, DataSource } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { assertTenantOwns, tenantFilterId, tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
-import { EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar, DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS, DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS, DOCUMENT_REJECTION_GUIDANCE, compareNames, type NameMatchGrade, /**
+import { CheckType, CHECK_TYPES, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL, checkTypeForReport, isAdverseVerdict, isRecheckedLifecycle, businessTodayDateKey as todayKey, BACKGROUND_CHECK_VERDICT_LABELS, type ComplianceHold } from '@fapoms/shared';
+import { EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, isVerifiableDocument, normaliseBankAccountNumber, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar, DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS, DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS, DOCUMENT_REJECTION_GUIDANCE, referenceEmailProblem, toE164IndianMobile, compareNames, type NameMatchGrade, /**
    * The deployability vocabulary, imported rather than restated. Every one of these is the exact
    * predicate a dispatch or payment gate already calls — see `deploymentVerdict`, which composes
    * them and writes no rule of its own.
@@ -13,13 +14,17 @@ import { AssayerEntity } from './assayer.entity';
 import { DataIntegrityService } from './data-integrity.service';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
-import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
+import { AssayerBackgroundCheckEntity, type BackgroundCheckReportFile } from './assayer-background-check.entity';
+import { ComplianceStandingService } from './compliance-standing.service';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, IDEMPOTENCY_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { EmailService } from '../notifications/email.service';
+import { SmsService } from '../notifications/sms.service';
+import { appPublicUrl } from '../../infrastructure/notifications/email-provider';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AuditService } from '../../core/audit/audit.service';
 import {
@@ -98,10 +103,14 @@ export interface IdentityStanding {
   ok: boolean;
 }
 
-const NUMBER_LIVES_ON_THE_PERSON: Partial<Record<OnboardingDocument, 'panNumber' | 'aadhaarNumber'>> = {
+const NUMBER_LIVES_ON_THE_PERSON: Partial<Record<OnboardingDocument, 'panNumber' | 'aadhaarNumber' | 'bankAccountNumber'>> = {
   [OnboardingDocument.PAN_CARD]: 'panNumber',
   [OnboardingDocument.AADHAAR_FRONT]: 'aadhaarNumber',
   [OnboardingDocument.AADHAAR_BACK]: 'aadhaarNumber',
+  // Shown beside the passbook (masked) so the reviewer can see which account it is checked against.
+  // Never written through the document: a passbook is not an identity document, so the number
+  // editor refuses it, and bank details are changed on the record's own form.
+  [OnboardingDocument.BANK_PASSBOOK]: 'bankAccountNumber',
 };
 
 @Injectable()
@@ -142,6 +151,15 @@ export class RosterRecordsService {
      * as a blocker while the gate that would actually refuse an activation is set to warn.
      */
     @Optional() private readonly platformSettings?: PlatformSettingsService,
+    /**
+     * The two outboxes a referee is told through. Optional like the collaborators above: a record
+     * whose referees cannot be written to must still be editable, and the notice says why it went
+     * nowhere rather than failing the save or the approval that asked for it.
+     */
+    @Optional() private readonly emailService?: EmailService,
+    @Optional() private readonly smsService?: SmsService,
+    /** Where each person stands on their re-checks — the record's blockers and the dossier read it. */
+    @Optional() private readonly compliance?: ComplianceStandingService,
   ) {}
 
   /**
@@ -216,7 +234,20 @@ export class RosterRecordsService {
         client: e.client ? { id: e.client.id, name: e.client.name, clientCode: e.client.clientCode } : null,
       })),
       backgroundChecks: checks,
-      currentCheck: checks[0] ?? null,
+      // The latest BACKGROUND VERIFICATION — what onboarding reads. A newer police or credit check
+      // is a re-check of its own kind, listed in `backgroundChecks` and in `compliance`.
+      currentCheck: checks.find((c) => (c.checkType ?? CheckType.BGV) === CheckType.BGV) ?? null,
+      // Report files uploaded but not yet recorded against a check — the report for the next one.
+      bgvReportPending: unclaimedReportFiles(
+        onboarding.find((d) => d.requirement === OnboardingDocument.BGV_REPORT) ?? null, checks, allVersions,
+      ),
+      // The same, for every check type that has a report — keyed by the report document.
+      reportPending: Object.fromEntries(CHECK_TYPES
+        .map((t) => CHECK_REPORT_DOCUMENT[t])
+        .filter((r): r is OnboardingDocument => !!r)
+        .map((r) => [r, unclaimedReportFiles(onboarding.find((d) => d.requirement === r) ?? null, checks, allVersions)])),
+      // Where they stand on every re-check, and anything holding them from new work.
+      compliance: (await this.compliance?.standingFor(assayerId)) ?? null,
       onboarding: this.paperworkChecklist(onboarding, assayer, allVersions),
       openIssues,
       // Computed from the rows already in hand — see deploymentVerdict for why the answer has to
@@ -467,6 +498,15 @@ export class RosterRecordsService {
       );
     }
 
+    /*
+      Re-checks over time: overdue past the grace period, or an adverse re-check awaiting a
+      senior's decision. Refused by the assignment gates and the planner's compliance filter —
+      `ComplianceStandingService.workBlockers` is what all three ask.
+    */
+    for (const b of (await this.compliance?.workBlockers(assayer.id)) ?? []) {
+      blockers.push(`${b.charAt(0).toLowerCase()}${b.slice(1)} — record it on their Background tab`);
+    }
+
     return { deployable: blockers.length === 0, deploymentBlockers: blockers };
   }
 
@@ -503,6 +543,8 @@ export class RosterRecordsService {
         // verification for identity documents and nothing of the sort for a code-of-conduct
         // letter, and this is what tells it apart.
         identity: isIdentityDocument(requirement),
+        /** Read and signed off by a reviewer — the identity documents and the passbook. */
+        verifiable: isVerifiableDocument(requirement),
         id: row?.id ?? null,
         currentVersionId: row?.currentVersionId ?? currentVerRecord?.id ?? null,
         docVersion: (row as any)?.version ?? 1,
@@ -528,6 +570,8 @@ export class RosterRecordsService {
         hardCopyReceived: row?.hardCopyReceived ?? null,
         hardCopyLocation: row?.hardCopyLocation ?? null,
         courierReference: row?.courierReference ?? null,
+        /** Who issued it — the agency behind a background verification report. */
+        issuedBy: row?.issuedBy ?? null,
         receivedAt: row?.receivedAt ?? null,
         // Read back from the person where that is where it lives — see
         // NUMBER_LIVES_ON_THE_PERSON. One value, two places to see it, no way for them to differ.
@@ -584,16 +628,172 @@ export class RosterRecordsService {
       : this.references.create({ assayerId });
     if (!row) throw new NotFoundException('No such reference.');
 
+    /**
+     * Absent keeps, `null` or empty clears.
+     *
+     * This was `dto.phone ?? row.phone`, and `??` treats `null` exactly like absent — so the
+     * correction form's deliberate `phone: null` (sent precisely so an emptied box would clear)
+     * put the old number straight back. The screen said "corrected"; the record said otherwise.
+     */
+    const kept = <T,>(incoming: T | null | undefined, stored: T | null): T | null =>
+      incoming === undefined ? stored : (incoming === null || (incoming as unknown) === '' ? null : incoming);
+    // Stored as `+91XXXXXXXXXX`, like every other phone on the roster, so the one a candidate
+    // typed as "98765 43210" and the one the desk typed as "+91-9876543210" are the same number.
+    // Something that is not an Indian mobile is kept as typed rather than refused: a referee's
+    // landline is still somebody the desk can ring.
+    const incomingPhone = typeof dto.phone === 'string' ? dto.phone.trim() : dto.phone;
     Object.assign(row, {
       fullName: dto.fullName?.trim(),
-      phone: dto.phone ?? row.phone ?? null,
-      relationship: dto.relationship ?? row.relationship ?? null,
-      remarks: dto.remarks ?? row.remarks ?? null,
+      phone: kept(
+        typeof incomingPhone === 'string' ? (toE164IndianMobile(incomingPhone) ?? incomingPhone) : incomingPhone,
+        row.phone ?? null,
+      ),
+      relationship: kept(typeof dto.relationship === 'string' ? dto.relationship.trim() : dto.relationship, row.relationship ?? null),
+      remarks: kept(dto.remarks, row.remarks ?? null),
       updatedBy: actorId,
     });
     if (!row.fullName) throw new BadRequestException('A reference needs a name.');
+    if (dto.email !== undefined) {
+      const email = typeof dto.email === 'string' ? dto.email.trim().toLowerCase() : '';
+      if (email) {
+        const bad = referenceEmailProblem(email);
+        if (bad) throw new BadRequestException(`That email ${bad}.`);
+        row.email = email;
+      } else {
+        // `null`, not absent: like the phone above, an emptied box must clear rather than
+        // silently put the old address back.
+        row.email = null;
+      }
+    }
     if (!id) row.createdBy = actorId;
     return this.references.save(row);
+  }
+
+  /**
+   * Tell a referee that HR may call them — by email where there is an address, by text where there
+   * is a mobile — and record what actually went.
+   *
+   * "What went" means QUEUED, and a text the gateway could never carry (no registered DLT template)
+   * is refused at queue time now, so it is not counted. Every channel that did not go is named in
+   * `noticeProblem` for the record to show, which is the difference between "HR was told nothing
+   * reached this person" and a silent gap.
+   *
+   * Idempotent unless `force`: an approval retried after a failure part way must not message the
+   * same three people twice. `force` is the record's "Tell them again" — after a corrected number,
+   * or once the text has a template id.
+   *
+   * Never throws for a delivery problem; the reference is found (or 404s) and a result comes back.
+   */
+  async notifyReferee(
+    assayerId: string,
+    referenceId: string,
+    actorId: string,
+    opts: { force?: boolean } = {},
+  ): Promise<{ channels: ('EMAIL' | 'SMS')[]; problem: string | null; alreadyTold: boolean }> {
+    await this.assertOwnedAssayer(assayerId);
+    const row = await this.references.findOne({ where: { id: referenceId, assayerId } });
+    if (!row) throw new NotFoundException('No such reference.');
+    if (row.notifiedAt && !opts.force) {
+      return { channels: (row.notifiedVia ?? '').split(',').filter(Boolean) as ('EMAIL' | 'SMS')[], problem: row.noticeProblem, alreadyTold: true };
+    }
+
+    const person = await this.assayers.findOne({ where: { id: assayerId }, select: { id: true, displayName: true } as never });
+    const candidateName = (person as { displayName?: string } | null)?.displayName?.trim() || 'A candidate';
+    const channels: ('EMAIL' | 'SMS')[] = [];
+    const problems: string[] = [];
+
+    if (row.email && this.emailService) {
+      const receipt = await this.emailService.queue({
+        kind: 'REFERENCE_NOTICE',
+        to: row.email,
+        recipientName: row.fullName,
+        content: {
+          template: 'reference-notice',
+          data: {
+            refereeName: row.fullName,
+            candidateName,
+            contactLine: await this.referenceContactLine(),
+            logoUrl: `${appPublicUrl()}/sumeru-logo@2x.png`,
+            companyName: 'Sumeru Global',
+          },
+        },
+        entityType: 'ASSAYER_REFERENCE',
+        entityId: row.id,
+        requestedBy: actorId,
+      }).catch(() => null);
+      if (receipt?.status === 'QUEUED') channels.push('EMAIL');
+      else problems.push(`email not sent${receipt?.error ? ` (${receipt.error})` : ''}`);
+    } else {
+      problems.push(row.email ? 'email is not set up' : 'no email address');
+    }
+
+    if (row.phone && toE164IndianMobile(row.phone) && this.smsService) {
+      const receipt = await this.smsService.queue({
+        kind: 'REFERENCE_NOTICE',
+        to: row.phone,
+        recipientName: row.fullName,
+        content: { template: 'reference-notice', data: { candidateName } },
+        entityType: 'ASSAYER_REFERENCE',
+        entityId: row.id,
+        requestedBy: actorId,
+      }).catch(() => null);
+      if (receipt?.status === 'QUEUED') channels.push('SMS');
+      else problems.push(`not texted${receipt?.error ? ` (${receipt.error})` : ''}`);
+    } else {
+      problems.push(!row.phone ? 'no phone number' : !toE164IndianMobile(row.phone) ? 'not a mobile number, so not texted' : 'texts are not set up');
+    }
+
+    // Everything that went is the notice; what did not is named beside it. A referee reached by one
+    // channel of two is told — the problem line says which one did not go.
+    const problem = problems.length > 0 && channels.length < 2 ? problems.join('; ') : null;
+    await this.references.update(row.id, {
+      notifiedAt: channels.length > 0 ? new Date() : row.notifiedAt ?? null,
+      notifiedVia: channels.length > 0 ? channels.join(',') : row.notifiedVia ?? null,
+      noticeProblem: problem ? problem.slice(0, 300) : null,
+    } as never);
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: channels.length > 0 ? 'ASSAYER_REFERENCE_NOTIFIED' : 'ASSAYER_REFERENCE_NOT_NOTIFIED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actorId,
+      remarks: channels.length > 0
+        ? `Reference ${row.fullName} told HR may call (${channels.join(' + ').toLowerCase()}).`
+        : `Reference ${row.fullName} could not be told: ${problem}.`,
+    });
+    return { channels, problem, alreadyTold: false };
+  }
+
+  /**
+   * Tell every referee on this record who has not been told yet. What approval calls, once the
+   * candidate's references have landed on the record; switched by `references.notifyOnApproval`.
+   * One referee's failure never stops the rest.
+   */
+  async notifyUntoldReferees(assayerId: string, actorId: string): Promise<void> {
+    const on = await this.platformSettings?.get<boolean>('references.notifyOnApproval').catch(() => true) ?? true;
+    if (!on) return;
+    // `isActive`: a reference HR removed is gone from the record and must not be messaged.
+    const rows = await this.references.find({ where: { assayerId, isActive: true } });
+    for (const row of rows) {
+      if (row.notifiedAt) continue;
+      try {
+        await this.notifyReferee(assayerId, row.id, actorId);
+      } catch {
+        // Recorded per reference by `notifyReferee`; a lookup failure here is one person, not all.
+      }
+    }
+  }
+
+  /** Who a referee writes to if they object — the grievance officer, as the consent notice names them. */
+  private async referenceContactLine(): Promise<string> {
+    const read = (key: string) => this.platformSettings?.get<string>(key).catch(() => '') ?? Promise.resolve('');
+    const [name, email, phone] = await Promise.all([
+      read('dpdp.grievanceOfficerName'), read('dpdp.grievanceOfficerEmail'), read('dpdp.grievanceOfficerPhone'),
+    ]);
+    const reach = [email, phone].map((v) => String(v ?? '').trim()).filter(Boolean).join(' / ');
+    const who = String(name ?? '').trim();
+    if (who && reach) return `${who} — ${reach}`;
+    return reach || who || 'the office that contacted you';
   }
 
   /** Marking a reference checked is who-and-when, not a free field, so it is its own action. */
@@ -786,10 +986,62 @@ export class RosterRecordsService {
   async recordBackgroundCheck(
     assayerId: string,
     dto: { verdict: BackgroundCheckVerdict; riskGrade?: RiskGrade; cibilScore?: number;
-           cibilBand?: CibilBand; checkedOn?: string; checkedByName?: string; findings?: string },
+           cibilBand?: CibilBand; checkedOn?: string; checkedByName?: string; findings?: string;
+           /** Which check — background (the default, and every check before 2026-09-23), police, credit or identity. */
+           checkType?: CheckType },
     actorId: string,
   ) {
     await this.assertOwnedAssayer(assayerId);
+    const checkType = dto.checkType ?? CheckType.BGV;
+    if (!(CHECK_TYPES as readonly string[]).includes(checkType)) {
+      throw new BadRequestException(`"${checkType}" is not a check this system records.`);
+    }
+    const label = CHECK_TYPE_LABELS[checkType];
+    const completed = dto.verdict !== BackgroundCheckVerdict.NOT_CHECKED;
+    /*
+      The report first, then its result. A verdict with no report behind it is somebody's word —
+      and "clear" is the word that admits a person to a vault. NOT_CHECKED records that no check
+      was run, so it needs none.
+
+      And it must be THIS check's report: the files no earlier check was recorded against. A
+      candidate who did not pass and is verified again needs the new report — re-reading the one
+      that failed them and calling it a pass is exactly what the history exists to stop. Each check
+      type has its own report (`CHECK_REPORT_DOCUMENT`); the identity re-check has none of its own —
+      the identity documents are what it re-verifies, so it has to say what was re-checked instead.
+    */
+    const requirement = CHECK_REPORT_DOCUMENT[checkType];
+    const { document: report, unclaimed } = requirement
+      ? await this.reportState(assayerId, requirement)
+      : { document: null, unclaimed: [] as PendingReportFile[] };
+    if (completed && requirement && unclaimed.length === 0) {
+      throw new BadRequestException(
+        (report?.filePaths?.length ?? 0) === 0
+          ? checkType === CheckType.BGV
+            ? 'Upload the background verification report before recording its result — the result is '
+              + 'only as good as the report it came from.'
+            : `Upload the ${ONBOARDING_DOCUMENT_LABELS[requirement].toLowerCase()} before recording the ${label.toLowerCase()} result.`
+          : 'Upload the report for this check. The report already on file belongs to the check '
+            + 'recorded before, and stays with it.',
+      );
+    }
+    if (completed && checkType === CheckType.IDENTITY && String(dto.findings ?? '').trim().length < 10) {
+      throw new BadRequestException(
+        'Say which identity documents were re-checked against the originals, and what was found.',
+      );
+    }
+    /*
+      Who ran it: typed, or else the issuer named when its report was uploaded — the same agency,
+      so nobody should have to type it twice. A result with no issuer at all (a report uploaded
+      before the name was asked for) is refused: "clear" says nothing without who said it.
+    */
+    const agency = String(dto.checkedByName ?? '').trim() || String(report?.issuedBy ?? '').trim();
+    if (completed && CHECK_ISSUER_LABEL[checkType] && !agency) {
+      throw new BadRequestException(
+        checkType === CheckType.BGV
+          ? 'Name the agency that carried out the background verification.'
+          : `Name the ${String(CHECK_ISSUER_LABEL[checkType]).toLowerCase()}.`,
+      );
+    }
     // Always a new row. Overwriting the last check would lose the fact that the picture changed,
     // which is the only reason to look at a second one.
     const row = this.checks.create({
@@ -799,12 +1051,47 @@ export class RosterRecordsService {
       cibilScore: dto.cibilScore ?? null,
       cibilBand: dto.cibilBand ?? null,
       checkedOn: dto.checkedOn ? new Date(dto.checkedOn) : new Date(),
-      checkedByName: dto.checkedByName ?? null,
+      checkedByName: agency || null,
       findings: dto.findings ?? null,
+      reportFiles: completed ? unclaimed.map(({ index: _index, ...file }) => file) : [],
+      checkType,
       createdBy: actorId,
       updatedBy: actorId,
     });
+    /*
+      An adverse re-check on somebody already WORKING goes to a senior, and holds them from new
+      work until it is decided — keep them working, or suspend them (`ComplianceReviewService`).
+      A joiner's adverse check is onboarding's business: the gates there already stop them.
+    */
+    const person = await this.assayers.findOne({
+      where: { id: assayerId }, select: { id: true, lifecycleStatus: true, complianceHold: true, displayName: true },
+    });
+    const holdsWork = completed && isAdverseVerdict(dto.verdict) && isRecheckedLifecycle(person?.lifecycleStatus);
+    if (holdsWork) row.reviewStatus = 'PENDING';
     const saved = await this.checks.save(row);
+    if (holdsWork && person && !person.complianceHold) {
+      const hold: ComplianceHold = {
+        checkId: saved.id, checkType, verdict: saved.verdict, since: todayKey(), recordedBy: actorId,
+      };
+      await this.assayers.update({ id: assayerId }, { complianceHold: hold as never, updatedBy: actorId });
+    }
+    if (holdsWork) {
+      this.notifications?.emitSafe({
+        type: 'ASSAYER_RECHECK_ADVERSE',
+        entityType: 'ASSAYER',
+        entityId: assayerId,
+        actorUserId: actorId,
+        assayerId,
+        dedupeKey: `ASSAYER_RECHECK_ADVERSE:${saved.id}`,
+        payload: {
+          assayerName: person?.displayName ?? 'An assayer',
+          assayerId,
+          checkLabel: label,
+          outcome: BACKGROUND_CHECK_VERDICT_LABELS[saved.verdict] ?? saved.verdict,
+          findings: String(saved.findings ?? '').slice(0, 300) || 'No findings were written down.',
+        },
+      });
+    }
     // A background/credit check is the grounds for admitting someone to a bank vault, and it had
     // no trail at all — only the row itself, with no record of who recorded it.
     await this.auditService?.recordEventSafe({
@@ -814,10 +1101,50 @@ export class RosterRecordsService {
       entityId: assayerId,
       newState: saved.verdict,
       userId: actorId,
-      remarks: `Background check recorded: ${saved.verdict}${saved.riskGrade ? ` (${saved.riskGrade})` : ''}`,
-      metadata: { newValue: { verdict: saved.verdict, riskGrade: saved.riskGrade, cibilBand: saved.cibilBand, cibilScore: saved.cibilScore } },
+      remarks: `${label} recorded: ${saved.verdict}${saved.riskGrade ? ` (${saved.riskGrade})` : ''}`
+        + (holdsWork ? ' — held from new work until a senior decides.' : ''),
+      metadata: {
+        checkId: saved.id,
+        checkType,
+        heldFromWork: holdsWork,
+        newValue: {
+          verdict: saved.verdict, riskGrade: saved.riskGrade, cibilBand: saved.cibilBand, cibilScore: saved.cibilScore,
+          checkedByName: saved.checkedByName, checkedOn: saved.checkedOn,
+          // Which uploads the result was read from — the trail names the evidence, not just the verdict.
+          reportFiles: (saved.reportFiles ?? []).map((f) => ({ versionId: f.versionId, path: f.path })),
+        },
+      },
     });
     return saved;
+  }
+
+  /**
+   * The background verification report as it stands: the document row, and the files on it that
+   * no recorded check has claimed yet — the report waiting for its result. Each file carries its
+   * position on the document, which is how it is viewed or removed while it is still waiting.
+   */
+  async bgvReportState(assayerId: string): Promise<{
+    document: AssayerDocumentEntity | null;
+    unclaimed: PendingReportFile[];
+  }> {
+    return this.reportState(assayerId, OnboardingDocument.BGV_REPORT);
+  }
+
+  /** The same, for any check's report document — police certificate, credit report. */
+  async reportState(assayerId: string, requirement: OnboardingDocument): Promise<{
+    document: AssayerDocumentEntity | null;
+    unclaimed: PendingReportFile[];
+  }> {
+    const [document, checks] = await Promise.all([
+      this.onboarding.findOne({ where: { assayerId, requirement, isActive: true } }),
+      // The same checks the dossier lists, so both answer "which files are waiting" alike.
+      this.checks.find({ where: { assayerId, isActive: true }, select: { id: true, reportFiles: true } }),
+    ]);
+    if (!document || (document.filePaths ?? []).length === 0) return { document, unclaimed: [] };
+    const versions = this.docVersions
+      ? await this.docVersions.find({ where: { documentId: document.id }, order: { version: 'DESC' } })
+      : [];
+    return { document, unclaimed: unclaimedReportFiles(document, checks, versions) };
   }
 
   // ── Onboarding paperwork ──────────────────────────────────────────────
@@ -1014,7 +1341,26 @@ export class RosterRecordsService {
       fileSize?: number;
       mimeType?: string;
     },
+    /** Who issued the document — required for a background verification report (the agency). */
+    issuedBy?: string | null,
   ) {
+    /*
+      A background verification report is produced by an outside agency, and the report is only as
+      good as who produced it — so it is not accepted without that name. Checked before anything is
+      written, so a refused upload leaves no version, no audit line and no half-attached file.
+    */
+    const issuer = String(issuedBy ?? '').trim();
+    const reportFor = checkTypeForReport(requirement);
+    if (reportFor && CHECK_ISSUER_LABEL[reportFor] && !issuer) {
+      throw new BadRequestException(
+        reportFor === CheckType.BGV
+          ? 'Name the agency that carried out the background verification before uploading its report.'
+          : `Name the ${String(CHECK_ISSUER_LABEL[reportFor]).toLowerCase()} before uploading the ${ONBOARDING_DOCUMENT_LABELS[requirement].toLowerCase()}.`,
+      );
+    }
+    if (issuer.length > 200) {
+      throw new BadRequestException('Keep the agency name under 200 characters.');
+    }
     this.assertKnownRequirement(requirement);
     // `attachFile` writes a scan against a person and, for PHOTOGRAPH, writes through to
     // `assayers.photograph` further down — a mutation of the parent row keyed on nothing but the
@@ -1140,6 +1486,7 @@ export class RosterRecordsService {
       row.rejectionReason = null;
     }
     row.isActive = true;
+    if (issuer) row.issuedBy = issuer;
     row.updatedBy = actorId;
     const saved = await this.onboarding.save(row);
 
@@ -1279,6 +1626,21 @@ export class RosterRecordsService {
     await this.assertOwnedAssayer(row.assayerId, 'No such document.');
     const key = row.filePaths?.[index];
     if (!key) return null;
+
+    /*
+      A background check's report is the evidence for its result — "not passed" included — and the
+      check cannot be edited or deleted, so neither can what it was read from. Only a report still
+      waiting for its result can be taken off.
+    */
+    if (checkTypeForReport(row.requirement)) {
+      const citing = await this.checks.find({ where: { assayerId: row.assayerId }, select: { id: true, reportFiles: true } });
+      if (citing.some((c) => (c.reportFiles ?? []).some((f) => f.path === key))) {
+        throw new BadRequestException(
+          'This report is the evidence for a recorded background check and is kept with it. '
+          + 'If it is wrong, record a new check with the correct report.',
+        );
+      }
+    }
 
     /**
      * Every version row that points at this same object.
@@ -1531,9 +1893,24 @@ export class RosterRecordsService {
    * One reader, used by the lifecycle gate and the ID-card gate both, so "what did the last check
    * say" cannot quietly mean two different things in two places.
    */
-  async latestBackgroundVerdict(assayerId: string): Promise<BackgroundCheckVerdict | null> {
+  /**
+   * Does the operative check — the one `latestBackgroundVerdict` reads — carry its own report?
+   * Mandatory evidence: onboarding is not finished on a result with no report behind it. Asked of
+   * that check rather than of the document, so a pass can never lean on the report that failed
+   * the same person the time before.
+   */
+  async bgvReportOnFile(assayerId: string): Promise<boolean> {
     const latest = await this.checks.findOne({
-      where: { assayerId, isActive: true },
+      where: { assayerId, isActive: true, checkType: CheckType.BGV },
+      order: { checkedOn: 'DESC', createdAt: 'DESC' },
+    });
+    return (latest?.reportFiles?.length ?? 0) > 0;
+  }
+
+  async latestBackgroundVerdict(assayerId: string): Promise<BackgroundCheckVerdict | null> {
+    // Background verification only — a police or credit check is not what onboarding asks for.
+    const latest = await this.checks.findOne({
+      where: { assayerId, isActive: true, checkType: CheckType.BGV },
       order: { checkedOn: 'DESC', createdAt: 'DESC' },
     });
     return latest?.verdict ?? null;
@@ -1556,8 +1933,9 @@ export class RosterRecordsService {
    * carries to the end of the NEXT year — otherwise a December 31st joiner's card would expire
    * the day it was printed, which is the owner's own objection recorded verbatim.
    *
-   * This is the DOWNLOAD's entry point: the judgement is `idCardTerms`, and the audit row below is
-   * the one thing added on top. A preview must call `idCardTerms` instead — looking at a card is
+   * This is the entry point for the assayer OPENING their card in the app: the judgement is
+   * `idCardTerms`, and the audit row below is the one thing added on top. A preview (HR's, the live
+   * code refresh, the verification page) must call `idCardTerms` instead — looking at a card is
    * not issuing one, and must not leave an "issued with gaps" row behind.
    */
   async idCardIssuance(assayerId: string, actorId: string): Promise<IdCardTerms> {
@@ -1582,7 +1960,7 @@ export class RosterRecordsService {
 
   /**
    * The ID-card judgement with no side effects — refusals, gated items, gate mode and the dates the
-   * card would carry if it were printed now. Shared by the download (through `idCardIssuance`) and
+   * card would carry if it were shown now. Shared by the app's card (through `idCardIssuance`) and
    * the preview route, so the two cannot reach different verdicts.
    */
   async idCardTerms(assayerId: string): Promise<IdCardTerms> {
@@ -1631,13 +2009,14 @@ export class RosterRecordsService {
         return null;
       }
     };
-    const [signatoryName, signatoryTitle, helplinePhone, officeAddress] = await Promise.all([
+    const [signatoryName, signatoryTitle, helplinePhone, officeAddress, organisation] = await Promise.all([
       read('idCard.signatoryName'),
       read('idCard.signatoryTitle'),
       read('idCard.helplinePhone'),
       read('company.address'),
+      read('company.legalName'),
     ]);
-    return { signatoryName, signatoryTitle, helplinePhone, officeAddress };
+    return { signatoryName, signatoryTitle, helplinePhone, officeAddress, organisation };
   }
 
   /**
@@ -1719,6 +2098,9 @@ export class RosterRecordsService {
       rejectionReason?: DocumentRejectionReason | null;
       /** The reviewer has seen that the name does not agree, and says why they accepted it. */
       nameMismatchNote?: string | null;
+      /** Passbook only: the account number and IFSC as printed, checked against the record. */
+      accountNumber?: string | null;
+      ifscCode?: string | null;
       /** Explicit version to bind verification to */
       targetVersionId?: string | null;
       /** Optimistic concurrency version check */
@@ -1734,6 +2116,23 @@ export class RosterRecordsService {
     // superseded-version 409 each describe the row, and describing a row is disclosing it.
     await this.assertOwnedAssayer(row.assayerId, 'No such document.');
 
+    /**
+     * Document review opens at document verification — never while INVITED.
+     *
+     * INVITED means "on the roster, nothing reviewed yet", and the onboarding drawer moves such
+     * a person to document verification with one press ("Start checking documents"). Letting a
+     * verdict land earlier meant the same scans were verified twice: once off-stage on the
+     * record, and again when the stage flow asked for it. Collecting scans (attach) stays open
+     * at every stage — only the verdict needs the stage to have started.
+     */
+    const person = await this.assayers.findOne({ where: { id: row.assayerId } });
+    if (person?.lifecycleStatus === AssayerLifecycleStatus.INVITED) {
+      throw new BadRequestException(
+        'Document review has not started for this person yet. Move them to document '
+        + 'verification first, then verify or send back their documents.',
+      );
+    }
+
     // Row-level optimistic concurrency check
     if (attested?.expectedDocVersion !== undefined && (row as any).version !== attested.expectedDocVersion) {
       throw withCode(new ConflictException(
@@ -1741,9 +2140,9 @@ export class RosterRecordsService {
       ), CONCURRENCY_ERROR_CODES.DOCUMENT_VERSION_STALE);
     }
 
-    if (!isIdentityDocument(row.requirement)) {
+    if (!isVerifiableDocument(row.requirement)) {
       throw new BadRequestException(
-        `${ONBOARDING_DOCUMENT_LABELS[row.requirement]} is not an identity document. `
+        `${ONBOARDING_DOCUMENT_LABELS[row.requirement]} is not a document that is verified. `
         + 'Record whether it arrived instead.',
       );
     }
@@ -1826,10 +2225,11 @@ export class RosterRecordsService {
      * are telling you they could not get.
      */
     if (verdict === DocumentVerification.VERIFIED && !effectiveNumber) {
-      throw new BadRequestException(
-        'There is no document number on this record, so there is nothing to have checked against '
-        + 'the original.',
-      );
+      throw new BadRequestException(row.requirement === OnboardingDocument.BANK_PASSBOOK
+        ? 'There is no bank account on the record to check this passbook against. Add the account '
+          + 'number and IFSC to the record first, then verify the passbook.'
+        : 'There is no document number on this record, so there is nothing to have checked against '
+          + 'the original.');
     }
 
     /**
@@ -1888,6 +2288,49 @@ export class RosterRecordsService {
             `Before this ${ONBOARDING_DOCUMENT_LABELS[row.requirement]} can be marked verified, `
             + `record what it says: ${missing.join(', ')}. That is what the record is checked `
             + 'against — a verification that compares nothing attests to nothing.',
+          );
+        }
+      }
+
+      /**
+       * A passbook vouches for the account a payout goes to — so it is checked against THAT, not
+       * merely read. The reviewer types the number and IFSC off the page; they must agree with the
+       * record's, digit for digit. Compared, never stored on the document: the number already lives
+       * on the person, encrypted, and a second copy would be a second place to leak it from.
+       *
+       * Refused rather than warned: if the page shows another account, either the record is wrong
+       * (correct it — which withdraws this verification anyway) or it is not their passbook.
+       */
+      if (row.requirement === OnboardingDocument.BANK_PASSBOOK) {
+        const person = await this.assayers.findOne({ where: { id: row.assayerId } });
+        const onRecord = normaliseBankAccountNumber(person?.bankAccountNumber);
+        if (!onRecord) {
+          throw new BadRequestException(
+            'There is no bank account on the record to check this passbook against. Add the account '
+            + 'number and IFSC to the record first, then verify the passbook.',
+          );
+        }
+        const read = normaliseBankAccountNumber(attested?.accountNumber);
+        const readIfsc = String(attested?.ifscCode ?? '').trim().toUpperCase();
+        if (!read || !readIfsc) {
+          throw new BadRequestException(
+            'Type the account number and IFSC exactly as they are printed on the passbook — they are '
+            + 'what the record is checked against.',
+          );
+        }
+        const tail = (n: string) => `…${n.slice(-4)}`;
+        if (read !== onRecord) {
+          throw new BadRequestException(
+            `The passbook shows account ${tail(read)}, but the record has ${tail(onRecord)}. If the `
+            + 'record is wrong, correct its bank details and verify again; if this is not their '
+            + 'passbook, send it back.',
+          );
+        }
+        const recordIfsc = String(person?.ifscCode ?? '').trim().toUpperCase();
+        if (readIfsc !== recordIfsc) {
+          throw new BadRequestException(
+            `The passbook shows IFSC ${readIfsc}, but the record has ${recordIfsc || 'none'}. Correct `
+            + 'the record if it is wrong, or send the passbook back.',
           );
         }
       }
@@ -2203,4 +2646,34 @@ export class RosterRecordsService {
       openCount: (await this.listIssues({ limit: 1 })).openCount,
     };
   }
+}
+
+/** A report file waiting for its result, with its place on the report document. */
+export type PendingReportFile = BackgroundCheckReportFile & { index: number };
+
+/**
+ * The files on the background verification report that no recorded check was read from — the
+ * report for the next check. Pure, so the dossier answers from rows it has already loaded and
+ * `bgvReportState` from its own; the two cannot disagree about which files are waiting.
+ */
+export function unclaimedReportFiles(
+  document: Pick<AssayerDocumentEntity, 'id' | 'filePaths'> | null,
+  checks: Pick<AssayerBackgroundCheckEntity, 'reportFiles'>[],
+  versions: Pick<AssayerDocumentVersionEntity, 'id' | 'documentId' | 'filePath' | 'uploadedAt'>[],
+): PendingReportFile[] {
+  if (!document) return [];
+  const claimed = new Set(checks.flatMap((c) => (c.reportFiles ?? []).map((f) => f.path)));
+  return (document.filePaths ?? [])
+    .map((path, index) => ({ path, index }))
+    .filter(({ path }) => !claimed.has(path))
+    .map(({ path, index }) => {
+      const version = versions.find((v) => v.documentId === document.id && v.filePath === path) ?? null;
+      return {
+        documentId: document.id,
+        versionId: version?.id ?? null,
+        path,
+        uploadedAt: version?.uploadedAt ? new Date(version.uploadedAt).toISOString() : null,
+        index,
+      };
+    });
 }

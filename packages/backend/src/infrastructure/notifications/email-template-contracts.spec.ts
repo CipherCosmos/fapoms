@@ -35,6 +35,8 @@ describe('Email Template Engine & Security Contracts', () => {
     'app-credentials',
     'application-approved',
     'application-rejected',
+    'application-info-requested',
+    'reference-notice',
     'branch-audit-paperwork',
     'morning-digest',
     'account-setup-link',
@@ -43,8 +45,8 @@ describe('Email Template Engine & Security Contracts', () => {
   ];
 
   describe('1. Registry Contract Definitions', () => {
-    it('registers all 10 production templates', () => {
-      expect(Object.keys(EMAIL_TEMPLATE_REGISTRY)).toHaveLength(10);
+    it('registers all 12 production templates', () => {
+      expect(Object.keys(EMAIL_TEMPLATE_REGISTRY)).toHaveLength(12);
       for (const key of allKeys) {
         expect(EMAIL_TEMPLATE_REGISTRY[key]).toBeDefined();
         expect(EMAIL_TEMPLATE_REGISTRY[key].key).toBe(key);
@@ -71,6 +73,8 @@ describe('Email Template Engine & Security Contracts', () => {
         'app-credentials',
         'application-approved',
         'application-rejected',
+        'application-info-requested',
+    'reference-notice',
         'branch-audit-paperwork',
         'account-setup-link',
         'password-reset-link',

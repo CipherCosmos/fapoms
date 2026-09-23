@@ -112,12 +112,14 @@ export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout, role
         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
           <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>CURRENT PASSWORD</span>
           <input type="password" value={currentPassword} autoComplete="current-password"
+            title="Type the password you were given to sign in with"
             onChange={(e) => setCurrentPassword(e.target.value)} style={field} />
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
           <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>NEW PASSWORD</span>
           <input type="password" value={newPassword} autoComplete="new-password"
+            title="Choose a new password with at least 8 characters, known only to you"
             onChange={(e) => setNewPassword(e.target.value)} style={field} />
           <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>At least {MIN_LENGTH} characters.</span>
         </label>
@@ -125,6 +127,7 @@ export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout, role
         <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
           <span style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>CONFIRM NEW PASSWORD</span>
           <input type="password" value={confirmPassword} autoComplete="new-password"
+            title="Type the new password again to confirm it matches"
             onChange={(e) => setConfirmPassword(e.target.value)} style={field} />
         </label>
 
@@ -136,11 +139,12 @@ export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout, role
         )}
 
         <button type="submit" disabled={busy} className="btn btn-primary"
+          title="Save your new password and continue to the app"
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px', padding: '10px' }}>
           <KeyRound size={15} /> {busy ? 'Saving…' : 'Set password'}
         </button>
 
-        <button type="button" onClick={onLogout} className="btn btn-secondary" style={{ padding: '8px' }}>
+        <button type="button" onClick={onLogout} className="btn btn-secondary" title="Sign out instead of changing your password now" style={{ padding: '8px' }}>
           Sign out
         </button>
       </form>

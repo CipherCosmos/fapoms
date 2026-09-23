@@ -165,7 +165,7 @@ export const DocumentControlPanel: React.FC<{
                     ? `audit was ${Math.abs(d.daysUntilAudit)} day(s) ago`
                     : 'audit due today'}
                 </span>
-                <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
+                <button onClick={() => onDispatch([d.id])} disabled={busy} title={`Send ${d.fileName} to the assayer now`} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
                   Send now
                 </button>
               </span>
@@ -260,9 +260,9 @@ export const DocumentControlPanel: React.FC<{
             <div key={d.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', flexWrap: 'wrap' }}>
                 {d.status === 'UPLOADED' && (
-                  <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggle(d.id)} style={{ cursor: 'pointer' }} />
+                  <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggle(d.id)} title={`Select ${d.fileName} to send in bulk`} style={{ cursor: 'pointer' }} />
                 )}
-                <button onClick={() => setExpanded(open ? null : d.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}>
+                <button onClick={() => setExpanded(open ? null : d.id)} title={open ? `Hide paperwork trail for ${d.fileName}` : `Show paperwork trail for ${d.fileName}`} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}>
                   {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                 </button>
                 <FileText size={15} style={{ color: meta.color, flexShrink: 0 }} />

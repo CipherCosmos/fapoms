@@ -197,13 +197,13 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       footer={canAct ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
           {(invoice.status === InvoiceStatus.DRAFT || (invoice.status === InvoiceStatus.ISSUED && Number(invoice.paidAmount) === 0)) && (
-            <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Ban size={14} /> Cancel invoice</button>
+            <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" title="Cancel this invoice — its lines return to unbilled" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Ban size={14} /> Cancel invoice</button>
           )}
           {invoice.status === InvoiceStatus.DRAFT && (
-            <button onClick={doSend} disabled={send.isPending} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
+            <button onClick={doSend} disabled={send.isPending} className="btn btn-primary" title="Mark this invoice as sent — it becomes payable and outstanding" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
           )}
           {invoice.status === InvoiceStatus.ISSUED && (
-            <button onClick={() => setPayOpen((o) => !o)} className="btn btn-primary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Banknote size={14} /> Record payment</button>
+            <button onClick={() => setPayOpen((o) => !o)} className="btn btn-primary" title="Record a payment received against this invoice" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Banknote size={14} /> Record payment</button>
           )}
         </div>
       ) : undefined}
@@ -232,8 +232,8 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
             <textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} rows={2} placeholder="Reason *" style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
           )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => { setCancelOpen(false); setCancelPreset(''); setCancelReason(''); }} className="btn btn-secondary">Keep</button>
-            <button onClick={doCancel} disabled={cancel.isPending || !effectiveCancelReason} className="btn btn-primary">Cancel invoice</button>
+            <button onClick={() => { setCancelOpen(false); setCancelPreset(''); setCancelReason(''); }} className="btn btn-secondary" title="Keep this invoice — close without cancelling">Keep</button>
+            <button onClick={doCancel} disabled={cancel.isPending || !effectiveCancelReason} className="btn btn-primary" title={effectiveCancelReason ? 'Cancel this invoice and return its lines to unbilled' : 'Choose a reason first'}>Cancel invoice</button>
           </div>
         </div>
       )}
@@ -242,16 +242,16 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
             <Select value={method} onChange={(v) => setMethod(v as PaymentMethod)} options={METHODS.map((m) => ({ value: m, label: paymentMethodLabel(m) }))} />
-            <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} />
+            <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} title="Bank reference, UTR or cheque number for this payment" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-            <StyledInput placeholder={`Amount (outstanding ${money(outstanding)}) *`} type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            <StyledInput type="date" value={receivedDate} onChange={(e) => setReceivedDate(e.target.value)} />
+            <StyledInput placeholder={`Amount (outstanding ${money(outstanding)}) *`} type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} title={`Amount received — ${money(outstanding)} still outstanding`} />
+            <StyledInput type="date" value={receivedDate} onChange={(e) => setReceivedDate(e.target.value)} title="Date the payment was received" />
           </div>
-          <StyledInput placeholder="Notes" value={payNote} onChange={(e) => setPayNote(e.target.value)} />
+          <StyledInput placeholder="Notes" value={payNote} onChange={(e) => setPayNote(e.target.value)} title="Optional note about this payment" />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => setAmount(String(outstanding))} className="btn btn-secondary">Full amount</button>
-            <button onClick={doPay} disabled={pay.isPending} className="btn btn-primary">{pay.isPending ? 'Recording…' : 'Save payment'}</button>
+            <button onClick={() => setAmount(String(outstanding))} className="btn btn-secondary" title="Fill in the full outstanding amount">Full amount</button>
+            <button onClick={doPay} disabled={pay.isPending} className="btn btn-primary" title="Save this payment against the invoice">{pay.isPending ? 'Recording…' : 'Save payment'}</button>
           </div>
         </div>
       )}

@@ -4,8 +4,8 @@ import {
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, KeyRound, ShieldCheck, FileCheck, Gauge, Info, Trash2,
   Wallet,
 } from 'lucide-react';
-import {
-  nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel,
+import { looksMasked,
+  nextAssayerLifecycleStates, mayReopenBackgroundVerification, reopenTargetFor, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel,
   employmentTypeLabel,
   ASSAYER_RECORD_FIELDS, isValidIfsc, IDENTITY_GATE_DOCUMENTS, payoutBlockingGaps,
   businessDateKey,
@@ -43,8 +43,10 @@ import { AssayerQualificationTab } from './AssayerQualificationTab';
 import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { counted } from '../../utils/plural';
 import { LIFECYCLE_MOVE_REASONS, OTHER_LIFECYCLE_REASON, REHIRE_REASON } from './lifecycle-reason-vocabulary';
+import { SourceReferralEditor } from './record/SourceReferralEditor';
 import { resolveRecordSection, type SummaryGroupKey } from './record-sections';
-import { canDeleteAssayers, useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { canDeleteAssayers, canApproveJoiners, useCurrentRoles, useCurrentPermissions, useCurrentUserId } from '../../hooks/useCurrentRoles';
+import { ApprovalPanel } from './record/ApprovalPanel';
 import { queryClient } from '../../queryClient';
 import { queryKeys } from '../../hooks/queryKeys';
 import {
@@ -79,6 +81,7 @@ export const STAGE_CONSEQUENCE: Record<string, string> = {
   [AssayerLifecycleStatus.INVITED]: 'They are back at the start of joining and cannot be given work.',
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'They wait for their documents to be checked and cannot be given work yet.',
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'They wait for their background check and cannot be given work yet.',
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: 'A senior approves them before training — or rejects with a reason, or asks HR for more. Somebody other than you has to decide it.',
   [AssayerLifecycleStatus.TRAINING]: 'They are in training and cannot be given work yet.',
   [AssayerLifecycleStatus.ACTIVE]: 'They can be planned, offered work and paid from now on.',
   [AssayerLifecycleStatus.ON_LEAVE]: 'They stay on the roster but are not offered work until they are made Active again.',
@@ -128,6 +131,7 @@ const ONBOARDING_MILESTONES: Array<{ key: AssayerLifecycleStatus; title: string;
   { key: AssayerLifecycleStatus.INVITED, title: 'Invited', tab: 'summary' },
   { key: AssayerLifecycleStatus.DOCUMENT_VERIFICATION, title: 'Documents', tab: 'documents' },
   { key: AssayerLifecycleStatus.BACKGROUND_VERIFICATION, title: 'Background check', tab: 'vetting' },
+  { key: AssayerLifecycleStatus.FINAL_APPROVAL, title: 'Approval', tab: 'summary' },
   { key: AssayerLifecycleStatus.TRAINING, title: 'Training', tab: 'summary' },
   { key: AssayerLifecycleStatus.ACTIVE, title: 'Active', tab: 'summary' },
 ];
@@ -226,21 +230,33 @@ export const AssayerRecord: React.FC<{
   const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   /** True while the ID card PDF is being fetched — a second click before it lands would ask the server to build the same file twice. */
-  const [idCardBusy, setIdCardBusy] = useState(false);
   const [idCardOpen, setIdCardOpen] = useState(false);
 
-  const { confirm, confirmDialog } = useConfirm();
+  const { confirm, confirmWithReason, confirmDialog } = useConfirm();
   const { toast } = useToast();
   const arrivedRef = useRef(false);
   const [flashGroup, setFlashGroup] = useState<SummaryGroupKey | null>(null);
 
   const roles = useCurrentRoles();
+  const permissions = useCurrentPermissions();
+  const currentUserId = useCurrentUserId();
+  const canApprove = canApproveJoiners(roles, permissions);
   const canDelete = canManage && (typeof canDeleteAssayers === 'function' ? canDeleteAssayers(roles) : true);
 
   // In-place editing state
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [editInitial, setEditInitial] = useState<Record<string, string>>({});
+  /**
+   * The account number typed a second time — asked for only once a NEW number has been typed (the
+   * saved one shows masked and was confirmed when it was saved). Compared by `buildAssayerEditBody`,
+   * never sent.
+   */
+  const [accountConfirm, setAccountConfirm] = useState('');
+  const accountTypedNow = editing
+    && (editForm.bankAccountNumber ?? '') !== (editInitial.bankAccountNumber ?? '')
+    && !!(editForm.bankAccountNumber ?? '').trim()
+    && !looksMasked(editForm.bankAccountNumber ?? '');
   const [savingEdit, setSavingEdit] = useState(false);
   const managerOpts = useManagerOptions(editing && canManage, assayerId);
   const hrOwnerOpts = useHrOwnerOptions(editing && canManage);
@@ -480,7 +496,7 @@ export const AssayerRecord: React.FC<{
     const snap = snapshotEdit(a);
     setEditForm(snap); setEditInitial(snap); setTab('summary'); setEditing(true);
   };
-  const cancelEdit = () => { setEditing(false); };
+  const cancelEdit = () => { setEditing(false); setAccountConfirm(''); };
 
   const saveEdit = async () => {
     if (!a) return;
@@ -491,7 +507,9 @@ export const AssayerRecord: React.FC<{
       if (changed.length === 0) { setEditing(false); return; }
       const touched: Record<string, string | undefined> = {};
       for (const key of changed) touched[key] = editForm[key];
-      const { body, problems } = buildAssayerEditBody(EDIT_FIELDS, touched, a);
+      const { body, problems } = buildAssayerEditBody(
+        EDIT_FIELDS, { ...touched, bankAccountNumberConfirm: accountConfirm }, a,
+      );
       if (problems.length) { setErr(`Could not save. ${problems.join(' ')}`); return; }
       await api.request(`/assayers/${a.id}`, { method: 'PUT', body: JSON.stringify(body) });
       toast({ type: 'success', title: 'Saved', message: `${counted(changed.length, 'change')} saved.` });
@@ -529,13 +547,17 @@ export const AssayerRecord: React.FC<{
   // inside the callback made the rule ask for the whole record as a dependency -- which changes
   // identity on every refetch and would have recomputed both on every one.
   const lifecycleStatus = a?.lifecycleStatus;
+  const unavailableReason = a?.unavailableReason;
   const transitions = useMemo(
-    () => (lifecycleStatus ? nextAssayerLifecycleStates(lifecycleStatus) : []),
-    [lifecycleStatus],
+    () => (lifecycleStatus ? nextAssayerLifecycleStates(lifecycleStatus, unavailableReason) : []),
+    [lifecycleStatus, unavailableReason],
   );
+  // Somebody parked for failing a step has one way forward: that step again — background
+  // verification after a failed check, the approval after a rejection. See `reopenTargetFor`.
   const forwardStep = useMemo(
-    () => (lifecycleStatus ? nextOnboardingStep(lifecycleStatus) : null),
-    [lifecycleStatus],
+    () => ((lifecycleStatus === AssayerLifecycleStatus.INACTIVE ? reopenTargetFor(unavailableReason) : null)
+      ?? (lifecycleStatus ? nextOnboardingStep(lifecycleStatus) : null)),
+    [lifecycleStatus, unavailableReason],
   );
 
   const startMove = (to: string) => {
@@ -571,7 +593,7 @@ export const AssayerRecord: React.FC<{
 
     if (
       a.lifecycleStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION
-      && to === AssayerLifecycleStatus.TRAINING
+      && to === AssayerLifecycleStatus.FINAL_APPROVAL
       && dossierGlance?.currentCheck?.verdict
       && ADVERSE_BACKGROUND_VERDICTS.includes(dossierGlance.currentCheck.verdict)
     ) {
@@ -589,6 +611,26 @@ export const AssayerRecord: React.FC<{
         confirmLabel: `Move to ${assayerLifecycleLabel(to)}`,
       });
       if (!ok) return;
+    }
+
+    /*
+      Sending somebody up for approval carries a note for the approver — what they should know
+      about this file. Optional: a clean file needs no commentary. It opens the approval round.
+    */
+    if (to === AssayerLifecycleStatus.FINAL_APPROVAL) {
+      const sent = await confirmWithReason({
+        title: `Send ${a.displayName} for approval?`,
+        message: 'A senior approves them before training, rejects with a reason, or asks you for more. '
+          + 'Somebody other than you has to decide it.',
+        confirmLabel: 'Send for approval',
+        reasonPrompt: {
+          label: 'Note for the approver (optional)',
+          placeholder: 'Anything they should know about this file',
+          optional: true,
+        },
+      });
+      if (!sent.confirmed) return;
+      why = sent.reason.trim() || 'Sent for approval before training';
     }
 
     if (to === AssayerLifecycleStatus.ACTIVE) {
@@ -708,34 +750,6 @@ export const AssayerRecord: React.FC<{
     finally { setIssuing(null); }
   };
 
-  /**
-   * Streams the templated ID card PDF and saves it — same pattern the roster's template
-   * download uses (`downloadTemplate` in AssayerRoster.tsx): fetch through `api.request` with
-   * `raw: true` so the auth header rides along (a plain `<a href>` to this route cannot carry
-   * the bearer token), turn the blob into an object URL, and click a throwaway anchor. The
-   * route has no JSON envelope at all — it answers the raw PDF bytes — so this is the one place
-   * on the record that talks to it as a file rather than as data.
-   */
-  const downloadIdCard = async () => {
-    if (!a) return;
-    setIdCardBusy(true);
-    setErr(null);
-    try {
-      const blob = await api.request<Blob>(`/assayers/${assayerId}/id-card`, { raw: true } as any);
-      const url = URL.createObjectURL(blob as any);
-      const el = document.createElement('a');
-      el.href = url;
-      el.download = `${a.assayerCode}-id-card.pdf`;
-      document.body.appendChild(el);
-      el.click();
-      el.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      setErr(`Could not download the ID card. ${userMessage(e)}`);
-    } finally {
-      setIdCardBusy(false);
-    }
-  };
 
   if (!a) {
     /**
@@ -1052,6 +1066,23 @@ export const AssayerRecord: React.FC<{
               {/* LEFT COLUMN: what to do next, and whether they can work */}
               <div className="assayer-identity-column">
                 <div className="assayer-identity-sticky assayer-scroll-surface">
+                {/* The approval before training — decided here, and kept here once decided. */}
+                <ApprovalPanel
+                  assayerId={assayerId}
+                  lifecycleStatus={a.lifecycleStatus}
+                  canManage={canManage}
+                  canApprove={canApprove}
+                  currentUserId={currentUserId}
+                  onChanged={() => {
+                    void invalidateLifecycleMutation(queryClient, assayerId);
+                    api.request<Assayer>(`/assayers/${assayerId}`)
+                      .then(setA)
+                      .catch((e) => setErr(`Saved, but the record could not be re-read. ${userMessage(e)}`));
+                    loadActivity();
+                    onChanged();
+                  }}
+                />
+
                 {canManage && transitions.length > 0 && (
                   <section
                     style={{
@@ -1265,6 +1296,24 @@ export const AssayerRecord: React.FC<{
                         : null],
                     ]} />
 
+                    {/* The source reference: who brought them to us. Not one of the referees on the Background tab. */}
+                    <FactGroup
+                      title="Who referred them"
+                      rows={[]}
+                      footer={(
+                        <SourceReferralEditor
+                          assayerId={assayerId}
+                          value={a.sourceReferral}
+                          canManage={canManage}
+                          onSaved={() => {
+                            api.request<Assayer>(`/assayers/${assayerId}`)
+                              .then(setA)
+                              .catch((e) => setErr(`Saved, but the record could not be re-read. ${userMessage(e)}`));
+                          }}
+                        />
+                      )}
+                    />
+
                     <FactGroup
                       edit={editCtx}
                       anchor="location"
@@ -1352,6 +1401,27 @@ export const AssayerRecord: React.FC<{
                       ['Account', maskedIdentifier(a.bankAccountNumber), 'bankAccountNumber'],
                       ['IFSC', a.ifscCode, 'ifscCode'],
                     ]} />
+                    {accountTypedNow && (
+                      <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: 'var(--text-xs)', maxWidth: '320px', marginTop: '-4px' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Re-enter account number</span>
+                        <input
+                          value={accountConfirm}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          placeholder="Type it again, from the passbook"
+                          onChange={(e) => setAccountConfirm(e.target.value)}
+                          // A pasted copy repeats the slip it is meant to catch.
+                          onPaste={(e) => e.preventDefault()}
+                          style={{
+                            padding: '5px 8px', fontSize: 'var(--text-xs)', borderRadius: '6px', fontFamily: 'monospace',
+                            background: 'var(--bg-surface)', color: 'var(--text-primary)', border: '1px solid var(--border-color)',
+                          }}
+                        />
+                        <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)' }}>
+                          Typed, not pasted — the only check that catches a wrong digit.
+                        </span>
+                      </label>
+                    )}
 
                     <FactGroup edit={editCtx} anchor="workload" flash={flashGroup} title="How much work they can take" rows={[
                       ['Most jobs in a day', a.maxDailyWorkload, 'maxDailyWorkload'],
@@ -1478,7 +1548,11 @@ export const AssayerRecord: React.FC<{
               canManage={canManage}
               section="checks"
               lifecycleStatus={a.lifecycleStatus}
+              person={a}
               onGoToDocuments={() => setTab('documents')}
+              onReopenBackgroundVerification={canManage && mayReopenBackgroundVerification(a.lifecycleStatus, a.unavailableReason)
+                ? () => startMove(AssayerLifecycleStatus.BACKGROUND_VERIFICATION)
+                : undefined}
             />
           )}
 
@@ -1488,6 +1562,7 @@ export const AssayerRecord: React.FC<{
               canManage={canManage}
               section="documents"
               lifecycleStatus={a.lifecycleStatus}
+              person={a}
               onGoToChecks={() => setTab('vetting')}
             />
           )}
@@ -1530,9 +1605,6 @@ export const AssayerRecord: React.FC<{
           onClose={() => setIdCardOpen(false)}
           assayerId={assayerId}
           photoUrl={photoUrl}
-          allowDownload={canManage}
-          onDownload={downloadIdCard}
-          downloading={idCardBusy}
         />
 
         {/* Delete Assayer Modal */}
@@ -1575,7 +1647,10 @@ const StageStep: React.FC<{
   onCancel: () => void;
 }> = ({ to, primary, rehire, busy, asking, reason, onReason, onPress, onConfirm, onCancel }) => {
   const stage = assayerLifecycleLabel(to);
-  const buttonLabel = rehire ? 'Rehire — start onboarding again' : `Move to ${stage}`;
+  const buttonLabel = rehire ? 'Rehire — start onboarding again'
+    // Into approval is a request to somebody else, not a move this person makes happen.
+    : to === AssayerLifecycleStatus.FINAL_APPROVAL ? 'Send for approval'
+      : `Move to ${stage}`;
   const explainer = rehire
     ? 'They rejoin at the start: documents, background check and training are done again before they can work.'
     : (STAGE_CONSEQUENCE[to] ?? `They are moved to ${stage}.`);
