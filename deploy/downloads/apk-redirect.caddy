@@ -1,1 +1,1 @@
-redir https://expo.dev/artifacts/eas/mnaGDMbLCw0hEXIlxRWfWA9TtW0-7ELkAGFn0JsJiWk.apk temporary
+redir * https://expo.dev/artifacts/eas/mnaGDMbLCw0hEXIlxRWfWA9TtW0-7ELkAGFn0JsJiWk.apk temporary

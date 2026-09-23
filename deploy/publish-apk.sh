@@ -27,6 +27,10 @@ set -euo pipefail
 # --- where everything is, worked out rather than assumed --------------------------------------
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd -- "$HERE/.." && pwd)
+# auto-deploy.sh installs a copy of this script into the ops directory (~/apps/fapoms-ops), where
+# "one level up" is ~/apps and not a checkout — that copy died on a download directory it could not
+# find. Outside a checkout, resolve the repository the same way auto-deploy.sh does.
+[ -f "$REPO/deploy/docker-compose.prod.yml" ] || REPO="${FAPOMS_REPO:-$HOME/apps/fapoms}"
 COMPOSE="${COMPOSE:-$REPO/deploy/docker-compose.prod.yml}"
 ENVFILE="${ENVFILE:-$REPO/.env.docker}"
 
@@ -97,7 +101,13 @@ write_snippet() {
   # 302, not 301: browsers and Android cache a permanent redirect aggressively, and the whole
   # reason this is a redirect is that the target CHANGES with every release.
   # 'temporary' + 'redir' is Caddy's spelling of that.
-  printf 'redir %s temporary\n' "$1" > "$SNIPPET"
+  #
+  # The explicit `*` matcher is load-bearing. Caddy reads a first argument that starts with `/`
+  # as a PATH MATCHER, so `redir /download/x.apk temporary` meant "redirect requests for
+  # /download/x.apk to the URL 'temporary'" — it never matched /download/app.apk, and the stable
+  # link answered an empty 200 on every local-file publish (2026-09-23). A URL target starts with
+  # `https://` and happened to parse correctly, which is why EAS publishes never showed it.
+  printf 'redir * %s temporary\n' "$1" > "$SNIPPET"
 }
 
 restart_caddy() {
@@ -157,6 +167,8 @@ esac
 PROBE="${PUBLISH_APK_PROBE:-http://127.0.0.1:8080/download/app.apk}"
 STATUS=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$PROBE" || true)
 case "$STATUS" in
-  302|301|200) log "stable link answers $STATUS — done" ;;
+  # A redirect is the only right answer: the handler serves nothing itself, so a 200 means the
+  # snippet did not take effect and the link hands out an empty body.
+  302|301) log "stable link answers $STATUS — done" ;;
   *) log "WARNING: stable link answered '$STATUS' after publish"; exit 1 ;;
 esac
