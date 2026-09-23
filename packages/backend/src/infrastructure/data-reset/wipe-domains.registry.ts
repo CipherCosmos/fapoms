@@ -53,7 +53,13 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     // `device_tokens`/`refresh_tokens`/`notification_preferences` have no such constraint (verified
     // against the schema), so they need to be listed and scoped explicitly — see
     // `USER_SCOPED_TABLES` in data-reset.service.ts.
-    tables: ['device_tokens', 'refresh_tokens', 'users'],
+    // `user_sessions`, `user_mfa`, `mfa_recovery_codes` and `activity_telemetry` carry a `user_id`
+    // but no FK, so nothing cascades them: a removed account's sessions, MFA secrets and recovery
+    // codes outlived it. Scoped like the tokens — see `USER_SCOPED_TABLES`.
+    tables: [
+      'device_tokens', 'refresh_tokens', 'user_sessions', 'user_mfa', 'mfa_recovery_codes',
+      'activity_telemetry', 'users',
+    ],
   },
   {
     key: 'clients',
@@ -69,11 +75,17 @@ export const WIPE_DOMAINS: WipeDomain[] = [
   },
   {
     key: 'assayers',
-    label: 'Assayer workforce',
-    description: 'Assayer profiles, commercial terms, documents and activity history.',
+    label: 'Assayer workforce & hiring',
+    description: 'Assayer profiles, commercial terms, documents and activity history — and the hiring pipeline behind them: interviews, applications and their uploaded papers.',
+    // The hiring tables have no FK to `assayers` (a candidate exists before any assayer does), so
+    // nothing cascaded them: wiping the workforce left the whole hiring page standing, full of
+    // candidates "promoted" into assayers that no longer existed. Listed here, not as their own
+    // domain, for exactly that reason — the two only make sense together.
     tables: [
       'assayer_location_pings', 'assayer_activities', 'assayer_remarks', 'workforce_attributes',
-      'assayer_commercial_profiles', 'assayer_documents', 'assayers',
+      'assayer_commercial_profiles', 'assayer_documents',
+      'assayer_application_documents', 'assayer_applications', 'assayer_interviews',
+      'assayers',
     ],
   },
   {
@@ -105,7 +117,12 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     label: 'Billing & payments',
     description: 'Invoices, payments, payables and billing history. These records are protected by the database itself (ON DELETE RESTRICT) — clearing this data needs its own confirmation below.',
     requiresBillingConfirmation: true,
-    tables: ['billing_payments', 'billing_history', 'assayer_payables', 'billing_entries', 'billing_invoices'],
+    // `assayer_invoices` (the assayer's monthly bill) has no FK to anything here, so it used to
+    // survive a billing wipe untouched.
+    tables: [
+      'billing_payments', 'billing_history', 'assayer_payables', 'billing_entries', 'billing_invoices',
+      'assayer_invoices',
+    ],
   },
   {
     // User-facing label is "Support requests" (the channel renamed from "Feedback" to
@@ -140,6 +157,39 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     tables: ['geo_cities', 'geo_districts', 'geo_states'],
   },
 ];
+
+/**
+ * Every other table, and why a wipe leaves it alone.
+ *
+ * This exists because `WIPE_DOMAINS` is a list, and a list only covers the tables that existed the
+ * day it was written. The hiring pipeline, the assayer invoices and the session/MFA tables were all
+ * added later, were never listed, and so silently survived every "clear everything". The spec
+ * beside this file now requires every entity table to be in a domain, in `NEVER_WIPEABLE_TABLES`,
+ * or here with a reason — a new table cannot be forgotten again without failing the build.
+ */
+export const NOT_WIPED_TABLES: Record<string, string> = {
+  // Structure, not data (see the header of this file).
+  roles: 'RBAC structure', permissions: 'RBAC structure', capabilities: 'RBAC structure',
+  responsibilities: 'RBAC structure', role_permissions: 'RBAC structure',
+  role_responsibilities: 'RBAC structure', capability_permissions: 'RBAC structure',
+  responsibility_capabilities: 'RBAC structure', organizations: 'tenant structure',
+  platform_settings: 'runtime configuration', notification_settings: 'notification catalog configuration',
+  // Removed by the database with their parent rows (ON DELETE CASCADE), scoped correctly.
+  user_roles: 'cascades from users — only removed accounts lose their roles',
+  assayer_background_checks: 'cascades from assayers', assayer_references: 'cascades from assayers',
+  assayer_onboarding_approvals: 'cascades from assayers', assayer_document_versions: 'cascades from assayers',
+  assayer_idempotency_records: 'cascades from assayers', assayer_import_issues: 'cascades from assayers',
+  assayer_client_empanelments: 'cascades from assayers and from clients',
+  assayer_score_overrides: 'cascades from assayers and from clients',
+  assignment_idempotency_records: 'cascades from assignments',
+  assignment_reassignments: 'cascades from assignments',
+  ocr_jobs: 'cascades from documents',
+  // Records the law or the audit trail requires to outlive a data reset.
+  audit_chain: 'audit trail hash chain — same reasoning as audit_events',
+  security_incidents: 'statutory DPDP breach record',
+  data_rights_requests: 'statutory DPDP data-principal request record',
+  outbound_messages: 'email/SMS delivery record — same reasoning as outbox_events',
+};
 
 export function findDomain(key: string): WipeDomain | undefined {
   return WIPE_DOMAINS.find((d) => d.key === key);
