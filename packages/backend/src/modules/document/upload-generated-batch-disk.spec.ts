@@ -123,7 +123,7 @@ describe('DiskUploadScanInterceptor', () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
   it('reads each file from disk to scan it, and refuses the whole batch on an infected one — deleting every file', async () => {
-    const clean = diskFile('clean', '%PDF-1.4 fine');
+    const clean = diskFile('clean', '%PDF-1.4 fine\n%%EOF');
     const infected = diskFile('infected', EICAR);
     const handle = jest.fn(() => of('filed'));
 
@@ -135,7 +135,7 @@ describe('DiskUploadScanInterceptor', () => {
   });
 
   it('keeps the files while the handler runs, and deletes them once it has answered', async () => {
-    const file = diskFile('clean', '%PDF-1.4 fine');
+    const file = diskFile('clean', '%PDF-1.4 fine\n%%EOF');
     let presentDuringHandler = false;
     const handle = () => { presentDuringHandler = existsSync(file.path); return of('filed'); };
 
@@ -148,7 +148,7 @@ describe('DiskUploadScanInterceptor', () => {
   });
 
   it('deletes the files when the handler (or a pipe before it) refuses the request', async () => {
-    const file = diskFile('clean', '%PDF-1.4 fine');
+    const file = diskFile('clean', '%PDF-1.4 fine\n%%EOF');
     const handle = () => throwError(() => new Error('auditDate is required.'));
 
     await expect(lastValueFrom(await interceptor().intercept(contextFor([file]), { handle }))).rejects.toThrow(/auditDate/);

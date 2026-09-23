@@ -7,6 +7,7 @@ import { FileScanService } from '../../infrastructure/security/file-scan.service
 /** The multer file fields this interceptor reads. */
 interface UploadedFileLike {
   originalname?: string;
+  mimetype?: string;
   path?: string;
   buffer?: Buffer;
 }
@@ -66,7 +67,7 @@ export class DiskUploadScanInterceptor implements NestInterceptor {
             `"${file.originalname ?? 'upload'}" could not be scanned, so it was not accepted.`,
           );
         }
-        await this.scanner.scanOrThrow(bytes, file.originalname);
+        await this.scanner.scanOrThrow(bytes, file.originalname, file.mimetype);
       }
     } catch (err) {
       await discardDiskUploads(files);

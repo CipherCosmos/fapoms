@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException, ServiceUnavailableException } 
 import { Socket } from 'net';
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../http/api-error';
+import { assertUploadContent } from './file-content';
 
 export interface ScanResult {
   clean: boolean;
@@ -65,8 +66,15 @@ export class FileScanService {
     }
   }
 
-  /** Scan and throw a 400 if the file is infected. The convenience call for upload handlers. */
-  async scanOrThrow(buffer: Buffer, filename?: string): Promise<void> {
+  /**
+   * The gate every upload passes before it is stored: a 400 if the file is infected, and a 400 if
+   * its bytes are not a format this application accepts or are not what its name and declared type
+   * say (see `file-content.ts`). Malware first, so an infected file is reported as infected rather
+   * than as the wrong format.
+   *
+   * `declaredType` is the Content-Type the client sent, where there was one.
+   */
+  async scanOrThrow(buffer: Buffer, filename?: string, declaredType?: string | null): Promise<void> {
     const result = await this.scanBuffer(buffer, filename);
     if (!result.clean) {
       this.logger.warn(`Rejected infected upload "${filename ?? 'upload'}": ${result.signature}`);
@@ -78,6 +86,7 @@ export class FileScanService {
         ASSAYER_ERROR_CODES.UPLOAD_REJECTED,
       );
     }
+    assertUploadContent(buffer, { fileName: filename, declaredType });
   }
 
   /** Parse a clamd response line into a signature name, or null when the stream is clean. */

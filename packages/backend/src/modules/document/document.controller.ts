@@ -379,7 +379,7 @@ export class DocumentController {
       const parts: Buffer[] = [];
       for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       const stored = Buffer.concat(parts);
-      await this.fileScanner.scanOrThrow(stored, body.fileName);
+      await this.fileScanner.scanOrThrow(stored, body.fileName, body.contentType);
       integrity = deriveFileIntegrity(stored, body.contentType);
     } catch (err) {
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
@@ -458,7 +458,7 @@ export class DocumentController {
     // FileScanInterceptor that guards every multipart upload route (the interceptor reads a
     // multipart file, not a base64 body), so an audited-return PDF arriving here reached storage
     // and the data-entry pipeline unscanned. `scanOrThrow` fails closed when scanning is required.
-    await this.fileScanner.scanOrThrow(buffer, fileName);
+    await this.fileScanner.scanOrThrow(buffer, fileName, 'application/pdf');
 
     /**
      * The JSON sibling of `mobile-upload-binary`, and it must describe its bytes the same way.
@@ -748,7 +748,7 @@ export class DocumentController {
       const parts: Buffer[] = [];
       for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       const assembled = Buffer.concat(parts);
-      await this.fileScanner.scanOrThrow(assembled, session.fileName);
+      await this.fileScanner.scanOrThrow(assembled, session.fileName, 'application/pdf');
       integrity = deriveFileIntegrity(assembled, 'application/pdf');
     } catch (err) {
       await this.storage.deleteFile(s3Key).catch(() => undefined);
