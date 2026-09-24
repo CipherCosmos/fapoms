@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { countSmsSegments } from '@fapoms/shared';
 import {
-  SMS_SEND_TIMEOUT_MS, isPermanentHttpStatus,
+  SMS_SEND_TIMEOUT_MS, isPermanentHttpStatus, isTransportHttpStatus,
   type SmsMessage, type SmsSendResult, type SmsSendSettings, type SmsTransport,
 } from './sms-transport';
 
@@ -100,6 +100,7 @@ export class PinnacleTransport implements SmsTransport {
       return {
         success: false,
         error: timedOut ? 'The SMS gateway did not answer in time.' : (err?.message ?? 'The SMS gateway could not be reached.'),
+        transportFault: true,
       };
     }
 
@@ -110,6 +111,7 @@ export class PinnacleTransport implements SmsTransport {
         success: false,
         error: reply.reason ? `Pinnacle answered HTTP ${res.status}: ${reply.reason}` : `The SMS gateway answered HTTP ${res.status}.`,
         permanent: isPermanentHttpStatus(res.status),
+        transportFault: isTransportHttpStatus(res.status),
       };
     }
 

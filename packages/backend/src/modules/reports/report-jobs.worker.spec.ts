@@ -56,21 +56,29 @@ describe('ReportJobsWorker', () => {
       expect(Reflect.getMetadata(BULL_MODULE_QUEUE, ReportJobsWorker)).toMatchObject({ name: REPORT_QUEUE });
     });
 
+    it('has exactly ONE loop for the whole queue, at concurrency 1', () => {
+      // Five named handlers used to be five SHARED loops (Bull's loops belong to the queue and take
+      // any job name): up to five synchronous \`xlsx.write\` builds at once, each freezing the process.
+      const handlers = Object.getOwnPropertyNames(ReportJobsWorker.prototype)
+        .map((m) => Reflect.getMetadata(BULL_MODULE_QUEUE_PROCESS, (ReportJobsWorker.prototype as any)[m]))
+        .filter(Boolean);
+      expect(handlers).toEqual([expect.objectContaining({ name: '*', concurrency: 1 })]);
+    });
+
     it.each([
       ['assignments', REPORT_JOB.ASSIGNMENTS],
       ['billing', REPORT_JOB.BILLING],
       ['commandCenter', REPORT_JOB.COMMAND_CENTER],
       ['assayerRoster', REPORT_JOB.ASSAYER_ROSTER],
       ['assayerRosterPdf', REPORT_JOB.ASSAYER_ROSTER_PDF],
-    ])('registers %s under the exact name the enqueue side uses', (method, expectedName) => {
-      const meta = Reflect.getMetadata(BULL_MODULE_QUEUE_PROCESS, (ReportJobsWorker.prototype as any)[method]);
+    ])('dispatches %s from the one loop by the exact name the enqueue side uses', async (method, name) => {
+      const spy = jest.spyOn(worker as any, method).mockResolvedValue({ filename: 'x', mimeType: 'y', sizeBytes: 1 });
+      await worker.run({ id: 1, name, data: {} } as any);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
 
-      expect(meta).toBeDefined();
-      expect(meta.name).toBe(expectedName);
-      // `xlsx.write` is synchronous CPU with no yield point: while it runs the process serves
-      // nothing at all, health checks included. Two in parallel double that blackout rather than
-      // halving the wait, so 1 is the only correct setting here.
-      expect(meta.concurrency).toBe(1);
+    it('refuses a job name it does not know rather than completing it silently', async () => {
+      await expect(worker.run({ id: 1, name: 'nope', data: {} } as any)).rejects.toThrow('Unknown report job');
     });
   });
 

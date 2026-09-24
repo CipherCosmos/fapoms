@@ -1,10 +1,24 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { DEPARTED_LIFECYCLE_STATES, hasLeftWorkforce } from '@fapoms/shared';
 import {
   BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES,
   IN_FLIGHT_ASSIGNMENT_STATUSES,
   sqlStatusList,
 } from './assignment-workload';
+
+/** The departed lifecycle states as a SQL literal list, from the one shared definition. */
+const departedSqlList = DEPARTED_LIFECYCLE_STATES.map((s) => `'${s}'`).join(', ');
+
+/**
+ * The stated reason for a cancellation, or null when there is none. The state machine writes the
+ * placeholder 'Cancelled' when a caller supplied nothing, so that text is treated as no reason.
+ */
+export function cancellationReasonOf(raw: unknown): string | null {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text || text.toLowerCase() === 'cancelled') return null;
+  return text;
+}
 
 export interface IntegrityViolation {
   rule: string;
@@ -105,13 +119,22 @@ export class OperationalIntegrityService {
         AND (checked_in_at IS NOT NULL OR checked_out_at IS NOT NULL)
     `);
 
+    /**
+     * A cancellation after a real visit (the assayer arrived, the branch then closed or the client
+     * withdrew) is an ordinary outcome, not a contradiction — the cancel route requires a reason and
+     * stores it in `cancel_reason`. So an EXPLAINED one is reported at P2 (informational: the visit
+     * may still be payable, so it stays listed) and only an UNEXPLAINED one is a P1 anomaly. The
+     * state machine's own fallback text 'Cancelled' is not an explanation and counts as none.
+     */
     for (const row of cancelledWithAttendance) {
+      const reason = cancellationReasonOf(row.cancel_reason);
       violations.push({
         rule: 'CANCELLED_ASSIGNMENT_WITH_ATTENDANCE',
-        severity: 'P1',
+        severity: reason ? 'P2' : 'P1',
         entityId: row.id,
         details: row,
-        description: `Assignment ${row.assignment_number} is CANCELLED but carries check-in (${row.checked_in_at}) or check-out (${row.checked_out_at}) attendance evidence.`,
+        description: `Assignment ${row.assignment_number} is CANCELLED but carries check-in (${row.checked_in_at}) or check-out (${row.checked_out_at}) attendance evidence. `
+          + (reason ? `Stated cancellation reason: ${reason}` : 'No cancellation reason is on record.'),
       });
     }
 
@@ -180,21 +203,34 @@ export class OperationalIntegrityService {
     // 5. Assignment linked to ineligible assayer
     const ineligibleAssayers = await run('ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER', `
       SELECT a.id, a.assignment_number, a.status as assignment_status,
-             ass.id as assayer_id, ass.assayer_code, ass.status as assayer_status, ass.is_active as assayer_is_active
+             ass.id as assayer_id, ass.assayer_code, ass.status as assayer_status, ass.is_active as assayer_is_active,
+             ass.lifecycle_status as assayer_lifecycle_status, ass.unavailable_reason as assayer_unavailable_reason
       FROM assignments a
       INNER JOIN assayers ass ON a.assayer_id = ass.id
       WHERE a.is_active = true
         AND a.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})
-        AND (ass.status != 'ACTIVE' OR ass.is_active = false)
+        AND (ass.lifecycle_status::text IN (${departedSqlList}, 'INACTIVE') OR ass.is_active = false)
     `);
 
+    /**
+     * Only people who have LEFT the workforce (resigned, terminated, archived, or recorded as
+     * deceased — `hasLeftWorkforce`, the one shared definition) or whose record was deactivated.
+     * ON_LEAVE, SUSPENDED and plain INACTIVE are temporary standings: the job stays theirs and is
+     * handled by re-planning, so flagging them as P0 was a false alarm. The SQL pre-filters; the
+     * shared rule decides (INACTIVE counts only with the DECEASED reason).
+     */
     for (const row of ineligibleAssayers) {
+      const departed = hasLeftWorkforce({
+        lifecycleStatus: row.assayer_lifecycle_status,
+        unavailableReason: row.assayer_unavailable_reason,
+      });
+      if (!departed && row.assayer_is_active !== false) continue;
       violations.push({
         rule: 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER',
         severity: 'P0',
         entityId: row.id,
         details: row,
-        description: `Assignment ${row.assignment_number} is assigned to assayer ${row.assayer_code} who has status '${row.assayer_status}' (is_active=${row.assayer_is_active}).`,
+        description: `Assignment ${row.assignment_number} is assigned to assayer ${row.assayer_code} who has left the workforce or whose record is deactivated (lifecycle '${row.assayer_lifecycle_status}', status '${row.assayer_status}', is_active=${row.assayer_is_active}).`,
       });
     }
 

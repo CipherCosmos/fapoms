@@ -18,7 +18,11 @@ const BMP = (() => {
 })();
 const XLSX = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('....[Content_Types].xml....xl/workbook.xml....', 'latin1')]);
 const DOCX = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('....[Content_Types].xml....word/document.xml', 'latin1')]);
-const XLS = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0, 0, 0]);
+const CFB_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0, 0, 0]);
+// A compound file whose directory names Excel's `Workbook` stream (UTF-16LE, as CFB stores it).
+const XLS = Buffer.concat([CFB_MAGIC, Buffer.alloc(64), Buffer.from('Workbook', 'utf16le'), Buffer.alloc(16)]);
+// The same container holding a Word document instead: no workbook stream.
+const DOC = Buffer.concat([CFB_MAGIC, Buffer.alloc(64), Buffer.from('WordDocument', 'utf16le'), Buffer.alloc(16)]);
 const CSV = Buffer.from('SOL ID,Branch Name,City\n00123,BMW Road,Pune\n');
 const CSV_1252 = Buffer.from([...Buffer.from('name,city\nJos'), 0xe9, ...Buffer.from(',Pune\n')]);
 
@@ -54,6 +58,8 @@ describe('classifyUpload — the bytes decide', () => {
     ['a shell script', SHELL],
     ['a ZIP archive', ZIP],
     ['a Word document', DOCX],
+    ['a legacy Word .doc (compound file, no workbook stream)', DOC],
+    ['a bare compound-file header', CFB_MAGIC],
     ['a truncated PDF', TRUNCATED_PDF],
     ['a truncated PNG', TRUNCATED_PNG],
     ['an empty file', Buffer.alloc(0)],
@@ -86,6 +92,18 @@ describe('assertUploadContent — a label cannot disguise the bytes', () => {
 
   it('tolerates a mislabel within the same family (a HEIC a phone called JPEG)', () => {
     expect(assertUploadContent(HEIC, { fileName: 'IMG_0001.jpg', declaredType: 'image/jpeg' }).mimeType).toBe('image/heic');
+  });
+
+  it('accepts a legacy .xls only under a .xls name', () => {
+    expect(assertUploadContent(XLS, { fileName: 'branches.XLS', declaredType: 'application/vnd.ms-excel' }).mimeType)
+      .toBe('application/vnd.ms-excel');
+    expect(assertUploadContent(XLS, { fileName: 'branches.xls', declaredType: 'application/octet-stream' }).family)
+      .toBe('spreadsheet');
+    for (const fileName of ['branches.xlsx', 'branches.csv', 'branches', undefined]) {
+      expect(() => assertUploadContent(XLS, { fileName, declaredType: 'application/vnd.ms-excel' }))
+        .toThrow(/old-style Excel file/);
+    }
+    expect(() => assertUploadContent(DOC, { fileName: 'branches.xls', declaredType: 'application/vnd.ms-excel' })).toThrow();
   });
 
   it('uses the extension when the declared type says nothing', () => {

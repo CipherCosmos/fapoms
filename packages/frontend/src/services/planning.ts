@@ -89,8 +89,10 @@ export interface TravelRates {
  * second and repaint the panel with the wrong candidates. Optional so the handful of imperative
  * callers that are not queries keep working unchanged.
  */
+// `limit=200` is the server's ceiling (ParseLimitPipe); without it `/projects` answers 50, and a
+// tenant with more projects than that simply could not pick the rest from the planning screen.
 export const getProjects = (signal?: AbortSignal) =>
-  api.request<ProjectOption[]>('/projects', { method: 'GET', signal });
+  api.request<ProjectOption[]>('/projects?limit=200', { method: 'GET', signal });
 
 /**
  * Zones, optionally narrowed to one client's.
@@ -252,10 +254,33 @@ export interface RouteOptimizeResult {
   totalDurationMinutes: number;
 }
 
-export const optimizeRoute = (payload: RouteOptimizePayload) =>
+/**
+ * The optimize body with every coordinate a real number.
+ *
+ * Branch and assayer coordinates are Postgres `decimal` columns, which arrive in JSON as strings
+ * ("12.9716"). The route endpoint validates numbers, so a string refused the whole request.
+ * Coerced here, once, for every caller; a destination whose coordinates are not numbers at all is
+ * dropped rather than sent.
+ */
+export function buildRouteOptimizePayload(payload: {
+  origin: { latitude: number | string; longitude: number | string };
+  destinations: Array<{ id: string; latitude: number | string; longitude: number | string }>;
+  roundTrip?: boolean;
+  mode?: string;
+}): RouteOptimizePayload {
+  return {
+    ...payload,
+    origin: { latitude: Number(payload.origin.latitude), longitude: Number(payload.origin.longitude) },
+    destinations: payload.destinations
+      .map((d) => ({ id: d.id, latitude: Number(d.latitude), longitude: Number(d.longitude) }))
+      .filter((d) => Number.isFinite(d.latitude) && Number.isFinite(d.longitude)),
+  };
+}
+
+export const optimizeRoute = (payload: Parameters<typeof buildRouteOptimizePayload>[0]) =>
   api.request<RouteOptimizeResult>('/geo/route/optimize', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(buildRouteOptimizePayload(payload)),
   });
 
 // ── Coverage mutations ───────────────────────────────────────────────────────────

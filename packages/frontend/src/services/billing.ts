@@ -16,6 +16,10 @@ import type {
   AssayerInvoiceSummary,
   AssayerInvoiceInvitation,
   AssayerInvoiceInviteOutcome,
+  FinalApprovalQueue,
+  FinalApprovalRef,
+  FinalApprovalBulkResult,
+  PayoutDestinationCheck,
 } from '@fapoms/shared';
 
 /**
@@ -102,8 +106,11 @@ export interface AssayerStatement {
   assayerId: string;
   assayerName: string | null;
   assayerCode: string | null;
-  /** Decrypted for finance; null when the assayer has no PAN on file. */
+  /** Last four only, or null for an auditor — the whole PAN is read on the record, audited. */
   pan: string | null;
+  panMasked?: boolean;
+  /** Whether a PAN is on file at all, when `pan` is withheld. */
+  panOnFile?: boolean;
   /** The Income-tax section the withholding is quoted under, from settings (e.g. 194J). */
   tdsSection: string;
   totals: {
@@ -116,6 +123,8 @@ export interface AssayerStatement {
     tdsAmount: number; totalAmount: number; paidAmount: number; outstanding: number; createdAt: string;
     /** The assayer invoice this row rides — labels the server attaches for the staff audience. */
     invoiceNumber: string | null; invoiceStatus: AssayerInvoiceStatus | null;
+    /** Has the HOD's final approval (2026-09-24). An APPROVED row without it is not payable yet. */
+    hodApproved?: boolean;
   }>;
   payments: Array<{
     id: string; paymentReference: string; method: PaymentMethod;
@@ -126,6 +135,8 @@ export interface AssayerStatement {
 export interface PayoutActionResult {
   done: string[];
   refused: Array<{ id: string; reason: string }>;
+  /** Approved, with something the approver must know — an unverified bank account (audit F3). */
+  warnings?: Array<{ id: string; warning: string }>;
 }
 
 // ── Assayer invoices (the consent wrapper over payables) ───────────────────
@@ -197,6 +208,9 @@ export interface BankFileRow {
   netAmount: number;
   reference: string;
   hasBankDetails: boolean;
+  /** The record now names another account than the one frozen at approval; the file pays the frozen one. */
+  destinationDiffersFromRecord?: boolean;
+  warning?: string | null;
 }
 
 export interface BankFileResult {
@@ -224,6 +238,8 @@ export interface TdsReport {
   from: string | null;
   to: string | null;
   section: string;
+  /** The s.194J annual threshold in force (audit F15); 0 means TDS from the first rupee. */
+  thresholdRupees?: number;
   rows: TdsReportRow[];
   totals: { gross: number; tds: number; net: number; count: number };
 }
@@ -297,6 +313,8 @@ async function listPayouts(params: {
   assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean;
   /** Riding an assayer bill, or on none. The pay screen's stages are built from this. */
   onBill?: boolean;
+  /** Has the HOD's final approval (ready to pay), or not yet (2026-09-24). */
+  hodApproved?: boolean;
 } & PageParams = {}): Promise<BillingPage<PayoutRow>> {
   return api.request<BillingPage<PayoutRow>>(`/billing-engine/payouts${qs(params)}`);
 }
@@ -334,6 +352,15 @@ export interface BillingBulkJobWatch {
  */
 async function approvePayouts(payableIds: string[], reason?: string): Promise<BillingBulkJobStarted> {
   return api.request<BillingBulkJobStarted>('/billing-engine/payouts/approve', { method: 'POST', body: JSON.stringify({ payableIds, reason }) });
+}
+
+/**
+ * What to tell the approver, the HOD or the payer about each payout's bank account (audit F2/F3):
+ * not verified, on another assayer's record (approval will be refused), or changed since approval.
+ */
+async function getPayoutDestinationChecks(payableIds: string[]): Promise<PayoutDestinationCheck[]> {
+  if (!payableIds.length) return [];
+  return api.request<PayoutDestinationCheck[]>('/billing-engine/payouts/destination-check', { method: 'POST', body: JSON.stringify({ payableIds }) });
 }
 
 /** Start paying: the disbursements run on the server's queue. Wait on it with `followBulkJob`. */
@@ -483,6 +510,49 @@ async function reconcile(since?: string): Promise<ReconcileJob> {
   return api.request<ReconcileJob>('/billing-engine/reconcile', { method: 'POST', body: JSON.stringify({ since }) });
 }
 
+// ── The HOD's final approval (2026-09-24) ──────────────────────────────────
+
+/** Everything the office approved that is waiting for the HOD, with counts per kind. */
+async function getFinalApprovalQueue(): Promise<FinalApprovalQueue> {
+  return api.request<FinalApprovalQueue>('/billing-engine/final-approval');
+}
+
+/**
+ * Give the final approval to one item. Each kind has its owner's route, so the refusal that comes
+ * back (the same person as the office approver, already paid, on a bill…) is that owner's own words.
+ */
+async function finalApprove(ref: FinalApprovalRef): Promise<unknown> {
+  return api.request(`/billing-engine/final-approval/${finalApprovalPath(ref)}/approve`, { method: 'POST' });
+}
+
+/** Send one item back to the office with the HOD's reason. */
+async function finalReject(ref: FinalApprovalRef, reason: string): Promise<unknown> {
+  return api.request(`/billing-engine/final-approval/${finalApprovalPath(ref)}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
+}
+
+/** Start the bulk final approval; it runs on the server's queue. Wait on it with `followBulkJob`. */
+async function finalApproveMany(items: FinalApprovalRef[]): Promise<BillingBulkJobStarted> {
+  return api.request<BillingBulkJobStarted>('/billing-engine/final-approval/approve', {
+    method: 'POST', body: JSON.stringify({ items: items.map(({ kind, id }) => ({ kind, id })) }),
+  });
+}
+
+function finalApprovalPath(ref: FinalApprovalRef): string {
+  const id = encodeURIComponent(ref.id);
+  switch (ref.kind) {
+    case 'ASSAYER_BILL': return `assayer-invoices/${id}`;
+    case 'CLIENT_INVOICE': return `invoices/${id}`;
+    default: return `payouts/${id}`;
+  }
+}
+
+/** The office sends a draft client invoice up for the HOD's final approval. */
+async function requestInvoiceFinalApproval(id: string): Promise<BillingInvoice> {
+  return api.request<BillingInvoice>(`/billing-engine/invoices/${id}/request-final-approval`, { method: 'PATCH' });
+}
+
+export type { FinalApprovalBulkResult };
+
 async function jobStatus(jobId: string): Promise<BillingJobStatus> {
   return api.request<BillingJobStatus>(`/billing-engine/jobs/${jobId}`);
 }
@@ -492,6 +562,7 @@ export const billingApi = {
   listPayouts,
   approvePayouts,
   payPayouts,
+  getPayoutDestinationChecks,
   followBulkJob,
   holdPayout,
   reopenAssignment,
@@ -520,4 +591,9 @@ export const billingApi = {
   reconcilePreview,
   reconcile,
   jobStatus,
+  getFinalApprovalQueue,
+  finalApprove,
+  finalReject,
+  finalApproveMany,
+  requestInvoiceFinalApproval,
 };

@@ -127,15 +127,18 @@ export const PLANNING_WRITE_COMPLETED_RETENTION: KeepJobsOptions = { age: 6 * 60
  * **`attempts: 1`.** These WRITE. A retry after a failure part-way through would re-offer what was
  * already offered. A failed run is reported with its reason; the operator decides.
  *
- * **`timeout`.** Bull's timeout fails the job but does NOT stop the handler, which carries on in the
- * background while the loop moves to the next job. On a write queue that is a second run overlapping
- * the first, so the bound is set far past any real run — 500 branches at ten dated attempts and half
- * a second each is 42 minutes — and exists only so that a genuinely wedged run eventually releases
- * the slot.
+ * **No `timeout`** — see the note inside the options below.
  */
 export const PLANNING_WRITE_JOB_OPTIONS: JobOptions = {
   attempts: 1,
-  timeout: 2 * 60 * 60_000,
+  /*
+    No `timeout`, deliberately. Bull's timeout fails the job but does NOT stop the handler: the
+    write carried on while the queue's loop started the next run beside it, and the Jobs tray read
+    "failed" for work that was still happening. Overlap is prevented by the Postgres advisory lock
+    `BackgroundJobTracker` holds per queue for the whole run (released by Postgres if the worker
+    dies); a genuinely wedged run is a stalled job, which `maxStalledCount` and the recovery sweep
+    handle.
+  */
   removeOnComplete: PLANNING_WRITE_COMPLETED_RETENTION,
   removeOnFail: FAILED_JOB_RETENTION,
 };

@@ -71,7 +71,9 @@ const PAYABLE_STATE: Record<AssayerPayableStatus, { labelKey: TranslationKey; to
 const INVOICE_STATE: Record<AssayerInvoiceStatus, { labelKey: TranslationKey; tone: Tone }> = {
   [AssayerInvoiceStatus.INVITED]: { labelKey: 'earnings.invoiceStatus.invited', tone: 'info' },
   [AssayerInvoiceStatus.SUBMITTED]: { labelKey: 'earnings.invoiceStatus.submitted', tone: 'warning' },
-  [AssayerInvoiceStatus.APPROVED]: { labelKey: 'earnings.invoiceStatus.approved', tone: 'success' },
+  // Approved by the office, waiting for the final approval (2026-09-24) — not yet cleared for payment.
+  [AssayerInvoiceStatus.APPROVED]: { labelKey: 'earnings.invoiceStatus.approved', tone: 'info' },
+  [AssayerInvoiceStatus.HOD_APPROVED]: { labelKey: 'earnings.invoiceStatus.hodApproved', tone: 'success' },
   [AssayerInvoiceStatus.PAID]: { labelKey: 'earnings.invoiceStatus.paid', tone: 'success' },
   [AssayerInvoiceStatus.CANCELLED]: { labelKey: 'earnings.invoiceStatus.cancelled', tone: 'neutral' },
   [AssayerInvoiceStatus.SUPERSEDED]: { labelKey: 'earnings.invoiceStatus.superseded', tone: 'neutral' },
@@ -338,7 +340,11 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
           ) : (
             <>
             {payablesPage.visible.map((p, i) => {
-              const known = PAYABLE_STATE[p.status as AssayerPayableStatus];
+              // Approved by the office AND given the final approval (2026-09-24) reads as approved
+              // for payment; approved by the office alone says it is still waiting.
+              const known = p.status === AssayerPayableStatus.APPROVED && p.hodApproved
+                ? { labelKey: 'earnings.payableStatus.approvedForPayment' as TranslationKey, tone: 'success' as Tone }
+                : PAYABLE_STATE[p.status as AssayerPayableStatus];
               // A status this build has never heard of keeps the server's own word rather than
               // being given copy that might describe somebody's money wrongly.
               const state = p.onHold

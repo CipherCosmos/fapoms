@@ -20,6 +20,8 @@ import {
 } from './server-config';
 import { cleanWorkforceVocabulary, type WorkforceVocabulary } from './workforce-vocabulary';
 import { mapAssayerStatementResponse } from './assayer-statement-mapping';
+import { readAttendanceResponse } from './attendance-response';
+import { expenseBranchName } from './expense-mapping';
 import { registrationGateVerdict, type RegistrationGateVerdict } from './registration-gate-verdict';
 
 /** One row of the per-category notification preference set returned by the API. */
@@ -1613,8 +1615,8 @@ export class MobileApiService {
       return (data.data || []).map((e: any) => ({
         id: e.id,
         assignmentId: e.assignmentId,
-        branchName:
-          e.assignment?.projectBranch?.branchName || e.assignment?.branchName || 'Unknown branch',
+        // `projectBranch.branch.name` (see `expense-mapping.ts`); the fallback stays for an older server.
+        branchName: expenseBranchName(e) || 'Unknown branch',
         category: e.category,
         amount: Number(e.amount) || 0,
         description: e.description || '',
@@ -1875,16 +1877,10 @@ export class MobileApiService {
       method: 'POST',
       body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString(), ...(arrivedAt ? { arrivedAt } : {}) }),
     });
-    const resData = await response.json().catch(() => ({}));
-    return {
-      success: response.ok && resData.success !== false,
-      // The human sentence, not the machine code. The server refuses check-ins with a code
-      // ("NOT_SCHEDULED_TODAY", "TOO_FAR_FROM_BRANCH") *and* a message explaining what to do;
-      // surfacing the code put "TOO_FAR_FROM_BRANCH" in the assayer's toast.
-      error: resData.message || resData.error,
-      code: resData.code,
-      status: response.status,
-    };
+    // The human sentence, not the machine code, goes in `error`; the code comes from `code` OR —
+    // on the route's HTTP 200 `{ success: false, error: CODE, message }` refusal — from `error`.
+    // See `attendance-response.ts`: reading only `code` lost every 200-shaped refusal's code.
+    return readAttendanceResponse(response.ok, response.status, await response.json().catch(() => ({})));
   }
 
   /**
@@ -1908,14 +1904,8 @@ export class MobileApiService {
       method: 'POST',
       body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
     });
-    const resData = await response.json().catch(() => ({}));
-    return {
-      success: response.ok && resData.success !== false,
-      // The sentence, not the code — same reasoning as check-in above.
-      error: resData.message || resData.error,
-      code: resData.code,
-      status: response.status,
-    };
+    // Same two refusal shapes as check-in above; one reader for both.
+    return readAttendanceResponse(response.ok, response.status, await response.json().catch(() => ({})));
   }
 
   /**

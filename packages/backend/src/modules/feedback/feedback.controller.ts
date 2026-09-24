@@ -16,6 +16,7 @@ import { FeedbackEscalationService } from './feedback-escalation.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, AnyAuthenticated, hasAnyRole } from '../auth/guards';
 import { FeedbackCategory, FeedbackSeverity, FeedbackStatus, SystemRole } from '@fapoms/shared';
 import { FeedbackAttachmentDto } from './feedback-attachment.dto';
+import { FEEDBACK_ATTACHMENT_URL_PREFIX, issueFeedbackUploadToken } from './feedback-attachment-policy';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { assertUploadAllowed, uploadMulterOptions } from '../document/upload-validation';
@@ -146,15 +147,17 @@ export class FeedbackController {
    * `FileScanInterceptor` for malware. A file arriving on this route is exactly as constrained
    * as one arriving on a document upload.
    *
-   * The reply is the descriptor the create and reply routes expect back verbatim.
+   * The reply is the descriptor the create and reply routes expect back verbatim, including its
+   * `uploadToken` — the grant that binds the stored key to this uploader.
    */
   @Post('attachments')
   @AnyAuthenticated()
   @UseInterceptors(FilesInterceptor('files', MAX_FEEDBACK_ATTACHMENTS, feedbackMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload files to attach to a report or a reply' })
-  async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() _req: any) {
+  async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() req: any) {
     if (!files?.length) throw new BadRequestException('No file was uploaded.');
+    const uploader = this.actor(req);
 
     const saved = await Promise.all(
       files.map(async (file) => {
@@ -172,11 +175,14 @@ export class FeedbackController {
         return {
           // The only URL shape the attachment DTO accepts, so a client cannot post a link to
           // anywhere this server did not put a file.
-          url: `/api/v1/feedback/attachments/${encodeURIComponent(key)}`,
+          url: `${FEEDBACK_ATTACHMENT_URL_PREFIX}${encodeURIComponent(key)}`,
           storageKey: key,
           fileName: file.originalname,
           fileType: file.mimetype,
           size: file.size,
+          // Proof that THIS caller uploaded THIS key. Create and reply refuse a file without it,
+          // so nobody can attach — and so read back — an object somebody else stored.
+          uploadToken: issueFeedbackUploadToken(uploader, key),
         };
       }),
     );

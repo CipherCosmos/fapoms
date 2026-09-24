@@ -69,11 +69,40 @@ export interface EmailResult {
    * backoff, the same discipline the push provider applies to FCM error codes.
    */
   permanent?: boolean;
+  /**
+   * True when the fault is the CHANNEL, not this message: the mail server refused our login
+   * (EAUTH / 535 / 530), or could not be reached at all. Every message would get the same answer,
+   * and every one of them becomes deliverable the moment the credential or the network is fixed —
+   * so the message goes back to the queue on a long backoff instead of being settled FAILED.
+   */
+  transportFault?: boolean;
 }
 
-/** SMTP situations where a retry will produce the same answer. */
-const PERMANENT_CODES = new Set(['EAUTH', 'EENVELOPE', 'EMESSAGE']);
-const PERMANENT_RESPONSE_CODES = new Set([530, 535, 550, 551, 553]);
+/** SMTP situations where a retry will produce the same answer FOR THIS MESSAGE. */
+const PERMANENT_CODES = new Set(['EENVELOPE', 'EMESSAGE']);
+const PERMANENT_RESPONSE_CODES = new Set([550, 551, 553]);
+
+/**
+ * The mail channel itself is broken: our credentials were refused, or the server is unreachable.
+ *
+ * EAUTH/535 used to be in the permanent set above, so a rotated Gmail app password marked every
+ * message FAILED for good — a whole morning of invitations lost, none of them retried once the
+ * password was fixed, and nothing told anyone that every send was failing.
+ */
+const TRANSPORT_CODES = new Set(['EAUTH', 'ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'EDNS', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND']);
+const TRANSPORT_RESPONSE_CODES = new Set([421, 454, 530, 534, 535]);
+
+/** Classifies an SMTP failure. Exported for its spec. */
+export function classifyMailError(err: { code?: string; responseCode?: number | string } | null | undefined): {
+  permanent: boolean;
+  transportFault: boolean;
+} {
+  const code = err?.code ?? '';
+  const response = Number(err?.responseCode);
+  const transportFault = TRANSPORT_CODES.has(code) || TRANSPORT_RESPONSE_CODES.has(response);
+  const permanent = !transportFault && (PERMANENT_CODES.has(code) || PERMANENT_RESPONSE_CODES.has(response));
+  return { permanent, transportFault };
+}
 
 /**
  * How the mail connection is held, for every transport.
@@ -322,12 +351,12 @@ export class EmailProvider implements OnModuleInit, OnModuleDestroy {
       });
       return { success: true, messageId: info?.messageId };
     } catch (err: any) {
-      const permanent =
-        PERMANENT_CODES.has(err?.code) || PERMANENT_RESPONSE_CODES.has(Number(err?.responseCode));
+      const { permanent, transportFault } = classifyMailError(err);
       return {
         success: false,
         error: err?.message ?? 'Email send failed.',
         permanent,
+        transportFault,
       };
     }
   }

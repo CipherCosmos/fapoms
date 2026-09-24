@@ -1,3 +1,4 @@
+import { RECLAIM_AFTER_MS } from '../../infrastructure/background-jobs/background-job.store';
 import { randomUUID } from 'crypto';
 import { Readable } from 'stream';
 import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
@@ -281,6 +282,9 @@ describe('filing a batch', () => {
   it('a run whose worker died is FAILED with the board sentence, and never files the packets twice', async () => {
     const { job } = await start([pdf('SOL001.pdf')]);
     await store.claim(job.id, null); // the first worker got this far, then died
+    // …and nothing has touched the row since: a RUNNING row still being heartbeat is a live run,
+    // which the runner leaves alone rather than failing (`RECLAIM_AFTER_MS`).
+    store.rows.get(job.id)!.updatedAt = new Date(Date.now() - RECLAIM_AFTER_MS - 1_000);
 
     expect(await work(job.id)).toBe('interrupted');
 

@@ -1,4 +1,5 @@
 import { Injectable, Logger, BadRequestException, ForbiddenException } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Not, Repository } from 'typeorm';
 import { EventCategory } from '@fapoms/shared';
@@ -41,12 +42,11 @@ function maskDestination(type: MfaFactorType, dest: string): string {
  * attributable, secrets are encrypted at rest (the entity transformer), and verification is
  * rate-limited per account with a lockout — the same brute-force posture as the password path.
  *
- * SECURITY NOTE (documented residual, step-up auth is out of Wave 2 scope): enrol/disable/regenerate
- * here require an authenticated session but NOT a fresh password re-entry, so an attacker who already
- * holds a live session could change a victim's MFA. Mitigated for now by: instant session revocation
- * ("log out all devices"), the audit trail below, and that the far more common attack — stolen
- * credentials — is exactly what MFA at login stops. Step-up re-auth on these actions is the tracked
- * follow-up.
+ * STEP-UP: the two actions that WEAKEN an account — removing a factor and replacing the recovery
+ * codes — require proof beyond the session: the current password or a fresh authenticator code
+ * (`assertStepUp`). A stolen session alone therefore cannot switch MFA off or mint itself a fresh set
+ * of recovery codes. Enrolling an ADDITIONAL factor still needs only the session (it adds a hurdle
+ * rather than removing one); instant session revocation and the audit trail cover that residual.
  */
 @Injectable()
 export class MfaService {
@@ -344,6 +344,63 @@ export class MfaService {
       entityId: userId, userId, remarks: 'Incorrect MFA code at login',
     });
     return false;
+  }
+
+  /**
+   * Prove it is the account holder, not just somebody holding their session, before an action that
+   * weakens the account. Either the current password or a code from the authenticator app counts.
+   *
+   * A wrong answer is refused (and audited); a wrong authenticator code counts toward the same
+   * per-account lockout as a wrong code at login, so this is not a side door for guessing codes.
+   * Recovery codes are deliberately NOT accepted: they are for losing the device, and spending one
+   * here to regenerate them all would be circular.
+   */
+  async assertStepUp(userId: string, proof: { currentPassword?: string; code?: string }, action: string): Promise<void> {
+    const password = typeof proof?.currentPassword === 'string' ? proof.currentPassword : '';
+    const code = typeof proof?.code === 'string' ? proof.code.trim() : '';
+    if (!password && !code) {
+      throw new BadRequestException(
+        'Confirm it is you: enter your current password or a code from your authenticator app.',
+      );
+    }
+
+    let ok = false;
+    if (password) {
+      const user = await this.users.createQueryBuilder('u')
+        .addSelect('u.passwordHash')
+        .where('u.id = :id', { id: userId })
+        .getOne();
+      ok = !!user?.passwordHash && await bcrypt.compare(password, user.passwordHash);
+    }
+    if (!ok && code) {
+      const totpRow = await this.mfa.findOne({ where: { userId, type: 'TOTP', confirmedAt: Not(IsNull()) } });
+      if (totpRow) {
+        if (totpRow.lockedUntil && totpRow.lockedUntil.getTime() > Date.now()) {
+          throw new ForbiddenException('Too many incorrect codes. Try again in a few minutes.');
+        }
+        ok = verifyTotp(totpRow.secret, code);
+        if (ok && (totpRow.failedAttempts !== 0 || totpRow.lockedUntil)) {
+          totpRow.failedAttempts = 0; totpRow.lockedUntil = null; await this.mfa.save(totpRow);
+        } else if (!ok) {
+          totpRow.failedAttempts = (totpRow.failedAttempts || 0) + 1;
+          if (totpRow.failedAttempts >= MAX_MFA_ATTEMPTS) {
+            totpRow.lockedUntil = new Date(Date.now() + MFA_LOCK_MS);
+            totpRow.failedAttempts = 0;
+          }
+          await this.mfa.save(totpRow);
+        }
+      }
+    }
+
+    if (!ok) {
+      await this.audit.recordEventSafe({
+        category: EventCategory.USER, eventType: 'MFA_STEP_UP_FAILED', entityType: 'USER_MFA',
+        entityId: userId, userId, remarks: `Wrong password or code when trying to ${action}`,
+      });
+      throw new ForbiddenException(
+        'That password or code is not right. Enter your current password, or a fresh code from your authenticator app.',
+      );
+    }
   }
 
   /**

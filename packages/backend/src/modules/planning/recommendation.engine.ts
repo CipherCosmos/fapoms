@@ -1349,29 +1349,10 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
       }
     }
 
-    // 2. Same-Day Task Load (Overload increases SLA breach risk)
-    if (context.scheduledDate) {
-      // Preloaded for the whole pool; see sameDayAcceptedCountByAssayer for why the
-      // per-candidate fallback below never actually counted anything.
-      const activeSameDayCount = context.branchFacts
-        ? (context.branchFacts.sameDayAcceptedCountByAssayer[assayer.id] ?? 0)
-        : await this.assignmentRepository.count({
-            where: {
-              assayerId: assayer.id,
-              scheduledDate: context.scheduledDate,
-              status: In([AssignmentStatus.ACCEPTED]),
-              isActive: true,
-            },
-          });
-
-      if (activeSameDayCount >= 3) {
-        score -= 40; // Heavy schedule risks missing SLA target
-      } else if (activeSameDayCount === 2) {
-        score -= 20;
-      } else if (activeSameDayCount === 0) {
-        score += 10; // Unencumbered schedule ensures SLA guarantee
-      }
-    }
+    // 2. Same-day load: deliberately NOT scored (owner decision 2026-09-24, E2). An assayer may do
+    //    several branches in one day; this used to subtract 20/40 for two/three accepted jobs that
+    //    day and add 10 for none, ranking somebody already working nearby below an idle candidate.
+    //    Day capacity is the day planner's job, not a ranking penalty.
 
     // 3. Branch Risk Score & Assayer Seniority / SLA Track Record
     const branchRisk = Number(context.branch.riskScore) || 0;

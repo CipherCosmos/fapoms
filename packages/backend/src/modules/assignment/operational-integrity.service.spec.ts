@@ -140,7 +140,7 @@ describe('OperationalIntegrityService.scan', () => {
       expect(v!.description).toContain('ASG-001, ASG-002');
     });
 
-    it('flags an active assignment held by an assayer who is no longer eligible', async () => {
+    it('flags an active assignment held by an assayer who has left the workforce', async () => {
       serve({
         ineligibleAssayer: [{
           id: 'as-9',
@@ -148,30 +148,73 @@ describe('OperationalIntegrityService.scan', () => {
           assignment_status: 'ACCEPTED',
           assayer_id: 'a-9',
           assayer_code: 'AS0009',
-          assayer_status: 'SUSPENDED',
-          assayer_is_active: false,
+          assayer_status: 'INACTIVE',
+          assayer_is_active: true,
+          assayer_lifecycle_status: 'RESIGNED',
+          assayer_unavailable_reason: null,
         }],
       });
 
       const report = await service.scan();
 
       const v = report.violations.find((x) => x.rule === 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER');
+      // A departed person holding live field work at a client's branch. Its severity is the whole
+      // signal — demoted to P1 it sorts in with date typos.
       expect(v!.severity).toBe('P0');
-      // This is the rule that says a suspended person is currently holding live field work at a
-      // client's branch. Its severity is the whole signal — demoted to P1 it sorts in with date
-      // typos, which is where it would stop being acted on the same day.
       expect(v!.entityId).toBe('as-9');
       expect(v!.description).toContain('AS0009');
-      expect(v!.description).toContain('SUSPENDED');
+      expect(v!.description).toContain('RESIGNED');
+    });
+
+    it('flags a deceased (INACTIVE + DECEASED) assayer and a deactivated record, the other two ways out', async () => {
+      const base = { assignment_status: 'ACCEPTED', assayer_status: 'INACTIVE' };
+      serve({
+        ineligibleAssayer: [
+          { ...base, id: 'as-d', assignment_number: 'ASG-D', assayer_code: 'ASD', assayer_is_active: true,
+            assayer_lifecycle_status: 'INACTIVE', assayer_unavailable_reason: 'DECEASED' },
+          { ...base, id: 'as-x', assignment_number: 'ASG-X', assayer_code: 'ASX', assayer_is_active: false,
+            assayer_lifecycle_status: 'ACTIVE', assayer_unavailable_reason: null },
+        ],
+      });
+
+      const report = await service.scan();
+
+      expect(report.violations.filter((x) => x.rule === 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER').map((v) => v.entityId))
+        .toEqual(['as-d', 'as-x']);
+    });
+
+    it.each(['ON_LEAVE', 'SUSPENDED', 'INACTIVE'])(
+      'does NOT flag an assayer whose standing is temporary (%s) — the job is re-planned, not an integrity breach',
+      async (lifecycle) => {
+        serve({
+          ineligibleAssayer: [{
+            id: 'as-t', assignment_number: 'ASG-T', assignment_status: 'ACCEPTED', assayer_id: 'a-t',
+            assayer_code: 'AST', assayer_status: 'INACTIVE', assayer_is_active: true,
+            assayer_lifecycle_status: lifecycle, assayer_unavailable_reason: 'MEDICAL',
+          }],
+        });
+
+        const report = await service.scan();
+
+        expect(report.violations.filter((x) => x.rule === 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER')).toEqual([]);
+      },
+    );
+
+    it('pre-filters in SQL on the shared departed states, not on the old status != ACTIVE', async () => {
+      serve({});
+      await service.scan();
+      const sql = String(query.mock.calls.map(([q]) => q).find((q) => String(q).includes('INNER JOIN assayers')));
+      expect(sql).toContain("'RESIGNED', 'TERMINATED', 'ARCHIVED'");
+      expect(sql).not.toContain("ass.status != 'ACTIVE'");
     });
   });
 
   describe('the P1 rules — assignments whose recorded history contradicts itself', () => {
-    it('flags a cancelled assignment that nonetheless carries attendance evidence', async () => {
+    it('flags a cancelled assignment with attendance and NO stated reason at P1', async () => {
       serve({
         cancelledWithAttendance: [{
           id: 'as-2', assignment_number: 'ASG-002', status: 'CANCELLED',
-          checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: 'client withdrew',
+          checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: null,
         }],
       });
 
@@ -183,6 +226,37 @@ describe('OperationalIntegrityService.scan', () => {
       // may still be paid for. The check-in timestamp belongs in the description because it is the
       // fact that decides whether this is a stale marker or a real visit that was cancelled after.
       expect(v!.description).toContain('2026-02-01T09:00:00Z');
+      expect(v!.description).toContain('No cancellation reason');
+    });
+
+    it.each([[''], ['   '], ['Cancelled']])(
+      'treats a blank or placeholder cancel_reason (%j) as unexplained — P1',
+      async (reason) => {
+        serve({
+          cancelledWithAttendance: [{
+            id: 'as-2', assignment_number: 'ASG-002', status: 'CANCELLED',
+            checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: reason,
+          }],
+        });
+        const report = await service.scan();
+        expect(report.violations.find((x) => x.rule === 'CANCELLED_ASSIGNMENT_WITH_ATTENDANCE')!.severity).toBe('P1');
+      },
+    );
+
+    it('reports an EXPLAINED cancellation after a visit as informational P2, with the reason', async () => {
+      serve({
+        cancelledWithAttendance: [{
+          id: 'as-2', assignment_number: 'ASG-002', status: 'CANCELLED',
+          checked_in_at: '2026-02-01T09:00:00Z', checked_out_at: null, cancel_reason: 'Branch closed on arrival',
+        }],
+      });
+
+      const report = await service.scan();
+      const v = report.violations.find((x) => x.rule === 'CANCELLED_ASSIGNMENT_WITH_ATTENDANCE');
+
+      // Still listed (the visit may be payable) but no longer an anomaly alongside real contradictions.
+      expect(v!.severity).toBe('P2');
+      expect(v!.description).toContain('Branch closed on arrival');
     });
 
     it('flags a completed assignment with no attendance at all', async () => {

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
-import { actionDispatchers } from '../../services/action-dispatchers';
-import { processActionQueue } from '../../services/action-queue';
 import { isStampCurrent, stampSession } from '../../services/session-epoch';
 import type { AssayerAssignment } from '../../types/mobile-app';
 import {
+  drainQueue,
   readCachedJobs,
   refreshJobs,
   subscribeJobsChanged,
@@ -44,7 +43,9 @@ export function useJobs(): JobsState {
     const stamp = stampSession();
     setLoading(true);
     try {
-      await processActionQueue(actionDispatchers).catch(() => undefined);
+      // Refusals are notified and kept for the Today banner by `drainQueue`; the list below is
+      // fetched after it either way, so a refused action's job shows as the server now holds it.
+      await drainQueue(userId).catch(() => undefined);
       const items = await refreshJobs(userId);
       if (!isStampCurrent(stamp)) return;
       setJobs(items);

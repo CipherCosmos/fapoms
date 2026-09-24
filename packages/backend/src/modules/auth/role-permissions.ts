@@ -61,6 +61,12 @@ const ADMIN_BUSINESS_GRANTS: string[] = [
     'BILLING:APPROVE:ORGANIZATION',
     'BILLING:CREATE:ORGANIZATION',
     'BILLING:EDIT:ORGANIZATION',
+    /*
+      The HOD's final billing approval (2026-09-24): after the office approves, before money moves.
+      Admin holds it; a custom role (an "HOD" built in Users & Roles) can be given it. OPERATIONS
+      deliberately does not — the office approves, somebody above the office signs off.
+    */
+    'BILLING:FINAL_APPROVE:ORGANIZATION',
     'BILLING:VIEW:PLATFORM',
     'BRANCH:CREATE:ORGANIZATION',
     'BRANCH:DELETE:ORGANIZATION',

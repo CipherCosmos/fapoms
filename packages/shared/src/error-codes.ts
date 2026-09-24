@@ -154,6 +154,12 @@ export const ASSIGNMENT_ERROR_CODES = {
   REOPEN_PAPERS_WITH_CLIENT: 'REOPEN_PAPERS_WITH_CLIENT',
   /** Staff checking an assayer in from the office must say why (owner decision 2026-09-24). */
   OFFICE_CHECK_IN_REASON_REQUIRED: 'OFFICE_CHECK_IN_REASON_REQUIRED',
+  /**
+   * A new date for a job that can no longer be moved: only an offer or an accepted job nobody has
+   * checked in to can be rescheduled. Once the assayer has arrived the visit is happening on that
+   * day; a finished, declined or cancelled job has no visit left to move (2026-09-24).
+   */
+  RESCHEDULE_NOT_ALLOWED: 'RESCHEDULE_NOT_ALLOWED',
 } as const;
 
 export const ASSAYER_ERROR_CODES = {
@@ -295,6 +301,17 @@ export const ATTENDANCE_ERROR_CODES = {
   TOO_FAR_FROM_BRANCH: 'TOO_FAR_FROM_BRANCH',
   /** Check-out attempted with no check-in on record. */
   NOT_CHECKED_IN: 'NOT_CHECKED_IN',
+  /**
+   * Capability only (SUBMIT_RETURN): the assayer arrived and has not checked out, so an uploaded
+   * return would be stored but would not close the job. Check out first.
+   */
+  NOT_CHECKED_OUT: 'NOT_CHECKED_OUT',
+  /**
+   * Capability only (SUBMIT_RETURN): no check-in is on record (e.g. a job reopened for its papers
+   * that was closed without a visit), so the return cannot close it from the phone — completing it
+   * needs a stated reason, which only the office can give.
+   */
+  COMPLETION_BY_OFFICE: 'COMPLETION_BY_OFFICE',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -418,6 +435,24 @@ export const OTHER_CONFLICT_ERROR_CODES = {
    * (`EXPENSE_APPROVAL_OVERRIDE_ROLES` in `expense-approval.ts`). The refusal stands; a senior has to approve it.
    */
   EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED: 'EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED',
+  /**
+   * Money refused because the HOD's final approval (2026-09-24) has not been given yet: paying a
+   * payout, putting it in a bank file, or marking a client invoice sent. The office's approval is
+   * not enough on its own.
+   */
+  AWAITING_HOD_APPROVAL: 'AWAITING_HOD_APPROVAL',
+  /**
+   * A payout approval (office or HOD) refused because the bank account it would be paid to — the
+   * same account number and IFSC — is also on another assayer's record (2026-09-24 audit, owner's
+   * decision). One of the two records has to be corrected first.
+   */
+  PAYOUT_DESTINATION_SHARED: 'PAYOUT_DESTINATION_SHARED',
+  /**
+   * An office approval of an assayer bill refused because re-deciding its lines' TDS (a PAN now on
+   * file, or the s.194J threshold position moved) changed the bill's net total. The bill was sent
+   * back to the assayer as a new revision to confirm the new amount; nothing was approved.
+   */
+  BILL_TAX_RECALCULATED: 'BILL_TAX_RECALCULATED',
 } as const;
 
 // ---------------------------------------------------------------------------

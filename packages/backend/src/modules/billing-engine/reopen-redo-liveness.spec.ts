@@ -215,6 +215,17 @@ describe('a dead financial row is history, not a booking', () => {
     });
 
     /**
+     * Audit F1 (2026-09-24): invoicing locked every line of the chosen assignments, the cancelled
+     * one from a first completion included — so a reopened-and-redone job counted two lines, one of
+     * them "not unbilled", and could never be invoiced; nor could anything picked alongside it.
+     */
+    it('invoices the live client lines only', () => {
+      const i = src.indexOf('async createInvoice(');
+      const q = src.slice(i, i + 2400);
+      expect(q).toContain("e.is_active = true AND ${liveBillingEntrySql('e')}");
+    });
+
+    /**
      * Voiding a payout must cancel the CURRENT client line. Finding a cancelled one from an
      * earlier completion short-circuits the guard and leaves the live line to ride the next
      * invoice — billing the client for work the business decided not to pay for.

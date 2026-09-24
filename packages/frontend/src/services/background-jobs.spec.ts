@@ -37,6 +37,20 @@ describe('mergeJob', () => {
     const list = { active: [newer], recent: [] };
     expect(mergeJob(list, job())).toBe(list);
   });
+
+  it('lets a finished job win over a progress push stamped by a clock that runs ahead', () => {
+    // The push was stamped by the API process's clock, the poll by the database's.
+    const pushed = job({ updatedAt: '2026-09-24T10:09:00.000Z' });
+    const list = { active: [pushed], recent: [] };
+    const finishedPoll = job({ status: 'SUCCEEDED', updatedAt: '2026-09-24T10:08:30.000Z' });
+    expect(mergeJob(list, finishedPoll)).toEqual({ active: [], recent: [finishedPoll] });
+  });
+
+  it('never lets a late progress push reopen a finished job', () => {
+    const finished = job({ status: 'FAILED', updatedAt: '2026-09-24T10:05:00.000Z' });
+    const list = { active: [], recent: [finished] };
+    expect(mergeJob(list, job({ updatedAt: '2026-09-24T10:06:00.000Z' }))).toBe(list);
+  });
 });
 
 describe('applyJobUpdate', () => {

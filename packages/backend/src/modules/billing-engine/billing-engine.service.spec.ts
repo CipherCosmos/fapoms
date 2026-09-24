@@ -59,6 +59,8 @@ describe('BillingEngineService', () => {
     if (sql.includes('FROM users')) return [{ display_name: 'Priya Menon' }];
     if (sql.includes('FROM assayer_payables') && sql.includes('awaiting_approval')) return [totalsRow];
     if (sql.includes('FROM billing_payments') && sql.includes('SUM(amount)')) return [{ paid: 0 }];
+    // The client invoice series (audit F7): the counter row's next serial.
+    if (sql.includes('INSERT INTO billing_invoice_number_series')) return [{ last_serial: 123 }];
     return [];
   };
   const managerQuery: jest.Mock<Promise<any[]>, [string, any[]?]> = jest.fn(defaultManagerQuery);
@@ -138,6 +140,7 @@ describe('BillingEngineService', () => {
       assayerId: 'assayer-1',
       requirement: OnboardingDocument.BANK_PASSBOOK,
       verificationStatus: DocumentVerification.VERIFIED,
+      verifiedAt: new Date('2026-08-01T00:00:00Z'),
       currentVersionId: 'ver-bank-1',
       isActive: true,
     })),
@@ -258,6 +261,10 @@ describe('BillingEngineService', () => {
     quotedTravelFee: '300.00', quotedTransportMode: 'CAR', quotedDistanceKm: '42.00', quotedDistanceSource: 'OSRM',
     completionDate: new Date('2026-08-10T10:00:00Z'), ...over,
   });
+  /** A direct approval (no approved bill) needs its reason on the record — audit F6. */
+  const DIRECT_REASON = 'Assayer confirmed the amounts by phone';
+  /** The HOD's final approval (2026-09-24): an approved payout the tests pay carries it. */
+  const HOD_AT = new Date('2026-08-11T09:00:00Z');
   const payable = (over: Partial<any> = {}) => ({
     id: 'payable-1', payableNumber: 'PY-1', assayerId: 'assayer-1', clientId: 'client-1', projectId: 'project-1',
     assignmentId: 'asn-1', expenseId: null, status: AssayerPayableStatus.PENDING, onHold: false, holdReason: null,
@@ -310,6 +317,7 @@ describe('BillingEngineService', () => {
       assayerId: 'assayer-1',
       requirement: OnboardingDocument.BANK_PASSBOOK,
       verificationStatus: DocumentVerification.VERIFIED,
+      verifiedAt: new Date('2026-08-01T00:00:00Z'),
       currentVersionId: 'ver-bank-1',
       isActive: true,
     }));
@@ -326,7 +334,9 @@ describe('BillingEngineService', () => {
           useValue: {
             get: settingsGet,
             getMany: jest.fn(async () => ({})),
-            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            // The s.194J threshold (audit F15) is 0 here — the pre-threshold behaviour every older
+            // test was written against; the threshold's own tests set it through `settingsValues`.
+            getNumber: jest.fn(async (k: string, fb?: number) => settingsValues[k] ?? (k === 'billing.tds194jThresholdRupees' ? 0 : fb as number)),
             describeAll: jest.fn(async () => []),
             onChange: jest.fn(),
           },
@@ -548,6 +558,37 @@ describe('BillingEngineService', () => {
     });
   });
 
+  /**
+   * A voided payout is history. "Fee changed" (and "no fee agreed", and "on hold") on a voided
+   * payable asked finance to act on money that will never be paid — a reopened-and-redone job
+   * carries one voided payable beside its live one, and the list showed the dead one too.
+   */
+  describe('attentionItems — payout items are about LIVE payables only', () => {
+    const capture = async () => {
+      const sqls: string[] = [];
+      entryRepo.manager.query = jest.fn(async (sql: string, params?: any[]) => { sqls.push(sql); return managerQuery(sql, params); });
+      await (service as any).attentionItems();
+      entryRepo.manager.query = managerQuery;
+      const stripped = (s: string) => s.replace(/--[^\n]*/g, '');
+      return {
+        feeChanged: stripped(sqls.find((s) => s.includes('AS booked_fee'))!),
+        unsettled: stripped(sqls.find((s) => s.includes(`'settled') = 'false'`))!),
+        heldPayable: stripped(sqls.find((s) => s.includes('p.on_hold = true'))!),
+      };
+    };
+
+    it('the FEE_CHANGED query excludes voided payables', async () => {
+      const { feeChanged } = await capture();
+      expect(feeChanged).toContain(`p.status NOT IN ('VOIDED')`);
+    });
+
+    it('the UNSETTLED_FEE and held-payout queries exclude voided payables too', async () => {
+      const { unsettled, heldPayable } = await capture();
+      expect(unsettled).toContain(`p.status NOT IN ('VOIDED')`);
+      expect(heldPayable).toContain(`p.status NOT IN ('VOIDED')`);
+    });
+  });
+
   describe('repriceAssignment — the safety net for a fee that moved', () => {
     beforeEach(() => {
       assignmentRepo.findOne.mockImplementation(async () => completed({ agreedFee: '2500.00' }));
@@ -571,26 +612,328 @@ describe('BillingEngineService', () => {
     });
   });
 
+  // ── The HOD's final approval (owner, 2026-09-24) ─────────────────────────
+  //
+  // After the office approves, money needs the HOD's final approval before it can move. The gate is
+  // on the payable, read by the one path to PAID (`recordDisbursement`) and by the bank file; the
+  // client invoice's is on "Sent to client". Each refusal below is also the MUTATION CHECK for its
+  // gate: remove the gate and the test that says "refused" goes red.
+
+  describe("The HOD's final approval", () => {
+    /** Resolve settings the way a deployment with no saved row does — enforce is the default. */
+    beforeEach(() => {
+      settingsGet.mockImplementation(async (key: string) => settingsValues[key] ?? SETTING_BY_KEY[key]?.default ?? null);
+      assayerInvoiceRepo.findOne.mockImplementation(async () => null);
+    });
+    afterEach(() => {
+      settingsGet.mockImplementation(async (key: string) => settingsValues[key] ?? null);
+    });
+
+    const officeApproved = (over: Partial<any> = {}) => payable({
+      status: AssayerPayableStatus.APPROVED, approvedBy: 'office-1', approvedAt: new Date('2026-08-11T08:00:00Z'), hodApprovedAt: null, hodApprovedBy: null, ...over,
+    });
+
+    describe('payment is refused until the HOD approves', () => {
+      it('recordDisbursement refuses an office-approved payout the HOD has not approved — code AWAITING_HOD_APPROVAL', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved());
+        totalsRow = { ...totalsRow, outstanding: 0 };
+        const err: any = await service.recordDisbursement(
+          { payableId: 'payable-1', paymentReference: 'UTR-HOD-1', method: PaymentMethod.NEFT }, 'payer-1',
+        ).catch((e) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect(err.message).toMatch(/^Waiting for HOD approval/);
+        expect(err.getResponse()).toMatchObject({ code: 'AWAITING_HOD_APPROVAL' });
+        expect(committed).toHaveLength(0);
+        expect(paymentRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('the bulk pay run refuses it too, and pays nothing', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved());
+        const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-HOD-2', method: PaymentMethod.NEFT }, 'payer-1');
+        expect(r.done).toEqual([]);
+        expect(r.refused[0].reason).toMatch(/^Waiting for HOD approval/);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('pays it once the HOD has approved', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved({ hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }));
+        totalsRow = { ...totalsRow, outstanding: 0 };
+        const payment = await service.recordDisbursement(
+          { payableId: 'payable-1', paymentReference: 'UTR-HOD-3', method: PaymentMethod.NEFT }, 'payer-1',
+        );
+        expect(payment).toMatchObject({ payableId: 'payable-1', amount: 1800 });
+      });
+
+      it('the bank file leaves out a payout waiting for the HOD, and says why', async () => {
+        payableRepo.find.mockImplementation(async () => [
+          officeApproved({ id: 'p-wait', payableNumber: 'PY-WAIT' }),
+          officeApproved({ id: 'p-ok', payableNumber: 'PY-OK', hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }),
+        ]);
+        assayerRepo.find.mockImplementation(async () => [{ id: 'assayer-1', displayName: 'Asha', assayerCode: 'AS-1', panNumber: 'ABCDE1234F' }]);
+        const r = await service.payoutBankDetails(['p-wait', 'p-ok']);
+        expect(r.rows.map((x) => x.payableId)).toEqual(['p-ok']);
+        expect(r.skipped).toEqual([{ id: 'p-wait', reason: 'PY-WAIT: Waiting for HOD approval' }]);
+      });
+    });
+
+    describe('hodApprovePayouts — approving a payout approved without a bill, or a reimbursement', () => {
+      it('stamps the final approval, writes history and audit, and only NOW tells the assayer', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved());
+        const r = await service.hodApprovePayouts(['payable-1'], 'hod-1');
+        expect(r).toEqual({ done: ['payable-1'], refused: [] });
+        const p = committed.find((row) => row.payableNumber);
+        expect(p).toMatchObject({ status: AssayerPayableStatus.APPROVED, approvedBy: 'office-1', hodApprovedBy: 'hod-1' });
+        expect(p.hodApprovedAt).toBeInstanceOf(Date);
+        expect(committed).toContainEqual(expect.objectContaining({ action: 'PAYABLE_HOD_APPROVED', entityId: 'payable-1' }));
+        expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'PAYABLE_HOD_APPROVED', userId: 'hod-1' }), expect.anything());
+        await flush();
+        expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({ type: 'PAYABLE_APPROVED', assayerId: 'assayer-1', dedupeKey: 'PAYABLE_APPROVED:payable-1' }));
+      });
+
+      it('refuses the HOD who was also the office approver (segregation of duties, enforce by default) and audits the attempt', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved({ approvedBy: 'hod-1' }));
+        const r = await service.hodApprovePayouts(['payable-1'], 'hod-1');
+        expect(r.done).toEqual([]);
+        expect(r.refused[0].reason).toMatch(/Segregation of duties/);
+        expect(committed).toHaveLength(0);
+        expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'SEGREGATION_OF_DUTIES_REFUSED', entityId: 'payable-1', userId: 'hod-1' }));
+      });
+
+      it('warn mode lets the same person through but still records it', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'warn';
+        payableRepo.findOne.mockImplementation(async () => officeApproved({ approvedBy: 'hod-1' }));
+        const r = await service.hodApprovePayouts(['payable-1'], 'hod-1');
+        expect(r.done).toEqual(['payable-1']);
+        expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'SEGREGATION_OF_DUTIES_WARNED' }));
+      });
+
+      it('refuses what the office has not approved, a held payout and a paid one; a second press is a no-op', async () => {
+        payableRepo.findOne.mockImplementation(async (opts: any) => ({
+          due: payable({ id: 'due' }),
+          held: officeApproved({ id: 'held', onHold: true, holdReason: 'PAN mismatch' }),
+          paid: officeApproved({ id: 'paid', status: AssayerPayableStatus.PAID }),
+          done: officeApproved({ id: 'done', hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-2' }),
+        } as any)[opts.where.id]);
+        const r = await service.hodApprovePayouts(['due', 'held', 'paid', 'done'], 'hod-1');
+        expect(r.done).toEqual(['done']);
+        expect(r.refused).toEqual([
+          { id: 'due', reason: expect.stringContaining('not been approved by the office') },
+          { id: 'held', reason: expect.stringContaining('PAN mismatch') },
+          { id: 'paid', reason: expect.stringContaining('already paid') },
+        ]);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('refuses a payout riding an office-approved bill — the bill is what the HOD approves', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved({ assayerInvoiceId: 'ainv-1' }));
+        assayerInvoiceRepo.findOne.mockImplementation(async () => ({ id: 'ainv-1', invoiceNumber: 'AINV-1', status: AssayerInvoiceStatus.APPROVED }));
+        const r = await service.hodApprovePayouts(['payable-1'], 'hod-1');
+        expect(r.refused[0].reason).toContain('AINV-1');
+      });
+
+      it('reports progress after every item', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved());
+        const onProgress = jest.fn();
+        await service.hodApprovePayouts(['payable-1', 'payable-1'], 'hod-1', onProgress);
+        expect(onProgress.mock.calls).toEqual([[1, 1, 'Giving final approval']]);
+      });
+    });
+
+    describe('hodRejectPayout — back to the office, with the reason', () => {
+      it('returns the payout to Due, undoing the office approval and its frozen destination, and tells the office approver', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved());
+        const out = await service.hodRejectPayout('payable-1', 'The travel claim is twice the rate card.', 'hod-1');
+        expect(out).toMatchObject({
+          status: AssayerPayableStatus.PENDING, approvedBy: null, approvedAt: null,
+          destinationBankAccountNumber: null, destinationIfsc: null, destinationVerifiedAt: null, destinationVerifiedSource: null,
+          hodRejectedBy: 'hod-1', hodRejectReason: 'The travel claim is twice the rate card.',
+        });
+        expect(committed).toContainEqual(expect.objectContaining({
+          action: 'PAYABLE_HOD_REJECTED', fromState: AssayerPayableStatus.APPROVED, toState: AssayerPayableStatus.PENDING,
+          reason: 'The travel claim is twice the rate card.',
+        }));
+        await flush(); await flush();
+        expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'BILLING_FINAL_APPROVAL_REJECTED', ownerUserId: 'office-1', actorUserId: 'hod-1',
+          payload: expect.objectContaining({ reason: 'The travel claim is twice the rate card.', tab: 'pay' }),
+        }));
+      });
+
+      it('an expense reimbursement goes back the same way — the claim stays approved, its payout returns to Due', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved({ expenseId: 'expense-1' }));
+        const out = await service.hodRejectPayout('payable-1', 'No receipt attached to this claim.', 'hod-1');
+        expect(out).toMatchObject({ status: AssayerPayableStatus.PENDING, expenseId: 'expense-1' });
+        await flush(); await flush();
+        expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'BILLING_FINAL_APPROVAL_REJECTED', payload: expect.objectContaining({ what: 'Expense reimbursement PY-1' }),
+        }));
+      });
+
+      it('needs a reason the office can act on', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved());
+        await expect(service.hodRejectPayout('payable-1', 'no', 'hod-1')).rejects.toThrow(BadRequestException);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('refuses one that already has the final approval, or is part paid', async () => {
+        payableRepo.findOne.mockImplementation(async () => officeApproved({ hodApprovedAt: HOD_AT }));
+        await expect(service.hodRejectPayout('payable-1', 'Changed my mind about this one.', 'hod-1')).rejects.toThrow(/already has the final approval/);
+        payableRepo.findOne.mockImplementation(async () => officeApproved({ paidAmount: '100.00' }));
+        await expect(service.hodRejectPayout('payable-1', 'Changed my mind about this one.', 'hod-1')).rejects.toThrow(/part paid/);
+        expect(committed).toHaveLength(0);
+      });
+    });
+
+    describe('client invoices: sent to the client only after the HOD approves', () => {
+      it('refuses to mark a draft sent — AWAITING_HOD_APPROVAL — and the number never changes', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.DRAFT }));
+        const err: any = await service.sendInvoice('invoice-1', 'office-1').catch((e) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect(err.getResponse()).toMatchObject({ code: 'AWAITING_HOD_APPROVAL' });
+        expect(committed).toHaveLength(0);
+      });
+
+      it('refuses while it is with the HOD', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.AWAITING_HOD }));
+        await expect(service.sendInvoice('invoice-1', 'office-1')).rejects.toThrow(/^Waiting for HOD approval/);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('the office sends a draft up: DRAFT → AWAITING_HOD, and the HOD hears about it', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.DRAFT, createdBy: 'office-1' }));
+        const out = await service.requestInvoiceFinalApproval('invoice-1', 'office-1');
+        expect(out).toMatchObject({ status: InvoiceStatus.AWAITING_HOD, hodRequestedBy: 'office-1', invoiceNumber: 'INV-1' });
+        expect(committed).toContainEqual(expect.objectContaining({ action: 'INVOICE_SENT_FOR_FINAL_APPROVAL', toState: InvoiceStatus.AWAITING_HOD }));
+        await flush(); await flush();
+        expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'BILLING_FINAL_APPROVAL_NEEDED', entityType: 'INVOICE', entityId: 'invoice-1',
+          dedupeKey: expect.stringMatching(/^BILLING_FINAL_APPROVAL_NEEDED:INVOICE:invoice-1:\d+$/),
+        }));
+      });
+
+      it('the HOD approves: AWAITING_HOD → HOD_APPROVED, and then it can be sent', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.AWAITING_HOD, createdBy: 'office-1', hodRequestedBy: 'office-1' }));
+        const out = await service.hodApproveInvoice('invoice-1', 'hod-1');
+        expect(out).toMatchObject({ status: InvoiceStatus.HOD_APPROVED, hodApprovedBy: 'hod-1', invoiceNumber: 'INV-1' });
+        expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'INVOICE_HOD_APPROVED' }), expect.anything());
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.HOD_APPROVED }));
+        expect((await service.sendInvoice('invoice-1', 'office-1')).status).toBe(InvoiceStatus.ISSUED);
+      });
+
+      it('refuses the HOD who made the invoice, or who sent it up', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.AWAITING_HOD, createdBy: 'hod-1', hodRequestedBy: 'office-1' }));
+        await expect(service.hodApproveInvoice('invoice-1', 'hod-1')).rejects.toThrow(/Segregation of duties/);
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.AWAITING_HOD, createdBy: 'office-1', hodRequestedBy: 'hod-1' }));
+        await expect(service.hodApproveInvoice('invoice-1', 'hod-1')).rejects.toThrow(/Segregation of duties/);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('the HOD sends it back: → DRAFT with the reason, and whoever sent it up is told', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.AWAITING_HOD, createdBy: 'office-1', hodRequestedBy: 'office-2' }));
+        const out = await service.hodRejectInvoice('invoice-1', 'Wrong GSTIN on the client record.', 'hod-1');
+        expect(out).toMatchObject({ status: InvoiceStatus.DRAFT, hodRejectReason: 'Wrong GSTIN on the client record.', hodRequestedBy: null, invoiceNumber: 'INV-1' });
+        await flush(); await flush();
+        expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'BILLING_FINAL_APPROVAL_REJECTED', ownerUserId: 'office-2', payload: expect.objectContaining({ tab: 'invoices' }),
+        }));
+      });
+
+      it('recording a payment against an invoice not yet sent is refused as before', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.HOD_APPROVED }));
+        await expect(service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 10 }, 'f'))
+          .rejects.toThrow(/has not been sent yet/);
+      });
+    });
+
+    describe("the HOD's queue", () => {
+      it('lists the four kinds, and counts the whole queue', async () => {
+        managerQuery.mockImplementation(async (sql: string) => {
+          // The payout query mentions assayer_invoices in its NOT EXISTS, so it is matched first.
+          if (sql.includes('AS direct')) return [{ direct: 1, expense: 1 }];
+          if (sql.includes('FROM assayer_payables p') && sql.includes('LIMIT')) return [
+            { id: 'p-1', payable_number: 'PY-1', expense_id: null, total_amount: '1800.00', paid_amount: '0', approved_by: 'office-1', office_note: 'Assayer has left' },
+            { id: 'p-2', payable_number: 'PY-2', expense_id: 'x-1', total_amount: '450.00', paid_amount: '0', approved_by: 'office-1' },
+          ];
+          if (sql.includes('FROM assayer_invoices ai') && sql.includes('LIMIT')) return [{ id: 'ainv-1', invoice_number: 'AINV-1', total_amount: '5400.00', currency: 'INR', line_count: 3, approved_by: 'office-1', approved_at: new Date(), approver_name: 'Priya', payee_name: 'Asha' }];
+          if (sql.includes('FROM billing_invoices i') && sql.includes('LIMIT')) return [{ id: 'inv-1', invoice_number: 'INV-1', total: '12000', hod_requested_by: 'office-2', line_count: 4 }];
+          if (sql.includes('COUNT(*)::int AS n FROM assayer_invoices')) return [{ n: 1 }];
+          if (sql.includes('COUNT(*)::int AS n FROM billing_invoices')) return [{ n: 1 }];
+          return defaultManagerQuery(sql);
+        });
+        const q = await service.finalApprovalQueue();
+        expect(q.items.map((i) => [i.kind, i.number])).toEqual([
+          ['ASSAYER_BILL', 'AINV-1'], ['DIRECT_PAYOUT', 'PY-1'], ['EXPENSE_REIMBURSEMENT', 'PY-2'], ['CLIENT_INVOICE', 'INV-1'],
+        ]);
+        expect(q.items[1]).toMatchObject({ amount: 1800, officeNote: 'Assayer has left', officeApprovedBy: 'office-1' });
+        expect(q.counts).toEqual({ ASSAYER_BILL: 1, DIRECT_PAYOUT: 1, EXPENSE_REIMBURSEMENT: 1, CLIENT_INVOICE: 1 });
+        expect(q.total).toBe(4);
+      });
+
+      it('waits only on what the HOD can act on: office-approved, not final-approved, not held, owed, not on a live bill', async () => {
+        await service.finalApprovalQueue();
+        const payables = managerQuery.mock.calls.map(([sql]) => sql).find((sql) => sql.includes('FROM assayer_payables p') && sql.includes('LIMIT'))!;
+        expect(payables).toContain(`p.status = 'APPROVED' AND p.hod_approved_at IS NULL`);
+        expect(payables).toContain('p.on_hold = false');
+        expect(payables).toContain(`ai.status IN ('INVITED','SUBMITTED','APPROVED')`);
+        const invoices = managerQuery.mock.calls.map(([sql]) => sql).find((sql) => sql.includes('FROM billing_invoices i') && sql.includes('LIMIT'))!;
+        expect(invoices).toContain(`i.status = 'AWAITING_HOD'`);
+      });
+
+      it("a region-assigned HOD sees only their regions' items — the regions bound, never inlined", async () => {
+        stagedMode.mockResolvedValue('enforce');
+        await service.finalApprovalQueue({ regions: ['NORTH'] } as any);
+        const calls = managerQuery.mock.calls;
+        const payables = calls.find(([sql]) => sql.includes('FROM assayer_payables p') && sql.includes('LIMIT'))!;
+        expect(payables[0]).toMatch(/rgn_b\.region = ANY\(\$1::text\[\]\)/);
+        expect(payables[1]).toEqual([['NORTH']]);
+        const bills = calls.find(([sql]) => sql.includes('FROM assayer_invoices ai') && sql.includes('LIMIT') && !sql.includes('FROM assayer_payables'))!;
+        expect(bills[0]).toContain('a.region = ANY($1::text[])');
+        expect(bills[1]).toEqual([['NORTH']]);
+        const invoices = calls.find(([sql]) => sql.includes('FROM billing_invoices i') && sql.includes('LIMIT'))!;
+        expect(invoices[0]).toMatch(/rgi_b\.region = ANY/);
+        expect(JSON.stringify(calls.map(([sql]) => sql))).not.toContain("'NORTH'");
+        stagedMode.mockResolvedValue('log');
+      });
+    });
+
+    it('the payouts list narrows on the final approval (ready to pay vs waiting for the HOD)', async () => {
+      await service.listPayouts({ status: AssayerPayableStatus.APPROVED, hodApproved: true });
+      expect(payableRepo.findAndCount).toHaveBeenLastCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ hodApprovedAt: Not(IsNull()) }),
+      }));
+      await service.listPayouts({ status: AssayerPayableStatus.APPROVED, hodApproved: false });
+      expect(payableRepo.findAndCount).toHaveBeenLastCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ hodApprovedAt: IsNull() }),
+      }));
+    });
+  });
+
   // ── Payouts ───────────────────────────────────────────────────────────────
 
   describe('approvePayouts — the one gate', () => {
-    it('approves a due payout, stamps who and when, and tells the assayer', async () => {
+    it('approves a due payout, stamps who and when, and tells the HOD — not yet the assayer', async () => {
       payableRepo.findOne.mockImplementation(async () => payable());
-      const r = await service.approvePayouts(['payable-1'], 'finance-1');
+      const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
       expect(r).toEqual({ done: ['payable-1'], refused: [] });
       const p = committed.find((row) => row.payableNumber);
-      expect(p).toMatchObject({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' });
+      expect(p).toMatchObject({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1', hodApprovedAt: null });
       expect(p.approvedAt).toBeInstanceOf(Date);
       expect(locks).toContainEqual(expect.objectContaining({ entity: 'AssayerPayableEntity', mode: 'pessimistic_write' }));
       // The notification is detached from the transaction (it must never roll money back), so
       // let the event loop turn once before asserting it was sent.
       await flush();
-      expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({ type: 'PAYABLE_APPROVED', assayerId: 'assayer-1' }));
+      await flush();
+      // The office's approval waits for the HOD (2026-09-24): the HOD hears, the assayer does not.
+      expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'BILLING_FINAL_APPROVAL_NEEDED', entityType: 'PAYABLE', entityId: 'payable-1',
+        dedupeKey: expect.stringMatching(/^BILLING_FINAL_APPROVAL_NEEDED:PAYABLE:payable-1:\d+$/),
+      }));
+      expect(emitSafe).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'PAYABLE_APPROVED' }));
     });
 
     it('writes the approval to the compliance audit trail — who approved how much, for whom', async () => {
       payableRepo.findOne.mockImplementation(async () => payable());
-      await service.approvePayouts(['payable-1'], 'finance-1');
+      await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
       expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
         category: EventCategory.WORKFLOW,
         eventType: 'PAYABLE_APPROVED',
@@ -606,14 +949,14 @@ describe('BillingEngineService', () => {
     it('refuses a held payout, naming the hold reason, and approves the rest', async () => {
       payableRepo.findOne.mockImplementation(async (opts: any) =>
         opts.where.id === 'held-1' ? payable({ id: 'held-1', payableNumber: 'PY-H', onHold: true, holdReason: 'Client dispute' }) : payable());
-      const r = await service.approvePayouts(['held-1', 'payable-1'], 'finance-1');
+      const r = await service.approvePayouts(['held-1', 'payable-1'], 'finance-1', undefined, DIRECT_REASON);
       expect(r.done).toEqual(['payable-1']);
       expect(r.refused).toEqual([{ id: 'held-1', reason: expect.stringContaining('Client dispute') }]);
     });
 
     it('treats an already-approved payout as done — the bulk button may be pressed twice', async () => {
-      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
-      const r = await service.approvePayouts(['payable-1'], 'finance-1');
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }));
+      const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
       expect(r).toEqual({ done: ['payable-1'], refused: [] });
       expect(committed).toHaveLength(0);
       expect(emitSafe).not.toHaveBeenCalled();
@@ -621,7 +964,7 @@ describe('BillingEngineService', () => {
 
     it('refuses a paid payout', async () => {
       payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID }));
-      const r = await service.approvePayouts(['payable-1'], 'finance-1');
+      const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
       expect(r.refused[0].reason).toContain('already paid');
     });
 
@@ -634,7 +977,7 @@ describe('BillingEngineService', () => {
         opts.where.id === 'held-1' ? payable({ id: 'held-1', payableNumber: 'PY-H', onHold: true, holdReason: 'Client dispute' }) : payable());
       const onProgress = jest.fn();
 
-      const r = await service.approvePayouts(['held-1', 'payable-1', 'held-1'], 'finance-1', onProgress);
+      const r = await service.approvePayouts(['held-1', 'payable-1', 'held-1'], 'finance-1', onProgress, DIRECT_REASON);
 
       expect(r.done).toEqual(['payable-1']);
       expect(onProgress.mock.calls).toEqual([[1, 2, 'Approving payouts'], [2, 2, 'Approving payouts']]);
@@ -661,13 +1004,13 @@ describe('BillingEngineService', () => {
     });
 
     it('refuses a held payout even when approved', async () => {
-      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, onHold: true, holdReason: 'Pending PAN' }));
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', onHold: true, holdReason: 'Pending PAN' }));
       const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
       expect(r.refused[0].reason).toContain('Pending PAN');
     });
 
     it('pays the full outstanding, records a real payment row, marks PAID, and tells the assayer', async () => {
-      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }));
       totalsRow = { ...totalsRow, outstanding: 0 };
       const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT, paidDate: '2026-08-12' }, 'finance-1');
       expect(r.done).toEqual([{ payableId: 'payable-1', paymentId: expect.any(String) }]);
@@ -680,7 +1023,7 @@ describe('BillingEngineService', () => {
     });
 
     it('writes the disbursement to the compliance audit trail — who released how much, to whom', async () => {
-      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }));
       totalsRow = { ...totalsRow, outstanding: 0 };
       await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT, paidDate: '2026-08-12' }, 'finance-1');
       expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -700,7 +1043,7 @@ describe('BillingEngineService', () => {
     });
 
     it('computes the running balance on the transaction’s own connection, after the write', async () => {
-      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }));
       await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
       expect(txQueries.some((sql) => sql.includes('FROM assayer_payables') && sql.includes('awaiting_approval'))).toBe(true);
     });
@@ -715,14 +1058,14 @@ describe('BillingEngineService', () => {
     });
 
     it('refuses an amount above what is owed', async () => {
-      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }));
       await expect(service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT, amount: 1800.5 }, 'f'))
         .rejects.toThrow(BadRequestException);
     });
 
     it('atomically transitions parent AssayerInvoice to PAID when all lines are disbursed', async () => {
       payableRepo.findOne.mockImplementation(async () =>
-        payable({ status: AssayerPayableStatus.APPROVED, assayerInvoiceId: 'ainv-1' }),
+        payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', assayerInvoiceId: 'ainv-1' }),
       );
       // No line left unsettled; one PAID line (the one just disbursed).
       payableRepo.count.mockImplementation(async (opts: any) => (opts?.where?.status === AssayerPayableStatus.PAID ? 1 : 0));
@@ -771,8 +1114,12 @@ describe('BillingEngineService', () => {
     it('approving with no evidence at all leaves the claim NULL — it does not stamp the approval instant', async () => {
       unevidenced();
       payableRepo.findOne.mockImplementation(async () => payable({ destinationVerifiedAt: null }));
-      const r = await service.approvePayouts(['payable-1'], 'finance-1');
-      expect(r).toEqual({ done: ['payable-1'], refused: [] });
+      const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
+      // Allowed — the owner's decision (audit F3) — but never silently: the approver is told.
+      expect(r).toEqual({
+        done: ['payable-1'], refused: [],
+        warnings: [{ id: 'payable-1', warning: expect.stringContaining('Bank details are not verified') }],
+      });
       const approved = committed.find((row: any) => row.id === 'payable-1');
       expect(approved.status).toBe(AssayerPayableStatus.APPROVED);
       expect(approved.destinationVerifiedAt).toBeNull();
@@ -794,7 +1141,7 @@ describe('BillingEngineService', () => {
         verificationStatus: DocumentVerification.VERIFIED, verifiedAt, currentVersionId: 'ver-bank-1', isActive: true,
       }));
       payableRepo.findOne.mockImplementation(async () => payable({ destinationVerifiedAt: null }));
-      await service.approvePayouts(['payable-1'], 'finance-1');
+      await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
       const approved = committed.find((row: any) => row.id === 'payable-1');
       expect(approved.destinationVerifiedAt).toEqual(verifiedAt);
       expect(approved.destinationVerifiedSource).toBe('BANK_PASSBOOK');
@@ -809,7 +1156,7 @@ describe('BillingEngineService', () => {
         bankName: 'HDFC Bank', displayName: 'Assayer One', panNumber: 'ABCDE1234F', identityVerifiedAt,
       }));
       payableRepo.findOne.mockImplementation(async () => payable({ destinationVerifiedAt: null }));
-      await service.approvePayouts(['payable-1'], 'finance-1');
+      await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
       const approved = committed.find((row: any) => row.id === 'payable-1');
       expect(approved.destinationVerifiedAt).toEqual(identityVerifiedAt);
       expect(approved.destinationVerifiedSource).toBe('IDENTITY_DOCUMENT');
@@ -820,7 +1167,7 @@ describe('BillingEngineService', () => {
       // A payable frozen before this rule existed: destination columns unset, so
       // recordDisbursement re-freezes them under lock. It carried its own copy of the fallback.
       payableRepo.findOne.mockImplementation(async () => payable({
-        status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-9',
+        status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-9', hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1',
         destinationBankAccountNumber: null, destinationIfsc: null, destinationVerifiedAt: null,
       }));
       totalsRow = { ...totalsRow, outstanding: 0 };
@@ -849,7 +1196,7 @@ describe('BillingEngineService', () => {
       it('off: the same account books and approves without a lookup or a refusal', async () => {
         settingsValues['security.segregationOfDuties.mode'] = 'off';
         payableRepo.findOne.mockImplementation(async () => payable());
-        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        const r = await service.approvePayouts(['payable-1'], 'ops-1', undefined, DIRECT_REASON);
         expect(r).toEqual({ done: ['payable-1'], refused: [] });
         expect(assignmentRepo.findOne).not.toHaveBeenCalled();
       });
@@ -859,7 +1206,7 @@ describe('BillingEngineService', () => {
         payableRepo.findOne.mockImplementation(async () => payable());
         assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
         const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
-        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        const r = await service.approvePayouts(['payable-1'], 'ops-1', undefined, DIRECT_REASON);
         expect(r).toEqual({ done: ['payable-1'], refused: [] });
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('same account (ops-1) on both sides'));
         warn.mockRestore();
@@ -869,7 +1216,7 @@ describe('BillingEngineService', () => {
         settingsValues['security.segregationOfDuties.mode'] = 'enforce';
         payableRepo.findOne.mockImplementation(async () => payable());
         assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
-        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        const r = await service.approvePayouts(['payable-1'], 'ops-1', undefined, DIRECT_REASON);
         expect(r.done).toEqual([]);
         expect(r.refused).toEqual([{ id: 'payable-1', reason: expect.stringContaining('Segregation of duties') }]);
         expect(committed).toHaveLength(0);
@@ -879,7 +1226,7 @@ describe('BillingEngineService', () => {
         settingsValues['security.segregationOfDuties.mode'] = 'enforce';
         payableRepo.findOne.mockImplementation(async () => payable());
         assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'field-ops-1' }));
-        const r = await service.approvePayouts(['payable-1'], 'finance-1');
+        const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
         expect(r).toEqual({ done: ['payable-1'], refused: [] });
       });
 
@@ -887,14 +1234,14 @@ describe('BillingEngineService', () => {
         settingsValues['security.segregationOfDuties.mode'] = 'enforce';
         payableRepo.findOne.mockImplementation(async () => payable());
         assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'system' }));
-        const r = await service.approvePayouts(['payable-1'], 'finance-1');
+        const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
         expect(r).toEqual({ done: ['payable-1'], refused: [] });
       });
 
       it('enforce: an expense-driven payable is never checked against an assignment booker — it books nothing', async () => {
         settingsValues['security.segregationOfDuties.mode'] = 'enforce';
         payableRepo.findOne.mockImplementation(async () => payable({ assignmentId: null, expenseId: 'expense-1' }));
-        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        const r = await service.approvePayouts(['payable-1'], 'ops-1', undefined, DIRECT_REASON);
         expect(r).toEqual({ done: ['payable-1'], refused: [] });
         expect(assignmentRepo.findOne).not.toHaveBeenCalled();
       });
@@ -903,7 +1250,7 @@ describe('BillingEngineService', () => {
     describe('recordDisbursement vs. the payout approver', () => {
       it('enforce: refuses when the disburser is also the one who approved the payout', async () => {
         settingsValues['security.segregationOfDuties.mode'] = 'enforce';
-        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'finance-1' }));
         await expect(service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1'))
           .rejects.toThrow(ConflictException);
         expect(committed).toHaveLength(0);
@@ -911,7 +1258,7 @@ describe('BillingEngineService', () => {
 
       it('enforce: allows it when a different account approved the payout', async () => {
         settingsValues['security.segregationOfDuties.mode'] = 'enforce';
-        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'finance-1' }));
         totalsRow = { ...totalsRow, outstanding: 0 };
         const payment = await service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-2');
         expect(payment).toMatchObject({ payableId: 'payable-1' });
@@ -919,7 +1266,7 @@ describe('BillingEngineService', () => {
 
       it('warn: records the same-person disbursement but still pays it, and surfaces via the bulk endpoint as done', async () => {
         settingsValues['security.segregationOfDuties.mode'] = 'warn';
-        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'finance-1' }));
         totalsRow = { ...totalsRow, outstanding: 0 };
         const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
         const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
@@ -930,7 +1277,7 @@ describe('BillingEngineService', () => {
 
       it('off: the same account approves and pays without a refusal', async () => {
         settingsValues['security.segregationOfDuties.mode'] = 'off';
-        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'finance-1' }));
         totalsRow = { ...totalsRow, outstanding: 0 };
         const payment = await service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
         expect(payment).toMatchObject({ payableId: 'payable-1' });
@@ -962,7 +1309,7 @@ describe('BillingEngineService', () => {
 
     it('the same account cannot approve a payout and then pay it', async () => {
       payableRepo.findOne.mockImplementation(async () =>
-        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+        payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'ops-1' }));
       totalsRow = { ...totalsRow, outstanding: 0 };
       await expect(service.recordDisbursement(
         { payableId: 'payable-1', paymentReference: 'FC-SOD-1', method: PaymentMethod.NEFT }, 'ops-1',
@@ -975,7 +1322,7 @@ describe('BillingEngineService', () => {
       // The 'off' default was justified by "with two people on the roles today, Enforce would mean
       // neither could ever pay the other's work". This is that claim, tested: it is the reverse.
       payableRepo.findOne.mockImplementation(async () =>
-        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+        payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'ops-1' }));
       totalsRow = { ...totalsRow, outstanding: 0 };
       const payment = await service.recordDisbursement(
         { payableId: 'payable-1', paymentReference: 'FC-SOD-2', method: PaymentMethod.NEFT }, 'ops-2',
@@ -986,7 +1333,7 @@ describe('BillingEngineService', () => {
     it('the account that booked the assignment cannot approve its payout', async () => {
       payableRepo.findOne.mockImplementation(async () => payable());
       assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
-      const r = await service.approvePayouts(['payable-1'], 'ops-1');
+      const r = await service.approvePayouts(['payable-1'], 'ops-1', undefined, DIRECT_REASON);
       expect(r.done).toEqual([]);
       expect(r.refused).toEqual([{ id: 'payable-1', reason: expect.stringContaining('Segregation of duties') }]);
     });
@@ -994,7 +1341,7 @@ describe('BillingEngineService', () => {
     it('a different account may approve it', async () => {
       payableRepo.findOne.mockImplementation(async () => payable());
       assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
-      const r = await service.approvePayouts(['payable-1'], 'ops-2');
+      const r = await service.approvePayouts(['payable-1'], 'ops-2', undefined, DIRECT_REASON);
       expect(r).toEqual({ done: ['payable-1'], refused: [] });
     });
 
@@ -1005,7 +1352,7 @@ describe('BillingEngineService', () => {
      */
     it('writes the refused attempt to the audit trail, naming both sides', async () => {
       payableRepo.findOne.mockImplementation(async () =>
-        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+        payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'ops-1' }));
       totalsRow = { ...totalsRow, outstanding: 0 };
       await expect(service.recordDisbursement(
         { payableId: 'payable-1', paymentReference: 'FC-SOD-3', method: PaymentMethod.NEFT }, 'ops-1',
@@ -1029,7 +1376,7 @@ describe('BillingEngineService', () => {
      */
     it('has no role-shaped exception: the check sees account ids and nothing else', async () => {
       payableRepo.findOne.mockImplementation(async () =>
-        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'the-super-administrator' }));
+        payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'the-super-administrator' }));
       totalsRow = { ...totalsRow, outstanding: 0 };
       await expect(service.recordDisbursement(
         { payableId: 'payable-1', paymentReference: 'FC-SOD-4', method: PaymentMethod.NEFT }, 'the-super-administrator',
@@ -1043,7 +1390,7 @@ describe('BillingEngineService', () => {
     it('a settings read that fails falls back to the shipped default, not to off', async () => {
       settingsGet.mockImplementation(async () => { throw new Error('settings store unreachable'); });
       payableRepo.findOne.mockImplementation(async () =>
-        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+        payable({ status: AssayerPayableStatus.APPROVED, hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1', approvedBy: 'ops-1' }));
       totalsRow = { ...totalsRow, outstanding: 0 };
       await expect(service.recordDisbursement(
         { payableId: 'payable-1', paymentReference: 'FC-SOD-5', method: PaymentMethod.NEFT }, 'ops-1',
@@ -1209,8 +1556,8 @@ describe('BillingEngineService', () => {
   });
 
   describe('sendInvoice / cancelInvoice', () => {
-    it('sends a draft, and treats sending a sent invoice as a no-op', async () => {
-      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.DRAFT }));
+    it('sends an HOD-approved invoice, and treats sending a sent invoice as a no-op', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.HOD_APPROVED }));
       expect((await service.sendInvoice('invoice-1', 'f')).status).toBe(InvoiceStatus.ISSUED);
       invoiceRepo.findOne.mockImplementation(async () => invoice());
       await service.sendInvoice('invoice-1', 'f');
@@ -1218,14 +1565,14 @@ describe('BillingEngineService', () => {
     });
 
     it('writes issuance to the compliance audit trail', async () => {
-      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.DRAFT }));
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.HOD_APPROVED }));
       await service.sendInvoice('invoice-1', 'f');
       expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
         category: EventCategory.WORKFLOW,
         eventType: 'INVOICE_ISSUED',
         entityType: 'INVOICE',
         entityId: 'invoice-1',
-        previousState: InvoiceStatus.DRAFT,
+        previousState: InvoiceStatus.HOD_APPROVED,
         newState: InvoiceStatus.ISSUED,
         userId: 'f',
         metadata: expect.objectContaining({ invoiceId: 'invoice-1', clientId: 'client-1', amount: 3564 }),
@@ -1715,6 +2062,369 @@ describe('BillingEngineService', () => {
       expect(page.items).toHaveLength(1); // unfiltered
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('would filter 1 of 1'));
       warn.mockRestore();
+    });
+  });
+
+  // ── The 2026-09-24 money audit (F1–F16) ─────────────────────────────────
+  describe('2026-09-24 audit', () => {
+    const approvedPayable = (over: Partial<any> = {}) => payable({
+      status: AssayerPayableStatus.APPROVED, approvedBy: 'office-1', approvedAt: new Date('2026-08-11T08:00:00Z'),
+      hodApprovedAt: null, hodApprovedBy: null, destinationVerifiedSource: 'BANK_PASSBOOK', payoutEvidenceVersionId: 'ver-bank-1', ...over,
+    });
+    const recordNow = (over: Partial<any> = {}) => ({
+      id: 'assayer-1', assayerCode: 'AS-1', displayName: 'Asha', bankAccountNumber: '1111222233', ifscCode: 'SBIN0000001',
+      bankName: 'SBI', panNumber: 'ABCDE1234F', ...over,
+    });
+    /** The "is this account on another record?" lookup answers yes. */
+    const sharedAccount = () => managerQuery.mockImplementation(async (sql: string, params?: any[]) =>
+      (sql.includes('FROM assayers') && sql.includes('ifsc_code') && sql.includes('id <> $3') ? [{ '?column?': 1 }] : defaultManagerQuery(sql)));
+    /** The s.194J year: the other live fee payables' gross and TDS. */
+    const fyRow = (gross: number, tds: number) => managerQuery.mockImplementation(async (sql: string) =>
+      (sql.includes('SUM(p.base_amount + p.travel_amount)') ? [{ gross, tds }] : defaultManagerQuery(sql)));
+
+    describe('F1 — createInvoice reads LIVE lines only', () => {
+      it('locks the lines with the liveness rule and is_active, so a reopened-and-redone job can be invoiced', async () => {
+        const wheres: string[] = [];
+        entryRepo.createQueryBuilder.mockImplementation(() => {
+          const qb: any = { ...queryBuilderStub(), getMany: jest.fn(async () => [line()]) };
+          qb.where = jest.fn((clause: string) => { wheres.push(clause); return qb; });
+          return qb;
+        });
+        await service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1'] }, 'finance-1');
+        expect(wheres[0]).toContain("e.state NOT IN ('CANCELLED')");
+        expect(wheres[0]).toContain('e.is_active = true');
+      });
+    });
+
+    describe('F2 — the frozen bank destination can be refreshed', () => {
+      it('releasing a hold re-reads the account from the record, masked in history and audit, and withdraws an HOD approval given for the old one', async () => {
+        payableRepo.findOne.mockImplementation(async () => approvedPayable({ onHold: true, holdReason: 'Wrong account', hodApprovedAt: HOD_AT, hodApprovedBy: 'hod-1' }));
+        assayerRepo.findOne.mockImplementation(async () => recordNow());
+        await service.holdPayout('payable-1', false, undefined, 'office-2');
+        const p = committed.find((row) => row.payableNumber);
+        expect(p).toMatchObject({ onHold: false, destinationBankAccountNumber: '1111222233', destinationIfsc: 'SBIN0000001', hodApprovedAt: null });
+        const h = committed.find((row) => row.action === 'PAYABLE_DESTINATION_REFRESHED');
+        expect(h.previousValue).toMatchObject({ account: '******3210', ifsc: 'HDFC0001234' });
+        expect(h.newValue).toMatchObject({ account: '******2233', ifsc: 'SBIN0000001', hodApprovalWithdrawn: true });
+        expect(JSON.stringify(h)).not.toContain('9876543210');
+        expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'PAYABLE_DESTINATION_REFRESHED' }), expect.anything());
+      });
+
+      it('leaves the snapshot alone when the record still says the same account', async () => {
+        payableRepo.findOne.mockImplementation(async () => approvedPayable({ onHold: true, holdReason: 'x', hodApprovedAt: HOD_AT }));
+        assayerRepo.findOne.mockImplementation(async () => recordNow({ bankAccountNumber: '9876 5432 10', ifscCode: 'hdfc0001234', bankName: 'HDFC Bank', legalName: 'Assayer One' }));
+        await service.holdPayout('payable-1', false, undefined, 'office-2');
+        expect(committed.find((row) => row.action === 'PAYABLE_DESTINATION_REFRESHED')).toBeUndefined();
+        expect(committed.find((row) => row.payableNumber)).toMatchObject({ hodApprovedAt: HOD_AT });
+      });
+
+      it('refuses the release when the new account is on another assayer\'s record — nothing moves', async () => {
+        payableRepo.findOne.mockImplementation(async () => approvedPayable({ onHold: true, holdReason: 'x' }));
+        assayerRepo.findOne.mockImplementation(async () => recordNow());
+        sharedAccount();
+        await expect(service.holdPayout('payable-1', false, undefined, 'office-2')).rejects.toThrow(/another assayer's record/);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('reversing an outbound payment re-reads the account too', async () => {
+        paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-1', direction: PaymentDirection.OUTBOUND, payableId: 'payable-1', amount: '1800.00', paymentReference: 'UTR-1', isActive: true }));
+        payableRepo.findOne.mockImplementation(async () => approvedPayable({ status: AssayerPayableStatus.PAID, paidAmount: '1800.00', hodApprovedAt: HOD_AT }));
+        assayerRepo.findOne.mockImplementation(async () => recordNow());
+        await service.reversePayment('payment-1', 'Bounced — wrong account', 'f');
+        expect(committed.find((row) => row.payableNumber)).toMatchObject({ status: AssayerPayableStatus.APPROVED, destinationBankAccountNumber: '1111222233' });
+        expect(committed.find((row) => row.action === 'PAYABLE_DESTINATION_REFRESHED')).toBeDefined();
+      });
+
+      it('the bank file flags a payout whose record changed since approval, and still pays the frozen account', async () => {
+        payableRepo.find.mockImplementation(async () => [approvedPayable({ hodApprovedAt: HOD_AT })]);
+        assayerRepo.find.mockImplementation(async () => [recordNow()]);
+        const r = await service.payoutBankDetails(['payable-1']);
+        expect(r.rows[0]).toMatchObject({ accountNumber: '9876543210', destinationDiffersFromRecord: true });
+        expect(r.rows[0].warning).toContain('******3210');
+        expect(r.rows[0].warning).toContain('******2233');
+      });
+
+      it('the bank file says nothing when the record agrees', async () => {
+        payableRepo.find.mockImplementation(async () => [approvedPayable({ hodApprovedAt: HOD_AT })]);
+        assayerRepo.find.mockImplementation(async () => [recordNow({ bankAccountNumber: '9876543210', ifscCode: 'HDFC0001234' })]);
+        const r = await service.payoutBankDetails(['payable-1']);
+        expect(r.rows[0]).toMatchObject({ destinationDiffersFromRecord: false, warning: null });
+      });
+    });
+
+    describe('F3 — an account on another assayer\'s record is refused; an unverified one is allowed with a warning', () => {
+      it('office approval refuses, with PAYOUT_DESTINATION_SHARED, and approves nothing', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable());
+        sharedAccount();
+        const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
+        expect(r.done).toEqual([]);
+        expect(r.refused[0].reason).toMatch(/another assayer's record/);
+        expect(r.refused[0].reason).not.toMatch(/AS-|assayer-2/);
+        expect(committed.filter((row) => row.payableNumber)).toHaveLength(0);
+      });
+
+      it('the refusal carries the stable code', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable());
+        sharedAccount();
+        const err: any = await (service as any).inTx((m: any, emit: any) =>
+          service.approvePayableInTx(m, emit, 'payable-1', 'finance-1', { suppressNotification: true, reason: DIRECT_REASON }))
+          .catch((e: any) => e);
+        expect(err.getResponse()).toMatchObject({ code: 'PAYOUT_DESTINATION_SHARED' });
+      });
+
+      it('HOD approval refuses too, on the frozen account', async () => {
+        payableRepo.findOne.mockImplementation(async () => approvedPayable());
+        sharedAccount();
+        const r = await service.hodApprovePayouts(['payable-1'], 'hod-1');
+        expect(r.done).toEqual([]);
+        expect(r.refused[0].reason).toMatch(/another assayer's record/);
+      });
+
+      it('the queue and the pre-approval check say "not verified" and "changed since approval", masked', async () => {
+        payableRepo.find.mockImplementation(async () => [approvedPayable({ destinationVerifiedSource: null })]);
+        assayerRepo.find.mockImplementation(async () => [recordNow()]);
+        (payableRepo.manager as any).find = jest.fn(async () => []);
+        const [c] = await service.payoutDestinationChecks(['payable-1']);
+        expect(c).toMatchObject({ verified: false, snapshotDiffersFromRecord: true, sharedWithAnotherRecord: false, blocking: null, snapshotAccountTail: '******3210', recordAccountTail: '******2233' });
+        expect(c.warnings.join(' ')).toMatch(/not verified/);
+        expect(c.warnings.join(' ')).toMatch(/changed after this payout was approved/);
+      });
+
+      it("fills the HOD queue's warnings for a payout", async () => {
+        managerQuery.mockImplementation(async (sql: string) => {
+          if (sql.includes('FROM assayer_payables p') && sql.includes('office_note')) {
+            return [{ id: 'payable-1', payable_number: 'PY-1', total_amount: '1800', paid_amount: '0', approved_by: 'office-1' }];
+          }
+          return defaultManagerQuery(sql);
+        });
+        payableRepo.find.mockImplementation(async () => [approvedPayable({ destinationVerifiedSource: null })]);
+        assayerRepo.find.mockImplementation(async () => [recordNow({ bankAccountNumber: '9876543210', ifscCode: 'HDFC0001234' })]);
+        (payableRepo.manager as any).find = jest.fn(async () => []);
+        const q = await service.finalApprovalQueue();
+        const item = q.items.find((i) => i.id === 'payable-1')!;
+        expect(item.warnings).toEqual([expect.stringMatching(/not verified/)]);
+      });
+    });
+
+    describe('F4 — TDS booked without a PAN is re-withheld at the normal rate at approval', () => {
+      it('recomputes a payable booked at the s.206AA rate, with history', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable({
+          tdsAmount: '400.00', totalAmount: '1600.00', rateSnapshot: { feeAmount: 2000, tdsRate: 20, tdsPanBasis: 'NO_PAN' },
+        }));
+        await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
+        expect(committed.find((row) => row.payableNumber)).toMatchObject({ status: AssayerPayableStatus.APPROVED, tdsAmount: 200, totalAmount: 1800 });
+        const h = committed.find((row) => row.action === 'PAYABLE_TDS_RECOMPUTED');
+        expect(h).toMatchObject({ previousValue: { tdsAmount: 400, totalAmount: 1600, tdsRate: 20 }, newValue: { tdsAmount: 200, totalAmount: 1800, tdsRate: 10 } });
+        expect(h.reason).toMatch(/s\.206AA/);
+      });
+
+      it('recognises an older payable booked at the no-PAN rate by the rate alone', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable({ tdsAmount: '400.00', totalAmount: '1600.00', rateSnapshot: { tdsRate: 20 } }));
+        await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
+        expect(committed.find((row) => row.payableNumber)).toMatchObject({ tdsAmount: 200, totalAmount: 1800 });
+      });
+
+      it('leaves a payable booked at the normal rate exactly as booked', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable({ rateSnapshot: { tdsRate: 10, tdsPanBasis: 'PAN' } }));
+        await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
+        expect(committed.find((row) => row.payableNumber)).toMatchObject({ tdsAmount: '200.00', totalAmount: '1800.00' });
+        expect(committed.find((row) => row.action === 'PAYABLE_TDS_RECOMPUTED')).toBeUndefined();
+      });
+    });
+
+    describe('F15 — the s.194J annual threshold', () => {
+      beforeEach(() => {
+        settingsValues['billing.tds194jThresholdRupees'] = 50000;
+        assignmentRepo.findOne.mockImplementation(async () => completed());
+      });
+      const bookedPayable = () => committed.find((row) => row.payableNumber);
+
+      it('withholds nothing below the threshold', async () => {
+        fyRow(10000, 0);
+        await service.bookAssignment('asn-1', 'system');
+        expect(bookedPayable()).toMatchObject({ tdsAmount: 0, totalAmount: 2000 });
+        expect(bookedPayable().rateSnapshot.tds194j).toMatchObject({ basis: 'BELOW_THRESHOLD', thresholdRupees: 50000 });
+      });
+
+      it('withholds nothing when the year lands exactly on it', async () => {
+        fyRow(48000, 0);
+        await service.bookAssignment('asn-1', 'system');
+        expect(bookedPayable()).toMatchObject({ tdsAmount: 0 });
+      });
+
+      it('the crossing payable carries the catch-up for the whole year (capped at its own fee)', async () => {
+        fyRow(48500, 0);
+        await service.bookAssignment('asn-1', 'system');
+        // 10% of 50,500 = 5,050 due; only 2,000 to withhold it from.
+        expect(bookedPayable()).toMatchObject({ tdsAmount: 2000, totalAmount: 0 });
+        expect(bookedPayable().rateSnapshot.tds194j.basis).toBe('CROSSED');
+      });
+
+      it('withholds at the rate once the year is past it', async () => {
+        fyRow(60000, 6000);
+        await service.bookAssignment('asn-1', 'system');
+        expect(bookedPayable()).toMatchObject({ tdsAmount: 200, totalAmount: 1800 });
+      });
+
+      it('counts only this assayer\'s LIVE fee payables in the booking\'s Indian financial year', async () => {
+        fyRow(0, 0);
+        await service.bookAssignment('asn-1', 'system');
+        const call = managerQuery.mock.calls.find(([sql]) => sql.includes('SUM(p.base_amount + p.travel_amount)'))!;
+        expect(call[0]).toContain("p.status NOT IN ('VOIDED')");
+        expect(call[0]).toContain('p.expense_id IS NULL');
+        expect(call[0]).toContain("AT TIME ZONE 'Asia/Kolkata'");
+        const fy = (await import('@fapoms/shared')).indianFinancialYear(new Date());
+        expect(call[1]).toEqual(['assayer-1', fy.from, fy.to, null]);
+        expect(txQueries.some((q) => q.includes('pg_advisory_xact_lock'))).toBe(true);
+      });
+
+      it('files a payable booked at 02:00 IST on 1 April under the NEW year', async () => {
+        fyRow(0, 0);
+        const m: any = { query: jest.fn(async (sql: string) => (sql.includes('SUM(') ? [{ gross: 0, tds: 0 }] : [])) };
+        const d = await (service as any).assayerFeeTds(m, { assayerId: 'assayer-1', gross: 2000, ratePct: 10, bookedAt: new Date('2026-03-31T20:30:00Z') });
+        expect(d.financialYear).toBe('26-27');
+        expect(m.query.mock.calls.find(([sql]: [string]) => sql.includes('SUM('))[1]).toEqual(['assayer-1', '2026-04-01', '2027-03-31', null]);
+      });
+
+      it('threshold 0 is the old behaviour — the rate on this fee, nothing else read', async () => {
+        settingsValues['billing.tds194jThresholdRupees'] = 0;
+        await service.bookAssignment('asn-1', 'system');
+        expect(bookedPayable()).toMatchObject({ tdsAmount: 200, totalAmount: 1800 });
+        expect(managerQuery.mock.calls.some(([sql]) => sql.includes('SUM(p.base_amount + p.travel_amount)'))).toBe(false);
+      });
+
+      it('approval re-decides the year: a Due payable whose catch-up moved to it is withheld at approval', async () => {
+        // Booked at 10% (200) while another payable carried the year's catch-up; that one was
+        // voided, so this one now takes the year past the threshold on its own.
+        payableRepo.findOne.mockImplementation(async () => payable({ rateSnapshot: { tdsRate: 10, tdsPanBasis: 'PAN' }, createdAt: new Date('2026-09-01T06:00:00Z') }));
+        fyRow(52000, 0);
+        await service.approvePayouts(['payable-1'], 'finance-1', undefined, DIRECT_REASON);
+        expect(committed.find((row) => row.payableNumber)).toMatchObject({ tdsAmount: 2000, totalAmount: 0 });
+        expect(committed.find((row) => row.action === 'PAYABLE_TDS_RECOMPUTED').reason).toMatch(/s\.194J/);
+      });
+
+      it('the TDS report states the threshold in force', async () => {
+        const r = await service.tdsReport();
+        expect(r.thresholdRupees).toBe(50000);
+      });
+    });
+
+    describe('F6 — a direct approval needs its reason, server-side', () => {
+      it('refuses with no reason, with OVERRIDE_REASON_REQUIRED, and approves nothing', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable());
+        const err: any = await (service as any).inTx((m: any, emit: any) =>
+          service.approvePayableInTx(m, emit, 'payable-1', 'finance-1', { suppressNotification: true }))
+          .catch((e: any) => e);
+        expect(err).toBeInstanceOf(BadRequestException);
+        expect(err.getResponse()).toMatchObject({ code: 'OVERRIDE_REASON_REQUIRED' });
+        expect(committed).toHaveLength(0);
+      });
+
+      it('refuses a reason under ten characters', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable());
+        const r = await service.approvePayouts(['payable-1'], 'finance-1', undefined, 'ok fine');
+        expect(r.done).toEqual([]);
+        expect(r.refused[0].reason).toMatch(/at least 10 characters/);
+      });
+
+      it('the bill road needs none — the assayer\'s confirmation is the record', async () => {
+        payableRepo.findOne.mockImplementation(async () => payable());
+        const out = await (service as any).inTx((m: any, emit: any) =>
+          service.approvePayableInTx(m, emit, 'payable-1', 'finance-1', { suppressNotification: true, bypassInvoiceGuard: true }));
+        expect(out).toMatchObject({ status: AssayerPayableStatus.APPROVED });
+      });
+    });
+
+    describe('F7 — client invoice numbers INV/25-26/000123', () => {
+      it('takes the next serial of the issue date\'s financial year, on the invoice\'s own transaction', async () => {
+        entryRepo.createQueryBuilder.mockImplementation(() => ({ ...queryBuilderStub(), getMany: jest.fn(async () => [line()]) }));
+        const inv = await service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1'], issueDate: '2026-08-01' }, 'f');
+        expect(inv.invoiceNumber).toBe('INV/26-27/000123');
+        const upsert = managerQuery.mock.calls.find(([sql]) => sql.includes('billing_invoice_number_series'))!;
+        expect(upsert[0]).toMatch(/ON CONFLICT \(financial_year\)\s+DO UPDATE SET last_serial = billing_invoice_number_series\.last_serial \+ 1/);
+        expect(upsert[1]).toEqual(['26-27']);
+        expect(txQueries.some((q) => q.includes('billing_invoice_number_series'))).toBe(true);
+      });
+
+      it('an invoice dated 31 March is numbered in the year that is ending', async () => {
+        entryRepo.createQueryBuilder.mockImplementation(() => ({ ...queryBuilderStub(), getMany: jest.fn(async () => [line()]) }));
+        const inv = await service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1'], issueDate: '2026-03-31' }, 'f');
+        expect(inv.invoiceNumber).toBe('INV/25-26/000123');
+      });
+    });
+
+    describe('F8 — re-pricing never touches an approved payout', () => {
+      beforeEach(() => assignmentRepo.findOne.mockImplementation(async () => completed({ agreedFee: '2500.00' })));
+
+      it('leaves an APPROVED payout as approved and records why', async () => {
+        payableRepo.findOne.mockImplementation(async () => approvedPayable());
+        const r = await service.repriceAssignment('asn-1', 'ops-1');
+        expect(r.reason).toMatch(/already approved — left untouched/);
+        expect(committed.find((row) => row.payableNumber)).toBeUndefined();
+        expect(committed.find((row) => row.action === 'PAYABLE_REPRICE_SKIPPED')).toMatchObject({ entityId: 'payable-1', newValue: expect.objectContaining({ feeAmount: 2500 }) });
+      });
+
+      it('says so for one with the HOD\'s approval', async () => {
+        payableRepo.findOne.mockImplementation(async () => approvedPayable({ hodApprovedAt: HOD_AT }));
+        const r = await service.repriceAssignment('asn-1', 'ops-1');
+        expect(r.reason).toMatch(/HOD's final approval/);
+      });
+    });
+
+    describe('F9 — reversing a payment on a PAID bill re-opens the bill', () => {
+      it('goes back to HOD_APPROVED, with history and audit', async () => {
+        paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-1', direction: PaymentDirection.OUTBOUND, payableId: 'payable-1', amount: '1800.00', paymentReference: 'UTR-1', isActive: true }));
+        payableRepo.findOne.mockImplementation(async () => approvedPayable({ status: AssayerPayableStatus.PAID, paidAmount: '1800.00', assayerInvoiceId: 'ainv-1', hodApprovedAt: HOD_AT }));
+        assayerInvoiceRepo.findOne.mockImplementation(async () => ({ id: 'ainv-1', invoiceNumber: 'AINV-1', assayerId: 'assayer-1', status: AssayerInvoiceStatus.PAID, lineCount: 1, hodApprovedAt: HOD_AT, paidAt: new Date(), paidBy: 'f' }));
+        await service.reversePayment('payment-1', 'Bounced', 'f');
+        expect(committed.find((row) => row.lineCount !== undefined)).toMatchObject({ status: AssayerInvoiceStatus.HOD_APPROVED, paidAt: null });
+        expect(committed.find((row) => row.action === 'ASSAYER_INVOICE_UNSETTLED')).toMatchObject({ fromState: 'PAID', toState: 'HOD_APPROVED' });
+      });
+
+      it('a bill settled before the HOD step existed goes back to APPROVED', async () => {
+        paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-1', direction: PaymentDirection.OUTBOUND, payableId: 'payable-1', amount: '1800.00', paymentReference: 'UTR-1', isActive: true }));
+        payableRepo.findOne.mockImplementation(async () => approvedPayable({ status: AssayerPayableStatus.PAID, paidAmount: '1800.00', assayerInvoiceId: 'ainv-1' }));
+        assayerInvoiceRepo.findOne.mockImplementation(async () => ({ id: 'ainv-1', invoiceNumber: 'AINV-1', assayerId: 'assayer-1', status: AssayerInvoiceStatus.PAID, lineCount: 1, hodApprovedAt: null }));
+        await service.reversePayment('payment-1', 'Bounced', 'f');
+        expect(committed.find((row) => row.lineCount !== undefined)).toMatchObject({ status: AssayerInvoiceStatus.APPROVED });
+      });
+    });
+
+    describe('F16 — an invoice with nothing to collect is settled when sent', () => {
+      it('₹0 → PAID at send, lines settled, with history', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.HOD_APPROVED, total: '0.00', subtotal: '0.00', taxAmount: '0.00', tdsAmount: '0.00', outstandingAmount: '0.00' }));
+        entryRepo.createQueryBuilder.mockImplementation(() => ({ ...queryBuilderStub(), getMany: jest.fn(async () => [line({ state: BillingState.INVOICED, invoiceId: 'invoice-1', totalAmount: '0.00' })]) }));
+        const out = await service.sendInvoice('invoice-1', 'f');
+        expect(out.status).toBe(InvoiceStatus.PAID);
+        expect(committed.find((row) => row.entryNumber)).toMatchObject({ state: BillingState.PAID });
+        expect(committed.filter((row) => row.action === 'INVOICE_STATUS_CHANGED').map((h) => h.toState)).toEqual([InvoiceStatus.ISSUED, InvoiceStatus.PAID]);
+      });
+
+      it('an invoice with money on it is only sent', async () => {
+        invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.HOD_APPROVED, outstandingAmount: '3564.00' }));
+        const out = await service.sendInvoice('invoice-1', 'f');
+        expect(out.status).toBe(InvoiceStatus.ISSUED);
+      });
+    });
+
+    describe('the statement never carries the whole PAN', () => {
+      beforeEach(() => assayerRepo.findOne.mockImplementation(async () => recordNow()));
+
+      it('staff see the last four, flagged as such', async () => {
+        const s = await service.assayerStatement('assayer-1', undefined, 'staff', ['ADMIN']);
+        expect(s).toMatchObject({ pan: '******234F', panMasked: true, panOnFile: true });
+        expect(JSON.stringify(s)).not.toContain('ABCDE1234F');
+      });
+
+      it('an auditor sees none — only that one is on file', async () => {
+        const s = await service.assayerStatement('assayer-1', undefined, 'staff', ['AUDITOR']);
+        expect(s).toMatchObject({ pan: null, panOnFile: true });
+      });
+
+      it('an internal caller with no roles gets the masked form', async () => {
+        const s = await service.assayerStatement('assayer-1');
+        expect(s.pan).toBe('******234F');
+      });
     });
   });
 

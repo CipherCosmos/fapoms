@@ -83,8 +83,8 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
         title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Receipt size={14} /> Client invoices ({total})</span>}
         actions={
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {(['ALL', InvoiceStatus.DRAFT, InvoiceStatus.ISSUED, InvoiceStatus.PAID, InvoiceStatus.CANCELLED] as InvoiceFilter[]).map((f) => (
-              <button key={f} onClick={() => { onFilter(f); setPage(1); }} title={f === 'ALL' ? 'Show invoices in every state' : f === InvoiceStatus.DRAFT ? 'Drafts — created but not sent to the client yet' : f === InvoiceStatus.ISSUED ? 'Sent to the client — awaiting payment' : f === InvoiceStatus.PAID ? 'Fully paid invoices' : 'Cancelled invoices — kept as a record'} style={{
+            {(['ALL', InvoiceStatus.DRAFT, InvoiceStatus.AWAITING_HOD, InvoiceStatus.HOD_APPROVED, InvoiceStatus.ISSUED, InvoiceStatus.PAID, InvoiceStatus.CANCELLED] as InvoiceFilter[]).map((f) => (
+              <button key={f} onClick={() => { onFilter(f); setPage(1); }} title={f === 'ALL' ? 'Show invoices in every state' : f === InvoiceStatus.DRAFT ? 'Drafts — send each for the HOD\'s final approval' : f === InvoiceStatus.AWAITING_HOD ? 'With the HOD for the final approval' : f === InvoiceStatus.HOD_APPROVED ? 'Approved by the HOD — ready to be marked sent to the client' : f === InvoiceStatus.ISSUED ? 'Sent to the client — awaiting payment' : f === InvoiceStatus.PAID ? 'Fully paid invoices' : 'Cancelled invoices — kept as a record'} style={{
                 padding: '4px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 'var(--text-xs)', fontWeight: 600,
                 background: filter === f ? 'var(--status-pending-bg)' : 'transparent', color: filter === f ? 'var(--text-primary)' : 'var(--text-secondary)',
                 border: `1px solid ${filter === f ? 'var(--accent-primary)' : 'var(--border-color)'}`,

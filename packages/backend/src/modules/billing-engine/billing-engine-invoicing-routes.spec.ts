@@ -102,4 +102,19 @@ describe('BillingEngineController invoice-invitation route fitness test', () => 
       expect(block.text).toMatch(/assertEnabled\(\)/);
     });
   }
+
+  /**
+   * Audit F5 (2026-09-24): staff could submit an assayer's bill and the trail recorded the ASSAYER
+   * as the actor. The staff road stays (the desk records a confirmation given by phone), but only
+   * with a reason, and only as the staff member's own act.
+   */
+  it('submit: staff confirm for the assayer only with a reason, recorded under the staff member', () => {
+    const submit = invitationRoutes.find((b) => b.name === 'submitAssayerInvoiceInvitation')!;
+    // The assayer's own submission passes no on-behalf actor.
+    expect(submit.text).toMatch(/if \(req\.user\?\.id === assayerId\) return await this\.assayerInvoices\.submit\(assayerId, dto\.clientRequestId\);/);
+    // Anyone else (staff) must give a reason of the minimum length…
+    expect(submit.text).toMatch(/reason\.length < SUBMIT_ON_BEHALF_REASON_MIN[\s\S]*BadRequestException/);
+    // …and is recorded as themselves.
+    expect(submit.text).toMatch(/submit\(assayerId, dto\.clientRequestId, \{ staffId: this\.userId\(req\), reason \}\)/);
+  });
 });

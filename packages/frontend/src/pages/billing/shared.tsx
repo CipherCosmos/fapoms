@@ -26,6 +26,8 @@ const PAYABLE_TONE: Record<AssayerPayableStatus, string> = {
 };
 const INVOICE_TONE: Record<InvoiceStatus, string> = {
   DRAFT: 'var(--text-secondary)',
+  AWAITING_HOD: 'var(--warning)',
+  HOD_APPROVED: 'var(--accent)',
   ISSUED: 'var(--accent)',
   PAID: 'var(--success)',
   CANCELLED: 'var(--text-muted)',
@@ -35,7 +37,9 @@ const INVOICE_TONE: Record<InvoiceStatus, string> = {
 const ASSAYER_INVOICE_TONE: Record<AssayerInvoiceStatus, string> = {
   INVITED: 'var(--text-secondary)',
   SUBMITTED: 'var(--warning)',
-  APPROVED: 'var(--accent)',
+  // Approved by the office, waiting on the HOD — somebody else's move, so warning-toned.
+  APPROVED: 'var(--warning)',
+  HOD_APPROVED: 'var(--accent)',
   PAID: 'var(--success)',
   CANCELLED: 'var(--text-muted)',
   SUPERSEDED: 'var(--text-muted)',
@@ -66,12 +70,24 @@ export const LineStatePill: React.FC<{ state: BillingState; onHold?: boolean; ho
   </span>
 );
 
-export const PayoutStatusPill: React.FC<{ status: AssayerPayableStatus; onHold?: boolean; holdReason?: string | null }> = ({ status, onHold, holdReason }) => (
-  <span style={{ display: 'inline-flex', gap: 4 }}>
-    <Pill tone={PAYABLE_TONE[status] ?? 'var(--text-muted)'}>{payableStatusLabel(status)}</Pill>
-    {onHold && <HoldPill reason={holdReason} />}
-  </span>
-);
+/**
+ * `hodApproved` splits APPROVED in two (2026-09-24): approved by the office and waiting for the
+ * HOD's final approval, or cleared by the HOD and ready to pay. Omitted, the pill says what it always
+ * said — for the screens that do not carry the final approval on their rows.
+ */
+export const PayoutStatusPill: React.FC<{ status: AssayerPayableStatus; onHold?: boolean; holdReason?: string | null; hodApproved?: boolean }> = ({ status, onHold, holdReason, hodApproved }) => {
+  const awaitingHod = status === AssayerPayableStatus.APPROVED && hodApproved === false;
+  const label = status === AssayerPayableStatus.APPROVED && hodApproved !== undefined
+    ? (hodApproved ? 'Ready to pay' : 'Waiting for HOD approval')
+    : payableStatusLabel(status);
+  return (
+    <span style={{ display: 'inline-flex', gap: 4 }}>
+      <Pill tone={awaitingHod ? 'var(--warning)' : PAYABLE_TONE[status] ?? 'var(--text-muted)'}
+        title={awaitingHod ? "Approved by the office. It cannot be paid until the HOD gives the final approval." : undefined}>{label}</Pill>
+      {onHold && <HoldPill reason={holdReason} />}
+    </span>
+  );
+};
 
 export const InvoiceStatusPill: React.FC<{ status: InvoiceStatus; partPaid?: boolean }> = ({ status, partPaid }) => (
   <Pill tone={INVOICE_TONE[status] ?? 'var(--text-muted)'}>

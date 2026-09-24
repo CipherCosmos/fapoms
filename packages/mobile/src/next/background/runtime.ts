@@ -12,8 +12,9 @@ import * as BackgroundTask from 'expo-background-task';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
-import { actionDispatchers, type CheckInOutPayload } from '../../services/action-dispatchers';
-import { NOT_SIGNED_IN_ERROR, enqueueAndRun, getQueuedActions, processActionQueue, type QueuedAction } from '../../services/action-queue';
+import { actionDispatchers, type AssignmentStatusPayload, type CheckInOutPayload, type RejectPayload } from '../../services/action-dispatchers';
+import { NOT_SIGNED_IN_ERROR, enqueueAndRun, getQueuedActions, processActionQueue, type DrainReport, type QueuedAction } from '../../services/action-queue';
+import { refusalWords } from '../data/reasons';
 import { MobileApiService } from '../../services/api.service';
 import { flushQueue, queuedCount } from '../../services/location-queue';
 import { registerAndroidNotificationChannels, scheduleLocalNotification } from '../../services/notification.service';
@@ -25,7 +26,7 @@ import type { AssayerAssignment } from '../../types/mobile-app';
 import { translatorFor } from '../i18n/catalogues';
 import { formatDate, localDayKey } from '../i18n/format';
 import { readStoredLanguage } from '../i18n/stored-language';
-import { decideArrival, pruneHandled, usableFix, type Fix } from './arrival';
+import { afterAutoCheckIn, decideArrival, pruneHandled, usableFix, type Fix } from './arrival';
 import { planGeofences, type WatchedZone } from './geofence-plan';
 import { ensureSession } from './headless-session';
 import { ARRIVAL_EXPLAINED_KEY, type PermissionFacts } from './permission-flow';
@@ -220,6 +221,65 @@ export async function checkIn(assignmentId: string, arrivedAt: string): Promise<
   return { kind: 'refused', message: result.error, code: result.code };
 }
 
+/** Leave the branch — same queue, same position rules as `checkIn`. Does not finish the job. */
+export async function checkOut(assignmentId: string): Promise<CheckInOutcome> {
+  const fix = await onePosition();
+  if (!fix) return { kind: 'no-position' };
+  const payload: CheckInOutPayload = { assignmentId, lat: fix.latitude, lng: fix.longitude, accuracy: fix.accuracy ?? undefined };
+  const result = await enqueueAndRun('CHECK_OUT', payload, actionDispatchers.CHECK_OUT, {
+    sameAs: (existing: QueuedAction<CheckInOutPayload>) => existing.payload.assignmentId === assignmentId,
+  });
+  if (result.success) return { kind: 'done' };
+  if (result.queued) return { kind: 'queued' };
+  if (result.error === NOT_SIGNED_IN_ERROR) return { kind: 'not-signed-in' };
+  return { kind: 'refused', message: result.error, code: result.code };
+}
+
+/**
+ * Yes or no to an offer, through the same queue and dispatcher the current app uses (the server's
+ * idempotency key rides as `clientRequestId`). A decline must carry the assayer's reason.
+ */
+export async function answerOffer(
+  assignmentId: string,
+  answer: { accept: true } | { accept: false; reason: string; requestKey?: string },
+): Promise<CheckInOutcome> {
+  type P = AssignmentStatusPayload | RejectPayload;
+  const payload: P = answer.accept
+    ? { op: 'transition', assignmentId, status: 'ACCEPTED' }
+    : { op: 'reject', assignmentId, reason: answer.reason };
+  const result = await enqueueAndRun<P>('ASSIGNMENT_STATUS', payload, actionDispatchers.ASSIGNMENT_STATUS, {
+    clientRequestId: answer.accept ? undefined : answer.requestKey,
+    sameAs: (a) => a.payload.assignmentId === assignmentId && a.payload.op === payload.op,
+  });
+  if (result.success) return { kind: 'done' };
+  if (result.queued) return { kind: 'queued' };
+  if (result.error === NOT_SIGNED_IN_ERROR) return { kind: 'not-signed-in' };
+  return { kind: 'refused', message: result.error, code: result.code };
+}
+
+/**
+ * Send what is queued, and deal with what the office refused: each refusal is said once in a
+ * notification (the assayer was told it was saved and would send by itself), stays listed on
+ * Today until dismissed, and the job list and arrival circles are refreshed — a refused check-in
+ * or answer means the phone's picture of the jobs was wrong. Every drain in the new app goes here.
+ */
+export async function drainQueue(userId: string | null): Promise<DrainReport> {
+  const report = await processActionQueue(actionDispatchers);
+  if (report.refused.length === 0) return report;
+  const language = await readStoredLanguage();
+  const t = translatorFor(language);
+  registerAndroidNotificationChannels();
+  for (const entry of report.refused) {
+    const words = refusalWords(t, language, entry);
+    await scheduleLocalNotification(words.title, words.reason, { type: 'ACTION_REFUSED', kind: entry.kind }, 'HIGH').catch(() => undefined);
+  }
+  if (userId) {
+    const jobs = await refreshJobs(userId).catch(() => null);
+    if (jobs) await syncGeofences(userId, jobs).catch(() => undefined);
+  }
+  return report;
+}
+
 // ── Arrivals ─────────────────────────────────────────────────────────────────────────────────
 
 interface HandledRecord {
@@ -308,9 +368,13 @@ export async function handleGeofenceEvent(eventType: number, regionId: string | 
           ? `${outcome.message} ${t('arrival.notifyTapToCheckIn')}`
           : t('arrival.notifyTapToCheckIn');
   await notify(title, body, decision.zone.assignmentId);
-  if (outcome.kind === 'refused' || outcome.kind === 'no-position') {
-    // Let the person try again by hand (and a later event try again automatically).
-    await writeHandled(userId, handled);
+  // No fix: try again later. Refused by the server: stays handled for today (a re-entry would
+  // only be refused and notify again) and the jobs and circles are refreshed. See `afterAutoCheckIn`.
+  const next = afterAutoCheckIn(outcome.kind);
+  if (next.retryLater) await writeHandled(userId, handled);
+  if (next.refreshJobs) {
+    const fresh = await refreshJobs(userId).catch(() => null);
+    if (fresh) await syncGeofences(userId, fresh).catch(() => undefined);
   }
 }
 
@@ -354,7 +418,7 @@ export async function runBackgroundSync(): Promise<boolean> {
       log('background step failed', e);
     }
   };
-  if (plan.flushActions) await attempt(() => processActionQueue(actionDispatchers));
+  if (plan.flushActions) await attempt(() => drainQueue(userId));
   if (plan.flushUploads) await attempt(() => processOutbox(sendOne));
   if (plan.flushFixes) await attempt(() => flushQueue((batch) => MobileApiService.uploadLocationPings(batch)));
   if (plan.refreshJobs || plan.replanGeofences) {
@@ -380,5 +444,5 @@ export async function handlePushInBackground(raw: unknown): Promise<void> {
   if (!userId) return;
   const jobs = await refreshJobs(userId);
   await syncGeofences(userId, jobs);
-  await processActionQueue(actionDispatchers);
+  await drainQueue(userId);
 }

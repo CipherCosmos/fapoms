@@ -897,6 +897,23 @@ const mockNotificationService = {
       expect(new Set(keys).size).toBe(3);
       expect(keys[0]).toMatch(/^ASSIGNMENT_DATE_CHANGED:asn-1:2026-10-02:\d+$/);
     });
+
+    it('B14: a job dated for the first time re-decides the day it lands on', async () => {
+      const row: any = pendingOn('2026-10-01', { entityVersion: 4, projectBranch: { projectId: null, branch: { name: 'Kochi', state: 'KL' } } });
+      row.scheduledDate = null;
+      mockAssignmentRepo.findOne.mockResolvedValue(row);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      const rebalanceMany = jest.fn(async () => undefined);
+      (service as any).dayTravel = { rebalanceMany };
+
+      await service.update('asn-1', { scheduledDate: '2026-10-02' } as any, 'ops-1');
+
+      expect(rebalanceMany).toHaveBeenCalledWith(
+        [expect.objectContaining({ day: '2026-10-02', arrivingAssignmentId: 'asn-1' })],
+        'ops-1',
+        expect.stringContaining('moved'),
+      );
+    });
   });
 
   describe('rejectOffer', () => {

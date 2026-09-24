@@ -139,7 +139,7 @@ const signIn = async (username, seedPw, changePath) => {
     ['AZ-02', 'DELETE', `/assayers/${victim.id}`, { reason: 'unauthorised probe attempt' }, 'archive a person'],
     ['AZ-03', 'POST', '/assignments', { projectBranchId: victim.id, assayerId: victim.id, proposedFee: 1 },
       'create work'],
-    ['AZ-04', 'POST', '/billing-engine/payouts/approve', { payableIds: [anyPayable?.id] }, 'approve money'],
+    ['AZ-04', 'POST', '/billing-engine/payouts/approve', { payableIds: [anyPayable?.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' }, 'approve money'],
     ['AZ-05', 'POST', '/billing-engine/payouts/pay',
       { payableIds: [anyPayable?.id], paymentReference: 'PROBE', method: 'NEFT' }, 'pay money'],
     ['AZ-06', 'POST', `/assignments/${anyAssignment?.id}/reopen`, { reason: 'unauthorised probe attempt' },

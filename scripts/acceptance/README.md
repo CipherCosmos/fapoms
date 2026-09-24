@@ -178,6 +178,11 @@ the HTTP status. Two things it needs that are easy to get wrong:
   `manager`), `AC_APPROVER` (default `admin`) and `AC_PAYER` (default `admin2`), with
   `AC_BOOKER_PASSWORD` / `AC_PAYER_PASSWORD` if they differ from `AC_PASSWORD`. Signed in once the
   script cannot reach a single approval; signed in twice it reaches approval but never a payment.
+- **An HOD who is not the office approver** (2026-09-24). Money needs the HOD's final approval
+  after the office's: set `AC_HOD` (default `admin2`, with `AC_HOD_PASSWORD`) to an account holding
+  `BILLING:FINAL_APPROVE:ORGANIZATION` that is NOT `AC_APPROVER`, or every payment stops at
+  "Waiting for HOD approval". `business-loop`, `final-business-scenario`, `messy-reality` and
+  `ten-business-days` give the final approval the same way before they pay.
 - **An assayer inside the client's coverage band.** The rule has BOTH ends — under 5km is refused
   as a conflict of interest, over 200km as out of range — and the seeded dataset's only
   payable-ready assayer is filed under "Pune City" carrying Bangalore's coordinates, 745km from

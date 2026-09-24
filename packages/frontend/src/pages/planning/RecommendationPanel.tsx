@@ -24,7 +24,7 @@ export const RecommendationPanel: React.FC<{
   maxRadius: number;
   onMaxRadiusChange: (v: number) => void;
   /**
-   * The audit date candidates are evaluated FOR (YYYY-MM-DD). Availability, double-booking
+   * The audit date candidates are evaluated FOR (YYYY-MM-DD). Availability (leave, holidays)
    * and fee quotes all describe this date — changing it re-fetches the ranking. Without it
    * the engine assumed "today", which is rarely the day being planned.
    */

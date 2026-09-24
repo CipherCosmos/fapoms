@@ -206,7 +206,26 @@ const EXTENSION_TYPES: Record<string, string> = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   xls: 'application/vnd.ms-excel',
   csv: 'text/csv',
+  jfif: 'image/jpeg', // what Windows names a JPEG saved from a browser
 };
+
+/** The kind of file a type names — a name and a type within one kind are not a mismatch. */
+function kindOf(mime: string): 'pdf' | 'image' | 'spreadsheet' | null {
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('image/')) return 'image';
+  if (SPREADSHEET_UPLOAD_TYPES.has(mime)) return 'spreadsheet';
+  return null;
+}
+
+/**
+ * The extension a file name really carries: the part after the last dot, when it looks like one.
+ * `Mr. Sharma PAN` has no extension; `aadhaar.JPG` has `jpg`. An all-digit tail is a version or a
+ * date, not an extension (`Report v1.2`, `IMG_2026.09.24`), so it does not count as one.
+ */
+function extensionOf(fileName: string): string | null {
+  const m = /\.([a-z0-9]{1,5})$/.exec(fileName.toLowerCase().trim());
+  return m && /[a-z]/.test(m[1]) ? m[1] : null;
+}
 
 export function assertUploadAllowed(input: {
   contentType?: string | null;
@@ -254,6 +273,26 @@ export function assertUploadAllowed(input: {
       ),
       ASSAYER_ERROR_CODES.UPLOAD_TYPE_NOT_ALLOWED,
     );
+  }
+
+  // A declared type is a label, and so is the name — and the name is what the file is saved and
+  // later opened under. `report.html` sent as `application/pdf`, or `pan.exe` sent as
+  // `image/jpeg`, must not be stored under that name whatever the bytes turn out to be. So for
+  // EVERY declared type, a name that carries an extension must carry one of ours, of the same
+  // kind (a HEIC a phone called JPEG is the same kind). A name with no extension leaves the
+  // declared type to speak for itself.
+  const ext = input.fileName ? extensionOf(input.fileName) : null;
+  if (ext !== null) {
+    const fromName = EXTENSION_TYPES[ext];
+    if (!fromName || kindOf(fromName) !== kindOf(declared)) {
+      throw withCode(
+        new BadRequestException(
+          `"${input.fileName}" is not a kind of file this accepts, or its name does not match what it is. ` +
+            `Allowed: ${humanList(allowed)}.`,
+        ),
+        ASSAYER_ERROR_CODES.UPLOAD_TYPE_NOT_ALLOWED,
+      );
+    }
   }
   if (input.size != null && input.size > maxBytes) {
     // The size ceiling is the one upload refusal a client can act on beyond showing a sentence:

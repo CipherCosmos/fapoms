@@ -106,6 +106,32 @@ describe('AssignmentService.reopen', () => {
     expect(savedAssignments[0].completionDate).toBeNull();
   });
 
+  /**
+   * Audit F11 (2026-09-24): an APPROVED payout with money already sent against it is paid money.
+   * It used to pass the PAID check and be voided — a voided payable with a real disbursement behind it.
+   */
+  it('refuses a reopen when the live payout is part paid, and voids nothing', async () => {
+    const { service, billingEngine, savedAssignments } = makeService({
+      lockedStatus: AssignmentStatus.COMPLETED,
+      assignment: completedAssignment(),
+      payable: { id: 'payable-1', payableNumber: 'PY-1', status: 'APPROVED', paidAmount: '500.00' },
+    });
+    await expect(service.reopen('asn-1', 'admin-1', 'Audit reopened — completion was wrong'))
+      .rejects.toThrow(/₹500 has already been paid against assayer payout PY-1/);
+    expect(billingEngine.voidPayable).not.toHaveBeenCalled();
+    expect(savedAssignments).toHaveLength(0);
+  });
+
+  it('still reopens an approved payout with nothing paid against it', async () => {
+    const { service, billingEngine } = makeService({
+      lockedStatus: AssignmentStatus.COMPLETED,
+      assignment: completedAssignment(),
+      payable: { id: 'payable-1', payableNumber: 'PY-1', status: 'APPROVED', paidAmount: '0.00' },
+    });
+    await service.reopen('asn-1', 'admin-1', 'Audit reopened — completion was wrong');
+    expect(billingEngine.voidPayable).toHaveBeenCalled();
+  });
+
   it('reopens even when there is no payable to void — an expense-only or never-booked completion', async () => {
     const { service, billingEngine } = makeService({
       lockedStatus: AssignmentStatus.COMPLETED,

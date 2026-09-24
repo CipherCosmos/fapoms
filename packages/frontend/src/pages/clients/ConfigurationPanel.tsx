@@ -8,6 +8,7 @@ import { userMessage } from '../../services/errors';
 import { loadFailed } from '../../queryClient';
 import { LoadFailure } from '../../components/LoadFailure';
 import { SkeletonList } from '../../components/ui/Loading';
+import { canManageClients, useCurrentRoles } from '../../hooks/useCurrentRoles';
 
 const WORKING_DAY_OPTIONS = [
   { value: 0, label: 'Sun' },
@@ -113,6 +114,8 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
   const clientQuery = useClientDetail(clientId);
   const client = clientQuery.data;
   const update = useUpdateClient();
+  // `PUT /clients/:id` is ADMIN/OPERATIONS with no permission fallback (client.controller.ts).
+  const canEdit = canManageClients(useCurrentRoles());
   const { toast } = useToast();
 
   // ---- SLA & service (dedicated columns) ----
@@ -182,6 +185,7 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEdit) return;
     const slaRules: Record<string, unknown> = {};
     if (maxAuditsPerMonth) slaRules.maxAuditsPerMonth = Number(maxAuditsPerMonth);
     if (schedulingWindowDays) slaRules.schedulingWindowDays = Number(schedulingWindowDays);
@@ -247,6 +251,8 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
 
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {/* `display: contents` keeps the form's own column layout; `disabled` makes every input read-only. */}
+      <fieldset disabled={!canEdit} style={{ display: 'contents' }}>
       <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <h4 style={sectionTitle}><ShieldCheck size={14} /> Service &amp; SLA</h4>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
@@ -448,10 +454,15 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
         </div>
       </section>
 
+      </fieldset>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button type="submit" disabled={update.isPending} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Save size={14} /> {update.isPending ? 'Saving...' : 'Save Configuration'}
-        </button>
+        {canEdit ? (
+          <button type="submit" disabled={update.isPending} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Save size={14} /> {update.isPending ? 'Saving...' : 'Save Configuration'}
+          </button>
+        ) : (
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Read only — administrators and operations change a client's configuration.</span>
+        )}
       </div>
     </form>
   );

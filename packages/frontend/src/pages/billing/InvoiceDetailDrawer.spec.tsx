@@ -31,7 +31,7 @@ jest.mock('../../services/billing', () => {
   };
 });
 
-jest.mock('./invoicePrint', () => ({ openInvoicePrintWindow: jest.fn() }));
+jest.mock('./invoicePrint', () => ({ ...jest.requireActual('./invoicePrint'), openInvoicePrintWindow: jest.fn() }));
 
 const mockGetInvoice = billingApi.getInvoice as jest.Mock;
 const mockCancelInvoice = billingApi.cancelInvoice as jest.Mock;
@@ -160,5 +160,27 @@ describe('InvoiceDetailDrawer — payment reversal reason', () => {
 
     await waitFor(() =>
       expect(mockReversePayment).toHaveBeenCalledWith('p-1', 'The bank rejected the underlying NEFT transfer.'));
+  });
+});
+
+describe('InvoiceDetailDrawer — printing the tax invoice (audit E1)', () => {
+  const printButton = () => screen.getByRole('button', { name: /Print \/ PDF invoice/ });
+
+  it.each([InvoiceStatus.DRAFT, InvoiceStatus.AWAITING_HOD, InvoiceStatus.HOD_APPROVED])(
+    'is disabled, with the reason as its tooltip, while the invoice is %s',
+    async (status) => {
+      mockGetInvoice.mockResolvedValue({ ...draftInvoice, status });
+      renderDrawer();
+      await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+      expect(printButton()).toBeDisabled();
+      expect(printButton()).toHaveAttribute('title', expect.stringMatching(/not a tax invoice until it has been sent/));
+    },
+  );
+
+  it.each([InvoiceStatus.ISSUED, InvoiceStatus.PAID])('is enabled once the invoice is %s', async (status) => {
+    mockGetInvoice.mockResolvedValue({ ...issuedInvoiceWithPayment, status });
+    renderDrawer();
+    await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    expect(printButton()).toBeEnabled();
   });
 });

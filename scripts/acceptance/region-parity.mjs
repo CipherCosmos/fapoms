@@ -474,7 +474,7 @@ export async function main() {
   // and for a WEST leak, so the write that is the finding has actually happened when it is reported.
   await pair('POST /billing-engine/payouts/approve', async (f) => {
     if (!f.payableId) return { status: 599, msg: 'no payable fixture' };
-    const run = await postAndAwait('/billing-engine/payouts/approve', { payableIds: [f.payableId] },
+    const run = await postAndAwait('/billing-engine/payouts/approve', { payableIds: [f.payableId], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' },
       JOB_STATUS.billingBulk, { token: ops.token });
     return run.accepted ? { ...run.r, msg: describeJobOutcome(run) } : run.r;
   });

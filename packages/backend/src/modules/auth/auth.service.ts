@@ -153,8 +153,19 @@ function signInRefusal(status: AssayerLifecycleStatus): ForbiddenException {
  * token.
  */
 export function rbacPrincipalCacheKey(userId: string): string {
-  return `rbac:principal:${userId}`;
+  return `rbac:principal:${RBAC_GRANTS_VERSION}:${userId}`;
 }
+
+/**
+ * Bumped whenever a migration changes which permissions a role holds.
+ *
+ * A principal is cached for `RBAC_CACHE_TTL_SECONDS` (10 minutes). A deploy that grants a role a
+ * new permission — 1801200000000 gave ADMIN `BILLING:FINAL_APPROVE` — would otherwise leave every
+ * signed-in admin refused on the new screen until their cached principal expired. Changing this
+ * string changes every key, so the first request after the deploy resolves roles afresh and the
+ * stale entries simply age out.
+ */
+export const RBAC_GRANTS_VERSION = 'g20260924-final-approve';
 
 export interface JwtPayload {
   sub: string;           // User ID

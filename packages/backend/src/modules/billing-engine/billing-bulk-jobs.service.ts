@@ -1,12 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
-import type { BackgroundJobKind } from '@fapoms/shared';
+import type { BackgroundJobKind, FinalApprovalRef } from '@fapoms/shared';
 import {
   ApprovePayoutsJobData,
   BILLING_BULK_JOB,
   BILLING_BULK_JOB_OPTIONS,
   BILLING_BULK_QUEUE,
+  FinalApproveJobData,
   InviteAllAssayerInvoicesJobData,
   PayPayoutsJobData,
 } from './billing-bulk-jobs.contract';
@@ -117,6 +118,32 @@ export class BillingBulkJobsService {
       // The bank reference (UTR) is what the desk searches its statement for — never an account number.
       title: `Pay ${plural(sorted.length, 'payout')} (ref ${normalised.paymentReference})`,
       params: { payouts: sorted.length, method: normalised.method, paidDate: normalised.paidDate ?? null },
+      total: sorted.length,
+      regions,
+    });
+  }
+
+  /**
+   * The HOD's bulk final approval. The items are de-duplicated and sorted into the fingerprint, so a
+   * double click joins the run already going instead of approving the same items twice.
+   */
+  async enqueueFinalApprove(
+    items: FinalApprovalRef[],
+    actor: JobActor,
+    regions: string[] | null = null,
+  ): Promise<EnqueuedBillingBulkJob> {
+    const keyed = new Map(items.map((i) => [`${i.kind}:${i.id}`, { kind: i.kind, id: i.id }]));
+    const sorted = [...keyed.keys()].sort().map((k) => keyed.get(k)!);
+    const data: FinalApproveJobData = {
+      requestedBy: actor.userId,
+      items: sorted,
+      actor,
+      dedupeKey: dedupeKeyFor(BILLING_BULK_JOB.FINAL_APPROVE, actor.userId, { items: sorted.map((i) => `${i.kind}:${i.id}`) }),
+    };
+    return this.add(BILLING_BULK_JOB.FINAL_APPROVE, data, {
+      kind: 'BILLING_FINAL_APPROVAL',
+      title: `Final approval of ${plural(sorted.length, 'item')}`,
+      params: { items: sorted.length },
       total: sorted.length,
       regions,
     });

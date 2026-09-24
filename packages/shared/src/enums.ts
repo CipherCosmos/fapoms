@@ -292,6 +292,14 @@ export enum PermissionAction {
   REPLACE = 'REPLACE',
   MODIFY = 'MODIFY',
   RESCHEDULE = 'RESCHEDULE',
+  /**
+   * The final approval after the office's (owner, 2026-09-24): `BILLING:FINAL_APPROVE:ORGANIZATION`
+   * is the HOD's sign-off before money can move — assayer bills, payouts approved without a bill,
+   * expense reimbursements, and client invoices before they are sent. A separate action rather
+   * than a wider scope of APPROVE, because a PLATFORM grant implies every narrower scope: the
+   * office's `BILLING:APPROVE` must never be able to satisfy the HOD's gate by being widened.
+   */
+  FINAL_APPROVE = 'FINAL_APPROVE',
 }
 
 export enum PermissionResource {
@@ -465,12 +473,21 @@ export enum BillingState {
 /**
  * A client invoice: a set of completed assignments for one client.
  *
- *   DRAFT → ISSUED ("Sent") → PAID     (+ CANCELLED from DRAFT or an unpaid ISSUED)
+ *   DRAFT → AWAITING_HOD → HOD_APPROVED → ISSUED ("Sent") → PAID
+ *   (+ CANCELLED from any unpaid state; an HOD rejection returns AWAITING_HOD to DRAFT with a reason)
+ *
+ * The HOD step (owner, 2026-09-24): the office sends a draft for final approval, and only an
+ * invoice the HOD approved can be marked sent to the client. The invoice number is the one it was
+ * created with — the HOD step never renumbers.
  *
  * Part-payment is derived: `paidAmount > 0 && outstandingAmount > 0`.
  */
 export enum InvoiceStatus {
   DRAFT = 'DRAFT',
+  /** Sent by the office for the HOD's final approval. */
+  AWAITING_HOD = 'AWAITING_HOD',
+  /** Approved by the HOD — may now be marked sent to the client. */
+  HOD_APPROVED = 'HOD_APPROVED',
   ISSUED = 'ISSUED',
   PAID = 'PAID',
   CANCELLED = 'CANCELLED',
@@ -504,8 +521,12 @@ export enum PaymentMethod {
  *
  *   PENDING ("Due") → APPROVED → PAID
  *
- * One approval gate — finance or an administrator — then payment. PAID is reached only by
- * recording a disbursement; it is never set by hand. A held payable is `onHold = true`.
+ * APPROVED is the OFFICE's approval. Since 2026-09-24 money also needs the HOD's final approval
+ * before it can move: that is not a status but `hodApprovedAt` on the payable, so every consumer
+ * that reads APPROVED as "the office approved it" stays right, and the payment paths (record a
+ * disbursement, the bank file) refuse an APPROVED payable the HOD has not approved. PAID is
+ * reached only by recording a disbursement; it is never set by hand. A held payable is
+ * `onHold = true`.
  */
 export enum AssayerPayableStatus {
   PENDING = 'PENDING',
@@ -523,7 +544,11 @@ export enum AssayerPayableStatus {
 /**
  * The assayer-side invoice: a consent-and-visibility wrapper over existing payables.
  *
- *   INVITED → SUBMITTED → APPROVED   (+ CANCELLED from either pre-approval state)
+ *   INVITED → SUBMITTED → APPROVED → HOD_APPROVED → PAID   (+ CANCELLED from either pre-approval state)
+ *
+ * APPROVED is the office's approval; HOD_APPROVED is the HOD's final approval (2026-09-24), the
+ * only state from which the bill's payouts can be paid. An HOD rejection returns the bill to
+ * SUBMITTED with a reason — the assayer's confirmation still stands — and its lines to PENDING.
  *
  * Ops INVITES an assayer to bill their eligible payables; the assayer SUBMITS (the first time
  * they see the amounts); ops APPROVES, which is also the moment every line payable is approved.
@@ -534,7 +559,10 @@ export enum AssayerPayableStatus {
 export enum AssayerInvoiceStatus {
   INVITED = 'INVITED',
   SUBMITTED = 'SUBMITTED',
+  /** Approved by the office; waiting for the HOD's final approval. */
   APPROVED = 'APPROVED',
+  /** The HOD's final approval — cleared for payment. */
+  HOD_APPROVED = 'HOD_APPROVED',
   PAID = 'PAID',
   CANCELLED = 'CANCELLED',
   SUPERSEDED = 'SUPERSEDED',

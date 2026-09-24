@@ -15,7 +15,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Pill } from '../../components/ui/settings';
 import { FilterSelect, AlertBanner, PrimaryButton, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
-import { useCurrentUserId } from '../../hooks/useCurrentRoles';
+import { useCurrentUserId, useCurrentRoles, canManageRoles } from '../../hooks/useCurrentRoles';
 import { useClientOptions } from '../../hooks/useClients';
 import { UserActivityList } from './ActivityFeed';
 import { StyledInput } from '../../components/ui/inputs';
@@ -106,6 +106,14 @@ export const DirectoryPanel: React.FC = () => {
    * `sortValue` on each is the point of moving to `DataTable`: the old hand-rolled table could not
    * be sorted at all, so finding "everybody who has never signed in" meant reading the whole list.
    */
+  /*
+    Every write here — add, edit, roles, status, bulk status, reset, unlock, setup link — is
+    `@Roles(ADMIN)` on the server with no permission fallback (a user write one step from granting
+    ADMIN itself; see user.controller.ts). A custom role granted user:view reads this list, so the
+    controls that could only 403 for it are not drawn, and a row does not open the account drawer.
+  */
+  const canEdit = canManageRoles(useCurrentRoles());
+
   const columns: Column<UserProfile>[] = [
     {
       key: 'displayName',
@@ -187,11 +195,11 @@ export const DirectoryPanel: React.FC = () => {
         </span>
       ),
     },
-    {
+    ...(!canEdit ? [] : [{
       key: 'actions',
       header: '',
-      align: 'right',
-      render: (u) => (
+      align: 'right' as const,
+      render: (u: UserProfile) => (
         <button
           onClick={(e) => { e.stopPropagation(); startEditUser(u); }}
           className="btn btn-secondary"
@@ -201,7 +209,7 @@ export const DirectoryPanel: React.FC = () => {
           Manage
         </button>
       ),
-    },
+    }]),
   ];
 
   const filteredUsers = users.filter((u) => {
@@ -564,11 +572,13 @@ export const DirectoryPanel: React.FC = () => {
           { value: 'SUSPENDED', label: 'Suspended' },
           { value: 'LOCKED', label: 'Locked out' },
         ]} />
-        <div style={{ marginLeft: 'auto' }}>
-          <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />} title="Create a new staff user account or invite a colleague">
-            <span>Add someone</span>
-          </PrimaryButton>
-        </div>
+        {canEdit && (
+          <div style={{ marginLeft: 'auto' }}>
+            <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />} title="Create a new staff user account or invite a colleague">
+              <span>Add someone</span>
+            </PrimaryButton>
+          </div>
+        )}
       </FilterBar>
 
       {selectedIds.size > 0 && (
@@ -620,9 +630,9 @@ export const DirectoryPanel: React.FC = () => {
         columns={columns}
         rows={filteredUsers}
         rowKey={(u) => u.id}
-        onRowClick={(u) => startEditUser(u)}
+        onRowClick={canEdit ? (u) => startEditUser(u) : undefined}
         loading={isLoading}
-        selectable
+        selectable={canEdit}
         selected={selectedIds}
         onToggleSelect={toggleSelect}
         onSelectAll={(checked) => setSelectedIds(() => {
@@ -640,7 +650,7 @@ export const DirectoryPanel: React.FC = () => {
               message={searchText || filterStatus !== 'ALL'
                 ? 'Try a different name, or clear the filters.'
                 : 'Add your colleagues and they will each get an email to set their own password.'}
-              action={searchText || filterStatus !== 'ALL' ? undefined : (
+              action={searchText || filterStatus !== 'ALL' || !canEdit ? undefined : (
                 <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />} title="Create the first staff account">
                   <span>Add someone</span>
                 </PrimaryButton>

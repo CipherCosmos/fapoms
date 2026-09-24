@@ -25,6 +25,9 @@ describe('formatRupees', () => {
     expect(formatRupees(1200)).toBe('₹1,200');
     expect(formatRupees(1200.5)).toBe('₹1,200.50');
     expect(formatRupees(1200, { paise: 'always' })).toBe('₹1,200.00');
+    // Half a paisa rounds up, not down by binary accident (audit F14): 1.005 * 100 is 100.4999….
+    expect(formatRupees(1.005, { paise: 'always' })).toBe('₹1.01');
+    expect(formatRupees(-10000.005)).toBe('-₹10,000.01');
     expect(formatRupees(123456.789)).toBe('₹1,23,456.79');
   });
 

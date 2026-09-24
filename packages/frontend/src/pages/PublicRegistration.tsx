@@ -627,6 +627,12 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [journeyProgress, setJourneyProgress] = useState<CandidateJourneyProgress | null>(null);
   /** The link has expired and only shows their progress — see `statusOnly` on the hydrate result. */
   const [statusOnly, setStatusOnly] = useState(false);
+  /**
+   * Saved answers or scans are on file and were withheld: this tab has not proven the contact with
+   * a code yet. The form stays shut behind a code prompt until it has — see `sensitiveLocked` on
+   * the hydrate result. A leaked link on its own shows progress, never the PAN or the scans.
+   */
+  const [sensitiveLocked, setSensitiveLocked] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
 
   /*
@@ -732,6 +738,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       // An expired link sends its status, the steps and what HR asked for — and nothing to fill a
       // form from, which is fine: the flag keeps the form from rendering (see below).
       setStatusOnly(Boolean(result.statusOnly));
+      setSensitiveLocked(Boolean(result.sensitiveLocked));
       setApplication(result.application);
       setConsentNotice(result.consentNotice);
       setDocumentsRequested(result.documentsRequested);
@@ -892,6 +899,51 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       setOtpVerified(true);
       setOtpInfo(null);
       if (sentTo !== phone) setPhone(sentTo);
+    } catch (err) {
+      setOtpError(userMessage(err));
+    } finally {
+      setOtpBusy(false);
+    }
+  };
+
+  /*
+    UNLOCKING SAVED ANSWERS. The code goes to the number already on the application — the link
+    holder cannot choose where it goes (the server refuses anything else while answers are on
+    file) — and a right code reloads the form, now with what they had saved.
+  */
+  const handleUnlockSend = async () => {
+    if (!application) return;
+    setOtpError(null);
+    setOtpInfo(null);
+    setOtpBusy(true);
+    try {
+      const delivery = await requestRegistrationOtp(token, application.mobile);
+      setCodeSent(true);
+      setOtpSentTo(application.mobile);
+      setOtpInfo(otpSentWords(delivery));
+      setOtpCooldown(delivery.cooldownSeconds ?? 60);
+    } catch (err) {
+      setOtpError(userMessage(err));
+    } finally {
+      setOtpBusy(false);
+    }
+  };
+
+  const handleUnlockVerify = async () => {
+    if (!application) return;
+    setOtpError(null);
+    const entered = code.trim();
+    if (!/^\d{6}$/.test(entered)) {
+      setOtpError('Enter the 6-digit code you received.');
+      return;
+    }
+    setOtpBusy(true);
+    try {
+      await verifyRegistrationOtp(token, application.mobile, entered);
+      setOtpVerified(true);
+      setOtpInfo(null);
+      setCode('');
+      await load();
     } catch (err) {
       setOtpError(userMessage(err));
     } finally {
@@ -1566,6 +1618,64 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
           />
         </div>
       </div>
+    );
+  }
+
+  if (sensitiveLocked) {
+    const last4 = (application.mobile ?? '').replace(/\D/g, '').slice(-4);
+    return shortScreen(
+      <div data-testid="unlock-saved-answers" style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', alignItems: 'center' }}>
+        <ShieldCheck size={36} style={{ color: 'var(--accent)' }} />
+        <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          Confirm it is you to continue
+        </h1>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
+          Your saved details and documents are protected. We will send a 6-digit code to your mobile
+          number ending {last4 || '—'}. If that is no longer your number, ask HR to correct it.
+        </p>
+        {otpError && <AlertBanner type="error" message={otpError} />}
+        {otpInfo && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{otpInfo}</div>}
+        {!codeSent ? (
+          <PrimaryButton
+            onClick={() => void handleUnlockSend()}
+            busy={otpBusy}
+            disabled={otpCooldown > 0}
+            title="Send a 6-digit code to the mobile number on your application"
+          >
+            {otpCooldown > 0 ? `Send code (${otpCooldown}s)` : 'Send code'}
+          </PrimaryButton>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '260px' }}>
+            <label htmlFor="reg-unlock-code" style={LABEL_STYLE}>6-digit code</label>
+            <input
+              id="reg-unlock-code"
+              ref={codeRef}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleUnlockVerify(); }}
+              title="The 6-digit code you received"
+              className="reg-input"
+              style={{ textAlign: 'center', letterSpacing: '0.3em' }}
+            />
+            <PrimaryButton onClick={() => void handleUnlockVerify()} busy={otpBusy} title="Check the code and open your form">
+              Continue
+            </PrimaryButton>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={otpBusy || otpCooldown > 0}
+              onClick={() => void handleUnlockSend()}
+              title="Send a new code"
+            >
+              {otpCooldown > 0 ? `Resend code (${otpCooldown}s)` : 'Resend code'}
+            </button>
+          </div>
+        )}
+      </div>,
+      'neutral',
     );
   }
 

@@ -1,5 +1,6 @@
 import type { RouteSource } from './interfaces';
 import { canonicalStateName } from './regions';
+import { roundMoney } from './billing-money-rules';
 
 export const INDIAN_STATES: { value: string; label: string }[] = [
   { value: 'Andhra Pradesh', label: 'Andhra Pradesh' }, { value: 'Arunachal Pradesh', label: 'Arunachal Pradesh' },
@@ -245,8 +246,12 @@ export function formatRupees(
   if (emptyAs !== undefined && (value === null || value === undefined || value === '')) {
     return emptyAs;
   }
-  const n = Number(value ?? 0);
-  if (!Number.isFinite(n)) return emptyAs ?? '₹0';
+  const raw = Number(value ?? 0);
+  if (!Number.isFinite(raw)) return emptyAs ?? '₹0';
+  // Paise are rounded by the one money rule before formatting: `toLocaleString` rounds the binary
+  // value, which prints ₹1.005 as "₹1.00". Only at 2 decimals — pre-rounding to paise and then to
+  // whole rupees would round twice (₹2.495 → 2.50 → "₹3").
+  const n = decimals === 2 ? roundMoney(raw) : raw;
   return `₹${n.toLocaleString('en-IN', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

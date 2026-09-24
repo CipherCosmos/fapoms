@@ -28,6 +28,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { csvCell } from '../../core/csv/csv-cell';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 // The one place the upload rules live — see modules/document/upload-validation.ts. A second copy
 // here is how four upload paths came to disagree about what they accept.
@@ -114,7 +115,7 @@ class WorkingHoursDto {
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { LocationTrailService } from './location-trail.service';
 import { LocationPingSource } from './assayer-location-ping.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed, RoleOnly, permissionKeysHeldBy } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions, AllowPermissionFallback, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed, RoleOnly, permissionKeysHeldBy } from '../auth/guards';
 import {
   SystemRole,
   AssayerLifecycleStatus,
@@ -1374,6 +1375,10 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   // The roster list. Declared so a role built in Admin -> Roles can open the workforce console:
   // /hr admitted such a role while this refused it, so the console loaded and its list did not.
+  // `@AllowPermissionFallback()` is what actually lets that role through RolesGuard (the declaration
+  // alone never did). Safe for the reason above: `scopeAssayerForRoles` fails closed for a role name
+  // it does not recognise — the operational subset only, as on `GET /assayers/:id`.
+  @AllowPermissionFallback()
   @RequirePermissions('assayer:view:organization')
   @Get()
   @ApiOperation({ summary: 'List all registered assayers' })
@@ -1568,6 +1573,10 @@ export class AssayerController {
    * role-based redaction.
    */
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  // The assayer layer on the Command Center and planning maps, which a custom role holding
+  // assayer:view is offered. Pin facts only, and `scopeAssayerListForRoles` fails closed for a role
+  // name it does not know — the same reasoning as the roster list and `GET /assayers/:id`.
+  @AllowPermissionFallback()
   @RequirePermissions('assayer:view:organization')
   @Get('/map-roster')
   @ApiOperation({ summary: 'Every active assayer as the map needs them: pin facts, bank standings, committed-today' })
@@ -1731,6 +1740,10 @@ export class AssayerController {
    * allowed to *see* of the record is decided below by `visibleFor`, not by the door.
    */
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  // A role built in Admin → Roles holding assayer:view reaches the record too — the approver's
+  // review page (`/hr/approvals/:id`) opens it. Safe to widen: `scopeAssayerForRoles` below fails
+  // closed for an unrecognised role name (no identity, banking or staff-private fields).
+  @AllowPermissionFallback()
   @RequirePermissions('assayer:view:organization')
   @Get(':id')
   // Staff opening an appraiser's record is access to personal data (name, code, contact, employment
@@ -2420,6 +2433,12 @@ export class AssayerController {
   // The dossier carries the name, date of birth and address as printed on each identity card.
   @AuditRead({ resource: 'ASSAYER_DOSSIER', idParam: 'assayerId', eventType: 'ASSAYER_DOSSIER_VIEWED' })
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // A custom APPROVER role reaches it — the approval review page (`/hr/approvals/:id`) is built on
+  // it, as the approval routes themselves already honour custom roles. Narrower than a bare
+  // `@AllowPermissionFallback()` on purpose: nothing redacts this payload per role, so holding
+  // assayer:view alone must not hand a custom role background-check verdicts and referees' phone
+  // numbers. It takes the approval grant as well (both, not either — RolesGuard reads `every`).
+  @RolesFallbackPermissions('assayer:view:organization', 'assayer:approve:organization')
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Everything the roster holds about one person beyond their own row' })
   async getDossier(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
@@ -3349,11 +3368,4 @@ export class AssayerController {
         : 'Password reset. Ask the assayer to sign in with it and change it.',
     };
   }
-}
-
-/** Quote a CSV cell only when it needs it — a comma, quote or newline in the value. */
-function csvCell(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const s = typeof value === 'string' ? value : String(value);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }

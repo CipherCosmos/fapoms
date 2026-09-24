@@ -324,3 +324,15 @@ describe('assignment money', () => {
     });
   });
 });
+
+/** Audit F14 (2026-09-24): the paise rounding every money figure goes through. */
+describe('round2 — half a paisa rounds up, not down by binary accident', () => {
+  it.each([[1.005, 1.01], [10000.005, 10000.01], [0.285, 0.29], [-1.005, -1.01], [2.675, 2.68]])('%p → %p', (n, want) => {
+    expect(round2(n)).toBe(want);
+  });
+
+  it('applyTaxes lands the half-paisa GST on the right paisa', () => {
+    // 18% of 5.75 = 1.035 → 1.04 (the old helper gave 1.03: 5.75 * 0.18 is 1.0349999… in binary).
+    expect(applyTaxes(5.75, { taxRate: 18, tdsRate: 0 }).taxAmount).toBe(1.04);
+  });
+});

@@ -20,6 +20,7 @@ import { RulesSection } from '../Rules';
 import { TransportCostsSection } from '../TransportCosts';
 import { EmailTemplatesSection } from './EmailTemplatesSection';
 import { SmsDeliveryCard, SmsTemplatesSection } from './SmsTemplatesSection';
+import { DeliveryHealthBanner } from './DeliveryHealthBanner';
 import { Page } from '../../components/ui/Page';
 import { SkeletonList } from '../../components/ui/Loading';
 
@@ -282,6 +283,9 @@ export const PlatformSettings: React.FC = () => {
   const emailStatusQuery = useQuery({
     queryKey: ['notification-admin', 'email-status'],
     queryFn: () => api.request<any>('/notification-admin/email/status'),
+    // `/notification-admin/*` is ADMIN only. Operations and auditors open this page for their own
+    // sections and must not trigger a refused read in the background.
+    enabled: settingsAdmin,
   });
   const emailStatus = emailStatusQuery.data ? (emailStatusQuery.data as any) : null;
   /** Not "email is off" — "we did not get to ask". The card below told those apart as one. */
@@ -518,6 +522,9 @@ export const PlatformSettings: React.FC = () => {
         title="Platform Settings"
         subtitle="What the platform assumes when no contract says otherwise — changeable here, without a deploy."
       />
+
+      {/* Every send on a channel failing (e.g. a revoked mailbox password) — see DeliveryHealthBanner. */}
+      <DeliveryHealthBanner delivery={emailStatus?.delivery} />
 
       {!canEdit && (
         <div className="glass-card" style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'center', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>

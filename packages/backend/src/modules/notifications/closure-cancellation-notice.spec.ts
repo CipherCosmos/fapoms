@@ -73,8 +73,11 @@ describe('a closure cancellation reaches the assayer', () => {
     const m = txManager(rows);
     await branchService(m).remove('b-1', 'ops-1');
 
-    const emits = dispatch.emitSafe.mock.calls.map((c) => c[0]);
-    expect(emits).toHaveLength(1); // the unassigned job tells nobody
+    const all = dispatch.emitSafe.mock.calls.map((c) => c[0]);
+    const emits = all.filter((e) => e.type === 'ASSIGNMENT_CANCELLED_BY_CLOSURE');
+    expect(emits).toHaveLength(1); // the unassigned job tells no assayer
+    // The desk hears about every cancelled job (B1, 2026-09-24), assigned or not.
+    expect(all.filter((e) => e.type === 'ASSIGNMENT_CANCELLED_DESK').map((e) => e.entityId)).toEqual(['asn-1', 'asn-2']);
     expect(emits[0]).toMatchObject({
       type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE', assayerId: 'assayer-1',
       // The committed version is the occurrence (assignment-notification-keys.ts).

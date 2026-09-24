@@ -34,7 +34,7 @@ export const INVOICE = { one: 'client invoice', many: 'client invoices', Cap: 'C
  * task in mind, not an entity. The order is the dependency order: a claim must be approved
  * before it is a payout, a payout must be billed and approved before it is paid.
  */
-export type BillingJob = 'todo' | 'expenses' | 'bills' | 'pay' | 'invoices';
+export type BillingJob = 'todo' | 'expenses' | 'bills' | 'pay' | 'invoices' | 'final';
 
 export const JOBS: ReadonlyArray<{ key: BillingJob; label: string; hint: string }> = [
   { key: 'todo', label: 'To do', hint: 'Everything waiting on you, in the order to do it' },
@@ -42,6 +42,11 @@ export const JOBS: ReadonlyArray<{ key: BillingJob; label: string; hint: string 
   { key: 'bills', label: 'Assayer bills', hint: 'Send the monthly bill, approve what assayers confirm' },
   { key: 'pay', label: 'Pay assayers', hint: 'Send the bank file, then record what the bank paid' },
   { key: 'invoices', label: 'Bill clients', hint: 'Invoice completed work, send it, record the payment' },
+  /*
+    The HOD's queue (2026-09-24). Shown only to whoever holds the final billing approval — see
+    `Billing.tsx`. Last, because it is a different person's job, not a step in the office's day.
+  */
+  { key: 'final', label: 'Final approval', hint: 'Bills, payouts and client invoices the office approved, waiting for your final approval' },
 ];
 
 /**
@@ -58,6 +63,7 @@ export const JOB_ALIASES: Readonly<Record<string, BillingJob>> = {
   'assayer-invoices': 'bills',
   expenses: 'expenses',
   invoices: 'invoices',
+  'final-approval': 'final',
 };
 
 export const jobFromParam = (raw: string | null): BillingJob => {
@@ -79,14 +85,14 @@ export const jobFromParam = (raw: string | null): BillingJob => {
  *
  * Each stage is a real query, not a client-side slice, so the counts and the pages agree.
  */
-export type PayoutStage = 'WITH_ASSAYER' | 'NOT_BILLED' | 'TO_PAY' | 'PAID' | 'HELD';
+export type PayoutStage = 'WITH_ASSAYER' | 'NOT_BILLED' | 'AWAITING_HOD' | 'TO_PAY' | 'PAID' | 'HELD';
 
 export const PAYOUT_STAGES: ReadonlyArray<{
   key: PayoutStage;
   label: string;
   /** What this stage is waiting for, said as the answer to "why is it sitting here?". */
   waitingOn: string;
-  query: { status?: AssayerPayableStatus; onHold?: boolean; onBill?: boolean };
+  query: { status?: AssayerPayableStatus; onHold?: boolean; onBill?: boolean; hodApproved?: boolean };
 }> = [
   {
     key: 'WITH_ASSAYER',
@@ -101,10 +107,17 @@ export const PAYOUT_STAGES: ReadonlyArray<{
     query: { status: AssayerPayableStatus.PENDING, onHold: false, onBill: false },
   },
   {
+    // The HOD's final approval (2026-09-24): approved here, not payable until the HOD approves too.
+    key: 'AWAITING_HOD',
+    label: 'Waiting for HOD approval',
+    waitingOn: "Approved by the office, waiting for the HOD's final approval. They cannot be paid until then — nothing for you to do here.",
+    query: { status: AssayerPayableStatus.APPROVED, onHold: false, hodApproved: false },
+  },
+  {
     key: 'TO_PAY',
     label: 'Ready to pay',
-    waitingOn: 'Approved and cleared. Download the bank file, pay it, then record the payment here.',
-    query: { status: AssayerPayableStatus.APPROVED, onHold: false },
+    waitingOn: 'Approved by the office and the HOD. Download the bank file, pay it, then record the payment here.',
+    query: { status: AssayerPayableStatus.APPROVED, onHold: false, hodApproved: true },
   },
   { key: 'PAID', label: 'Paid', waitingOn: 'Settled. Kept for the record.', query: { status: AssayerPayableStatus.PAID } },
   { key: 'HELD', label: 'On hold', waitingOn: 'Stopped on purpose. It cannot be approved or paid until the hold is released.', query: { onHold: true } },
@@ -131,7 +144,8 @@ export const payoutStage = (raw: string | null): PayoutStage =>
 export const BILL_STATE_LABEL: Record<AssayerInvoiceStatus, string> = {
   [AssayerInvoiceStatus.INVITED]: 'Waiting for the assayer',
   [AssayerInvoiceStatus.SUBMITTED]: 'Confirmed, needs your approval',
-  [AssayerInvoiceStatus.APPROVED]: 'Approved',
+  [AssayerInvoiceStatus.APPROVED]: 'Approved, waiting for HOD approval',
+  [AssayerInvoiceStatus.HOD_APPROVED]: 'Approved for payment',
   [AssayerInvoiceStatus.PAID]: 'Paid',
   [AssayerInvoiceStatus.CANCELLED]: 'Cancelled',
   [AssayerInvoiceStatus.SUPERSEDED]: 'Replaced by a revision',
@@ -141,7 +155,8 @@ export const BILL_STATE_LABEL: Record<AssayerInvoiceStatus, string> = {
 export const BILL_STATE_CHIP: Record<AssayerInvoiceStatus, string> = {
   [AssayerInvoiceStatus.INVITED]: 'With the assayer',
   [AssayerInvoiceStatus.SUBMITTED]: 'To approve',
-  [AssayerInvoiceStatus.APPROVED]: 'Approved',
+  [AssayerInvoiceStatus.APPROVED]: 'With the HOD',
+  [AssayerInvoiceStatus.HOD_APPROVED]: 'Approved for payment',
   [AssayerInvoiceStatus.PAID]: 'Paid',
   [AssayerInvoiceStatus.CANCELLED]: 'Cancelled',
   [AssayerInvoiceStatus.SUPERSEDED]: 'Replaced',
@@ -150,6 +165,8 @@ export const BILL_STATE_CHIP: Record<AssayerInvoiceStatus, string> = {
 /** Client invoice states, said as where the document has got to. */
 export const INVOICE_STATE_CHIP: Record<InvoiceStatus, string> = {
   [InvoiceStatus.DRAFT]: 'Draft, not sent',
+  [InvoiceStatus.AWAITING_HOD]: 'With the HOD',
+  [InvoiceStatus.HOD_APPROVED]: 'Ready to send',
   [InvoiceStatus.ISSUED]: 'Sent to client',
   [InvoiceStatus.PAID]: 'Paid',
   [InvoiceStatus.CANCELLED]: 'Cancelled',
@@ -171,11 +188,14 @@ export const payoutStageOf = (p: {
   status: AssayerPayableStatus | string;
   onHold: boolean;
   onBill: boolean;
+  /** Has the HOD's final approval. Omitted (a row that does not carry it) counts as "no". */
+  hodApproved?: boolean;
 }): (typeof PAYOUT_STAGES)[number] | null =>
   PAYOUT_STAGES.find(({ query: q }) =>
     (q.status === undefined || q.status === p.status)
     && (q.onHold === undefined || q.onHold === p.onHold)
-    && (q.onBill === undefined || q.onBill === p.onBill),
+    && (q.onBill === undefined || q.onBill === p.onBill)
+    && (q.hodApproved === undefined || q.hodApproved === !!p.hodApproved),
   ) ?? null;
 
 /**

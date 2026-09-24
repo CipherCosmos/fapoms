@@ -101,7 +101,10 @@ export class UserEntity extends BaseEntity {
    * This exists so that nobody ever types a password on somebody else's behalf — the old flow had
    * an administrator inventing one and passing it on by WhatsApp.
    */
-  @Column({ name: 'password_setup_token_hash', type: 'varchar', length: 64, nullable: true })
+  // `select: false`, like the password hash: until spent, the link this hashes IS a password, so
+  // the hash must not ride along on ordinary reads (the principal cache, GET /users). The one
+  // lookup that needs it filters on it in the WHERE, which select:false does not affect.
+  @Column({ name: 'password_setup_token_hash', type: 'varchar', length: 64, nullable: true, select: false })
   passwordSetupTokenHash: string | null;
 
   @Column({ name: 'password_setup_expires_at', type: 'timestamptz', nullable: true })

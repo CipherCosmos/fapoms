@@ -30,7 +30,14 @@ import { readCache, writeCache } from './token-store';
  *    will fail forever no matter how many times it is retried, and retrying it silently
  *    would leave the assayer thinking a rejected request was still "trying". Only a transport
  *    failure (`retryable: true` from the dispatcher) re-queues the action; anything else is
- *    surfaced immediately and taken off the queue.
+ *    surfaced — and how depends on who was watching:
+ *      - attempted from a screen (`enqueueAndRun`), the screen shows the refusal on the spot, so
+ *        the entry is taken off the queue;
+ *      - attempted by a background drain (`processActionQueue`) — i.e. after the assayer was told
+ *        "saved on your phone, it will send by itself" — nobody saw it. The entry is KEPT as
+ *        `ERROR` with the server's reason until the assayer dismisses it, and the drain returns
+ *        it so the caller can raise a notification and reload. Dropping it here used to make a
+ *        refused offline check-in or claim vanish without a word.
  */
 
 export type ActionKind =
@@ -49,7 +56,10 @@ export type ActionStatus =
   | 'SENT'
   /** A transport/timeout failure. Kept for automatic retry — never shown as a dead end. */
   | 'RETRYING'
-  /** A non-retryable failure (a validation 4xx). Terminal: shown to the assayer, then dismissed. */
+  /**
+   * A non-retryable failure (the server refused it). Terminal: never sent again. Kept on the queue
+   * — visible to the assayer with its reason — until they dismiss it (`dismissAction`).
+   */
   | 'ERROR';
 
 export interface QueuedAction<TPayload = any> {
@@ -332,8 +342,26 @@ export async function dismissAction(id: string): Promise<void> {
 }
 
 /**
+ * Actions the server refused after the assayer had already been told they were saved — kept so
+ * the app can show them, with the server's reason, until the assayer dismisses them. Only the
+ * signed-in user's own.
+ */
+export async function getRefusedActions(): Promise<QueuedAction[]> {
+  if (!owner) return [];
+  return (await load()).filter((a) => a.status === 'ERROR' && a.ownerId === owner).map((a) => ({ ...a }));
+}
+
+/** What one drain did that somebody needs to hear about. */
+export interface DrainReport {
+  /** Refused by the server during THIS drain (each reported once; they stay queued as ERROR). */
+  refused: QueuedAction[];
+  /** How many went through during this drain. */
+  sent: number;
+}
+
+/**
  * Send everything still waiting (PENDING or RETRYING), oldest first, and keep whatever did not
- * go. Called on app start, on reconnect, and whenever the app returns to the foreground — the
+ * go. A refusal is kept as `ERROR` (see the header) and returned in the report. Called on app start, on reconnect, and whenever the app returns to the foreground — the
  * moments a handset that lost signal mid-branch is most likely to have some again.
  *
  * `dispatchers` is keyed by `ActionKind` because each kind hits a different endpoint; a kind with
@@ -344,11 +372,12 @@ export async function dismissAction(id: string): Promise<void> {
  */
 export async function processActionQueue(
   dispatchers: Partial<Record<ActionKind, ActionDispatcher>>,
-): Promise<void> {
-  if (processing) return;
+): Promise<DrainReport> {
+  const report: DrainReport = { refused: [], sent: 0 };
+  if (processing) return report;
   // Nobody signed in: send nothing and drop nothing. The owner is set as a session starts, and a
   // drain that happens to run first must not mistake "not yet known" for "someone else".
-  if (!owner) return;
+  if (!owner) return report;
   processing = true;
   try {
     const initial = await load();
@@ -371,13 +400,20 @@ export async function processActionQueue(
       if (!dispatch) continue;
 
       const result = await attempt(entry, dispatch);
-      if (result.success || !result.retryable) {
+      if (result.success) {
+        report.sent += 1;
         await dismissAction(id);
+        continue;
       }
+      const after = (await load()).find((a) => a.id === id);
+      // Refused by the server: kept, visible, reported once. (An entry `attempt` would not send —
+      // the account changed mid-drain — is left as it was; the next drain drops it as foreign.)
+      if (after?.status === 'ERROR') report.refused.push({ ...after });
     }
   } finally {
     processing = false;
   }
+  return report;
 }
 
 /**

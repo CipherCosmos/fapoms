@@ -25,6 +25,8 @@ import { AssayerInvoiceStatus } from './enums';
 export const ASSAYER_SENT_INVOICE_STATUSES: readonly AssayerInvoiceStatus[] = [
   AssayerInvoiceStatus.SUBMITTED,
   AssayerInvoiceStatus.APPROVED,
+  // The HOD's final approval (2026-09-24) sits between the office's approval and payment.
+  AssayerInvoiceStatus.HOD_APPROVED,
   AssayerInvoiceStatus.PAID,
 ];
 
@@ -62,6 +64,13 @@ export interface AssayerInvoiceSummary {
   submittedAt: string | null;
   approvedAt: string | null;
   approvedBy: string | null;
+  /** The HOD's final approval (2026-09-24) — set when the bill is cleared for payment. */
+  hodApprovedAt?: string | null;
+  hodApprovedBy?: string | null;
+  /** The last HOD rejection, kept so the office sees why the bill came back to them. */
+  hodRejectedAt?: string | null;
+  hodRejectedBy?: string | null;
+  hodRejectReason?: string | null;
   paidAt?: string | null;
   paidBy?: string | null;
   cancelledAt: string | null;
@@ -81,6 +90,11 @@ export interface AssayerInvoiceSummary {
   // Labels attached by list endpoints.
   assayerName?: string | null;
   assayerCode?: string | null;
+  /**
+   * Returned by the office's approval only: what the approver must know that did not refuse it —
+   * a line paid to a bank account no passbook or identity document backs (2026-09-24 audit F3).
+   */
+  warnings?: string[];
 }
 
 /**
@@ -165,6 +179,11 @@ export interface AssayerStatementPayable {
    * Present only on the gated (assayer-audience) statement's rows.
    */
   preInvoicingEra?: boolean;
+  /**
+   * The HOD's final approval (2026-09-24). An APPROVED payable without it is approved by the
+   * office and waiting for the final approval — not payable yet. Absent on older servers.
+   */
+  hodApproved?: boolean;
 }
 
 export interface AssayerStatementPayment {

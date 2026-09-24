@@ -410,6 +410,19 @@ describe('NotificationDispatchService', () => {
       expect(publishCalls[0].payload.userId).toBeNull();
     });
 
+    it('names the catalog type and the record, so the phone can react to the kind of notice', async () => {
+      mockUserQb.getMany.mockResolvedValue([]);
+
+      await service.emit({
+        type: 'ASSIGNMENT_OFFERED', entityType: 'ASSIGNMENT', entityId: 'asn-1', assayerId: 'assayer-9',
+        payload: { branchName: 'Thrissur', scheduledDate: '2026-09-10' },
+      });
+
+      expect(publishCalls[0].payload).toMatchObject({ type: 'ASSIGNMENT_OFFERED', entityType: 'ASSIGNMENT', entityId: 'asn-1' });
+      // Never `eventType` — the gateway routes on that, and this must stay a notification:new.
+      expect(publishCalls[0].payload.eventType).toBeUndefined();
+    });
+
     it('a broken publisher does not stop the notification from being created', async () => {
       mockEventPublisher.publish.mockImplementationOnce(() => { throw new Error('socket down'); });
       mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);

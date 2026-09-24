@@ -4,6 +4,7 @@ import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { Pagination } from '../../components/ui';
 // One source for every document word on these screens — see documents/vocabulary.ts.
 import { stageWords } from './vocabulary';
+import { ALL_DOCUMENT_ACTIONS, type DocumentActions } from './document-actions';
 import {
   Send, AlertTriangle, CheckCircle2, Clock, Search, FileText, ChevronRight, ChevronDown,
 } from 'lucide-react';
@@ -108,7 +109,9 @@ export const DocumentControlPanel: React.FC<{
   stage: string;
   onStageChange: (v: string) => void;
   onPageChange: (p: number) => void;
-}> = ({ data, onDispatch, onDownload, busy, search, onSearchChange, stage, onStageChange, onPageChange }) => {
+  /** Which actions the caller's role is served — see document-actions.ts. Omitted: all offered. */
+  actions?: DocumentActions;
+}> = ({ data, onDispatch, onDownload, busy, search, onSearchChange, stage, onStageChange, onPageChange, actions: allow = ALL_DOCUMENT_ACTIONS }) => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -121,7 +124,8 @@ export const DocumentControlPanel: React.FC<{
    */
   const rows = data.documents;
 
-  const selectable = rows.filter((r) => r.status === 'UPLOADED');
+  // Nothing is selectable for a role the dispatch route refuses — the tick boxes only feed Send.
+  const selectable = allow.dispatch ? rows.filter((r) => r.status === 'UPLOADED') : [];
   const toggle = (id: string) =>
     setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
@@ -165,9 +169,11 @@ export const DocumentControlPanel: React.FC<{
                     ? `audit was ${Math.abs(d.daysUntilAudit)} day(s) ago`
                     : 'audit due today'}
                 </span>
-                <button onClick={() => onDispatch([d.id])} disabled={busy} title={`Send ${d.fileName} to the assayer now`} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
-                  Send now
-                </button>
+                {allow.dispatch && (
+                  <button onClick={() => onDispatch([d.id])} disabled={busy} title={`Send ${d.fileName} to the assayer now`} className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
+                    Send now
+                  </button>
+                )}
               </span>
             </div>
           ))}
@@ -259,7 +265,7 @@ export const DocumentControlPanel: React.FC<{
           return (
             <div key={d.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', flexWrap: 'wrap' }}>
-                {d.status === 'UPLOADED' && (
+                {allow.dispatch && d.status === 'UPLOADED' && (
                   <input type="checkbox" checked={selected.has(d.id)} onChange={() => toggle(d.id)} title={`Select ${d.fileName} to send in bulk`} style={{ cursor: 'pointer' }} />
                 )}
                 <button onClick={() => setExpanded(open ? null : d.id)} title={open ? `Hide paperwork trail for ${d.fileName}` : `Show paperwork trail for ${d.fileName}`} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}>
@@ -276,14 +282,16 @@ export const DocumentControlPanel: React.FC<{
                 <span style={{ padding: '3px 9px', borderRadius: 'var(--radius-sm)', background: meta.bg, color: meta.color, fontSize: 'var(--text-2xs)', fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {meta.label}
                 </span>
-                {d.status === 'UPLOADED' && (
+                {allow.dispatch && d.status === 'UPLOADED' && (
                   <button onClick={() => onDispatch([d.id])} disabled={busy} className="btn btn-primary" title={`Dispatch ${d.fileName} to assayer`} style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 5 }}>
                     <Send size={11} /> Send
                   </button>
                 )}
-                <button onClick={() => onDownload(d.id)} className="btn btn-secondary" title={`Download ${d.fileName}`} style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
-                  Download
-                </button>
+                {allow.download && (
+                  <button onClick={() => onDownload(d.id)} className="btn btn-secondary" title={`Download ${d.fileName}`} style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
+                    Download
+                  </button>
+                )}
               </div>
 
               {open && (

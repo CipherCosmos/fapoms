@@ -285,6 +285,7 @@ async function seed() {
       { resource: PermissionResource.BILLING, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create bills' },
       { resource: PermissionResource.BILLING, action: PermissionAction.EDIT, scope: AuthorizationScope.ORGANIZATION, description: 'Edit bills' },
       { resource: PermissionResource.BILLING, action: PermissionAction.APPROVE, scope: AuthorizationScope.ORGANIZATION, description: 'Approve bills' },
+      { resource: PermissionResource.BILLING, action: PermissionAction.FINAL_APPROVE, scope: AuthorizationScope.ORGANIZATION, description: 'Final billing approval (HOD)' },
 
       // Assayers
       { resource: PermissionResource.ASSAYER, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all assayers' },

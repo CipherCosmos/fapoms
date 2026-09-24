@@ -84,7 +84,7 @@ export function payForAssignment(payables: Payable[]): AssignmentPay | null {
   if (payables.length === 0) return null;
   const live = payables.filter((p) => p.status !== AssayerPayableStatus.VOIDED);
   const lead = live.find((p) => !p.expenseId) ?? live[0] ?? payables[0];
-  const stage = payoutStageOf({ status: lead.status, onHold: lead.onHold, onBill: lead.invoiceNumber != null });
+  const stage = payoutStageOf({ status: lead.status, onHold: lead.onHold, onBill: lead.invoiceNumber != null, hodApproved: lead.hodApproved });
   const stageText = !stage
     ? payableStatusLabel(lead.status)
     : stage.key === 'HELD' && lead.holdReason

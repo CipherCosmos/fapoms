@@ -5,13 +5,15 @@ import {
   OnGatewayDisconnect,
   SubscribeMessage,
 } from '@nestjs/websockets';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AssayerEntity } from '../assayer/assayer.entity';
-import { isOnboardingStage, maySignIn } from '../auth/auth.service';
+import { AuthService, isOnboardingStage, maySignIn } from '../auth/auth.service';
+import { realtimeHealth } from '../../infrastructure/realtime/realtime-health';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
 
 /**
@@ -24,6 +26,44 @@ const AUTH_CHANGE_EVENTS = new Set<string>([
   'user:updated',
   'user:password-changed',
 ]);
+
+/**
+ * The same, for a field account, keyed on the assayer's id (`aggregateId`). A deleted record, and
+ * every lifecycle transition the assayer state machine raises (`AssayerSuspendedEvent`,
+ * `AssayerTerminatedEvent`, `AssayerActivatedEvent` …, published under their class names with
+ * `newState`), can change whether the phone may hold a socket at all. An ordinary profile edit
+ * (`assayer:updated`) carries no lifecycle change and is deliberately NOT one: dropping the phone's
+ * socket on every address correction would be churn with nothing to re-authorize.
+ */
+export function assayerAuthChangeId(eventName: string, payload: any): string | null {
+  const id = typeof payload?.aggregateId === 'string' ? payload.aggregateId : null;
+  if (!id) return null;
+  const name = payload?.eventType || eventName;
+  if (name === 'assayer:deleted') return id;
+  if (/^Assayer[A-Za-z]*Event$/.test(name) && payload?.newState !== undefined) return id;
+  return null;
+}
+
+/** Room of the national (region-unassigned) internal staff — see `emitOperational`. */
+export const NATIONAL_ROOM = 'staff:national';
+
+/** Payload keys `RegionGuardService.resolveEventRegion` can place in a region. */
+const PAYLOAD_KEYS_THAT_PLACE_AN_EVENT = ['branchId', 'projectBranchId', 'assignmentId', 'scheduleId', 'assayerId'];
+
+/**
+ * Whether a payload names something that lives in a region — the same identifiers
+ * `RegionGuardService.resolveEventRegion` resolves. An event like that whose region could NOT be
+ * resolved (lookup error, a row with no region) is regional traffic of unknown region, and goes to
+ * the national desk only — never to every staff socket.
+ */
+export function namesARegionalRecord(payload: any): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  if (typeof (payload.region ?? payload.metadata?.region) === 'string') return true;
+  const meta = payload.metadata ?? {};
+  return PAYLOAD_KEYS_THAT_PLACE_AN_EVENT.some(
+    (k) => typeof (payload[k] ?? meta[k]) === 'string' && (payload[k] ?? meta[k]),
+  );
+}
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { RegionGuardService, RoomVerdict, isInternalStaff } from '../../infrastructure/scope/region-guard.service';
 import { verifyAccessToken } from '../../infrastructure/security/jwt-verify';
@@ -42,7 +82,12 @@ interface AuthenticatedSocket extends Socket {
   };
   /** Room-join decisions already made for this socket — see `joinIfEntitled`. */
   roomVerdicts?: Map<string, boolean>;
+  /** Fires at the access token's expiry and drops the socket — see `handleConnection`. */
+  expiryTimer?: ReturnType<typeof setTimeout>;
 }
+
+/** Longest a single timer may be set for (setTimeout overflows past 2^31-1 ms). */
+const MAX_TIMER_MS = 2_147_483_647;
 
 @Injectable()
 @WebSocketGateway({
@@ -76,18 +121,39 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly regionGuard: RegionGuardService,
     @InjectRepository(AssayerEntity)
     private readonly assayers: Repository<AssayerEntity>,
+    /**
+     * Resolves `AuthService` lazily, at connect time, so the socket runs the SAME session and
+     * principal gate as an HTTP request without this @Global module importing AuthModule's graph
+     * (see realtime.module.ts). Optional only so unit tests can construct the gateway by hand.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
-    this.eventPublisher.onPublish((eventName, payload) => {
+    this.eventPublisher.onPublish((eventName, payload, meta) => {
       // An authorization change must drop the live socket, not just the HTTP principal cache.
-      // Rooms (user/role/org/staff/region) are joined ONCE at connect from the token+DB and never
+      // Rooms (user/role/org/staff/region) are joined ONCE at connect from the DB and never
       // re-evaluated, so a role downgrade, region removal, suspension or termination would
       // otherwise leave an already-connected socket receiving its old rooms' events for the rest
       // of the connection's life — access the user no longer possesses. Disconnecting forces a
       // reconnect, which re-runs handleConnection's gates and re-rooms against current authority.
-      if (AUTH_CHANGE_EVENTS.has(eventName) || AUTH_CHANGE_EVENTS.has(payload?.eventType)) {
+      //
+      // This half runs in EVERY process, remote deliveries included: `userSockets` is per process,
+      // so only the process holding the socket can drop it.
+      const name = payload?.eventType || eventName;
+      if (AUTH_CHANGE_EVENTS.has(eventName) || AUTH_CHANGE_EVENTS.has(name)) {
         this.disconnectUserForReauth(payload?.userId);
-        return;
+        // A password change is nobody else's business; the profile/role events still refresh
+        // the admin screens below.
+        if (name === 'user:password-changed') return;
       }
+      const assayerId = assayerAuthChangeId(eventName, payload);
+      if (assayerId) this.disconnectUserForReauth(assayerId);
+
+      // The broadcast runs ONCE, on the process that published the event. Its room emits already
+      // reach every replica's sockets through the Socket.IO Redis adapter; re-emitting an event
+      // that arrived over the domain-event bridge delivered it once per process. Only a process
+      // whose server is NOT on the Redis adapter (Redis down at boot) still emits it locally,
+      // because nothing else will reach its sockets.
+      if (meta?.remote && realtimeHealth.crossProcessFanOut) return;
       this.broadcastEvent(eventName, payload);
     });
   }
@@ -110,6 +176,29 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // handleDisconnect prunes userSockets as each socket goes; clear defensively in case a socket
     // object was already gone from the server registry.
     this.userSockets.delete(userId);
+  }
+
+  /**
+   * The HTTP request gate, applied to a socket: the session must still be usable (not revoked, not
+   * idle- or absolute-expired — `SessionService.touchIfUsable` inside `validateJwtPayload`) and the
+   * account must still resolve to an active principal. Returns that principal — whose roles and
+   * organisation are read from the database, not the token — or null to refuse.
+   *
+   * `undefined` means "no auth service in this context" (a unit test building the gateway by hand);
+   * the caller then falls back to the token claims. In the running app `moduleRef` always exists,
+   * and a failure to resolve the service there refuses the socket rather than skip the gate.
+   */
+  private async validatedPrincipal(payload: any, userId: string): Promise<any | null | undefined> {
+    if (!this.moduleRef) return undefined;
+    let auth: AuthService;
+    try {
+      auth = this.moduleRef.get(AuthService, { strict: false });
+    } catch {
+      console.warn('[EventsGateway] AuthService unavailable; refusing socket (fail-closed)');
+      return null;
+    }
+    if (!auth) return null;
+    return (await auth.validateJwtPayload({ ...payload, sub: userId })) ?? null;
   }
 
   afterInit() {
@@ -190,26 +279,58 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
+      /*
+        Same session and account gate as an HTTP request. The token alone proved only that it was
+        signed within the last fifteen minutes; a session revoked by "sign out everywhere", an
+        account suspended since, or roles changed since, all passed. Roles and organisation below
+        come from this principal, not from the token's claims.
+      */
+      const principal = await this.validatedPrincipal(payload, userId);
+      if (principal === null) {
+        client.emit('error', { message: 'Your session has ended; please sign in again.', code: 'SESSION_INVALID' });
+        client.disconnect();
+        return;
+      }
+      const principalRoles: any[] = principal ? (principal.roles ?? []) : (payload.roles ?? []);
+      const organizationId = principal ? (principal.organizationId ?? undefined) : payload.organizationId;
+
       client.user = {
         id: userId,
         userId,
-        roles: payload.roles || [],
-        organizationId: payload.organizationId,
+        roles: principalRoles,
+        organizationId,
       };
+
+      /*
+        A socket lives no longer than the token that opened it. Without this, one handshake held
+        rooms for as long as the connection stayed up — days, on a desk left open — after the
+        token had expired and long after anything else it authorized had stopped working. At
+        expiry the socket is dropped; the web and phone clients reconnect with their current token
+        (`manualReconnect.ts`), which runs this gate again.
+      */
+      if (typeof payload.exp === 'number') {
+        const ms = Math.max(0, Math.min(payload.exp * 1000 - Date.now(), MAX_TIMER_MS));
+        client.expiryTimer = setTimeout(() => {
+          client.emit('error', { message: 'Your session token expired; reconnecting.', code: 'TOKEN_EXPIRED' });
+          client.disconnect();
+        }, ms);
+        (client.expiryTimer as any)?.unref?.();
+      }
 
       // With the Redis adapter, join() is async (room membership propagates across nodes). Await it
       // so a broadcast issued right after connect can't race ahead of the socket joining its rooms.
       await client.join(`user:${userId}`);
 
-      if (payload.roles) {
-        for (const role of payload.roles) {
-          const roleName = typeof role === 'string' ? role : role.name;
-          if (roleName) await client.join(`role:${roleName}`);
-        }
+      for (const role of principalRoles) {
+        const roleName = typeof role === 'string' ? role : role?.name;
+        if (roleName) await client.join(`role:${roleName}`);
       }
 
-      if (payload.organizationId) {
-        await client.join(`org:${payload.organizationId}`);
+      // No operational broadcast is sent to `org:` any more (see `emitOperational`): every
+      // principal of the organisation, field assayers included, sits in it. Joined still, so a
+      // future organisation-wide notice for everyone has a room.
+      if (organizationId) {
+        await client.join(`org:${organizationId}`);
       }
 
       /**
@@ -226,7 +347,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
        * organizationId — without this room those events would reach nobody and the web app's
        * live updates would silently stop.
        */
-      const roleNames: string[] = (payload.roles || [])
+      const roleNames: string[] = principalRoles
         .map((r: any) => (typeof r === 'string' ? r : r?.name))
         .filter(Boolean);
 
@@ -238,6 +359,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // for the HTTP side; imported rather than re-declared so the two cannot drift apart.
       if (isInternalStaff(roleNames)) {
         await client.join('staff');
+        // The organisation's own staff — what operational traffic naming an organisation goes
+        // to, instead of `org:` (which also holds that organisation's assayers).
+        if (organizationId) await client.join(`staff:org:${organizationId}`);
 
         /**
          * Territorial rooms, so a region-assigned operator is not in the national firehose.
@@ -269,6 +393,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
         const rooms = regionLookupFailed ? [] : (regions ?? ALL_REGIONS);
         for (const r of rooms) await client.join(`region:${r}`);
+        // National desk only: where regional traffic whose region could not be resolved goes
+        // (see `emitOperational`). A restricted account, or one whose lookup failed, never joins.
+        if (!regionLookupFailed && regions === null) await client.join(NATIONAL_ROOM);
       }
 
       if (!this.userSockets.has(userId)) {
@@ -285,6 +412,10 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleDisconnect(client: AuthenticatedSocket) {
+    if (client.expiryTimer) {
+      clearTimeout(client.expiryTimer);
+      client.expiryTimer = undefined;
+    }
     if (client.user?.id) {
       const sockets = this.userSockets.get(client.user.id);
       if (sockets) {
@@ -418,40 +549,40 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   /**
    * Organisation-wide operational traffic, scoped to people entitled to see it.
    *
-   * Replaces the bare `this.server.emit(...)` that every branch of `broadcastEvent` used to
-   * end with. That form ignores rooms entirely and delivers to every connected socket, which
-   * on this system meant field assayers' phones received the whole operational firehose —
-   * other assayers' assignments and fees, client and branch records, billing events.
+   * Replaces the bare `this.server.emit(...)` that every branch of `broadcastEvent` used to end
+   * with, which delivered to every connected socket — field assayers' phones included.
    *
-   * Delivery is to the event's own organisation where the payload names one, and otherwise to
-   * internal staff. Assayers still receive everything genuinely theirs through the
-   * `user:` and `assignment:` room emits, which are untouched.
+   * ## Where it goes, in order
    *
-   * ## Region routing
+   *  1. The event names a record that resolves to a region → `region:<R>` only.
+   *  2. It names a regional record whose region could NOT be resolved (the lookup errored, or the
+   *     row carries no region) → the national desk room only. FAIL CLOSED: this used to fall back
+   *     to the organisation or the whole `staff` room, so a DB hiccup during resolution handed a
+   *     region-restricted operator another region's branch and assignment traffic.
+   *  3. It names nothing regional (clients, zones, holidays, users) → the organisation's STAFF
+   *     room when the payload names an organisation, else `staff`.
    *
-   * On top of that, an event that can be placed in a region goes to `region:<R>` rather than
-   * the whole staff/org room, so a region-assigned operator does not receive other regions'
-   * branch names, codes and assignment traffic. The region is *resolved* from whatever
-   * identifier the payload carries rather than read from a field, because 75 call sites
-   * publish these events and a publisher that forgot the field would be a silent leak.
-   *
-   * Fire-and-forget: the resolution is a cached, indexed lookup, and a failure degrades to the
-   * previous unrouted behaviour rather than dropping the event.
+   * Never `org:`. That room holds every principal of the organisation, assayers included, and was
+   * how `assignment:fee-updated` and other operational events reached phones that are
+   * deliberately money-blind. Assayers receive what is theirs through `user:` and `assignment:`.
    */
   private emitOperational(eventName: string, payload: any) {
+    const regional = namesARegionalRecord(payload);
     void this.regionGuard
       .resolveEventRegion(payload)
       .catch(() => null)
       .then((region) => {
-        const orgId = payload?.organizationId || payload?.metadata?.organizationId;
-        const base = orgId ? `org:${orgId}` : 'staff';
+        if (!this.server) return;
         if (region) {
-          // Intersection of "this organisation" and "this region" — socket.io treats multiple
-          // `.to()` calls as a union, so the org room is deliberately not added here.
           this.server.to(`region:${region}`).emit(eventName, payload);
           return;
         }
-        this.server.to(base).emit(eventName, payload);
+        if (regional) {
+          this.server.to(NATIONAL_ROOM).emit(eventName, payload);
+          return;
+        }
+        const orgId = payload?.organizationId || payload?.metadata?.organizationId;
+        this.server.to(orgId ? `staff:org:${orgId}` : 'staff').emit(eventName, payload);
       });
   }
 
@@ -465,9 +596,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       case 'AssignmentCreated': {
         if (payload.assayerId) {
           this.server.to(`user:${payload.assayerId}`).emit('assignment:created', payload);
-        }
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit('assignment:created', payload);
         }
         // Without this the desk was only reached through `org:`, and most tokens issued here
         // carry no organizationId — so a newly offered assignment reached the assayer's phone
@@ -494,9 +622,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.assayerId) {
           this.server.to(`user:${payload.assayerId}`).emit('assignment:status-changed', payload);
         }
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit('assignment:status-changed', payload);
-        }
         this.emitOperational('assignment:status-changed', payload);
         break;
       }
@@ -511,9 +636,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
          * ops-internal fact. The publication itself must survive: the desk's queues refresh on
          * it, and the billing engine subscribes to it for repricing.
          */
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit('assignment:fee-updated', payload);
-        }
         // Same gap as `assignment:created`: with delivery limited to `org:`, an agreed fee — the
         // number the desk queues track — never reached them live.
         this.emitOperational('assignment:fee-updated', payload);
@@ -527,9 +649,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
         if (payload.assayerId) {
           this.server.to(`user:${payload.assayerId}`).emit(eventType, payload);
-        }
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
         this.emitOperational(eventType, payload);
         break;
@@ -563,6 +682,8 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // operational rooms.
       case 'query:raised':
       case 'query:responded':
+      case 'query:reopened':
+      case 'query:resolved':
       case 'query:message': {
         if (payload.queryId) {
           this.server.to(`query:${payload.queryId}`).emit(eventType, payload);
@@ -572,9 +693,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
         if (payload.validatorId) {
           this.server.to(`user:${payload.validatorId}`).emit(eventType, payload);
-        }
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
         }
         this.emitOperational(eventType, payload);
         break;
@@ -605,10 +723,41 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       case 'document:uploaded':
-      case 'document:status-changed': {
+      case 'document:status-changed':
+      case 'document:received':
+      case 'document:dispatched': {
         if (payload.projectBranchId) {
           this.server.to(`branch:${payload.projectBranchId}`).emit(eventType, payload);
         }
+        // The assayer the document concerns, when the publisher names one — their phone lists it.
+        if (payload.assayerId) {
+          this.server.to(`user:${payload.assayerId}`).emit(eventType, payload);
+        }
+        this.emitOperational(eventType, payload);
+        break;
+      }
+
+      /**
+       * A reassignment moves a job off one phone and onto another. Both phones must hear it (the
+       * outgoing assayer's list otherwise kept the job until a refresh), plus the job's own room
+       * and the desk. `oldAssayerId`/`previousAssayerId` is who lost it, `newAssayerId`/`assayerId`
+       * who gained it.
+       */
+      case 'assignment:reassigned': {
+        const asnId = payload.assignmentId || payload.aggregateId;
+        if (asnId) this.server.to(`assignment:${asnId}`).emit(eventType, payload);
+        const phones = new Set<string>(
+          [payload.oldAssayerId, payload.previousAssayerId, payload.newAssayerId, payload.assayerId]
+            .filter((id): id is string => typeof id === 'string' && !!id),
+        );
+        for (const id of phones) this.server.to(`user:${id}`).emit(eventType, payload);
+        this.emitOperational(eventType, payload);
+        break;
+      }
+
+      /** An expense claim approved or rejected: the claimant's phone, and the desk. Ids only. */
+      case 'expense:decided': {
+        if (payload.assayerId) this.server.to(`user:${payload.assayerId}`).emit(eventType, payload);
         this.emitOperational(eventType, payload);
         break;
       }
@@ -621,16 +770,27 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         break;
       }
 
-      // Money events. The assayer whose money moved hears it on their phone; the desk hears all.
-      // These payloads carry ids and statuses, never amounts — the phone reacts by re-fetching
-      // its own (gated) endpoints, so nothing here fights the money-blind rule.
-      case 'billing:booked':
+      /**
+       * Money events. The desk hears all of them through the operational rooms (never `org:`, so
+       * never an assayer's phone by that route).
+       *
+       * The assayer's own phone hears only the two that move something the app shows AFTER the
+       * work is billed — their invoice invitation and their payout's progress — because the app is
+       * money-blind until then. `billing:booked` (a payable booked at completion) and
+       * `billing:invoice-changed` (a CLIENT invoice) are desk facts and used to reach the phone
+       * too. Payloads carry ids and statuses, never amounts.
+       */
       case 'billing:payout-changed':
-      case 'billing:invoice-changed':
       case 'billing:assayer-invoice-changed': {
         if (payload.assayerId) {
           this.server.to(`user:${payload.assayerId}`).emit(eventType, payload);
         }
+        this.emitOperational(eventType, payload);
+        break;
+      }
+
+      case 'billing:booked':
+      case 'billing:invoice-changed': {
         this.emitOperational(eventType, payload);
         break;
       }
@@ -640,9 +800,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.clientId) {
           this.server.to(`client:${payload.clientId}`).emit(eventType, payload);
         }
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
-        }
         this.emitOperational(eventType, payload);
         break;
       }
@@ -650,9 +807,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       case 'client:created':
       case 'client:updated':
       case 'client:status-changed': {
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
-        }
         this.emitOperational(eventType, payload);
         break;
       }
@@ -679,9 +833,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (payload.aggregateId) {
           this.server.to(`user:${payload.aggregateId}`).emit(eventType, payload);
         }
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
-        }
         this.emitOperational(eventType, payload);
         break;
       }
@@ -689,9 +840,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       case 'project:created':
       case 'project:updated':
       case 'project:deleted': {
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit(eventType, payload);
-        }
         this.emitOperational(eventType, payload);
         break;
       }
@@ -756,9 +904,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const aggregateId = payload?.aggregateId;
 
     if (eventName.startsWith('Project') || eventName.startsWith('ProjectBranch')) {
-      if (payload?.metadata?.organizationId) {
-        this.server.to(`org:${payload.metadata.organizationId}`).emit(eventName, payload);
-      }
       if (aggregateId) {
         this.server.to(`project:${aggregateId}`).emit(eventName, payload);
       }

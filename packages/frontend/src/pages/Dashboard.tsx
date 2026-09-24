@@ -43,7 +43,8 @@ interface Snapshot {
   roles: string[];
   focus: string;
   sections: string[];
-  attention: Attention[];
+  /** Null (or absent) when the caller's roles do not include it — like every other section. */
+  attention?: Attention[] | null;
   funnel: Array<{ key: string; label: string; count: number; packets: number }> | null;
   due: DueItem[] | null;
   documents: { packetsUnsent: number; awaitingReturn: number; awaitingOcr: number; inOcr: number } | null;
@@ -360,7 +361,10 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
-          {/* 1. Needs attention — the only section that should change hour to hour. */}
+          {/* 1. Needs attention — the only section that should change hour to hour.
+              Absent for a role that does not get it: no block at all, rather than a
+              "Nothing blocked" that would be a claim about work this person cannot see. */}
+          {Array.isArray(data.attention) && (
           <div>
             <SectionLabel icon={<AlertTriangle size={13} />}>Needs attention</SectionLabel>
             {data.attention.length === 0 ? (
@@ -398,6 +402,7 @@ export const Dashboard: React.FC = () => {
               </div>
             )}
           </div>
+          )}
 
           {/* 2. The week ahead + where the book is piling up. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>

@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Linking, Platform, StyleSheet, View } from 'react-native';
+import { Alert, Linking, Platform, StyleSheet, View } from 'react-native';
 import { useRoute, type RouteProp } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
 import type { AssayerAssignment } from '../../types/mobile-app';
-import { checkIn, readPermissionFacts, syncGeofences } from '../background/runtime';
+import { answerOffer, checkIn, checkOut, readPermissionFacts, syncGeofences, type CheckInOutcome } from '../background/runtime';
+import { dismissAction, generateClientRequestId, getRefusedActions, subscribeActionQueue, type QueuedAction } from '../../services/action-queue';
+import { reasonText, refusalWords } from '../data/reasons';
 import { planGeofences } from '../background/geofence-plan';
 import { permissionStep, type PermissionStep } from '../background/permission-flow';
 import { declineArrivalPermission, ensureForegroundLocation, requestArrivalPermission } from '../background/permission-request';
@@ -11,12 +13,12 @@ import { actionsFor, jobStep, partitionToday, type ActionView } from '../data/jo
 import { useJobs } from '../data/useJobs';
 import { canOpenPapers, openBranchPapers, papersBeingPrepared } from '../data/packet';
 import { MobileApiService } from '../../services/api.service';
-import { useT } from '../i18n/I18nProvider';
+import { useI18n, useT } from '../i18n/I18nProvider';
 import { formatDay, formatDayTime } from '../i18n/format';
 import type { TranslationKey } from '../i18n/catalogues';
 import type { TabParamList } from '../nav/linking';
 import { colors, space } from '../theme/tokens';
-import { Button, Card, Chip, EmptyState, Icon, Screen, StepBar, Text, useToast, type ChipTone, type IconName } from '../ui';
+import { Button, Card, Chip, EmptyState, Icon, Screen, Sheet, StepBar, Text, TextField, useToast, type ChipTone, type IconName } from '../ui';
 
 const ACTION_ICON: Record<string, IconName> = {
   ACCEPT: 'checkmark-circle-outline',
@@ -39,13 +41,15 @@ const STATUS_TONE: Record<string, ChipTone> = {
 };
 
 /**
- * FOUNDATION placeholder for Today: the assayer's real jobs, with each job's buttons exactly as the
- * server's `capabilities` allow (allowed → button; not allowed → disabled with the reason). Only
- * "I have reached" is wired (it is the one-tap fallback of automatic check-in); the other actions
- * say they are not ready yet. The job-now card, the Yes/No offer and the step bar use the real kit.
+ * Today: the assayer's real jobs, with each job's buttons exactly as the server's `capabilities`
+ * allow (allowed → button; not allowed → disabled with the reason, translated by its code). Wired:
+ * Yes/No to an offer (No asks why), "I have reached" and "I am leaving", all through the same
+ * action queue as the current app. Actions not built here yet are drawn disabled as "coming soon"
+ * (`WIRED_ACTIONS` in job-view.ts) — never an enabled button that only says "not ready".
  */
 export const TodayScreen: React.FC = () => {
   const t = useT();
+  const { language } = useI18n();
   const toast = useToast();
   const { user } = useAuth();
   const route = useRoute<RouteProp<TabParamList, 'Today'>>();
@@ -66,25 +70,89 @@ export const TodayScreen: React.FC = () => {
     void recheckPermission();
   }, [recheckPermission]);
 
-  const onAction = useCallback(
-    async (job: AssayerAssignment, view: ActionView) => {
-      if (view.action !== 'CHECK_IN') {
-        toast.show('error', t('common.notReadyYet'));
-        return;
-      }
-      if (!(await ensureForegroundLocation())) {
-        toast.show('error', t('arrival.locationNeeded'));
-        return;
-      }
-      const outcome = await checkIn(job.id, new Date().toISOString());
-      if (outcome.kind === 'done') toast.show('done', t('arrival.checkedIn', { place: job.branchName || job.bankName }));
+  /** Actions saved on the phone that the office then refused — listed until dismissed. */
+  const [refused, setRefused] = useState<QueuedAction[]>([]);
+  useEffect(() => {
+    let live = true;
+    const read = () => void getRefusedActions().then((list) => { if (live) setRefused(list); }).catch(() => undefined);
+    read();
+    const unsubscribe = subscribeActionQueue(read);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, [user?.id]);
+
+  /** The decline form: which job, what they typed, and one key per form (the server's idempotency key). */
+  const [declining, setDeclining] = useState<{ job: AssayerAssignment; reason: string; requestKey: string; tried: boolean } | null>(null);
+
+  /** One toast per outcome, the same for every wired action. */
+  const report = useCallback(
+    (outcome: CheckInOutcome, doneTitle: string) => {
+      if (outcome.kind === 'done') toast.show('done', doneTitle);
       else if (outcome.kind === 'queued') toast.show('saved');
       else if (outcome.kind === 'no-position') toast.show('error', t('arrival.noFix'));
-      else toast.show('error', (outcome.kind === 'refused' && outcome.message) || t('common.somethingWrong'));
+      else if (outcome.kind === 'refused') toast.show('error', reasonText(t, language, outcome.code, outcome.message, 'common.somethingWrong'));
+      else toast.show('error', t('common.somethingWrong'));
+    },
+    [language, t, toast],
+  );
+
+  const onAction = useCallback(
+    async (job: AssayerAssignment, view: ActionView) => {
+      if (view.comingSoon || !view.allowed) return;
+      const place = job.branchName || job.bankName;
+      switch (view.action) {
+        case 'ACCEPT':
+          report(await answerOffer(job.id, { accept: true }), t('work.accepted'));
+          break;
+        case 'DECLINE':
+          setDeclining({ job, reason: '', requestKey: generateClientRequestId(), tried: false });
+          return;
+        case 'CHECK_IN':
+          if (!(await ensureForegroundLocation())) {
+            toast.show('error', t('arrival.locationNeeded'));
+            return;
+          }
+          report(await checkIn(job.id, new Date().toISOString()), t('arrival.checkedIn', { place }));
+          break;
+        case 'CHECK_OUT': {
+          // One-way: the server keeps the first departure it is given, so it is confirmed first.
+          const sure = await new Promise<boolean>((resolve) =>
+            Alert.alert(t('work.checkOutTitle'), t('work.checkOutBody', { place }), [
+              { text: t('common.cancel'), style: 'cancel', onPress: () => resolve(false) },
+              { text: t('today.actions.CHECK_OUT'), style: 'destructive', onPress: () => resolve(true) },
+            ], { cancelable: true, onDismiss: () => resolve(false) }),
+          );
+          if (!sure) return;
+          if (!(await ensureForegroundLocation())) {
+            toast.show('error', t('arrival.locationNeeded'));
+            return;
+          }
+          report(await checkOut(job.id), t('work.checkedOut', { place }));
+          break;
+        }
+        default:
+          return;
+      }
       void refresh();
     },
-    [refresh, t, toast],
+    [refresh, report, t, toast],
   );
+
+  const sendDecline = useCallback(async () => {
+    if (!declining) return;
+    const reason = declining.reason.trim();
+    if (!reason) {
+      setDeclining({ ...declining, tried: true });
+      return;
+    }
+    const outcome = await answerOffer(declining.job.id, { accept: false, reason, requestKey: declining.requestKey });
+    report(outcome, t('work.declined'));
+    // The form stays open on a refusal the assayer can act on; otherwise it is done.
+    if (outcome.kind !== 'refused') setDeclining(null);
+    void refresh();
+  }, [declining, refresh, report, t]);
 
   /**
    * The branch's audit papers, once the assayer has reached the branch and operations has sent
@@ -144,18 +212,23 @@ export const TodayScreen: React.FC = () => {
       <View style={styles.actions}>
         {views.map((v) => {
           const label = t(`today.actions.${v.action}` as TranslationKey);
-          const why = v.allowed
-            ? undefined
-            : [v.reason || t('today.actionNotAllowed'), v.opensAt ? t('today.opensAt', { when: formatDayTime(v.opensAt, now, t) }) : null]
-                .filter(Boolean)
-                .join(' ');
+          const why = v.comingSoon
+            ? t('work.comingSoon')
+            : v.allowed
+              ? undefined
+              : [
+                  reasonText(t, language, v.code, v.reason, 'today.actionNotAllowed'),
+                  v.opensAt ? t('today.opensAt', { when: formatDayTime(v.opensAt, now, t) }) : null,
+                ]
+                  .filter(Boolean)
+                  .join(' ');
           return (
             <View key={v.action} style={styles.action}>
               <Button
                 label={label}
                 icon={ACTION_ICON[v.action] ?? 'ellipse-outline'}
                 variant={v.weight === 'danger' ? 'danger' : v.weight === 'main' ? 'main' : 'quiet'}
-                disabled={!v.allowed}
+                disabled={!v.allowed || v.comingSoon}
                 accessibilityHint={why}
                 onPress={() => onAction(job, v)}
               />
@@ -203,6 +276,21 @@ export const TodayScreen: React.FC = () => {
             {t('today.showingSaved', { when: savedAt ? formatDayTime(savedAt, now, t) : '' })}
           </Text>
         </View>
+      ) : null}
+
+      {refused.length > 0 ? (
+        <Card tone="plain">
+          <View style={styles.why} accessibilityLiveRegion="polite">
+            <Icon name="alert-circle-outline" color="danger" />
+            <Text variant="title" style={styles.flex}>{t('queue.title')}</Text>
+          </View>
+          {refused.map((entry) => (
+            <View key={entry.id} style={styles.action}>
+              <Text variant="body">{refusalWords(t, language, entry).line}</Text>
+              <Button label={t('queue.dismiss')} variant="quiet" onPress={() => dismissAction(entry.id)} />
+            </View>
+          ))}
+        </Card>
       ) : null}
 
       {permission === 'explain' ? (
@@ -268,6 +356,19 @@ export const TodayScreen: React.FC = () => {
           ))}
         </View>
       ) : null}
+
+      <Sheet visible={declining !== null} onClose={() => setDeclining(null)} title={t('work.declineTitle')}>
+        <TextField
+          label={t('work.declineLabel')}
+          hint={t('work.declineHint')}
+          value={declining?.reason ?? ''}
+          onChangeText={(reason) => setDeclining((d) => (d ? { ...d, reason } : d))}
+          required
+          maxLength={500}
+          showErrors={declining?.tried}
+        />
+        <Button label={t('work.declineSend')} icon="close-circle-outline" variant="danger" onPress={sendDecline} />
+      </Sheet>
 
       {loaded && openCount === 0 ? (
         <EmptyState

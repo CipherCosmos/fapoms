@@ -20,6 +20,7 @@ import {
   UploadedFile,
   Res,
   HttpCode,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -34,7 +35,7 @@ import { branchImportUploadOptions, CommitBranchImportDto, incomingFile } from '
 import { readerFrom } from '../../infrastructure/background-jobs/background-jobs.controller';
 import { jobActorFrom } from '../../infrastructure/queue/job-actor';
 import { DiskUploadScanInterceptor } from '../document/disk-upload-scan.interceptor';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, Priority, ProjectStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
@@ -165,6 +166,10 @@ export class ProjectController {
   // Was @Public(): the entire project portfolio was readable without a token.
   // The controller-level staff gate now applies.
   @Get()
+  // A role built in Admin → Roles holding project:view reads the list (region-scoped by `scope`
+  // below like everyone else). Fallback-only, not @RequirePermissions: PermissionsGuard would
+  // enforce that on every STAFF_ROLES caller, some of whom hold no grants at all.
+  @RolesFallbackPermissions('project:view:organization')
   @ApiOperation({ summary: 'Get paginated list of projects' })
   async findAll(
     @Query('page') page?: number,
@@ -191,8 +196,23 @@ export class ProjectController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get details for a single project by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     const project = await this.projectService.findOne(id);
+    /**
+     * The detail row is readable exactly when the list would offer it: a region-assigned caller
+     * sees a project with at least one active branch in their regions (`GET /projects` asks the
+     * same question, through the same `findAll` predicate, so the two cannot drift). Not
+     * `assertProjectInScope` — that refuses a project with ANY branch elsewhere, which would lock
+     * a regional operator out of the national project their own branches sit in. Only the
+     * account's region ceiling is applied; the header's zone/state convenience filters are not
+     * an authorisation fact and must not turn an open into a 403.
+     */
+    if (scope?.regions?.length) {
+      const visible = await this.projectService.findAll(1, 1, { regions: scope.regions, projectId: id });
+      if (visible.total === 0) {
+        throw new ForbiddenException('This project has no branches in the regions your account is assigned to.');
+      }
+    }
     return project;
   }
 
@@ -204,7 +224,11 @@ export class ProjectController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateProjectRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // A project-wide write: refused if the project reaches any branch outside the caller's
+    // regions — the rule `assertProjectInScope` states for every whole-project operation.
+    await this.regionGuard.assertProjectInScope(id, scope);
     const project = await this.projectService.update(id, dto, req.user.id);
     return project;
   }
@@ -220,7 +244,10 @@ export class ProjectController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: TransitionProjectRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Same ceiling as `update`: a lifecycle move is a whole-project operation.
+    await this.regionGuard.assertProjectInScope(id, scope);
     const project = await this.projectService.transition(id, dto.targetStatus, req.user.id, dto.reason);
     return project;
   }

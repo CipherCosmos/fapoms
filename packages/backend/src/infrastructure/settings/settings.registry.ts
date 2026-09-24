@@ -19,6 +19,7 @@
  */
 
 import { CANONICAL_STATE_NAMES } from '@fapoms/shared';
+import { validatePublicUrl, validateSmtpHost } from './setting-validators';
 
 export type SettingType = 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron' | 'json';
 
@@ -62,6 +63,11 @@ export interface SettingDef {
    * nature is the other. Unset means "whatever my group is" — see `audienceOfSetting`.
    */
   audience?: SettingAudience;
+  /**
+   * A save-time check on the coerced value: return a message to refuse it, `null` to accept.
+   * Runs only when a value is saved here, never on the environment fallback.
+   */
+  validate?: (value: any) => string | null | Promise<string | null>;
 }
 
 /**
@@ -251,6 +257,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: null,
     envVar: 'SMTP_HOST',
     applies: 'immediately',
+    validate: validateSmtpHost,
   },
   {
     key: 'email.smtpPort',
@@ -314,6 +321,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: 'http://localhost:5173',
     envVar: 'APP_PUBLIC_URL',
     applies: 'immediately',
+    validate: validatePublicUrl,
   },
 
   // ── SMS ─────────────────────────────────────────────────────────────────
@@ -643,6 +651,18 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     min: 0,
     max: 100,
     unit: '%',
+    applies: 'immediately',
+  },
+  {
+    key: 'billing.tds194jThresholdRupees',
+    label: 'TDS starts once a year’s fees pass',
+    description: 'Section 194J annual threshold — confirm with your CA. No TDS is deducted from an assayer until their total fees in the financial year (April–March, Indian dates) go past this amount. The payment that takes them past it carries TDS on the whole year’s fees, earlier payments included; every payment after it is withheld at the normal rate. Voided payments do not count. Set 0 to withhold on every payment from the first rupee (the behaviour before this setting existed). Applies to payables booked, re-priced or approved from now on; paid payables keep what was withheld.',
+    group: 'billing',
+    type: 'number',
+    default: 50000,
+    min: 0,
+    max: 10000000,
+    unit: '₹',
     applies: 'immediately',
   },
   {

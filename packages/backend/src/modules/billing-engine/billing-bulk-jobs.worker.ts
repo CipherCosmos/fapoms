@@ -3,10 +3,12 @@ import { Logger } from '@nestjs/common';
 import type { Job } from 'bull';
 import { BillingEngineService } from './billing-engine.service';
 import { AssayerInvoiceService } from './assayer-invoice.service';
+import { FinalApprovalService } from './final-approval.service';
 import {
   ApprovePayoutsJobData,
   BILLING_BULK_JOB,
   BILLING_BULK_QUEUE,
+  FinalApproveJobData,
   InviteAllAssayerInvoicesJobData,
   PayPayoutsJobData,
 } from './billing-bulk-jobs.contract';
@@ -42,10 +44,11 @@ export class BillingBulkJobsWorker {
     private readonly billing: BillingEngineService,
     private readonly assayerInvoices: AssayerInvoiceService,
     private readonly tracker: BackgroundJobTracker,
+    private readonly finalApproval: FinalApprovalService,
   ) {}
 
   @Process({ name: '*', concurrency: 1 })
-  async run(job: Job<ApprovePayoutsJobData | PayPayoutsJobData | InviteAllAssayerInvoicesJobData>) {
+  async run(job: Job<ApprovePayoutsJobData | PayPayoutsJobData | InviteAllAssayerInvoicesJobData | FinalApproveJobData>) {
     switch (job.name) {
       case BILLING_BULK_JOB.APPROVE_PAYOUTS:
         return this.approvePayouts(job as Job<ApprovePayoutsJobData>);
@@ -53,6 +56,8 @@ export class BillingBulkJobsWorker {
         return this.payPayouts(job as Job<PayPayoutsJobData>);
       case BILLING_BULK_JOB.INVITE_ALL_ASSAYER_INVOICES:
         return this.inviteAllAssayerInvoices(job as Job<InviteAllAssayerInvoicesJobData>);
+      case BILLING_BULK_JOB.FINAL_APPROVE:
+        return this.finalApprove(job as Job<FinalApproveJobData>);
       default:
         // A name nothing here knows would otherwise complete silently with no result.
         throw new Error(`No handler for billing bulk job "${job.name}".`);
@@ -68,6 +73,21 @@ export class BillingBulkJobsWorker {
         summary: r.refused.length
           ? `${plural(r.done.length, 'payout')} approved; ${r.refused.length} refused.`
           : `${plural(r.done.length, 'payout')} approved.`,
+        counts: { approved: r.done.length, refused: r.refused.length },
+      }),
+    });
+  }
+
+  /** The HOD's bulk final approval — one owner per kind, one transaction per item. */
+  async finalApprove(job: Job<FinalApproveJobData>) {
+    const { items, actor } = job.data;
+    this.logger.log(`Final approval run ${job.id}: ${items.length} item(s).`);
+    return this.tracker.run(job, (t) => runAsJobActor(actor, () =>
+      this.finalApproval.approveMany(items, actor.userId, t.progress)), {
+      describe: (r) => ({
+        summary: r.refused.length
+          ? `${plural(r.done.length, 'item')} given final approval; ${r.refused.length} refused.`
+          : `${plural(r.done.length, 'item')} given final approval.`,
         counts: { approved: r.done.length, refused: r.refused.length },
       }),
     });

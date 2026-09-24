@@ -11,6 +11,7 @@ import {
   DOCUMENT_STAGE_ORDER as STAGE_ORDER, stageWords,
   DOCUMENT_TYPE, DOCUMENT_TYPE_ORDER as TYPE_ORDER, UPLOADABLE_TYPES, documentTypeLabel,
 } from './vocabulary';
+import { ALL_DOCUMENT_ACTIONS, type DocumentActions } from './document-actions';
 
 const fmtDate = (d?: string | null) => (d ? new Date(d).toLocaleDateString() : null);
 const fmtDateTime = (d?: string | null) => (d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : null);
@@ -48,10 +49,13 @@ export const BranchDocumentPanel: React.FC<{
   onSendToOcr: (docId: string) => Promise<void>;
   onUploadExcel: (assessmentId: string, file: File) => Promise<void>;
   busy?: boolean;
+  /** Which actions the caller's role is served — see document-actions.ts. Omitted: all offered. */
+  actions?: DocumentActions;
 }> = ({
   branches, neverPrepared, total, neverPreparedTotal, page, pageSize, onPageChange,
   search, onSearchChange, stage: stageFilter, onStageChange, loading,
   pipeline, onDispatch, onDownload, onUpload, onMarkReceived, onSendToOcr, onUploadExcel, busy,
+  actions: allow = ALL_DOCUMENT_ACTIONS,
 }) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Tracks which specific document/branch is mid-action, so only that row shows
@@ -178,9 +182,9 @@ export const BranchDocumentPanel: React.FC<{
                     const meta = DOCUMENT_TYPE[t];
                     const typeName = documentTypeLabel(t);
                     if (!docs?.length) {
-                      if (!UPLOADABLE_TYPES.has(t)) {
+                      if (!UPLOADABLE_TYPES.has(t) || !allow.upload) {
                         return (
-                          <span key={t} title={`${typeName}: not applicable yet`} style={{
+                          <span key={t} title={UPLOADABLE_TYPES.has(t) ? `${typeName}: not uploaded yet` : `${typeName}: not applicable yet`} style={{
                             fontSize: 'var(--text-3xs)', padding: '2px 7px', borderRadius: 'var(--radius-sm)',
                             background: 'transparent', border: '1px dashed var(--border-color)', color: 'var(--text-muted)',
                           }}>{meta.short}</span>
@@ -219,9 +223,9 @@ export const BranchDocumentPanel: React.FC<{
                       {b.documentsByType[t].map((d) => {
                         const stage = stageWords(d.status) ?? { label: d.status, meaning: '', color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' };
                         const isReturn = d.type === 'AUDITED_RETURN_PDF';
-                        const canMarkReceived = isReturn && d.status === 'UPLOADED';
-                        const canSendToOcr = isReturn && (d.status === 'RECEIVED' || d.status === 'SENT_TO_DATA_ENTRY');
-                        const canUploadExcel = isReturn && d.status === 'SENT_TO_EXTERNAL_OCR';
+                        const canMarkReceived = allow.markReceived && isReturn && d.status === 'UPLOADED';
+                        const canSendToOcr = allow.sendToOcr && isReturn && (d.status === 'RECEIVED' || d.status === 'SENT_TO_DATA_ENTRY');
+                        const canUploadExcel = allow.uploadExcel && isReturn && d.status === 'SENT_TO_EXTERNAL_OCR';
                         const rowBusy = acting.has(d.id);
                         return (
                           <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 0', flexWrap: 'wrap' }}>
@@ -235,7 +239,7 @@ export const BranchDocumentPanel: React.FC<{
                                 <CheckCircle2 size={12} color="var(--success)" />
                               </span>
                             )}
-                            {d.status === 'UPLOADED' && !isReturn && (
+                            {allow.dispatch && d.status === 'UPLOADED' && !isReturn && (
                               <button onClick={() => withActing(d.id, () => onDispatch([d.id]))} disabled={busy || rowBusy} title={`Send ${d.fileName} to the assayer`} className="btn btn-primary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <Send size={10} /> {rowBusy ? '…' : 'Send'}
                               </button>
@@ -259,9 +263,11 @@ export const BranchDocumentPanel: React.FC<{
                                 onFile={(file) => withActing(d.id, () => onUploadExcel(d.assessmentId!, file))}
                               />
                             )}
-                            <button onClick={() => onDownload(d.id)} title={`Download ${d.fileName} to your computer`} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)' }}>
-                              Download
-                            </button>
+                            {allow.download && (
+                              <button onClick={() => onDownload(d.id)} title={`Download ${d.fileName} to your computer`} className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 'var(--text-2xs)' }}>
+                                Download
+                              </button>
+                            )}
                           </div>
                         );
                       })}

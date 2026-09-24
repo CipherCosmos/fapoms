@@ -10,7 +10,7 @@
  */
 
 import {
-  Controller, Get, Put, Post, Delete, Param, Body, Req, UseGuards, BadRequestException,
+  Controller, Get, Put, Post, Delete, Param, Body, Req, UseGuards, BadRequestException, Optional,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsArray, IsInt, IsEmail, Min, Max, IsObject } from 'class-validator';
@@ -44,6 +44,7 @@ import {
 import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-template-renderer';
 import { plainTextFor } from '../../infrastructure/notifications/html-to-text';
 import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
+import { OutboundMessageService } from './outbound-message.service';
 import { MessageTokensService, SAMPLE_RECIPIENT } from '../../infrastructure/notifications/message-tokens';
 import { SmsService } from './sms.service';
 import { SmsTemplateService, SmsTemplateView } from './sms-template.service';
@@ -223,6 +224,8 @@ export class NotificationAdminController {
     private readonly smsTemplates: SmsTemplateService,
     /** Only for previews: the values every message carries, so a preview shows what is really sent. */
     private readonly tokens: MessageTokensService,
+    /** Delivery health per channel, for the settings screen's "every send is failing" banner. */
+    @Optional() private readonly outbound?: OutboundMessageService,
   ) {}
 
   /**
@@ -407,6 +410,11 @@ export class NotificationAdminController {
       hint: this.email.isEnabled()
         ? null
         : 'Configure it under Administration → Platform Settings → Email delivery. It takes effect immediately; no restart.',
+      /*
+        Per channel (email and SMS), the last half hour: sends, failures, and `down` when there were
+        failures and not one send — the settings screen shows a banner then. Null when unreadable.
+      */
+      delivery: this.outbound ? await this.outbound.channelHealth().catch(() => null) : null,
     };
   }
 

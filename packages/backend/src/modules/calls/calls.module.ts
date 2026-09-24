@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ValidationQueryMessageEntity } from '../validation-query/validation-query-message.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ValidationQueryModule } from '../validation-query/validation-query.module';
 import { CallsController } from './calls.controller';
 import { CallsService } from './calls.service';
 
@@ -15,6 +16,8 @@ import { CallsService } from './calls.service';
   imports: [
     TypeOrmModule.forFeature([ValidationQueryEntity, ValidationQueryMessageEntity]),
     NotificationsModule,
+    // ValidationQueryService.resolveRegion — the clarification's region, for the staff ceiling.
+    ValidationQueryModule,
   ],
   controllers: [CallsController],
   providers: [CallsService],

@@ -18,6 +18,15 @@ describe('a URL on its way into a log', () => {
     expect(redactUrl(`/register/${token}`)).toBe('/register/[token]');
   });
 
+  /** A staff password-setup link is that person's password until it is spent. */
+  it('takes the token out of a password-setup link, page and API alike', () => {
+    expect(redactUrl(`/account-setup/${token}`)).toBe('/account-setup/[token]');
+    expect(redactUrl(`/api/v1/public/account-setup/${token}`)).toBe('/api/v1/public/account-setup/[token]');
+    expect(redactUrl(`https://app.example.in/account-setup/${token}?from=email`))
+      .toBe('https://app.example.in/account-setup/[token]?from=email');
+    expect(redactUrl(`/api/v1/public/account-setup/${token}`)).not.toContain(token);
+  });
+
   it('takes identity numbers and tokens out of a query string', () => {
     const out = redactUrl('/api/v1/assayers/identifier-check?panNumber=ABCDE1234F&aadhaarNumber=234567890124&phone=9822014455');
     expect(out).not.toContain('ABCDE1234F');

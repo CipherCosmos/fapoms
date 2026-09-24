@@ -17,6 +17,7 @@
  *   CHECK_OUT     evaluateCheckOutNotClosed, AssignmentService.recordCheckOut
  *                 evaluateCheckOut
  *   SUBMIT_RETURN evaluateSubmitReturn       DocumentController.replayOrRefuseOnFinishedJob
+ *                 (+ evaluateSubmitReturnForAssayer, capability only: check-out / office-completes)
  *   CLAIM_EXPENSE evaluateExpenseClaim       ExpenseService.create
  *   (desk)        evaluateExpenseApproval    ExpenseService.review (approving a claim — not a field
  *                                            action; here because it shares `liveFeeBillId`)
@@ -371,6 +372,38 @@ export function evaluateSubmitReturn(
   return allow(S);
 }
 
+/**
+ * SUBMIT_RETURN as the field app shows it — the route gate above plus what completion will do
+ * with the upload (`AssignmentStateMachine.completeAudit`, reached from the upload through
+ * `DocumentController.completeAssignmentForReturn` with NO reason). The route still accepts the
+ * file in both cases below and reports `assignmentCompletion.completed: false`; this only stops
+ * the phone from offering an upload that cannot finish the job:
+ *
+ *   - arrived, not left: completion needs a departure (or a reason nobody on the phone can give),
+ *     so the assayer is told to check out first;
+ *   - never arrived (a fresh ACCEPTED job, or one reopened for its papers after being closed
+ *     without a visit): completion needs a reason for the absent check-in, which only the office
+ *     can state through its completion route — so the office completes it.
+ */
+export function evaluateSubmitReturnForAssayer(
+  assignment: Pick<CapabilityAssignment, 'id' | 'assignmentNumber' | 'status' | 'checkedInAt' | 'checkedOutAt'>,
+): Gate {
+  const S = AssignmentAction.SUBMIT_RETURN;
+  const route = evaluateSubmitReturn(assignment);
+  if (!route.allowed) return route;
+  if (!assignment.checkedInAt) {
+    return refuse(S, ATTENDANCE_ERROR_CODES.COMPLETION_BY_OFFICE,
+      'There is no check-in on record for this job, so uploading the return from the app will not '
+      + 'close it. Check in at the branch first; if the visit cannot be recorded (for example a job '
+      + 'reopened for its papers), the office completes it.');
+  }
+  if (!assignment.checkedOutAt) {
+    return refuse(S, ATTENDANCE_ERROR_CODES.NOT_CHECKED_OUT,
+      'Check out first. The return can only close the job once your departure from the branch is recorded.');
+  }
+  return allow(S);
+}
+
 // ── Expense claims ────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -440,6 +473,8 @@ export function evaluateExpenseClaim(
 export const SENT_BILL_STATUSES: readonly AssayerInvoiceStatus[] = [
   AssayerInvoiceStatus.SUBMITTED,
   AssayerInvoiceStatus.APPROVED,
+  // The HOD's final approval (2026-09-24) — still a sent bill.
+  AssayerInvoiceStatus.HOD_APPROVED,
   AssayerInvoiceStatus.PAID,
 ];
 
@@ -505,11 +540,21 @@ export function evaluateExpenseApproval(
 
 // ── Reporting a problem ───────────────────────────────────────────────────────────────────────
 
-/** Flagging a problem to the desk: any of their assignments except a completed one. */
+/**
+ * Flagging a problem to the desk: any of their assignments that is still open. A finished job
+ * (`isAssignmentTerminal` — completed, declined or cancelled) has no work left for the desk to
+ * unblock. COMPLETED keeps its original code and wording; declined and cancelled share the
+ * closed-assignment code the other field paperwork uses.
+ */
 export function evaluateReportIssue(assignment: Pick<CapabilityAssignment, 'status'>): Gate {
   if (assignment.status === AssignmentStatus.COMPLETED) {
     return refuse(AssignmentAction.REPORT_ISSUE, ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED,
       'This assignment is already completed.');
+  }
+  if (isAssignmentTerminal(assignment.status)) {
+    return refuse(AssignmentAction.REPORT_ISSUE, OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CLOSED,
+      `This assignment is already ${String(assignment.status).toLowerCase()}, so there is nothing left `
+      + 'to report on it. Contact operations directly if something still needs attention.');
   }
   return allow(AssignmentAction.REPORT_ISSUE);
 }
@@ -530,9 +575,9 @@ export function evaluateReportIssue(assignment: Pick<CapabilityAssignment, 'stat
  *                                 bill, approved or paid — the evaluator says which)
  *   REJECTED / CANCELLED          nothing
  *
- * The routes are more permissive than this list in places (an issue may be reported on a declined
- * offer; a return uploaded to an accepted job that was never checked into) and stay so: this is
- * which buttons the app draws, not a new rule.
+ * The routes are more permissive than this list in places (a return uploaded to a job with no
+ * check-in or no check-out is stored, though it does not close the job — the SUBMIT_RETURN gate
+ * says why) and stay so: this is which buttons the app draws, not a new rule.
  */
 export function relevantActions(assignment: Pick<CapabilityAssignment, 'status' | 'checkedInAt' | 'checkedOutAt'>): AssignmentAction[] {
   const s = assignment.status;
@@ -605,7 +650,7 @@ export function buildAssignmentCapabilities(
       case AssignmentAction.CHECK_OUT:
         return evaluateCheckOut(assignment);
       case AssignmentAction.SUBMIT_RETURN:
-        return evaluateSubmitReturn(assignment);
+        return evaluateSubmitReturnForAssayer(assignment);
       case AssignmentAction.CLAIM_EXPENSE:
         return evaluateExpenseClaim(assignment, ctx.feePayable);
       case AssignmentAction.REPORT_ISSUE:

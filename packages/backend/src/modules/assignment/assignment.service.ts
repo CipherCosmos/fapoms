@@ -47,6 +47,7 @@ import { dayTravelAlreadyCharged, DayTravelService } from './assignment-day-trav
 import { throwMappedUniqueViolation, throwIfRetryable } from './assignment-constraint-errors';
 import { attendanceDeadline, offerResponseDeadline } from './assignment-sla';
 import { assignmentOccurrenceKey, checkInOccurrenceKey } from './assignment-notification-keys';
+import { cancellationNotices } from './closure-cancellation';
 import {
   buildAssignmentCapabilities,
   evaluateAcceptOffer,
@@ -466,6 +467,23 @@ export class AssignmentService {
     return override;
   }
 
+  /**
+   * Only an offer (PENDING) or an accepted job nobody has checked in to can take a new date (B8,
+   * 2026-09-24). This is the funnel every date write passes (Scheduling's create and Reschedule, the
+   * desk's schedule route), so the refusal is here once. Before, a CHECKED_IN or COMPLETED job
+   * could be moved to another day, leaving its attendance evidence on a date it no longer carried.
+   */
+  static assertReschedulable(a: Pick<AssignmentEntity, 'status' | 'checkedInAt' | 'assignmentNumber'>): void {
+    const movable = a.status === AssignmentStatus.PENDING || a.status === AssignmentStatus.ACCEPTED;
+    if (movable && !a.checkedInAt) return;
+    throw withCode(new ConflictException(
+      a.checkedInAt && movable
+        ? `${a.assignmentNumber ?? 'This job'} cannot be rescheduled: the assayer has already checked in for it.`
+        : `${a.assignmentNumber ?? 'This job'} cannot be rescheduled: it is ${String(a.status).toLowerCase().replace(/_/g, ' ')}. `
+          + 'Only an open offer or an accepted job nobody has checked in to can take a new date.',
+    ), ASSIGNMENT_ERROR_CODES.RESCHEDULE_NOT_ALLOWED);
+  }
+
   static applyOverridePolicy(
     rule: AssignmentRule,
     barredReason: string,
@@ -876,7 +894,11 @@ export class AssignmentService {
       // Reuse existing assignment record for this branch to preserve single unified timeline
       assignment = reusableExisting;
       assignment.assayerId = dto.assayerId;
-      assignment.status = AssignmentStatus.PENDING;
+      // Through the transition table, as `reassignAssignment` does (B13, 2026-09-24) — a direct
+      // write here was the one way back to PENDING that no table consulted. Only a declined row
+      // reaches this branch today (live offers, engaged and cancelled rows are refused above), and
+      // REJECTED → PENDING is an edge the table allows; anything else now refuses instead of reviving.
+      AssignmentStateMachine.reassign(assignment, userId);
       /**
        * ONE way a fee is recorded, whichever button produced the assignment.
        *
@@ -1416,10 +1438,14 @@ export class AssignmentService {
     return accepted;
   }
 
-  async findOne(id: string): Promise<AssignmentEntity> {
+  async findOne(id: string, opts?: { withProject?: boolean }): Promise<AssignmentEntity> {
     const assignment = await this.assignmentRepository.findOne({
       where: { id },
-      relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
+      // The project only for the detail read (the drawer names it); the write paths that call
+      // findOne and then save keep the lighter graph they always had.
+      relations: opts?.withProject
+        ? ['projectBranch', 'projectBranch.branch', 'projectBranch.project', 'assayer']
+        : ['projectBranch', 'projectBranch.branch', 'assayer'],
     });
     if (!assignment) {
       throw new NotFoundException(`Assignment ${id} not found.`);
@@ -1536,11 +1562,13 @@ export class AssignmentService {
     }
     this.jobChanged(saved.assayerId, saved.id, userId);
 
-    // Travel once per assayer per day (E2): the day it left and the day it arrived on.
-    if (dateMoved && dayBefore) {
+    // Travel once per assayer per day (E2): the day it left (when it had one) and the day it
+    // arrived on. A job dated for the first time used to skip this entirely, so the day it landed on
+    // could end up charging the journey twice (B14, 2026-09-24).
+    if (dateMoved) {
       await this.redecideDayTravel(
         [
-          { assayerId: saved.assayerId, day: dayBefore },
+          ...(dayBefore ? [{ assayerId: saved.assayerId, day: dayBefore }] : []),
           { assayerId: saved.assayerId, day: dayAfter, arrivingAssignmentId: saved.id },
         ],
         userId,
@@ -2115,9 +2143,29 @@ export class AssignmentService {
       // the office's version naming the assayer. One catalog entry cannot word itself per
       // audience, so the desk's copy is its own type (ASSIGNMENT_CANCELLED_DESK), the same split
       // ASSIGNMENT_REASSIGNED_AWAY / ASSIGNMENT_REASSIGNED already made.
-      const types = notifyType === 'ASSIGNMENT_CANCELLED'
-        ? ['ASSIGNMENT_CANCELLED', 'ASSIGNMENT_CANCELLED_DESK']
-        : [notifyType];
+      if (notifyType === 'ASSIGNMENT_CANCELLED') {
+        // The same pair every cancel sends — built by the one helper the bulk cancels (branch and
+        // project closures, an assayer's departure or deletion) share: `cancellationNotices`.
+        for (const notice of cancellationNotices({
+          id: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          previousStatus: String(event?.previousState ?? ''),
+          assayerId: saved.assayerId,
+          branchName: payload.branchName,
+          entityVersion: Number(saved.entityVersion ?? 1) || 1,
+          scheduledDate: saved.scheduledDate ?? null,
+          createdBy: saved.createdBy,
+          assayerName: payload.assayerName,
+        }, {
+          userId,
+          reason: payload.reason,
+          assayerNotice: 'direct',
+          dedupeKey: (type) => assignmentOccurrenceKey(type, saved),
+        })) {
+          this.notificationDispatch.emitSafe(notice);
+        }
+      }
+      const types = notifyType === 'ASSIGNMENT_CANCELLED' ? [] : [notifyType];
       for (const type of types) {
         this.notificationDispatch.emitSafe({
           type,
@@ -2492,6 +2540,17 @@ export class AssignmentService {
             `Cannot reopen assignment: Assayer payout ${payable.payableNumber} has already been paid/disbursed. Operational reversal required before reopening.`,
           );
         }
+        /**
+         * Part paid is paid (audit F11, 2026-09-24). An APPROVED payout with some money already sent
+         * against it passed the check above, and the reopen then VOIDED it — a voided payable with a
+         * real disbursement behind it, which no screen reconciles and the redo books afresh on top of.
+         * The money that left has to be reversed first, exactly as for a fully paid one.
+         */
+        if (Number(payable.paidAmount) > 0) {
+          throw new ConflictException(
+            `Cannot reopen assignment: ₹${Number(payable.paidAmount)} has already been paid against assayer payout ${payable.payableNumber}. Reverse the payment(s) before reopening.`,
+          );
+        }
         if (payable.assayerInvoiceId) {
           const inv = await manager.findOne(AssayerInvoiceEntity, {
             where: { id: payable.assayerInvoiceId },
@@ -2499,7 +2558,8 @@ export class AssignmentService {
           if (
             inv &&
             (inv.status === AssayerInvoiceStatus.SUBMITTED ||
-              inv.status === AssayerInvoiceStatus.APPROVED)
+              inv.status === AssayerInvoiceStatus.APPROVED ||
+              inv.status === AssayerInvoiceStatus.HOD_APPROVED)
           ) {
             throw new ConflictException(
               `Cannot reopen assignment: Assayer payout is attached to invoice ${inv.invoiceNumber} in status '${inv.status}'. Invoice must be cancelled before reopening.`,
@@ -2955,7 +3015,43 @@ export class AssignmentService {
     const deskFee = typedFee !== null && repriced
       ? AssignmentService.resolveProposedFee(typedFee, repriced.total)
       : null;
-    if (namedDayChanges && forPricing) {
+    /**
+     * The incoming assayer is checked for the day the job will actually be on — ALWAYS (B5,
+     * 2026-09-24), not only when the desk also moved the date. Keeping the date and changing the
+     * person is exactly the move that used to land a job on somebody's recorded leave or holiday.
+     */
+    const jobDay = namedDay ?? (forPricing?.scheduledDate ? businessDateKey(forPricing.scheduledDate) : null);
+    /**
+     * The same skills and distance rules `create()` applies (B9). Overridable ones are waived by the
+     * reassignment's own written reason — as client eligibility already is below — and recorded on
+     * the audit row; the ones no reason can waive (the distance floor) refuse.
+     */
+    const reassignOverrides: Array<{ rule: AssignmentRule; barredReason: string; overrideReason: string }> = [];
+    const reassignProject = forPricing?.projectBranch?.project ?? null;
+    if (reassignProject) {
+      const skills = this.constraintEvaluator.checkSkillsAndCertifications(
+        newAssayer as any, reassignProject as any, jobDay ? new Date(jobDay) : undefined,
+      );
+      if (!skills.passed) {
+        reassignOverrides.push(AssignmentService.applyOverridePolicy(
+          skills.rule ?? AssignmentRule.SKILLS_AND_CERTIFICATIONS,
+          skills.reason ?? 'Missing a skill or certification this project requires.',
+          statedReason,
+        ));
+      }
+      const distance = this.constraintEvaluator.checkDistancePolicy(
+        (reassignProject as any).client?.planningPreferences,
+        repriced && repriced.distanceKm > 0 ? repriced.distanceKm : null,
+      );
+      if (!distance.passed) {
+        reassignOverrides.push(AssignmentService.applyOverridePolicy(
+          distance.rule ?? AssignmentRule.DISTANCE_FLOOR,
+          distance.reason ?? 'Outside the client\'s permitted distance band for this branch.',
+          statedReason,
+        ));
+      }
+    }
+    if (jobDay && forPricing) {
       const project = forPricing.projectBranch?.project ?? null;
       const availability = await this.constraintEvaluator.checkDateAvailability({
         assayer: newAssayer as any,
@@ -2963,7 +3059,7 @@ export class AssignmentService {
         project: project as any,
         branchState: forPricing.projectBranch?.branch?.state ?? null,
         clientId: project?.clientId ?? null,
-        scheduledDate: new Date(namedDay!),
+        scheduledDate: new Date(jobDay),
         excludeAssignmentId: id,
       });
       if (!availability.passed) {
@@ -3485,6 +3581,8 @@ export class AssignmentService {
           entityVersion: persistedVersion,
           ...(deskFee !== null ? { deskTypedFee: deskFee } : {}),
           ...(namedDayChanges ? { previousDay: lockedDay ? businessDateKey(lockedDay) : null, newDay: namedDay } : {}),
+          // Rules the reassignment's reason waived (skills, distance ceiling) — B9.
+          ...(reassignOverrides.length ? { overrides: reassignOverrides } : {}),
         },
       }, { manager });
 
@@ -3509,6 +3607,27 @@ export class AssignmentService {
           previousState: prevStatus,
           newState: persistedStatus,
           assayerId: persistedAssayerId,
+          oldAssayerId: prevAssayerId,
+          newAssayerId: persistedAssayerId,
+          userId,
+        });
+      } else {
+        /**
+         * A plain reassignment (no desk acceptance) is a status change too — the job goes back to
+         * PENDING for somebody else — and it is the event every live screen already routes. It used
+         * to emit only `assignment:reassigned`, so the outgoing assayer's list and the desk views kept
+         * the old holder until a refresh (B7, 2026-09-24). Both assayers are named so each side's
+         * listeners can route it.
+         */
+        emit('assignment:status-changed', {
+          eventType: 'assignment:status-changed',
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          previousState: prevStatus,
+          newState: persistedStatus,
+          assayerId: persistedAssayerId,
+          oldAssayerId: prevAssayerId,
+          newAssayerId: persistedAssayerId,
           userId,
         });
       }
@@ -3692,7 +3811,9 @@ export class AssignmentService {
         assignmentId: saved.id,
         assignmentNumber: saved.assignmentNumber,
         previousAssayerId: prevAssayerId,
+        oldAssayerId: prevAssayerId,
         newAssayerId: newAssayerId,
+        assayerId: newAssayerId,
         userId,
         reason: statedReason,
       });
@@ -4123,6 +4244,7 @@ export class AssignmentService {
 
   async scheduleAudit(id: string, userId: string, scheduledDate: string, remarks?: string): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
+    AssignmentService.assertReschedulable(assignment);
     const dayBeforeSchedule = assignment.scheduledDate ? businessDateKey(assignment.scheduledDate) : null;
 
     /**

@@ -577,6 +577,9 @@ const TemplateEditor: React.FC<{
             <div style={{ border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden' }}>
               <iframe
                 title="Email preview"
+                // The preview is rendered template HTML: fully sandboxed (no script, no same
+                // origin, no forms), so nothing in a template can act as this signed-in admin.
+                sandbox=""
                 srcDoc={
                   preview.emailHtml
                     ? preview.emailHtml

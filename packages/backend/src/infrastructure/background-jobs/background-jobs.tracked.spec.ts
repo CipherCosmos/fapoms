@@ -5,6 +5,7 @@ import type { BackgroundJobKind, BackgroundJobStatus } from '@fapoms/shared';
 import { BackgroundJobEntity } from './background-job.entity';
 import { BackgroundJobRegistry } from './background-job.registry';
 import { OPEN_STATUSES } from './background-job.store';
+import { trackedJobLockKey } from './background-job.tracker';
 import { BackgroundJobsService, INTERRUPTED_MESSAGE, type JobReader } from './background-jobs.service';
 import { BackgroundJobRunner } from './background-job.runner';
 import { BackgroundJobRecovery } from './background-jobs.recovery';
@@ -389,5 +390,82 @@ describe('recovering a tracked run whose worker went away', () => {
     store.age(out.backgroundJobId!, 10 * 60_000);
     await recovery.sweep();
     expect(store.rows.get(out.backgroundJobId!)!.status).toBe('RUNNING');
+  });
+});
+
+/**
+ * Two tracked runs on one queue never overlap, and the recovery sweep never fails a run whose
+ * handler still holds its lock — even when Bull says the job failed (a Bull timeout, a stalled
+ * lock). Postgres advisory locks, played by a shared in-memory lock table.
+ */
+describe('tracked runs are serialised per queue, and a live run is never declared dead', () => {
+  const pg = () => {
+    const held = new Map<string, number>();
+    let session = 0;
+    return {
+      held,
+      createQueryRunner: () => {
+        const me = ++session;
+        return {
+          connect: async () => undefined,
+          release: async () => undefined,
+          query: async (sql: string, [key]: [string]) => {
+            if (sql.includes('pg_try_advisory_lock')) {
+              const owner = held.get(key);
+              if (owner && owner !== me) return [{ ok: false }];
+              held.set(key, me);
+              return [{ ok: true }];
+            }
+            if (held.get(key) === me) held.delete(key);
+            return [{}];
+          },
+        };
+      },
+    };
+  };
+
+  it('a second run on the same queue waits for the first to finish', async () => {
+    const db = pg();
+    const locked = new BackgroundJobTracker(store as any, service, storage as any, db as any);
+    locked.lockPollMs = 5;
+    const a = await service.enqueueTracked(trackedRequest(envelope('a')));
+    const b = await service.enqueueTracked(trackedRequest(envelope('b')));
+
+    const order: string[] = [];
+    let finishA!: () => void;
+    const runA = locked.run(featureQueue.jobs.get(a.jobId)! as any, async () => {
+      order.push('A start');
+      await new Promise<void>((r) => { finishA = r; });
+      order.push('A end');
+      return 'a';
+    }, { describe: () => ({ summary: 'a' }) });
+    await new Promise((r) => setTimeout(r, 10));
+    const runB = locked.run(featureQueue.jobs.get(b.jobId)! as any, async () => { order.push('B start'); return 'b'; },
+      { describe: () => ({ summary: 'b' }) });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(order).toEqual(['A start']);
+    expect(store.rows.get(b.backgroundJobId!)!.progress.stage).toBe('Waiting for the previous run to finish');
+
+    finishA();
+    await Promise.all([runA, runB]);
+    expect(order).toEqual(['A start', 'A end', 'B start']);
+    expect(db.held.size).toBe(0);
+  });
+
+  it('the sweep leaves a Bull-"failed" row alone while its handler holds the run lock', async () => {
+    const db = pg();
+    const probing = new BackgroundJobRecovery(store as any, registry, service, trackedQueue as any, db as any);
+    const out = await service.enqueueTracked(trackedRequest(envelope(randomUUID())));
+    await store.claim(out.backgroundJobId!);
+    featureQueue.jobs.get(out.jobId)!.state = 'failed'; // e.g. a Bull timeout: failed, handler still writing
+    store.age(out.backgroundJobId!, 10 * 60_000);
+    db.held.set(trackedJobLockKey(out.backgroundJobId!), 999); // the live handler's session
+
+    await probing.sweep();
+    expect(store.rows.get(out.backgroundJobId!)!.status).toBe('RUNNING');
+
+    db.held.clear(); // the handler is gone
+    await probing.sweep();
+    expect(store.rows.get(out.backgroundJobId!)!.status).toBe('FAILED');
   });
 });

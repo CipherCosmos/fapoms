@@ -118,6 +118,17 @@ function looksLikeDelimitedText(buffer: Buffer): boolean {
   return !(head.startsWith('<') || head.startsWith('#!') || head.startsWith('MZ'));
 }
 
+/**
+ * A legacy compound-binary (OLE/CFB) file is a spreadsheet only when it carries Excel's workbook
+ * stream. The same container holds Word `.doc`, Outlook `.msg`, `.msi` installers and more; the
+ * magic bytes alone cannot tell them apart. Directory entry names are UTF-16LE: Excel 97+ writes
+ * `Workbook`, Excel 5/95 wrote `Book`.
+ */
+const LEGACY_WORKBOOK_STREAMS = [Buffer.from('Workbook', 'utf16le'), Buffer.from('Book\0', 'utf16le')];
+function isLegacyWorkbook(buffer: Buffer): boolean {
+  return LEGACY_WORKBOOK_STREAMS.some((name) => buffer.includes(name));
+}
+
 /** An .xlsx is a ZIP whose entries include these parts; their names sit uncompressed in the archive. */
 function isSpreadsheetZip(buffer: Buffer): boolean {
   return buffer.includes('[Content_Types].xml') && buffer.includes('xl/workbook');
@@ -171,7 +182,8 @@ export function classifyUpload(buffer: Buffer, claimed?: UploadFamily | null): U
       }
       return refuse(unusableTypeMessage(claimed));
     case 'application/vnd.ms-office':
-      return { family: 'spreadsheet', mimeType: 'application/vnd.ms-excel' };
+      if (isLegacyWorkbook(buffer)) return { family: 'spreadsheet', mimeType: 'application/vnd.ms-excel' };
+      return refuse(unusableTypeMessage(claimed));
     default:
       if (looksLikeDelimitedText(buffer)) return { family: 'spreadsheet', mimeType: 'text/csv' };
       return refuse(unusableTypeMessage(claimed));
@@ -185,8 +197,14 @@ function claimedFamily(declaredType?: string | null, fileName?: string | null): 
     const fromType = FAMILY_OF_TYPE[declared];
     if (fromType) return fromType;
   }
-  const ext = (fileName || '').toLowerCase().split('.').pop() ?? '';
-  return FAMILY_OF_EXTENSION[ext] ?? null;
+  return FAMILY_OF_EXTENSION[fileExtension(fileName)] ?? null;
+}
+
+/** Lower-case extension after the last dot, or '' when the name has none. */
+function fileExtension(fileName?: string | null): string {
+  const name = (fileName || '').toLowerCase().trim();
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? '' : name.slice(dot + 1);
 }
 
 /**
@@ -200,6 +218,12 @@ export function assertUploadContent(
 ): UploadClassification {
   const claimed = claimedFamily(meta.declaredType, meta.fileName);
   const actual = classifyUpload(buffer, claimed);
+  // A legacy Office binary is only accepted under its own name. A compound file that happens to
+  // carry a workbook stream but is called `invoice.pdf`, `photo.jpg` — or has no name at all —
+  // is not something any route here asked for.
+  if (actual.mimeType === 'application/vnd.ms-excel' && fileExtension(meta.fileName) !== 'xls') {
+    refuse('This is an old-style Excel file. Save it with a .xls name, or as .xlsx, and upload it again.');
+  }
   if (claimed && claimed !== actual.family) {
     const really = actual.mimeType === 'text/csv' ? 'plain text' : FAMILY_WORDS[actual.family];
     refuse(`This file is ${really}, not ${FAMILY_WORDS[claimed]}. Choose the right file.`);

@@ -23,9 +23,13 @@
  * sweep was looking.
  */
 
-import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy, Optional } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
+import { InjectDataSource } from '@nestjs/typeorm';
 import type { Queue } from 'bull';
+import type { DataSource } from 'typeorm';
+import { isAdvisoryLockHeld } from '../queue/advisory-lock';
+import { trackedJobLockKey } from './background-job.tracker';
 import { BackgroundJobEntity } from './background-job.entity';
 import { BackgroundJobRegistry } from './background-job.registry';
 import { BackgroundJobStore } from './background-job.store';
@@ -52,6 +56,8 @@ export class BackgroundJobRecovery implements OnApplicationBootstrap, OnModuleDe
     private readonly registry: BackgroundJobRegistry,
     private readonly jobs: BackgroundJobsService,
     @InjectQueue(TRACKED_JOBS_QUEUE) private readonly queue: Queue,
+    /** To ask Postgres whether a tracked run's handler still holds its lock. Optional for specs. */
+    @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -154,6 +160,16 @@ export class BackgroundJobRecovery implements OnApplicationBootstrap, OnModuleDe
       return 'left';
     }
     if (['waiting', 'delayed', 'active', 'paused', 'stuck'].includes(state)) return 'left';
+
+    /*
+      Bull says failed or gone — but that is Bull's view of the JOB, not of the handler. A timed-out
+      or stalled job is failed while its handler may still be writing. The handler holds the row's
+      advisory lock for as long as it runs (`BackgroundJobTracker`); while that lock is held the row
+      is left alone, and the live run settles it.
+    */
+    if (state !== 'completed' && this.dataSource && (await isAdvisoryLockHeld(this.dataSource, trackedJobLockKey(row.id)))) {
+      return 'left';
+    }
 
     const patch =
       state === 'completed'

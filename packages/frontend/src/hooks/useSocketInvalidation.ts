@@ -37,7 +37,19 @@ const DESK_QUEUES = [
  */
 const PLANNING_DESK = [queryKeys.planning.queue, queryKeys.planning.recommendationsAll];
 
-const EVENT_KEYS: [string, ...any[]][] = [
+/** `ProjectXxxEvent` — the class names in the backend's `core/events/domain-events.ts`. */
+const PROJECT_EVENTS = [
+  'ProjectPlanningStartedEvent', 'ProjectSchedulingReadyEvent', 'ProjectExecutionStartedEvent',
+  'ProjectValidationStartedEvent', 'ProjectCompletedEvent', 'ProjectCancelledEvent', 'ProjectOnHoldEvent',
+  'ProjectArchivedEvent',
+] as const;
+const PROJECT_BRANCH_EVENTS = [
+  'ProjectBranchPlanningStartedEvent', 'ProjectBranchAssignmentConfirmedEvent', 'ProjectBranchAuditScheduledEvent',
+  'ProjectBranchAuditCompletedEvent', 'ProjectBranchValidationCompletedEvent', 'ProjectBranchClosedEvent',
+  'ProjectBranchUnableToCoverEvent', 'ProjectBranchCoverageReopenedEvent',
+] as const;
+
+export const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.commandCenter.all],
   ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.commandCenter.all],
   // `assignment:counter-offered` used to sit here; the gateway stopped emitting it when in-app
@@ -50,9 +62,38 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:escalated', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.planning.queue, queryKeys.dashboard.all],
   ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
   ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
-  ['ProjectCompleted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
-  ['ProjectCancelled', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
-  ['ProjectPlanningStarted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
+  /**
+   * A reassignment moves a job between two assayers' lists and changes what the desk queues show;
+   * the gateway sends it to both phones, the job's room and the desk.
+   */
+  ['assignment:reassigned', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.commandCenter.all],
+  /**
+   * Project lifecycle. The server publishes these under their CLASS names — `ProjectCompletedEvent`,
+   * not `ProjectCompleted` (`project.service.ts` publishes `event.constructor.name`). The names
+   * listened for here used to lack the `Event` suffix, so no project transition ever refreshed a
+   * screen. `project:created/updated/deleted` are the record's own create/edit/delete events.
+   */
+  ...PROJECT_EVENTS.map((event): [string, ...any[]] => [
+    event, queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all,
+  ]),
+  ...PROJECT_BRANCH_EVENTS.map((event): [string, ...any[]] => [
+    event, queryKeys.projects.all, queryKeys.branches.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all,
+  ]),
+  ...(['project:created', 'project:updated', 'project:deleted'] as const).map((event): [string, ...any[]] => [
+    event, queryKeys.projects.all, queryKeys.planning.queue, queryKeys.commandCenter.all,
+  ]),
+  // The assignment record's discussion, contact log and clarification threads (the detail drawer).
+  ['comment:added', queryKeys.desk.assignmentDetail, queryKeys.assignments.all],
+  ['communication:created', queryKeys.desk.assignmentDetail, queryKeys.assignments.all],
+  ...(['query:raised', 'query:reopened', 'query:responded'] as const).map((event): [string, ...any[]] => [
+    event, queryKeys.desk.assignmentDetail, queryKeys.assignments.all, queryKeys.documents.dataEntry,
+  ]),
+  // An expense claim decided: its claim lists and the money it books.
+  ['expense:decided', queryKeys.assignments.all, queryKeys.desk.assignmentDetail, queryKeys.billing.all],
+  // Reference data with screens of their own (Holidays, Zones, Users & Roles) and the planning desk's zone picker.
+  ...(['holiday:created', 'holiday:updated', 'holiday:deleted'] as const).map((event): [string, ...any[]] => [event, ['holidays']]),
+  ...(['zone:created', 'zone:updated', 'zone:deleted'] as const).map((event): [string, ...any[]] => [event, ['zones'], queryKeys.planning.all]),
+  ...(['user:created', 'user:updated', 'user:role-changed'] as const).map((event): [string, ...any[]] => [event, ['users']]),
   ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],
   ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry, queryKeys.schedules.all, queryKeys.assignments.all],
   ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],

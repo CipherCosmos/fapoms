@@ -76,3 +76,18 @@ export function usableFix(fix: Fix | null | undefined, now: number): Fix | null 
   if (fix.accuracy != null && fix.accuracy > FIX_MAX_ACCURACY_M) return null;
   return fix;
 }
+
+/**
+ * What to do after an automatic check-in attempt, by its outcome:
+ *  - `retryLater`: forget that this arrival was handled, so a later event (or a tap) tries again —
+ *    only when nothing reached the server (no position fix);
+ *  - `refreshJobs`: re-read the job list and re-plan the circles — when the server refused, since
+ *    the phone's picture of that job was evidently out of date. A refusal is final for today: the
+ *    arrival stays handled, so re-entering the circle does not refuse (and notify) again.
+ */
+export function afterAutoCheckIn(outcome: 'done' | 'queued' | 'refused' | 'no-position' | 'not-signed-in'): {
+  retryLater: boolean;
+  refreshJobs: boolean;
+} {
+  return { retryLater: outcome === 'no-position', refreshJobs: outcome === 'refused' };
+}

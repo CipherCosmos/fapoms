@@ -15,7 +15,7 @@
  */
 
 import type { JobOptions, KeepJobsOptions } from 'bull';
-import type { PaymentMethod } from '@fapoms/shared';
+import type { FinalApprovalRef, PaymentMethod } from '@fapoms/shared';
 import { FAILED_JOB_RETENTION, QueuedJobEnvelope } from '../../infrastructure/queue/queued-job';
 import type { JobActor } from '../../infrastructure/queue/job-actor';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -34,6 +34,8 @@ export const BILLING_BULK_JOB = {
   APPROVE_PAYOUTS: 'approve-payouts',
   PAY_PAYOUTS: 'pay-payouts',
   INVITE_ALL_ASSAYER_INVOICES: 'invite-all-assayer-invoices',
+  /** The HOD's bulk final approval (2026-09-24) — bills, payouts and client invoices, mixed. */
+  FINAL_APPROVE: 'final-approve',
 } as const;
 
 /**
@@ -48,6 +50,12 @@ export interface ApprovePayoutsJobData extends QueuedJobEnvelope {
   actor: JobActor;
   /** Why the assayer's confirmation was skipped, when it was. See `PayoutIdsDto.reason`. */
   reason?: string;
+}
+
+/** The items the HOD ticked, each named by kind — see `FinalApprovalService.approveMany`. */
+export interface FinalApproveJobData extends QueuedJobEnvelope {
+  items: FinalApprovalRef[];
+  actor: JobActor;
 }
 
 export interface PayPayoutsJobData extends QueuedJobEnvelope {
@@ -86,16 +94,18 @@ const COMPLETED_RETENTION: KeepJobsOptions = { age: 6 * 60 * 60, count: 20 };
  * `attempts` does not cover a worker that DIES mid-run — Bull recovers that as a stalled job, on
  * its own counter. The queue is registered with `maxStalledCount: 0` (billing-engine.module.ts).
  *
- * `timeout`: an estimate, not a measurement. A payable's approval or payment is about ten queries
- * in one transaction and an invite about the same plus a notification enqueue; at a generous
- * half-second each, 500 payouts is ~4 minutes and a 1,200-assayer round ~10 minutes. Sixty
- * minutes is six times the larger. It has to be that generous: Bull's timeout fails the job but
- * does not stop the handler, so a timeout that fired on a slow-but-healthy run would let the single
- * loop start the next run while the first was still writing.
+ * No `timeout` — see the note inside the options below.
  */
 export const BILLING_BULK_JOB_OPTIONS: JobOptions = {
   attempts: 1,
-  timeout: 60 * 60_000,
+  /*
+    No `timeout`, deliberately. Bull's timeout fails the job but does NOT stop the handler: the
+    write carried on while the queue's loop started the next run beside it, and the Jobs tray read
+    "failed" for work that was still happening. Overlap is prevented by the Postgres advisory lock
+    `BackgroundJobTracker` holds per queue for the whole run (released by Postgres if the worker
+    dies); a genuinely wedged run is a stalled job, which `maxStalledCount` and the recovery sweep
+    handle.
+  */
   removeOnComplete: COMPLETED_RETENTION,
   removeOnFail: FAILED_JOB_RETENTION,
 };

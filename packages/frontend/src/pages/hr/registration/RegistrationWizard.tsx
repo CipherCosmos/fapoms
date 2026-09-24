@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { APPLICATION_REFERENCES_MAX, bankAccountConfirmProblem, referenceEmailProblem, referencePhoneForDisplay } from '@fapoms/shared';
+import {
+  APPLICATION_REFERENCES_MAX, bankAccountConfirmProblem, referenceEmailProblem, referencePhoneForDisplay,
+  isRegistrationSecretField, looksMasked,
+} from '@fapoms/shared';
 import {
   User, MapPin, CreditCard, FileText, Users, Building2, ClipboardCheck,
   Check, ChevronLeft, ChevronRight, AlertTriangle, Plus, Phone,
@@ -769,31 +772,56 @@ export const RegistrationWizard: React.FC<{
     fieldExtras(field.key),
   );
 
-  /**
-   * The identity boxes, which cannot open on a number that is already on file.
-   *
-   * A resumed registration used to prefill these from the record. The record now hands out masked
-   * identifiers, so the box would have opened holding `••••••234F` — and a clerk who corrected one
-   * character of that would have saved the mask over a real PAN, leaving something that reads
-   * plausibly on every screen afterwards and can never be told apart from the truth.
-   *
-   * So a field with a number already on file shows it masked with a deliberate, recorded reveal
-   * beside it, and only turns back into a box once it has been uncovered. A field with nothing on
-   * file is an ordinary box — there is nothing to protect and nothing to reveal.
-   */
   /*
-    There is nothing to unmask here any more.
+    THE IDENTITY BOXES CANNOT OPEN ON A NUMBER ALREADY ON FILE.
 
-    This used to render a masked value with an audited reveal beside it, because the boxes were
-    reading from an `assayers` row where PAN, Aadhaar and the bank account are encrypted and come
-    back as `••••••234F`. An application is not that row: it holds what was typed, unencrypted,
-    until promotion writes it through `AssayerService.update` — which is where the encryption, the
-    masking and the reveal audit all live.
-
-    So the box is an ordinary box, showing what the desk or the candidate entered. The protection
-    starts when the person does.
+    The application keeps PAN, Aadhaar and the bank account sealed, and every staff read returns
+    them as their last four (`••••••234F`). A box holding that mask invited a clerk to correct one
+    character and save the mask over the real number. So a masked value is shown read-only with a
+    Replace action: Replace empties the box to type the number afresh from the card, and Keep puts
+    the saved value back. Until a new number is typed nothing is sent for it (`withSecretsKept`).
   */
-  const renderIdentity = (field: FieldDef) => renderOne(field);
+  const [replacing, setReplacing] = useState<Record<string, boolean>>({});
+  const renderIdentity = (field: FieldDef) => {
+    const savedValue = reg.saved?.[field.key] ?? '';
+    const onFileMasked = isRegistrationSecretField(field.key) && looksMasked(savedValue);
+    if (!onFileMasked || replacing[field.key]) {
+      if (!onFileMasked) return renderOne(field);
+      return (
+        <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {renderOne(field)}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ alignSelf: 'flex-start', fontSize: 'var(--text-xs)', padding: '2px 6px' }}
+            onClick={() => { reg.set(field.key, savedValue); setReplacing((r) => ({ ...r, [field.key]: false })); }}
+            title="Keep the number already on file"
+          >
+            Keep the number on file
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div key={field.key} data-testid={`masked-${field.key}`}>
+        <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>{field.label}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontFamily: 'monospace', fontSize: 'var(--text-sm)', color: 'var(--text-primary)' }} title="On file, shown as its last digits only">
+            {savedValue}
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: 'var(--text-xs)', padding: '4px 10px' }}
+            onClick={() => { reg.set(field.key, ''); setReplacing((r) => ({ ...r, [field.key]: true })); }}
+            title={`Type a new ${field.label} in place of the one on file`}
+          >
+            Replace
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   /**
    * Leave this step, saving what moved.

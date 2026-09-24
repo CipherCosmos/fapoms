@@ -78,14 +78,18 @@ export interface ReassignOptions {
   newAssayerId: string;
   reason: string;
   /**
-   * The fee the desk typed. Applied when the rate card's re-price for the new assayer differs.
-   * Omitted, the server's re-price stands.
+   * The fee the desk TYPED — see `feeToSend`. Omitted when the box still holds the quote it was
+   * prefilled with: the server then records its own day-aware quote for the new assayer (base
+   * only when their travel for that day is already paid on another job). Sending the prefill
+   * made the server treat a travel-inclusive quote as the desk's number and charge travel twice.
    */
   fee?: number;
-  /** The date on the form. Applied when it differs from the date the job already carries. */
+  /** The date on the form (YYYY-MM-DD). The server applies it only when it differs. */
   scheduledDate?: string;
-  /** Call & Assign: the desk accepts on the new assayer's behalf at `fee`. */
+  /** Call & Assign: the desk records the new assayer's acceptance in the same request. */
   acceptOnBehalf: boolean;
+  /** Optional wording for the recorded acceptance; a default is used for Call & Assign. */
+  acceptanceReason?: string;
 }
 
 interface AssignmentResult {
@@ -96,44 +100,55 @@ interface AssignmentResult {
 }
 
 /**
- * Move a live offer to another assayer, then bring it to what the form says.
+ * The fee to send with an assign, or undefined to let the server price it.
  *
- * The server re-prices from the rate card for the new assayer and resets the job to PENDING; the
- * desk's typed fee (and date) are then applied on top, and Call & Assign accepts it at that fee —
- * the same three things the create path does in one request, done as the three the reassign
- * contract allows. Resolves with the final status so the caller reports what actually happened.
+ * Only a figure the desk actually typed is sent. The box is prefilled with the rate card's quote
+ * as a reading; posting that prefill back made it the "desk's" number, which the server never
+ * re-prices — so an assayer's second job on the same day carried travel a second time.
  */
-export async function reassignAndApply(request: Request, o: ReassignOptions): Promise<{ status?: string }> {
+export function feeToSend(feeInput: string, feeEdited: boolean): number | undefined {
+  if (!feeEdited) return undefined;
+  if (String(feeInput).trim() === '') return undefined;
+  const n = Number(feeInput);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** The one `POST /assignments/:id/reassign` body — move, fee, date and acceptance together. */
+export function reassignBody(o: ReassignOptions): Record<string, unknown> {
+  const body: Record<string, unknown> = { newAssayerId: o.newAssayerId, reason: o.reason.trim() };
+  if (o.fee != null && Number.isFinite(o.fee)) body.proposedFee = o.fee;
+  if (o.scheduledDate) body.scheduledDate = o.scheduledDate;
+  if (o.acceptOnBehalf) {
+    body.acceptOnBehalf = true;
+    body.acceptanceReason = o.acceptanceReason?.trim()
+      || (o.fee != null && Number.isFinite(o.fee)
+        ? `Agreed at ${money(o.fee)} during Call & Assign.`
+        : 'Agreed during Call & Assign.');
+  }
+  return body;
+}
+
+/**
+ * Move a live offer to another assayer — in ONE request.
+ *
+ * The server's reassign takes the move, the desk's typed fee, a new date and the desk's record of
+ * the incoming assayer's acceptance together, in one transaction. This used to be three requests
+ * (reassign, then PUT fee/date, then accept), and a failure after the first left the job moved at
+ * the rate card's price with nobody's acceptance recorded. Resolves with what the server reports,
+ * so the caller says what actually happened.
+ */
+export async function reassignAndApply(
+  request: Request,
+  o: ReassignOptions,
+): Promise<{ status?: string; proposedFee?: number | string | null }> {
   const reason = o.reason.trim();
   if (!reason) throw new Error('A reason is required to move this branch to another assayer.');
 
   const moved = await request<AssignmentResult>(`/assignments/${o.assignmentId}/reassign`, {
     method: 'POST',
-    body: JSON.stringify({ newAssayerId: o.newAssayerId, reason }),
+    body: JSON.stringify(reassignBody(o)),
   });
-  const id = moved?.id || o.assignmentId;
-  let status = moved?.status;
-
-  const patch: Record<string, unknown> = {};
-  if (o.fee != null && Number.isFinite(o.fee) && Number(moved?.proposedFee) !== o.fee) {
-    patch.proposedFee = o.fee;
-    patch.agreedFee = o.fee;
-  }
-  const currentDate = moved?.scheduledDate ? String(moved.scheduledDate).slice(0, 10) : undefined;
-  if (o.scheduledDate && o.scheduledDate !== currentDate) patch.scheduledDate = o.scheduledDate;
-  if (Object.keys(patch).length > 0) {
-    await request(`/assignments/${id}`, { method: 'PUT', body: JSON.stringify(patch) });
-  }
-
-  if (o.acceptOnBehalf) {
-    if (o.fee == null) throw new Error('Accepting on the assayer\'s behalf needs the agreed fee.');
-    const accepted = await request<AssignmentResult>(`/assignments/${id}/accept`, {
-      method: 'POST',
-      body: JSON.stringify({ fee: o.fee, reason: `Agreed at ${money(o.fee)} during Call & Assign.` }),
-    });
-    status = accepted?.status ?? 'ACCEPTED';
-  }
-  return { status };
+  return { status: moved?.status, proposedFee: moved?.proposedFee };
 }
 
 /**

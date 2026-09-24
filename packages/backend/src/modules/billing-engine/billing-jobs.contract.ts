@@ -85,13 +85,18 @@ export const BOOK_ASSIGNMENT_JOB_OPTIONS: JobOptions = {
  * collecting constraint violations into the error list, and report a failure that looks like a
  * data problem rather than a re-run. One attempt, and the operator decides.
  *
- * **`timeout`.** Concurrency is 1, so a wedged job holds the only slot and every later request
- * queues behind it forever. Thirty minutes is far beyond any measured run and can only fire on
- * something genuinely stuck.
+ * **No `timeout`** — see the note inside the options below.
  */
 export const BILLING_JOB_OPTIONS: JobOptions = {
   attempts: 1,
-  timeout: 30 * 60_000,
+  /*
+    No `timeout`, deliberately. Bull's timeout fails the job but does NOT stop the handler: the
+    write carried on while the queue's loop started the next run beside it, and the Jobs tray read
+    "failed" for work that was still happening. Overlap is prevented by the Postgres advisory lock
+    `BackgroundJobTracker` holds per queue for the whole run (released by Postgres if the worker
+    dies); a genuinely wedged run is a stalled job, which `maxStalledCount` and the recovery sweep
+    handle.
+  */
   removeOnComplete: BILLING_COMPLETED_RETENTION,
   removeOnFail: FAILED_JOB_RETENTION,
 };

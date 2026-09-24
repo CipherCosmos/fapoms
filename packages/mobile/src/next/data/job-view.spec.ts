@@ -26,11 +26,11 @@ describe('actionsFor', () => {
   });
 
   it('keeps a not-allowed action, disabled, with the server reason and opening time', () => {
-    const [checkIn, papers] = actionsFor({
+    const [accept, checkIn] = actionsFor({
       capabilities: {
         actions: [
           { action: AssignmentAction.CHECK_IN, allowed: false, code: 'NOT_SCHEDULED_TODAY', reason: 'This job is for tomorrow.', opensAt: '2026-09-25T00:00:00+05:30' },
-          { action: AssignmentAction.SUBMIT_RETURN, allowed: true },
+          { action: AssignmentAction.ACCEPT, allowed: true },
         ],
       },
     });
@@ -41,9 +41,32 @@ describe('actionsFor', () => {
       code: 'NOT_SCHEDULED_TODAY',
       opensAt: '2026-09-25T00:00:00+05:30',
       weight: 'quiet',
+      comingSoon: false,
     });
     // The main weight goes to the first ALLOWED action, not to a disabled one.
-    expect(papers.weight).toBe('main');
+    expect(accept.weight).toBe('main');
+  });
+
+  it('marks actions this app cannot carry out yet as coming soon, never main', () => {
+    const views = actionsFor({
+      capabilities: {
+        actions: [
+          { action: AssignmentAction.SUBMIT_RETURN, allowed: true },
+          { action: AssignmentAction.CHECK_OUT, allowed: true },
+          { action: AssignmentAction.CLAIM_EXPENSE, allowed: true },
+          { action: AssignmentAction.REPORT_ISSUE, allowed: true },
+        ],
+      },
+    });
+    expect(views.map((v) => [v.action, v.comingSoon])).toEqual([
+      ['SUBMIT_RETURN', true],
+      ['CHECK_OUT', false],
+      ['CLAIM_EXPENSE', true],
+      ['REPORT_ISSUE', true],
+    ]);
+    expect(views.some((v) => v.weight === 'main')).toBe(false);
+    const wired = actionsFor({ capabilities: { actions: [{ action: AssignmentAction.ACCEPT, allowed: true }, { action: AssignmentAction.DECLINE, allowed: true }, { action: AssignmentAction.CHECK_IN, allowed: true }] } });
+    expect(wired.every((v) => !v.comingSoon)).toBe(true);
   });
 
   it('does not hide an action this build has never heard of', () => {

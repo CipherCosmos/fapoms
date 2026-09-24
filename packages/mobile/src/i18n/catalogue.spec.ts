@@ -28,7 +28,7 @@ const EVERY_VARIABLE = {
   actual: 'Sikkim', seconds: 5, phone: '9876543210',
   bank: 'SBI', contact: 'hr@example.com', documents: 'PAN', email: 'a@b.in', index: 1, length: 201, min: 0,
   note: 'n', now: '9876543211', pincode: '400001', place: 'Mumbai', ref: 'APP-1', sent: '9876543210',
-  step: 1, typed: 't', value: 'v', version: '2026-09',
+  step: 1, typed: 't', value: 'v', version: '2026-09', last4: '4455',
 };
 
 function leafKeys(node: unknown, path: string[] = []): string[] {

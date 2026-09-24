@@ -12,6 +12,7 @@ import { AppText, Badge, Button, Card, Icon, Input, ModalSheet, Tappable } from 
 import { useT } from '../../i18n';
 import {
   SelfRegistrationApi,
+  registrationSessionHeaders,
   type RegistrationApplication,
   type RegistrationDocument,
   type RegistrationHydration,
@@ -70,10 +71,23 @@ function openFile(url: string) {
   void Linking.openURL(url).catch(() => undefined);
 }
 
+/**
+ * Opens a scan in the phone's viewer. The viewer cannot send the session header the scan needs,
+ * so a short-lived link to exactly this page is asked for first (see `documentOpenUrl`).
+ */
+async function openScan(token: string, requirement: string, index: number) {
+  const res = await SelfRegistrationApi.documentOpenUrl(token, requirement, index);
+  if (res.success && res.data) openFile(res.data);
+}
+
 const isImageFile = (label: string, filePath: string, index: number, count: number) =>
   (scanMimeType(storedScanFileName(label, filePath, count > 1 ? index + 1 : undefined)) ?? '').startsWith('image/');
 
-const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
+/**
+ * `headers` carries the registration session key: the server hands a scan's bytes only to a caller
+ * that unlocked the link with a code this session (`registrationSessionHeaders`).
+ */
+const PreviewImage: React.FC<{ url: string; headers?: Record<string, string> }> = ({ url, headers }) => {
   const t = useTheme();
   const tr = useT();
   const [loaded, setLoaded] = useState(false);
@@ -87,7 +101,7 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
   return (
     <View style={{ width: '100%', height: 420, borderRadius: t.radius.lg, overflow: 'hidden', backgroundColor: t.colors.surfaceAlt }}>
       <Image
-        source={{ uri: url }}
+        source={{ uri: url, headers }}
         resizeMode="contain"
         style={{ width: '100%', height: 420 }}
         onLoad={() => setLoaded(true)}
@@ -103,7 +117,7 @@ const PreviewImage: React.FC<{ url: string }> = ({ url }) => {
 };
 
 /** A small picture of what was sent — a PDF shows as a page icon. Tap to look closer. */
-const Thumb: React.FC<{ url: string; image: boolean; onPress: () => void; label: string }> = ({ url, image, onPress, label }) => {
+const Thumb: React.FC<{ url: string; headers?: Record<string, string>; image: boolean; onPress: () => void; label: string }> = ({ url, headers, image, onPress, label }) => {
   const t = useTheme();
   const [failed, setFailed] = useState(false);
   return (
@@ -114,7 +128,7 @@ const Thumb: React.FC<{ url: string; image: boolean; onPress: () => void; label:
         alignItems: 'center', justifyContent: 'center',
       }}>
         {image && !failed
-          ? <Image source={{ uri: url }} resizeMode="cover" style={{ width: 64, height: 80 }} onError={() => setFailed(true)} />
+          ? <Image source={{ uri: url, headers }} resizeMode="cover" style={{ width: 64, height: 80 }} onError={() => setFailed(true)} />
           : <Icon name="document-text-outline" size={28} color={t.colors.textMuted} />}
       </View>
     </Tappable>
@@ -245,6 +259,7 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                           <View key={`${i}-${filePath}`} style={{ alignItems: 'center', gap: 2 }}>
                             <Thumb
                               url={versionedFileUrl(token, requirement, i, filePath)}
+                              headers={registrationSessionHeaders(token)}
                               image={isImageFile(label, filePath, i, files.length)}
                               label={label}
                               onPress={() => setPreviewRequirement(requirement)}
@@ -406,7 +421,7 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                   </AppText>
                 )}
                 {isImageFile(previewLabel, filePath, i, count) ? (
-                  <PreviewImage key={url} url={url} />
+                  <PreviewImage key={url} url={url} headers={registrationSessionHeaders(token)} />
                 ) : (
                   <View style={{ gap: t.space.md, padding: t.space.lg, borderRadius: t.radius.lg, backgroundColor: t.colors.surfaceAlt }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
@@ -419,7 +434,7 @@ export const StepDocuments: React.FC<StepDocumentsProps> = ({
                       label={tr('selfRegistration.documents.previewOpen')}
                       icon="open-outline"
                       variant="neutral"
-                      onPress={() => openFile(url)}
+                      onPress={() => void openScan(token, previewRequirement, i)}
                       full
                     />
                   </View>

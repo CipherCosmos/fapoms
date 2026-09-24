@@ -93,7 +93,7 @@ export const WORKER_CONCURRENCY = {
    * queue — a few short reads and two updates, no gateway call — and only for events an
    * administrator has switched SMS on for, so it is idle on a default deployment.
    */
-  notifications: { deliver: 5, deliverEmail: 3, deliverSms: 2, sweep: 1, failAbandoned: 1, markExhausted: 1 },
+  notifications: { deliver: 5, deliverEmail: 3, deliverSms: 2, sweep: 1, failAbandoned: 1 },
 
   /**
    * The emails an action asks for — invites, setup links, approval letters, bulk credentials —
@@ -124,19 +124,13 @@ export const WORKER_CONCURRENCY = {
   workforceBulk: { run: 1 },
 
   /**
-   * Report exports. One per report kind, so a slow roster export cannot block a billing export.
-   *
-   * `assayerRosterPdf` joined on 2026-09-12 with the Appraiser Recruitment work. It is the same
-   * roster as `assayerRoster` rendered by pdfkit instead of xlsx, and it is a separate `@Process`
-   * — hence a separate slot — because the two share an enqueue dedupe key derived from the job
-   * name: one name for both would let an Excel request and a PDF request of the same roster
-   * deduplicate onto each other and hand the second caller the wrong file type.
-   *
-   * It does not newly cross the pool line (the total has been past `DB_POOL_MAX` since August
-   * 2026, which the boot warning below already says out loud), and it is the same kind of slot as
-   * its siblings: idle almost always, and holding no connection while pdfkit serialises.
+   * Report exports: ONE `'*'` loop for every export kind. It used to be five named handlers, with a
+   * comment claiming "one per report kind, so a slow roster export cannot block a billing export" —
+   * false: Bull's loops are per queue and take any job name, so five handlers were five shared
+   * loops and up to five synchronous `xlsx.write` builds at once, each one freezing the process.
+   * One slot is the correct number for a CPU-blocking build (see `ReportJobsWorker`).
    */
-  reports: { assignments: 1, billing: 1, commandCenter: 1, assayerRoster: 1, assayerRosterPdf: 1 },
+  reports: { run: 1 },
 
   /** OCR. Bounded by CPU on the host rather than by the pool. */
   ocr: { extract: 3 },
@@ -156,10 +150,19 @@ export const WORKER_CONCURRENCY = {
    */
   planningWrites: { run: 1 },
 
-  /** Scheduled scans. */
+  /**
+   * Scheduled scans. Two named handlers are two SHARED loops, so two scans could run at once (a
+   * retry's backoff landing on the next tick); the scan takes a Postgres advisory lock and a tick
+   * that finds one running skips (`SlaScannerWorker.runScan`).
+   */
   slaScanner: { scan: 1, digest: 1 },
 
-  /** Single-slot workers, each for its own reason documented at its `@Process`. */
+  /**
+   * Single-slot workers, each for its own reason documented at its `@Process` — except `billing`,
+   * which is TWO shared loops (reconcile + booking are two named handlers on one queue), not one of
+   * each. Two reconciles cannot overlap anyway: reconcile runs through `BackgroundJobTracker`, whose
+   * per-queue advisory lock serialises tracked runs cluster-wide.
+   */
   retention: { purge: 1 },
   outbox: { drain: 1 },
   billing: { reconcile: 1, bookAssignment: 1 },
@@ -187,7 +190,6 @@ export const WORKER_CONCURRENCY = {
    * exists solely to stop the every-minute cron from overlapping itself if a pass ever runs long.
    */
   auditSeal: { seal: 1 },
-  generic: { catchAll: 1 },
   /**
    * Tracked background jobs (`BackgroundJobsWorker`, queue `tracked-jobs`) — the uploads and other
    * work whose progress lives on a `background_jobs` row the Jobs tray reads back after a refresh.
@@ -250,7 +252,6 @@ const QUEUE_NAME_BY_WORKER_KEY: Record<keyof typeof WORKER_CONCURRENCY, string> 
   billingBulk: 'billing-bulk-jobs',
   documents: 'document-dispatch',
   auditSeal: 'audit-seal',
-  generic: 'background-jobs',
   trackedJobs: 'tracked-jobs',
   geoPrecision: 'geo-precision',
 };

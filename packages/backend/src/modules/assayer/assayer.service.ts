@@ -18,8 +18,16 @@ import { diffFields } from '../../core/audit/diff-fields';
 import {
   COMMITTED_ASSIGNMENT_STATUSES,
   DEFAULT_WEEKLY_CAPACITY,
-  IN_FLIGHT_ASSIGNMENT_STATUSES,
 } from '../assignment/assignment-workload';
+import {
+  announceCancelledAssignments,
+  CANCELLABLE_ASSIGNMENT_STATUSES,
+  CancelledForAnnouncement,
+  lockOnSiteAssignments,
+  onSiteRefusalMessage,
+} from '../assignment/closure-cancellation';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
+import { DayTravelService } from '../assignment/assignment-day-travel';
 import { DATA_INTEGRITY_SHEET } from './data-integrity.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import {
@@ -670,6 +678,10 @@ interface CancelledAssignmentRow {
   new_version: number | null;
   scheduled_date: string | null;
   project_branch_id: string | null;
+  /** Who raised the job — the desk notice's owner. */
+  created_by?: string | null;
+  branch_name?: string | null;
+  assayer_id?: string | null;
 }
 
 @Injectable()
@@ -733,6 +745,13 @@ export class AssayerService implements OnModuleInit {
      * missing one refuses only the SMS leg: the email still carries the credential.
      */
     @Optional() private readonly smsService?: SmsService,
+    /**
+     * For the departure/deletion cascade's after-commit announcements (2026-09-24): the cancelled
+     * jobs vanish from the assayer's phone, and the day's travel is re-decided. Optional and last
+     * for the same positional-spec reason as the four above.
+     */
+    @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
+    @Optional() private readonly dayTravel?: DayTravelService,
   ) {}
 
   private emailQueue(): EmailService {
@@ -1775,6 +1794,14 @@ export class AssayerService implements OnModuleInit {
     if (opts.selfEdit && dto.leaves !== undefined) {
       await this.assertLeaveClearOfCommittedWork(id, assayer.leaves ?? [], dto.leaves ?? []);
     }
+    /**
+     * Staff may record leave over accepted work (somebody phoning in sick), but they are TOLD which
+     * jobs it covers, so the work is reassigned rather than discovered on the day (B12, 2026-09-24).
+     * A warning on the response, not a refusal.
+     */
+    const leaveWarning = !opts.selfEdit && dto.leaves !== undefined
+      ? await this.leaveOverCommittedWorkWarning(id, assayer.leaves ?? [], dto.leaves ?? [])
+      : null;
     const orig = {
       address: assayer.address,
       city: assayer.city,
@@ -2027,6 +2054,7 @@ export class AssayerService implements OnModuleInit {
       payload: { id: saved.id, displayName: saved.displayName },
     });
     await this.hydrateWorkforceAttributes(saved);
+    if (leaveWarning) (saved as any).leaveWarning = leaveWarning;
     return saved;
   }
 
@@ -2234,12 +2262,51 @@ export class AssayerService implements OnModuleInit {
     before: Array<{ startDate: string; endDate: string }>,
     after: Array<{ startDate: string; endDate: string }>,
   ): Promise<void> {
+    const clashes = await this.leaveClashesWithCommittedWork(assayerId, before, after);
+    if (clashes.length === 0) return;
+    throw withCode(
+      new BadRequestException(
+        `This leave covers work you have already accepted: ${AssayerService.nameClashes(clashes)}. `
+        + 'Ask operations to reassign or reschedule it before marking those days as leave.',
+      ),
+      ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK,
+    );
+  }
+
+  /** The HR path's version of the same check: a warning listing the jobs, never a refusal (B12). */
+  private async leaveOverCommittedWorkWarning(
+    assayerId: string,
+    before: Array<{ startDate: string; endDate: string }>,
+    after: Array<{ startDate: string; endDate: string }>,
+  ): Promise<{ code: string; message: string; assignments: Array<{ assignmentNumber: string | null; day: string; branchName: string | null }> } | null> {
+    const clashes = await this.leaveClashesWithCommittedWork(assayerId, before, after);
+    if (clashes.length === 0) return null;
+    return {
+      code: ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK,
+      message: `Leave saved, but it covers work this assayer has already accepted: ${AssayerService.nameClashes(clashes)}. `
+        + 'Reassign or reschedule those jobs.',
+      assignments: clashes.map((c) => ({ assignmentNumber: c.assignment_number, day: c.day, branchName: c.branch_name })),
+    };
+  }
+
+  private static nameClashes(clashes: Array<{ assignment_number: string | null; day: string; branch_name: string | null }>): string {
+    return clashes
+      .map((c) => `${formatDateOnly(c.day)} at ${c.branch_name ?? 'a branch'}${c.assignment_number ? ` (${c.assignment_number})` : ''}`)
+      .join('; ');
+  }
+
+  /** Accepted jobs whose day falls inside a leave period that is NEW in this edit. */
+  private async leaveClashesWithCommittedWork(
+    assayerId: string,
+    before: Array<{ startDate: string; endDate: string }>,
+    after: Array<{ startDate: string; endDate: string }>,
+  ): Promise<Array<{ assignment_number: string | null; day: string; branch_name: string | null }>> {
     const dayOf = (v: unknown) => (v == null || v === '' ? '' : businessDateKey(v as string));
     const known = new Set(before.map((l) => `${dayOf(l?.startDate)}|${dayOf(l?.endDate)}`));
     const fresh = after
       .map((l) => ({ start: dayOf(l?.startDate), end: dayOf(l?.endDate) }))
       .filter((l) => l.start && l.end && !known.has(`${l.start}|${l.end}`));
-    if (fresh.length === 0) return;
+    if (fresh.length === 0) return [];
 
     const held: Array<{ assignment_number: string | null; scheduled_on: string | Date | null; branch_name: string | null }> =
       await this.dataSource.query(
@@ -2257,18 +2324,7 @@ export class AssayerService implements OnModuleInit {
       .map((h) => ({ ...h, day: h.scheduled_on ? dayOf(h.scheduled_on) : '' }))
       .filter((h) => h.day && fresh.some((l) => l.start <= h.day && h.day <= l.end))
       .sort((x, y) => x.day.localeCompare(y.day));
-    if (clashes.length === 0) return;
-
-    const named = clashes
-      .map((c) => `${formatDateOnly(c.day)} at ${c.branch_name ?? 'a branch'}${c.assignment_number ? ` (${c.assignment_number})` : ''}`)
-      .join('; ');
-    throw withCode(
-      new BadRequestException(
-        `This leave covers work you have already accepted: ${named}. `
-        + 'Ask operations to reassign or reschedule it before marking those days as leave.',
-      ),
-      ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK,
-    );
+    return clashes;
   }
 
   /** Does this assayer currently hold work they have accepted and not yet completed? */
@@ -2461,7 +2517,12 @@ export class AssayerService implements OnModuleInit {
      * boundary and hide every statement after it from the check. A plain chain keeps the whole
      * cascade — every UPDATE, by name — inside the text the structural test actually reads.
      */
+    // What the cascade cancelled — announced once the deletion has COMMITTED.
+    let deletionCancelled: CancelledAssignmentRow[] = [];
     await this.uow.run((manager) => manager.getRepository(AssayerEntity).save(assayer)
+      // Nobody on site (owner decision 2026-09-24): the deletion is refused, listing the jobs, and
+      // the whole transaction rolls back. The office completes or cancels those first.
+      .then(() => this.refuseWhileOnSite(manager, id, 'Cannot delete this assayer'))
       // Deactivate assayer commercial profiles
       .then(() => manager.query(
         `UPDATE assayer_commercial_profiles SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
@@ -2571,11 +2632,14 @@ export class AssayerService implements OnModuleInit {
                 before.entity_version AS previous_version,
                 assignments.entity_version AS new_version,
                 assignments.scheduled_date,
-                assignments.project_branch_id`,
+                assignments.project_branch_id,
+                assignments.created_by,
+                (SELECT b.name FROM project_branches pb JOIN branches b ON b.id = pb.branch_id
+                  WHERE pb.id = assignments.project_branch_id) AS branch_name`,
         [AssignmentStatus.CANCELLED, userId, id, AssayerService.OPEN_ASSIGNMENT_STATUSES],
       ))
       .then((raw) => this.auditCancelledOnDeparture(
-        AssayerService.returnedRows(raw), id, AssayerLifecycleStatus.ARCHIVED, userId,
+        (deletionCancelled = AssayerService.returnedRows(raw)), id, AssayerLifecycleStatus.ARCHIVED, userId,
         'Assayer profile soft deleted; the work could not proceed as planned. Reassign it if it '
         + 'still needs doing.',
         manager, deletionEventId, 'ASSAYER_DELETED',
@@ -2634,6 +2698,10 @@ export class AssayerService implements OnModuleInit {
       organizationId: assayer.organizationId,
       payload: { id, displayName: assayer.displayName },
     });
+    await this.announceCascadeCancellations(
+      deletionCancelled, id, assayer.displayName, userId,
+      `${assayer.displayName ?? 'The assayer'}'s record was deleted`,
+    );
   }
 
   /**
@@ -2703,7 +2771,64 @@ export class AssayerService implements OnModuleInit {
    * always right about this — it filters on an explicit set of open standings, which is why it
    * was idempotent while this was not.
    */
-  private static readonly OPEN_ASSIGNMENT_STATUSES: string[] = [...IN_FLIGHT_ASSIGNMENT_STATUSES];
+  /**
+   * PENDING and ACCEPTED only, since 2026-09-24 (owner decision). Checked-in and in-progress work
+   * is no longer cancelled by a departure or a deletion at all: the cascade REFUSES while anyone is
+   * on site (`lockOnSiteAssignments`), and the office first completes or cancels those jobs with a
+   * reason. Before, a raw UPDATE cancelled a visit that was under way and told nobody.
+   */
+  private static readonly OPEN_ASSIGNMENT_STATUSES: string[] = [...CANCELLABLE_ASSIGNMENT_STATUSES];
+
+  /**
+   * Refuse a departure or deletion while this assayer has a job on site — read `FOR UPDATE`, so a
+   * check-in cannot slip in between the answer and the cascade. The message lists every such job.
+   */
+  private async refuseWhileOnSite(
+    runner: Pick<EntityManager, 'query'>,
+    assayerId: string,
+    what: string,
+  ): Promise<void> {
+    const onSite = await lockOnSiteAssignments(runner, { assayerId });
+    if (onSite.length > 0) throw new ConflictException(onSiteRefusalMessage(what, onSite));
+  }
+
+  /**
+   * After commit: the one announcer every bulk cancel shares (`announceCancelledAssignments`). The
+   * departed or deleted assayer is not sent a notice (they are the one who left); the desk is, their
+   * phone refreshes, sharing stops, the status change is published and the day's travel re-decided.
+   */
+  private async announceCascadeCancellations(
+    rows: CancelledAssignmentRow[],
+    assayerId: string,
+    assayerName: string | null | undefined,
+    userId: string,
+    reason: string,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const announced: CancelledForAnnouncement[] = rows.map((r) => ({
+      id: r.id,
+      assignmentNumber: r.assignment_number ?? r.id,
+      previousStatus: r.previous_status,
+      assayerId,
+      branchName: r.branch_name ?? null,
+      entityVersion: Number(r.new_version ?? 0),
+      scheduledDate: r.scheduled_date,
+      createdBy: r.created_by ?? null,
+      assayerName: assayerName ?? null,
+    }));
+    await announceCancelledAssignments(announced, {
+      notificationDispatch: this.notificationDispatch,
+      eventPublisher: this.eventPublisher,
+      refreshPush: this.refreshPush,
+      disableLiveTrackingWhenWorkEnds: (id, uid) => this.disableLiveTrackingWhenWorkEnds(id, uid),
+      dayTravel: this.dayTravel,
+    }, {
+      userId,
+      reason,
+      assayerNotice: 'none',
+      travelReason: reason,
+    });
+  }
 
   /**
    * Every lifecycle move goes through here, so the cached principal is dropped in one place.
@@ -3241,8 +3366,10 @@ export class AssayerService implements OnModuleInit {
     }
 
     let event: any;
+    // What a departure's cascade cancelled — announced once the transition has COMMITTED.
+    let departureCancelled: CancelledAssignmentRow[] = [];
 
-    return this.workflowEngine.executeCommand(
+    const outcome = await this.workflowEngine.executeCommand(
       'assayer',
       preRead.id,
       `${targetStatus}_Command`,
@@ -3687,11 +3814,12 @@ export class AssayerService implements OnModuleInit {
 
         // Same reasoning, same scope, same "after the save" ordering as the empanelment close
         // above — see `cancelOpenAssignmentsOnDeparture` for why this exists at all.
-        const assignmentsCancelled = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
+        departureCancelled = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
           ? await this.cancelOpenAssignmentsOnDeparture(
             saved.id, targetStatus, userId, manager, departureEventId ?? undefined,
           )
-          : 0;
+          : [];
+        const assignmentsCancelled = departureCancelled.length;
 
         /**
          * The bookkeeping goes on the record with the reason, not silently alongside it. A
@@ -3749,6 +3877,13 @@ export class AssayerService implements OnModuleInit {
         return { saved, event };
       }
     );
+
+    // Committed. Never about a departure that rolled back.
+    await this.announceCascadeCancellations(
+      departureCancelled, preRead.id, preRead.displayName, userId,
+      `${preRead.displayName ?? 'The assayer'} was recorded as ${targetStatus}`,
+    );
+    return outcome;
   }
 
   /**
@@ -3951,10 +4086,13 @@ export class AssayerService implements OnModuleInit {
      * `auditCancelledOnDeparture`.
      */
     departureEventId?: string,
-  ): Promise<number> {
+  ): Promise<CancelledAssignmentRow[]> {
     const runner = manager ?? this.dataSource;
     const reason = `Assayer workforce record moved to ${target} on ${calendarDay(new Date())}; ` +
       'the work could not proceed as planned. Reassign it if it still needs doing.';
+
+    // Nobody on site (owner decision 2026-09-24): refused, listing the jobs, before anything moves.
+    await this.refuseWhileOnSite(runner, assayerId, `Cannot record this assayer as ${target}`);
 
     /**
      * One statement, and it hands back what it changed.
@@ -3986,7 +4124,10 @@ export class AssayerService implements OnModuleInit {
               before.entity_version AS previous_version,
               a.entity_version      AS new_version,
               a.scheduled_date,
-              a.project_branch_id`,
+              a.project_branch_id,
+              a.created_by,
+              (SELECT b.name FROM project_branches pb JOIN branches b ON b.id = pb.branch_id
+                WHERE pb.id = a.project_branch_id) AS branch_name`,
       [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssayerService.OPEN_ASSIGNMENT_STATUSES],
     );
 
@@ -4017,7 +4158,7 @@ export class AssayerService implements OnModuleInit {
       [userId, assayerId, AssignmentStatus.CANCELLED],
     );
 
-    return cancelled.length;
+    return cancelled;
   }
 
   /**

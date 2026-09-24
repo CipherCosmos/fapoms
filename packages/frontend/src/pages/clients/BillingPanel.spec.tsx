@@ -11,6 +11,12 @@ jest.mock('../../hooks/useClients', () => ({
   useUpdateBilling: jest.fn(),
   useUpdateClient: jest.fn(),
 }));
+// Save is gated on `PUT /clients/:id/billing`'s ADMIN-only audience; these tests are about the
+// fields, so they run as an administrator. The gate itself is pinned in client-panels-gating.spec.
+jest.mock('../../hooks/useCurrentRoles', () => ({
+  ...jest.requireActual('../../hooks/useCurrentRoles'),
+  useCurrentRoles: () => ['ADMIN'],
+}));
 jest.mock('../../components/ui', () => ({
   ...jest.requireActual('../../components/ui'),
   useToast: () => ({ toast: jest.fn() }),

@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { ConflictException, HttpException, HttpStatus, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as QRCode from 'qrcode';
 import type { Readable } from 'stream';
@@ -7,6 +7,7 @@ import { AssayerService } from './assayer.service';
 import { RosterRecordsService } from './roster-records.service';
 import { ComplianceStandingService } from './compliance-standing.service';
 import { AuditService } from '../../core/audit/audit.service';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 import { runOutsideRequestContext } from '../../core/context/request-context';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { appPublicUrl } from '../../infrastructure/notifications/email-provider';
@@ -53,6 +54,21 @@ export interface IdCardVerification {
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /**
+ * How many wrong codes one ID number may take before the typed check is closed for it.
+ *
+ * The per-IP throttle alone (10 a minute) still lets a patient guesser, or several addresses, work
+ * through the 6-digit space for one person; a live code is valid for about two minutes, so the
+ * counter is kept per ID number, across every address. Five wrong in fifteen minutes is far past
+ * any honest typo, and a lock only closes the TYPED route — scanning the QR still works, so the
+ * person in front of the counter is never stranded by somebody else's guessing.
+ */
+export const ID_CARD_CODE_MAX_FAILURES = 5;
+export const ID_CARD_CODE_FAIL_WINDOW_SECONDS = 15 * 60;
+export const ID_CARD_CODE_LOCK_SECONDS = 15 * 60;
+const failKey = (code: string) => `idcard:verify-fail:${code}`;
+const lockKey = (code: string) => `idcard:verify-lock:${code}`;
+
+/**
  * THE DIGITAL ID CARD — the app's card, its live code, and the public check of both
  * (owner, 2026-09-23). See `id-card.ts` for the card and `id-card-verification.ts` for the code.
  */
@@ -67,6 +83,8 @@ export class IdCardService {
     @Inject('StorageEngine') private readonly storage: StorageEngine,
     config: ConfigService,
     @Optional() private readonly compliance?: ComplianceStandingService,
+    /** Wrong-code counters. Absent (no Redis), the check falls back to the per-IP throttle alone. */
+    @Optional() private readonly cache?: CacheService,
   ) {
     this.key = idCardKey(config.get<string>('JWT_SECRET', 'dev-secret'));
   }
@@ -130,10 +148,23 @@ export class IdCardService {
   /** The ID number and the 6 digits, typed in. The same answer for "no such person" and "wrong code". */
   async verifyByCode(assayerCode: string, code: string): Promise<IdCardVerification> {
     const noMatch = { result: 'NO_MATCH' as const, message: 'No live ID card matches that ID number and code. Check both, or ask them to show the code again — it changes every minute.' };
+    const idNumber = String(assayerCode ?? '').trim().toUpperCase();
+    // Counted per ID number whether or not anybody holds it: a lock that only real numbers could
+    // earn would itself say which numbers are real.
+    if (this.cache && (await this.cache.getJson<number>(lockKey(idNumber)))) {
+      throw new HttpException(
+        'Too many wrong codes for this ID number. Scan the QR code on their card instead, or try again in 15 minutes.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     // Signed-out: one record, found by the ID number, and read further only if its live code matches.
     return runOutsideRequestContext(async () => {
-      const person = await this.assayerService.getProfile(String(assayerCode ?? '').trim().toUpperCase()).catch(() => null);
-      if (!person || !checkLiveCardCode(this.key, person.id, code, nowSeconds())) return this.answer(noMatch, null, 'CODE');
+      const person = await this.assayerService.getProfile(idNumber).catch(() => null);
+      if (!person || !checkLiveCardCode(this.key, person.id, code, nowSeconds())) {
+        await this.recordCodeFailure(idNumber);
+        return this.answer(noMatch, null, 'CODE');
+      }
+      await this.cache?.del(failKey(idNumber));
       return this.verifyPerson(person.id, 'CODE');
     });
   }
@@ -151,6 +182,16 @@ export class IdCardService {
   }
 
   // ── internals ─────────────────────────────────────────────────────────
+
+  /** One more wrong code for this ID number; at the limit, close the typed check for a while. */
+  private async recordCodeFailure(idNumber: string): Promise<void> {
+    if (!this.cache) return;
+    const count = await this.cache.incrWithTtl(failKey(idNumber), ID_CARD_CODE_FAIL_WINDOW_SECONDS);
+    if (count >= ID_CARD_CODE_MAX_FAILURES) {
+      await this.cache.setJson(lockKey(idNumber), Date.now() + ID_CARD_CODE_LOCK_SECONDS * 1000, ID_CARD_CODE_LOCK_SECONDS);
+      await this.cache.del(failKey(idNumber));
+    }
+  }
 
   private async verifyPerson(assayerId: string, method: 'QR' | 'CODE'): Promise<IdCardVerification> {
     const person = await this.assayerService.findOneForReading(assayerId).catch(() => null);

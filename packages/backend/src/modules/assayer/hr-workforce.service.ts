@@ -1044,10 +1044,12 @@ export class HrWorkforceService implements OnModuleInit {
         ROUND(AVG(NULLIF(average_rating, 0))::numeric, 2)                       AS "avgRating",
         COUNT(*) FILTER (WHERE average_rating > 0)::int                         AS rated,
         COUNT(*) FILTER (WHERE average_rating > 0 AND average_rating < 3)::int   AS "belowPar",
-        SUM(total_assignments)::int                                             AS "totalAssignments",
-        SUM(completed_assignments)::int                                         AS "completedAssignments",
-        SUM(cancelled_assignments)::int                                         AS "cancelledAssignments",
-        SUM(on_time_completions)::int                                           AS "onTimeCompletions"
+        -- COALESCE: SUM over no rows (an empty or fully out-of-scope roster) is NULL, not 0, and the
+        -- page's "nobody has been given work yet" check compares against 0.
+        COALESCE(SUM(total_assignments), 0)::int                                AS "totalAssignments",
+        COALESCE(SUM(completed_assignments), 0)::int                            AS "completedAssignments",
+        COALESCE(SUM(cancelled_assignments), 0)::int                            AS "cancelledAssignments",
+        COALESCE(SUM(on_time_completions), 0)::int                              AS "onTimeCompletions"
       FROM assayers
       WHERE ${ON_ROSTER}${performanceScope}
     `, performanceParams);

@@ -83,41 +83,29 @@ export class AuthController {
   ) {}
 
   /**
-   * Confirms an assayer identifier exists, before the password step.
+   * Pre-login identifier step — answers the same thing for every identifier.
    *
-   * The app previously did this by downloading the entire assayer list from a
-   * public `GET /assayers` and matching client-side — which is why that endpoint
-   * was public, and why every assayer's bcrypt hash and personal details were
-   * readable by anyone who could reach the API. This returns only what the login
-   * screen needs to greet the user, for one exact identifier.
+   * It used to confirm the identifier existed and hand back the person's display name, assayer
+   * code and whether they had ever been given a password. The route needs no credentials, so that
+   * made it a directory: anyone could walk assayer codes or phone numbers and collect who works
+   * here, by name, and which accounts had no password yet (the easiest ones to target with a
+   * social-engineering "we're setting up your app" call). The login endpoint already refuses to
+   * tell a wrong password from a missing account; this route now keeps the same silence.
+   *
+   * Kept (rather than deleted) because field-app builds already in people's hands call it; they
+   * read only `needsAppAccess` after a failed sign-in, and treat its absence as "nothing special"
+   * — so they fall back to the ordinary credential message.
    */
-  // Unauthenticated and needs no credentials to call, so it is cheaper to hammer than login: an
-  // attacker enumerating assayer codes here to find live identifiers, then feeding them to a
-  // credential guess, never has to pay a single bcrypt compare along the way. Same per-IP budget
-  // as login for the same reason (shared office NAT, per-account lockout does the real work).
+  // Unauthenticated and needs no credentials to call. The throttle stays: the answer no longer
+  // varies, but an unthrottled public POST is still a free amplifier for anyone hammering the API.
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('verify-assayer')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Check an assayer identifier exists (pre-login, no credentials returned)' })
-  async verifyAssayer(@Body() dto: VerifyAssayerDto) {
-    const found = await this.authService.verifyAssayerIdentifier(dto.identifier);
-    // Deliberately minimal: existence plus a display name. No contact details,
-    // no banking, no identifiers beyond the one already supplied by the caller.
-    //
-    // `needsAppAccess` is the one addition, and it is a flag rather than a fact about the
-    // person: it says the account exists but has never been given a password. 540 assayers are
-    // in that state — imported from the roster, never invited — and without this the app
-    // greeted them by name and then said their password was wrong for an account that has
-    // never had one. Passing it through is the whole point of computing it; it was being
-    // dropped here while the service worked it out.
-    return found
-      ? {
-        verified: true,
-        displayName: found.displayName,
-        assayerCode: found.assayerCode,
-        ...(found.needsAppAccess ? { needsAppAccess: true } : {}),
-      }
-      : { verified: false };
+  @ApiOperation({ summary: 'Pre-login identifier step (same answer for every identifier; reveals nothing)' })
+  async verifyAssayer(@Body() _dto: VerifyAssayerDto) {
+    // Deliberately not looked up: an answer that depends on the identifier, even only in how long
+    // it takes, is the enumeration this route used to offer.
+    return { accepted: true };
   }
 
   /**

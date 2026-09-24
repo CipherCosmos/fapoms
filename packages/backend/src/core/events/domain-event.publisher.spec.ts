@@ -114,6 +114,40 @@ describe('DomainEventPublisher', () => {
       expect(seen).toEqual([{ id: 'n1' }]);
     });
 
+    it('runs a NAMED listener once across two processes — on the origin only', async () => {
+      const bus = new FakeRedisBus();
+      const publisherA = new DomainEventPublisher(new FakeRedisClient(bus) as any);
+      const publisherB = new DomainEventPublisher(new FakeRedisClient(bus) as any);
+      await publisherA.onModuleInit();
+      await publisherB.onModuleInit();
+
+      // Both processes register the same business listener, as every replica loads the same modules.
+      const runs: string[] = [];
+      publisherA.subscribe('assignment:fee-updated', () => runs.push('A'));
+      publisherB.subscribe('assignment:fee-updated', () => runs.push('B'));
+
+      publisherA.publish('assignment:fee-updated', { assignmentId: 'a1' });
+      await publisherA.publishAsync('assignment:fee-updated', { assignmentId: 'a2' });
+
+      expect(runs).toEqual(['A', 'A']);
+    });
+
+    it('tells a global callback whether the delivery came over the bridge', async () => {
+      const bus = new FakeRedisBus();
+      const publisherA = new DomainEventPublisher(new FakeRedisClient(bus) as any);
+      const publisherB = new DomainEventPublisher(new FakeRedisClient(bus) as any);
+      await publisherA.onModuleInit();
+      await publisherB.onModuleInit();
+
+      const seen: Array<[string, boolean | undefined]> = [];
+      publisherA.onPublish((_n, _p, meta) => seen.push(['A', meta?.remote]));
+      publisherB.onPublish((_n, _p, meta) => seen.push(['B', meta?.remote]));
+
+      publisherA.publish('user:updated', { userId: 'u1' });
+
+      expect(seen).toEqual([['A', false], ['B', true]]);
+    });
+
     it('a malformed message on the channel is dropped, not thrown', async () => {
       const bus = new FakeRedisBus();
       const redis = new FakeRedisClient(bus);
@@ -220,7 +254,9 @@ describe('the subscriber connection', () => {
     };
 
     const publisher = new DomainEventPublisher(client);
-    publisher.subscribe('thing:happened', () => { deliveredDuringSubscribe = true; });
+    // A global callback: named listeners deliberately never run for a remote delivery (the
+    // origin process ran them), so the catch-all is what proves the handler was attached.
+    publisher.onPublish((name) => { if (name === 'thing:happened') deliveredDuringSubscribe = true; });
     await publisher.onModuleInit();
     await new Promise((r) => setImmediate(r));
 

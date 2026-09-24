@@ -6,7 +6,7 @@ import { ShieldAlert, Clock, AlertTriangle, CheckCircle2, Plus, Link2 } from 'lu
 import {
   getComplianceHealth, listIncidents, raiseIncident, updateIncident,
   listRightsRequests, logRightsRequest, updateRightsRequest,
-  INCIDENT_CATEGORIES, INCIDENT_SEVERITIES, RIGHTS_REQUEST_TYPES,
+  INCIDENT_CATEGORIES, INCIDENT_SEVERITIES, RIGHTS_REQUEST_TYPES, complianceLabel,
   type SecurityIncident, type IncidentClock, type RightsRequest, type SlaClock,
 } from '../../services/compliance';
 import { userMessage } from '../../services/errors';
@@ -144,10 +144,10 @@ export const CompliancePanel: React.FC = () => {
             style={inputStyle} />
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} title="What kind of incident this was" style={inputStyle}>
-              {INCIDENT_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+              {INCIDENT_CATEGORIES.map((c) => <option key={c} value={c}>{complianceLabel(c)}</option>)}
             </select>
             <select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })} title="How serious this incident is" style={inputStyle}>
-              {INCIDENT_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {INCIDENT_SEVERITIES.map((s) => <option key={s} value={s}>{complianceLabel(s)}</option>)}
             </select>
             <label title="Tick if personal data was involved — starts the 72-hour Board report clock" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={form.personalDataInvolved} onChange={(e) => setForm({ ...form, personalDataInvolved: e.target.checked })} />
@@ -185,7 +185,7 @@ export const CompliancePanel: React.FC = () => {
                   <div style={{ fontSize: 'var(--text-base)', fontWeight: 700 }}>
                     {inc.title}
                     <span style={{ marginLeft: 8, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
-                      {inc.severity} · {inc.category.replace(/_/g, ' ')} · {inc.status}
+                      {complianceLabel(inc.severity)} · {complianceLabel(inc.category)} · {complianceLabel(inc.status)}
                     </span>
                   </div>
                   <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>detected {fmt(inc.detectedAt)}</span>
@@ -270,7 +270,7 @@ const RightsRequestsSection: React.FC = () => {
           {log.isError && <div style={{ color: 'var(--danger)', fontSize: 'var(--text-sm)' }}>{userMessage(log.error)}</div>}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <select value={form.requestType} onChange={(e) => setForm({ ...form, requestType: e.target.value })} title="Access, correction, erasure, nomination or grievance" style={inputStyle}>
-              {RIGHTS_REQUEST_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {RIGHTS_REQUEST_TYPES.map((t) => <option key={t} value={t}>{complianceLabel(t)}</option>)}
             </select>
             <input placeholder="Who is asking (name)" value={form.requesterName} onChange={(e) => setForm({ ...form, requesterName: e.target.value })} title="Name of the person making the request" style={inputStyle} />
             <input placeholder="Their identifier (assayer code / email / phone)" value={form.subjectRef} onChange={(e) => setForm({ ...form, subjectRef: e.target.value })} title="How to find their records — code, email or phone" style={{ ...inputStyle, minWidth: 260 }} />
@@ -297,9 +297,9 @@ const RightsRequestsSection: React.FC = () => {
           <div key={r.id} className="glass-card" style={{ padding: 16, opacity: terminal ? 0.7 : 1 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'baseline' }}>
               <div style={{ fontSize: 'var(--text-base)', fontWeight: 700 }}>
-                {r.requestType}
+                {complianceLabel(r.requestType)}
                 <span style={{ marginLeft: 8, fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', fontWeight: 600 }}>
-                  {r.subjectRef || 'subject not identified'} · {r.status}
+                  {r.subjectRef || 'subject not identified'} · {complianceLabel(r.status)}
                 </span>
               </div>
               <SlaBadge sla={r.sla} />

@@ -33,6 +33,8 @@ import {
  * here changes what people can do within seconds, without anyone signing out.
  */
 
+import { impliedPermissionNote, withImpliedPermissions } from './permission-implications';
+
 interface Permission { id: string; resource: string; action: string; scope: string; description: string | null }
 interface RoleRow { id: string; name: string; displayName: string; description: string | null; permissions: Permission[]; isSystem?: boolean }
 interface UserRow { id: string; roles: { id: string }[] }
@@ -252,7 +254,7 @@ export const RolesPermissionsPanel: React.FC = () => {
     setDraft((prev) => {
       const next = new Set(prev);
       for (const p of perms) { if (on) next.add(p.id); else next.delete(p.id); }
-      return next;
+      return withImpliedPermissions(next, catalogue);
     });
 
   // Refused before loading: a role list that never arrived must not be drawn as no roles.
@@ -278,6 +280,9 @@ export const RolesPermissionsPanel: React.FC = () => {
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
       {success && <AlertBanner type="success">{success}</AlertBanner>}
+      {openRole && impliedPermissionNote(draft, catalogue) && (
+        <div role="note" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '6px 0' }}>{impliedPermissionNote(draft, catalogue)}</div>
+      )}
       {/* Every holder count above is only ever of the accounts this query actually got — say so
           rather than let a role's tally quietly stop growing past whatever the page cap was. */}
       {usersTotal > users.length && (
@@ -480,7 +485,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                                   onClick={() => setDraft((prev) => {
                                     const next = new Set(prev);
                                     if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
-                                    return next;
+                                    return withImpliedPermissions(next, catalogue);
                                   })}
                                   style={{
                                     display: 'inline-flex', alignItems: 'center', gap: '5px',

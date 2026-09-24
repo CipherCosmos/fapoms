@@ -214,6 +214,7 @@ const CATEGORY_KEYS: Record<string, { label: TranslationKey; hint: TranslationKe
   WORKFORCE: { label: 'profile.notifications.categories.WORKFORCE', hint: 'profile.notifications.categoryHints.WORKFORCE' },
   BILLING: { label: 'profile.notifications.categories.BILLING', hint: 'profile.notifications.categoryHints.BILLING' },
   SYSTEM: { label: 'profile.notifications.categories.SYSTEM', hint: 'profile.notifications.categoryHints.SYSTEM' },
+  FEEDBACK: { label: 'profile.notifications.categories.FEEDBACK', hint: 'profile.notifications.categoryHints.FEEDBACK' },
 };
 
 // ─────────────────────────────────────────────────────────── Row building blocks

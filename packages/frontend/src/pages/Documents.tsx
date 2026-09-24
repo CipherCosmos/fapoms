@@ -16,6 +16,7 @@ import { userMessage, AppError } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { uploadSizeProblem, SystemRole } from '@fapoms/shared';
 import { useCurrentRoles, useCurrentPermissions, canReadCustomerMaster, hasAnyRole } from '../hooks/useCurrentRoles';
+import { documentActionsFor } from './documents/document-actions';
 import { Page } from '../components/ui/Page';
 
 /**
@@ -163,6 +164,8 @@ export const Documents: React.FC = () => {
    */
   const canDispatchDocuments = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK]);
   const canSendToExternalOcr = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.DESK]);
+  /** Every paperwork action, one flag per server route — the same answer on all three panels. */
+  const documentActions = documentActionsFor(roles);
   const [view, setView] = useState<'daily' | 'branch' | 'flat' | 'versions'>(canCustomerMaster ? 'daily' : 'branch');
   const [projectId, setProjectId] = useState<string>('');
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
@@ -260,7 +263,8 @@ export const Documents: React.FC = () => {
 
   useEffect(() => {
     // The daily run is scoped to one project's schedule for a date.
-    api.request<Array<{ id: string; name: string }>>('/projects')
+    // `limit=200` is the server's ceiling; the default page of 50 hid every later project.
+    api.request<Array<{ id: string; name: string }>>('/projects?limit=200')
       .then((list) => {
         setProjects(list || []);
         if (list?.length) setProjectId((cur) => cur || list[0].id);
@@ -605,6 +609,8 @@ export const Documents: React.FC = () => {
               onSuccess={setSuccessMsg}
               canDispatch={canDispatchDocuments}
               canSendToOcr={canSendToExternalOcr}
+              canUpload={documentActions.upload}
+              canDownload={documentActions.download}
             />
           ) : view === 'branch' ? (
             <BranchDocumentPanel
@@ -628,6 +634,7 @@ export const Documents: React.FC = () => {
               onMarkReceived={handleMarkReceived}
               onSendToOcr={handleSendToOcr}
               onUploadExcel={handleUploadExcel}
+              actions={documentActions}
             />
           ) : (
             <DocumentControlPanel
@@ -640,6 +647,7 @@ export const Documents: React.FC = () => {
               stage={branchStage}
               onStageChange={changeBranchStage}
               onPageChange={setBranchPage}
+              actions={documentActions}
             />
           )}
         </div>

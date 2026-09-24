@@ -10,6 +10,7 @@ import { applyPlaceToAddressGroup, composeAddress, emptyAddressGroup, stateOptio
 import { taxIdHint, taxIdGstinConsequenceHint } from './field-hints';
 import { loadFailed } from '../../queryClient';
 import { SkeletonList } from '../../components/ui/Loading';
+import { canEditClientBilling, useCurrentRoles } from '../../hooks/useCurrentRoles';
 
 /**
  * A client's billing, in one place: what they are billed per audit (the rate card), the tax
@@ -43,6 +44,13 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   const updateBilling = useUpdateBilling();
   const updateClient = useUpdateClient();
   const { toast } = useToast();
+  /**
+   * Save writes TWO routes — the rate card through `PUT /clients/:id` (ADMIN/OPERATIONS) and the
+   * tax/bank terms through `PUT /clients/:id/billing` (ADMIN only). Gated as one action on the
+   * narrower of the two, so an OPERATIONS click cannot land the rate card and then be refused the
+   * rest. Read-only for everyone else, rather than a form whose Save half-works.
+   */
+  const canEdit = canEditClientBilling(useCurrentRoles());
 
   // Rate card + travel policy (client_configurations / clients.planning_preferences)
   const [baseFee, setBaseFee] = useState('');
@@ -120,7 +128,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (saving) return;
+    if (saving || !canEdit) return;
     setSaving(true);
     try {
       await updateClient.mutateAsync({
@@ -217,6 +225,8 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
 
   return (
     <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* `display: contents` keeps the form's own column layout; `disabled` makes every input read-only. */}
+      <fieldset disabled={!canEdit} style={{ display: 'contents' }}>
       {!hasRate && (
         <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderLeft: '3px solid var(--warning)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)' }}>
           <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
@@ -352,12 +362,19 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
         <label style={labelStyle}>Notes<textarea rows={2} style={{ ...inputStyle, width: '100%' }} value={form.notes ?? ''} onChange={(e) => set('notes', e.target.value)} /></label>
       </section>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Applies to audits completed from now on; booked lines are unchanged.</span>
-        <button type="submit" disabled={saving} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Save size={14} /> {saving ? 'Saving…' : 'Save billing'}
-        </button>
-      </div>
+      </fieldset>
+      {canEdit ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>Applies to audits completed from now on; booked lines are unchanged.</span>
+          <button type="submit" disabled={saving} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Save size={14} /> {saving ? 'Saving…' : 'Save billing'}
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+          Read only — only an administrator changes a client's billing terms.
+        </div>
+      )}
     </form>
   );
 };

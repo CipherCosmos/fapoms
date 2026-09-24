@@ -10,7 +10,9 @@ import {
   useReviseAssayerInvoice,
   useInviteAllAssayerInvoices,
   useHoldPayout,
+  usePayoutDestinationChecks,
 } from '../../hooks/useBilling';
+import { DestinationWarnings } from './DestinationWarnings';
 import { BILLING_PAGE_SIZE, billingApi } from '../../services/billing';
 import type { AssayerInvoiceInviteAllResult } from '../../services/billing';
 import { userMessage } from '../../services/errors';
@@ -32,7 +34,8 @@ import { InviteOutcomeSummary } from './PayoutsTab';
  * Lifecycle:
  *   INVITED → Assayer reviews statement
  *   SUBMITTED → Assayer explicitly confirmed; awaits Ops approval
- *   APPROVED → Ops approves claim; payables move to Disbursement Queue
+ *   APPROVED → Ops approves claim; waits for the HOD's final approval (2026-09-24)
+ *   HOD_APPROVED → The HOD's final approval; payables become payable
  *   PAID → All payouts disbursed via Bank UTR transfer
  *   SUPERSEDED → Corrected by newer revision (Rev N+1)
  *   CANCELLED → Voided before approval; lines return to unbilled pool
@@ -44,6 +47,7 @@ const FILTERS: AssayerInvoiceFilter[] = [
   AssayerInvoiceStatus.SUBMITTED,
   AssayerInvoiceStatus.INVITED,
   AssayerInvoiceStatus.APPROVED,
+  AssayerInvoiceStatus.HOD_APPROVED,
   AssayerInvoiceStatus.PAID,
   AssayerInvoiceStatus.SUPERSEDED,
   AssayerInvoiceStatus.CANCELLED,
@@ -300,8 +304,9 @@ const CANCEL_ASSAYER_INVOICE_REASONS = [
 
 const ClaimLifecycleStepper: React.FC<{ invoice: AssayerInvoiceInvitation }> = ({ invoice }) => {
   const isInvited = true;
-  const isSubmitted = !!invoice.submittedAt || invoice.status === AssayerInvoiceStatus.SUBMITTED || invoice.status === AssayerInvoiceStatus.APPROVED || invoice.status === AssayerInvoiceStatus.PAID;
-  const isApproved = !!invoice.approvedAt || invoice.status === AssayerInvoiceStatus.APPROVED || invoice.status === AssayerInvoiceStatus.PAID;
+  const isSubmitted = !!invoice.submittedAt || invoice.status === AssayerInvoiceStatus.SUBMITTED || invoice.status === AssayerInvoiceStatus.APPROVED || invoice.status === AssayerInvoiceStatus.HOD_APPROVED || invoice.status === AssayerInvoiceStatus.PAID;
+  const isApproved = !!invoice.approvedAt || invoice.status === AssayerInvoiceStatus.APPROVED || invoice.status === AssayerInvoiceStatus.HOD_APPROVED || invoice.status === AssayerInvoiceStatus.PAID;
+  const isHodApproved = !!invoice.hodApprovedAt || invoice.status === AssayerInvoiceStatus.HOD_APPROVED || invoice.status === AssayerInvoiceStatus.PAID;
   const isPaid = invoice.status === AssayerInvoiceStatus.PAID;
   const isCancelled = invoice.status === AssayerInvoiceStatus.CANCELLED;
   const isSuperseded = invoice.status === AssayerInvoiceStatus.SUPERSEDED;
@@ -324,12 +329,14 @@ const ClaimLifecycleStepper: React.FC<{ invoice: AssayerInvoiceInvitation }> = (
   const steps = [
     { label: 'Bill sent', date: invoice.invitedAt, done: isInvited, active: invoice.status === AssayerInvoiceStatus.INVITED },
     { label: 'Assayer agreed', date: invoice.submittedAt, done: isSubmitted, active: invoice.status === AssayerInvoiceStatus.SUBMITTED, badge: invoice.confirmedVersion ? `v${invoice.confirmedVersion}` : undefined },
-    { label: 'You approved', date: invoice.approvedAt, done: isApproved, active: invoice.status === AssayerInvoiceStatus.APPROVED },
+    { label: 'You approved', date: invoice.approvedAt, done: isApproved, active: false },
+    // The HOD's final approval (2026-09-24): the step between the office's approval and payment.
+    { label: 'Final approval (HOD)', date: invoice.hodApprovedAt ?? null, done: isHodApproved, active: invoice.status === AssayerInvoiceStatus.APPROVED || invoice.status === AssayerInvoiceStatus.HOD_APPROVED },
     { label: 'Bank paid', date: invoice.paidAt, done: isPaid, active: isPaid },
   ];
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: '10px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, padding: '10px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
       {steps.map((s, idx) => (
         <div key={s.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -363,6 +370,14 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
   const cancel = useCancelAssayerInvoice();
   const revise = useReviseAssayerInvoice();
   const hold = useHoldPayout();
+  /**
+   * Where the bill's money would go (audit F3): an account on another assayer's record is refused
+   * by the approval, an unverified one is allowed — both are shown BEFORE the approve button is
+   * pressed, not discovered after. Read only while the bill is waiting for this desk's approval.
+   */
+  const destinationChecks = usePayoutDestinationChecks(
+    invoice && canAct && invoice.status === AssayerInvoiceStatus.SUBMITTED ? invoice.lines.map((l) => l.payableId) : [],
+  );
 
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelPreset, setCancelPreset] = useState('');
@@ -387,7 +402,9 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
         <>
           This accepts what {invoice.assayerName ?? 'the assayer'} confirmed: <strong>{invoice.lineCount} line{invoice.lineCount === 1 ? '' : 's'}</strong> totalling{' '}
           <strong>{amountText}</strong>. Every pending payout on it is approved in the same step, and these
-          amounts then appear as the assayer&rsquo;s earnings.
+          amounts then appear as the assayer&rsquo;s earnings. It then goes to the HOD for the final
+          approval; nothing on it can be paid until the HOD approves.
+          <div style={{ marginTop: 10 }}><DestinationWarnings checks={destinationChecks.data} /></div>
         </>
       ),
       confirmLabel: `Approve ${amountText}`,
@@ -398,8 +415,9 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
     });
     if (!ok) return;
     try {
-      await approve.mutateAsync(invoice.id);
-      toast('success', `${invoice.invoiceNumber} approved — ready for disbursement in Payouts tab`);
+      const res = await approve.mutateAsync(invoice.id);
+      toast('success', `${invoice.invoiceNumber} approved — now waiting for the HOD's final approval before it can be paid`);
+      if (res?.warnings?.length) toast({ type: 'warning', title: 'Approved to an unverified bank account', message: res.warnings.join(' · ') });
       void refetch();
     } catch (e) {
       toast({ type: 'error', title: 'Could not approve', message: userMessage(e) });
@@ -508,6 +526,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <ClaimLifecycleStepper invoice={invoice} />
+        {canApprove && <DestinationWarnings checks={destinationChecks.data} />}
 
         {/* 4 Financial Stat Cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
@@ -537,6 +556,21 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
         {invoice.status === AssayerInvoiceStatus.SUBMITTED && (
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--accent-primary)', fontWeight: 500, background: 'var(--status-pending-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
             ✓ Assayer confirmed this statement (Revision {invoice.revision ?? 1}). Ready for Ops review and disbursement approval.
+          </div>
+        )}
+        {invoice.status === AssayerInvoiceStatus.SUBMITTED && invoice.hodRejectReason && (
+          <div role="note" style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', background: 'var(--status-pending-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+            Sent back by the HOD{invoice.hodRejectedAt ? ` on ${fmtDate(invoice.hodRejectedAt)}` : ''}: <em>{invoice.hodRejectReason}</em>. The assayer&rsquo;s confirmation still stands — approve it again once fixed, issue a corrected revision, or cancel it.
+          </div>
+        )}
+        {invoice.status === AssayerInvoiceStatus.APPROVED && (
+          <div role="note" title="Waiting for HOD approval" style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', background: 'var(--status-pending-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+            Approved by the office. Waiting for the HOD&rsquo;s final approval — none of its payouts can be paid until then.
+          </div>
+        )}
+        {invoice.status === AssayerInvoiceStatus.HOD_APPROVED && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', background: 'var(--status-active-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+            ✓ Given the HOD&rsquo;s final approval{invoice.hodApprovedAt ? ` on ${fmtDate(invoice.hodApprovedAt)}` : ''}. Its payouts are ready to pay on the Pay assayers tab.
           </div>
         )}
         {invoice.status === AssayerInvoiceStatus.CANCELLED && invoice.cancelReason && (
@@ -613,7 +647,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
               <th style={{ ...th, textAlign: 'right' }}>Travel</th>
               <th style={{ ...th, textAlign: 'right' }}>TDS</th>
               <th style={{ ...th, textAlign: 'right' }}>Net</th>
-              {canAct && invoice.status !== AssayerInvoiceStatus.APPROVED && invoice.status !== AssayerInvoiceStatus.PAID && <th style={th}>Hold</th>}
+              {canAct && invoice.status !== AssayerInvoiceStatus.APPROVED && invoice.status !== AssayerInvoiceStatus.HOD_APPROVED && invoice.status !== AssayerInvoiceStatus.PAID && <th style={th}>Hold</th>}
             </tr></thead>
             <tbody>
               {invoice.lines.map((l) => (
@@ -634,7 +668,7 @@ export const AssayerInvoiceDrawer: React.FC<{ invoiceId: string; onClose: () => 
                   <td style={tdNum}>{Number(l.travelAmount) ? moneyExact(l.travelAmount) : '—'}</td>
                   <td style={tdNum}>{Number(l.tdsAmount) ? `−${moneyExact(l.tdsAmount)}` : '—'}</td>
                   <td style={{ ...tdNum, fontWeight: 700, color: 'var(--text-primary)' }}>{moneyExact(l.totalAmount)}</td>
-                  {canAct && invoice.status !== AssayerInvoiceStatus.APPROVED && invoice.status !== AssayerInvoiceStatus.PAID && (
+                  {canAct && invoice.status !== AssayerInvoiceStatus.APPROVED && invoice.status !== AssayerInvoiceStatus.HOD_APPROVED && invoice.status !== AssayerInvoiceStatus.PAID && (
                     <td style={td}>
                       <button
                         onClick={() => handleToggleHold(l.payableId, !l.onHold)}

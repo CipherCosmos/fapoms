@@ -242,3 +242,61 @@ describe('identifyTemplate', () => {
     expect(message).toContain('Could not find a "Phone" column');
   });
 });
+
+describe('readWorkbook — the ceilings every import is opened under', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { readWorkbook } = require('./sheet-reader') as typeof import('./sheet-reader');
+  const rows = (n: number) => [['Assayer Code'], ...Array.from({ length: n }, (_, i) => [`AS-${i}`])];
+
+  it('opens an ordinary workbook', () => {
+    expect(readWorkbook(workbook(rows(3))).SheetNames).toEqual(['Sheet1']);
+  });
+
+  it('refuses a workbook that unpacks past the size ceiling, in plain words', () => {
+    expect(() => readWorkbook(workbook(rows(2000)), {}, { maxUncompressedBytes: 10 * 1024 }))
+      .toThrow(/too large to import\. Split it/);
+  });
+
+  it('refuses a sheet with more rows than the ceiling, instead of silently cutting it short', () => {
+    expect(() => readWorkbook(workbook(rows(10)), {}, { maxRows: 10 })).toThrow(/more than 10 rows/);
+    expect(() => readWorkbook(Buffer.from(rows(10).map((r) => r[0]).join('\n')), {}, { maxRows: 10 }))
+      .toThrow(/more than 10 rows/);
+    expect(readWorkbook(workbook(rows(9)), {}, { maxRows: 10 }).SheetNames).toEqual(['Sheet1']);
+  });
+
+  it('does not refuse a sheet whose declared range runs far past its data', () => {
+    const ws = xlsx.utils.aoa_to_sheet(rows(3));
+    ws['!ref'] = 'A1:A1048576';
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, 'Sheet1');
+    const buf = Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    expect(() => readWorkbook(buf, {}, { maxRows: 10 })).not.toThrow();
+  });
+
+  it('parseSheet goes through it', () => {
+    // A workbook whose one entry is flagged encrypted: SheetJS would read on regardless; the
+    // guard in front of it refuses the archive as unreadable.
+    const buf = workbook(rows(3));
+    const cen = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    buf.writeUInt16LE(buf.readUInt16LE(cen + 8) | 0x1, cen + 8);
+    expect(() => parseSheet(buf)).toThrow(/could not be opened/);
+  });
+
+  it('is the only way a workbook is opened — no import calls xlsx.read directly', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const root = path.resolve(__dirname, '../..');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) { walk(p); continue; }
+        if (!p.endsWith('.ts') || p.endsWith('.spec.ts') || p.endsWith('fixtures.ts')) continue;
+        if (p === path.join(__dirname, 'sheet-reader.ts')) continue;
+        if (/\b(xlsx|XLSX)\.read(File)?\(/.test(fs.readFileSync(p, 'utf8'))) offenders.push(path.relative(root, p));
+      }
+    };
+    walk(root);
+    expect(offenders).toEqual([]);
+  });
+});

@@ -263,7 +263,7 @@ export class DayTravelService {
                  WHERE ap.assignment_id = a.id AND ap.expense_id IS NULL
                    AND ap.status NOT IN (${DEAD_PAYABLE_STATUSES.map((s) => `'${s}'`).join(',')})
                    AND (ap.status IN ('APPROVED','PAID') OR COALESCE(ap.paid_amount, 0) > 0
-                        OR ai.status IN ('SUBMITTED','APPROVED','PAID'))
+                        OR ai.status IN ('SUBMITTED','APPROVED','HOD_APPROVED','PAID'))
               ) AS payable_frozen,
               EXISTS (
                 SELECT 1 FROM billing_entries be

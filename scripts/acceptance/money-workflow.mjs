@@ -21,6 +21,12 @@
  *   the exception     complete -> the desk approves the payout directly, because that assayer
  *                     cannot confirm (no smartphone, has left) — allowed, and recorded as to why
  *
+ * Since 2026-09-24 money also needs the HOD's FINAL approval after the office's: a bill, a payout
+ * approved without a bill, and a client invoice before it is sent. Act 3b walks that gate —
+ * payment refused until the HOD approves, the office approver refused as the HOD, the office
+ * (OPERATIONS) refused the HOD's route, the HOD sending a payout back — and every later payment
+ * goes through it. The HOD is `AC_HOD` (default admin2, an ADMIN who is NOT the office approver).
+ *
  * Usage:  AC_ALLOW_WRITES=1 AC_API=http://127.0.0.1:3001/api/v1 AC_PASSWORD=... \
  *           DB_HOST=127.0.0.1 DB_PORT=55433 node scripts/acceptance/money-workflow.mjs
  */
@@ -31,7 +37,8 @@
  *
  * password    : none beyond sign-in. Never rotates anything.
  * api writes  : creates fixture branches and assignments, completes them, bills and approves and
- *               PAYS the resulting payouts, raises a client invoice and settles it.
+ *               PAYS the resulting payouts, raises a client invoice and settles it. Gives the HOD's
+ *               final approval (as AC_HOD) and sends one payout back to the office.
  *               BOOKS, APPROVES AND PAYS REAL MONEY.
  * db writes   : fills bank account / IFSC / PAN on ONE assayer it picks, so a payout can be
  *               approved at all — restored to whatever they held before, at the end.
@@ -71,6 +78,7 @@ const made = { branchIds: [], pbIds: [], assignmentIds: [], invoiceIds: [], bill
 let token = null;        // the approver — approves payouts and bills, and may never pay them
 let bookerToken = null;  // creates and completes assignments, and may never approve their payouts
 let payerToken = null;   // records the bank payment, and may never have approved what it pays
+let hodToken = null;     // the HOD's final approval (2026-09-24) — may never be the office approver
 const get = (p) => req(p, { token });
 const post = (p, body) => req(p, { method: 'POST', token, body });
 const patch = (p, body) => req(p, { method: 'PATCH', token, body });
@@ -127,6 +135,10 @@ async function refusesAndLeavesUnmoved(name, payableId, act, { expect = /.*/ } =
 const approve = (payableIds, reason) => postAndAwait(
   '/billing-engine/payouts/approve', reason ? { payableIds, reason } : { payableIds },
   JOB_STATUS.billingBulk, { token: () => token });
+
+/** The HOD's final approval of one item: 'assayer-invoices', 'payouts' or 'invoices'. */
+const hodApprove = (path, id, t = () => hodToken) => req(`/billing-engine/final-approval/${path}/${id}/approve`, { method: 'POST', token: t() });
+const hodReject = (path, id, reason) => req(`/billing-engine/final-approval/${path}/${id}/reject`, { method: 'POST', token: hodToken, body: { reason } });
 
 /** Paying runs as the payer, who must not be whoever approved these rows. */
 const payOut = (payableIds, body) => postAndAwait(
@@ -199,9 +211,13 @@ const main = async () => {
   const approver = await login(env.AC_APPROVER ?? 'admin', env.AC_PASSWORD);
   const booker = await login(env.AC_BOOKER ?? 'manager', env.AC_BOOKER_PASSWORD ?? env.AC_PASSWORD);
   const payer = await login(env.AC_PAYER ?? 'admin2', env.AC_PAYER_PASSWORD ?? env.AC_PASSWORD);
+  const hod = await login(env.AC_HOD ?? 'admin2', env.AC_HOD_PASSWORD ?? env.AC_PAYER_PASSWORD ?? env.AC_PASSWORD);
   token = approver.token;
   bookerToken = booker.token;
   payerToken = payer.token;
+  hodToken = hod.token;
+  check('the HOD session is alive, and is not the office approver',
+    !!hodToken && (env.AC_HOD ?? 'admin2') !== (env.AC_APPROVER ?? 'admin'), `hod=${env.AC_HOD ?? 'admin2'}`);
   check('three SEPARATE sessions are alive — one books, one approves, one pays',
     !!token && !!bookerToken && !!payerToken,
     `booker=${env.AC_BOOKER ?? 'manager'} approver=${env.AC_APPROVER ?? 'admin'} payer=${env.AC_PAYER ?? 'admin2'}`);
@@ -343,8 +359,9 @@ const main = async () => {
     // The assayer confirms. Billing staff may submit on their behalf, which is the desk-side
     // path for an assayer on the phone; the horizontal-isolation case (an assayer submitting
     // somebody ELSE's bill) is covered by authorization-and-audit.mjs.
+    // Staff recording it must say why (audit F5, 2026-09-24) and are recorded as themselves.
     const submitted = await post(`/billing-engine/assayers/${payee.id}/invoice-invitation/submit`,
-      { clientRequestId: crypto.randomUUID() });
+      { clientRequestId: crypto.randomUUID(), onBehalfReason: 'Assayer confirmed the figures by phone' });
     const billAfterSubmit = await one('SELECT status, submitted_at FROM assayer_invoices WHERE id = $1', [bill.id]);
     check('the assayer confirming the figures moves the bill to submitted',
       submitted.status === 200 && billAfterSubmit.status === 'SUBMITTED' && !!billAfterSubmit.submitted_at,
@@ -352,7 +369,7 @@ const main = async () => {
 
     // ILLEGAL: confirming twice under a NEW request id is a second consent to the same figures.
     const resubmit = await post(`/billing-engine/assayers/${payee.id}/invoice-invitation/submit`,
-      { clientRequestId: crypto.randomUUID() });
+      { clientRequestId: crypto.randomUUID(), onBehalfReason: 'Assayer confirmed the figures by phone' });
     check('ILLEGAL confirming an already-confirmed bill again is refused',
       resubmit.status >= 400, `${resubmit.status} ${String(resubmit.msg).slice(0, 120)}`);
 
@@ -383,6 +400,38 @@ const main = async () => {
     check('ILLEGAL cancelling an approved bill is refused, and it stays approved',
       lateCancel.status >= 400 && billNow.status === 'APPROVED',
       `${lateCancel.status} ${String(lateCancel.msg).slice(0, 120)} · bill is ${billNow.status}`);
+
+    // ══ ACT 3b — the HOD's final approval (2026-09-24) ════════════════════════════════════════
+    // ILLEGAL: the office approved it; that is not enough to pay.
+    await refusesAndLeavesUnmoved(
+      'ILLEGAL an office-approved payout the HOD has not approved cannot be paid',
+      fee1.id, async () => asRefusal(await payOut([fee1.id], { paymentReference: `${TAG}-NO-HOD`, method: 'NEFT' })),
+      { expect: /Waiting for HOD approval/ });
+
+    const queue = dataOf(await req('/billing-engine/final-approval', { token: hodToken }));
+    check('the bill appears in the HOD’s queue, with the office approver named',
+      (queue?.items ?? []).some((i) => i.kind === 'ASSAYER_BILL' && i.id === bill.id && !!i.officeApprovedBy),
+      `queue total=${queue?.total}`);
+
+    const bookerSeesQueue = await req('/billing-engine/final-approval', { token: bookerToken });
+    check('ILLEGAL the office (OPERATIONS) cannot open the HOD’s queue', bookerSeesQueue.status === 403, String(bookerSeesQueue.status));
+
+    const selfFinal = await hodApprove('assayer-invoices', bill.id, () => token);
+    const billSelf = await one('SELECT status, hod_approved_at FROM assayer_invoices WHERE id = $1', [bill.id]);
+    check('ILLEGAL the office approver cannot also give the final approval, and nothing moves',
+      selfFinal.status === 409 && /segregation of duties/i.test(JSON.stringify(selfFinal.msg ?? '')) && billSelf.status === 'APPROVED' && !billSelf.hod_approved_at,
+      `${selfFinal.status} ${String(selfFinal.msg).slice(0, 120)} · bill ${billSelf.status}`);
+
+    const opsFinal = await hodApprove('assayer-invoices', bill.id, () => bookerToken);
+    check('ILLEGAL the office (OPERATIONS) cannot reach the final approval at all', opsFinal.status === 403, String(opsFinal.status));
+
+    const finalOk = await hodApprove('assayer-invoices', bill.id);
+    const billFinal = await one('SELECT status, hod_approved_by FROM assayer_invoices WHERE id = $1', [bill.id]);
+    const feeFinal = await one('SELECT status, hod_approved_at FROM assayer_payables WHERE id = $1', [fee1.id]);
+    check('LEGAL the HOD approves the bill: HOD_APPROVED, and every payout on it cleared for payment',
+      finalOk.status === 200 && billFinal.status === 'HOD_APPROVED' && !!billFinal.hod_approved_by
+      && feeFinal.status === 'APPROVED' && !!feeFinal.hod_approved_at,
+      `${finalOk.status} bill ${billFinal.status} · payout ${feeFinal.status} hod=${!!feeFinal.hod_approved_at}`);
 
     // ══ ACT 4 — the exception road, and what it must leave behind ═════════════════════════════
     const a2 = await completedAssignment(payee.id, 'exception-road', 1800);
@@ -416,6 +465,15 @@ const main = async () => {
       check('ILLEGAL approving an already-approved payout changes nothing and creates nothing',
         before.length === after.length && after.find((x) => x.id === fee2.id).status === 'APPROVED',
         `${before.length} -> ${after.length} payables`);
+
+      // The HOD sends it back (2026-09-24): back to Due with the reason, never cancelled.
+      const shortReason = await hodReject('payouts', fee2.id, 'no');
+      check('ILLEGAL the HOD cannot send a payout back without a reason', shortReason.status === 400, String(shortReason.status));
+      const back = await hodReject('payouts', fee2.id, 'The assayer is still reachable by phone; bill them properly.');
+      const fee2Back = await one('SELECT status, approved_by, hod_reject_reason FROM assayer_payables WHERE id = $1', [fee2.id]);
+      check('LEGAL the HOD sends a payout back to the office: Due again, the office approval undone, the reason kept',
+        back.status === 200 && fee2Back.status === 'PENDING' && fee2Back.approved_by === null && /reachable by phone/.test(fee2Back.hod_reject_reason ?? ''),
+        `${back.status} -> ${fee2Back.status} reason=${JSON.stringify(fee2Back.hod_reject_reason)}`);
     }
 
     // ══ ACT 5 — holds, and paying ════════════════════════════════════════════════════════════
@@ -517,6 +575,19 @@ const main = async () => {
       earlyPay.status >= 400 && Number(invEarly.paid_amount) === 0,
       `${earlyPay.status} ${String(earlyPay.msg).slice(0, 120)} · paid ${money(invEarly.paid_amount)}`);
 
+    // The HOD's final approval of a client invoice (2026-09-24): not sent without it.
+    const sendDraft = await patch(`/billing-engine/invoices/${invoice.id}/send`, {});
+    const invDraft = await one('SELECT status FROM billing_invoices WHERE id = $1', [invoice.id]);
+    check('ILLEGAL a draft cannot be marked sent to the client before the HOD approves it',
+      sendDraft.status === 409 && /Waiting for HOD approval/.test(JSON.stringify(sendDraft.msg ?? '')) && invDraft.status === 'DRAFT',
+      `${sendDraft.status} ${String(sendDraft.msg).slice(0, 100)} · ${invDraft.status}`);
+    const upForFinal = await patch(`/billing-engine/invoices/${invoice.id}/request-final-approval`, {});
+    const invFinal = await hodApprove('invoices', invoice.id);
+    const invHod = await one('SELECT status, invoice_number FROM billing_invoices WHERE id = $1', [invoice.id]);
+    check('LEGAL the office sends it up and the HOD approves it; the number does not change',
+      upForFinal.status === 200 && invFinal.status === 200 && invHod.status === 'HOD_APPROVED' && invHod.invoice_number === invoice.invoiceNumber,
+      `${upForFinal.status}/${invFinal.status} -> ${invHod.status} ${invHod.invoice_number}`);
+
     const sent = await patch(`/billing-engine/invoices/${invoice.id}/send`, {});
     const invSent = await one('SELECT status, total, outstanding_amount FROM billing_invoices WHERE id = $1', [invoice.id]);
     check('LEGAL sending the invoice is what makes it owed',
@@ -569,7 +640,7 @@ const main = async () => {
       const fee4 = await liveFeePayable(a4.id);
       if (fee4) {
         const before = await one('SELECT status FROM assayer_payables WHERE id = $1', [fee4.id]);
-        const sod = await postAndAwait('/billing-engine/payouts/approve', { payableIds: [fee4.id] },
+        const sod = await postAndAwait('/billing-engine/payouts/approve', { payableIds: [fee4.id], reason: 'Assayer confirmed the amounts by phone or in person' },
           JOB_STATUS.billingBulk, { token: () => bookerToken });
         const after = await one('SELECT status FROM assayer_payables WHERE id = $1', [fee4.id]);
         const said = sod.result?.refused?.[0]?.reason ?? describeJobOutcome(sod);
@@ -591,7 +662,7 @@ const main = async () => {
       if (target) {
         const before = await one('SELECT status FROM assayer_payables WHERE id = $1', [target.id]);
         const r = await req('/billing-engine/payouts/approve',
-          { method: 'POST', token: weak.token, body: { payableIds: [target.id] } });
+          { method: 'POST', token: weak.token, body: { payableIds: [target.id], reason: 'Assayer confirmed the amounts by phone or in person' } });
         const after = await one('SELECT status FROM assayer_payables WHERE id = $1', [target.id]);
         check('ILLEGAL a role off the disbursement path cannot approve money, and nothing queues',
           r.status === 403 && before.status === after.status,

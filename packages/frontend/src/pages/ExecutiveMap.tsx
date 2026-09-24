@@ -13,16 +13,19 @@ import { loadFailed } from '../queryClient';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { queryKeys } from '../hooks/queryKeys';
-import { formatRupees as money } from '@fapoms/shared';
+import { formatRupees as money, branchStatusLabel } from '@fapoms/shared';
 import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
+import { canListClients, useCurrentRoles } from '../hooks/useCurrentRoles';
+import { branchPointKey, planningLinkFor } from './executive-map-points';
 import { Select } from '../components/ui';
 import { Page } from '../components/ui/Page';
 
 interface BranchPoint {
-  id: string; projectBranchId: string; name: string; solId: string | null;
+  // Null for a branch in no project (the server adds those so the map is complete).
+  id: string; projectBranchId: string | null; name: string; solId: string | null;
   district: string | null; state: string;
   latitude: number | null; longitude: number | null;
-  status: string; clientId: string; clientName: string; projectId: string;
+  status: string | null; clientId: string; clientName: string; projectId: string | null;
   packets: number; auditHours: number; scheduledDate: string | null;
   assigned: boolean;
   nearestAssayerKm: number | null; nearestAssayerName: string | null;
@@ -107,11 +110,16 @@ export const ExecutiveMap: React.FC = () => {
   });
   const { data, isPending, isFetching, refetch } = commandCentre;
 
+  // The client filter's list. A custom role holding planning:view is offered this page, but
+  // `GET /clients` serves staff role names only — so for it the filter is not drawn and the list is
+  // never asked for, rather than failing in the background on every visit.
+  const showClientFilter = canListClients(useCurrentRoles());
   useEffect(() => {
+    if (!showClientFilter) return;
     api.request<any[]>('/clients?limit=100')
       .then((list) => setClients((list || []).map((c: any) => ({ id: c.id, name: c.name }))))
       .catch(() => { /* client filter is optional */ });
-  }, []);
+  }, [showClientFilter]);
 
   // The map shows whichever slice the lens and territory selection describe, so
   // clicking a territory or a lens re-frames the map rather than opening a
@@ -127,8 +135,9 @@ export const ExecutiveMap: React.FC = () => {
 
   const mapBranches = useMemo(
     () => visibleBranches.map((b) => ({
-      id: b.id, name: b.name, latitude: b.latitude, longitude: b.longitude,
-      status: b.status, state: b.state, city: b.district ?? undefined,
+      // Keyed by the project-branch link: one branch in two projects is two points (W3).
+      id: branchPointKey(b), name: b.name, latitude: b.latitude, longitude: b.longitude,
+      status: b.status ?? '', state: b.state, city: b.district ?? undefined,
       solId: b.solId ?? undefined,
       // What the colour-by-bank mode paints branch pins with.
       clientId: b.clientId, clientName: b.clientName,
@@ -136,7 +145,11 @@ export const ExecutiveMap: React.FC = () => {
     [visibleBranches],
   );
 
-  const selected = data?.branchPoints.find((b) => b.id === selectedBranchId) ?? null;
+  const selected = data?.branchPoints.find((b) => branchPointKey(b) === selectedBranchId)
+    // A link saved before points were keyed by project-branch still names the branch.
+    ?? data?.branchPoints.find((b) => b.id === selectedBranchId)
+    ?? null;
+  const planningLink = selected ? planningLinkFor(selected) : null;
   const t = data?.totals;
   // Capacity is expressed per day; demand in assayer-days. Dividing gives the
   // number of working days the current book would take at full utilisation.
@@ -161,11 +174,13 @@ export const ExecutiveMap: React.FC = () => {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Select
-            value={clientId}
-            onChange={(v) => { setClientId(v); setSelectedState(null); }}
-            options={[{ value: '', label: 'All clients' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
-          />
+          {showClientFilter && (
+            <Select
+              value={clientId}
+              onChange={(v) => { setClientId(v); setSelectedState(null); }}
+              options={[{ value: '', label: 'All clients' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
+            />
+          )}
           {updatedAt && (
             <span style={{
               fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--text-muted)',
@@ -266,7 +281,8 @@ export const ExecutiveMap: React.FC = () => {
                   </div>
                   <Row label="Client" value={selected.clientName} />
                   <Row label="Workload" value={`${selected.packets} packets · ${selected.auditHours}h`} />
-                  <Row label="Status" value={selected.status} />
+                  {/* A branch in no project has no branch status at all — say so, never print a blank or a raw code. */}
+                  <Row label="Status" value={selected.status ? branchStatusLabel(selected.status) : 'Not in a project'} />
                   <Row label="Assayer confirmed" value={selected.assigned ? 'Yes' : 'Not yet'}
                        color={selected.assigned ? 'var(--success)' : 'var(--warning)'} />
                   <Row label="Nearest assayer"
@@ -279,10 +295,13 @@ export const ExecutiveMap: React.FC = () => {
                       No assayer lives within serviceable range. This branch needs travel-and-stay costing, a partner, or a local hire — it cannot be scheduled normally.
                     </div>
                   )}
-                  <button onClick={() => navigate(`/planning?projectId=${selected.projectId}&branchId=${selected.projectBranchId}`)} className="btn btn-secondary" title={`Open ${selected.name} in Planning to assign an assayer`}
+                  {/* Only a branch that is in a project has anything to plan (W3). */}
+                  {planningLink && (
+                  <button onClick={() => navigate(planningLink)} className="btn btn-secondary" title={`Open ${selected.name} in Planning to assign an assayer`}
                     style={{ marginTop: 'auto', fontSize: 'var(--text-xs)' }}>
                     Open in Planning
                   </button>
+                  )}
                 </>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center', gap: 10, fontSize: 'var(--text-xs)' }}>

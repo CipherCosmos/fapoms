@@ -7,7 +7,6 @@ import { FileScanService } from '../../infrastructure/security/file-scan.service
 import { Response } from 'express';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { randomUUID } from 'crypto';
 import { DocumentService } from './document.service';
 import type { DocumentEntity } from './document.entity';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
@@ -33,10 +32,12 @@ import { jobActorFrom } from '../../infrastructure/queue/job-actor';
 import { AssignmentService } from '../assignment/assignment.service';
 import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
-import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { RegionGuardService, roleNames } from '../../infrastructure/scope/region-guard.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { buildPaginationMeta } from '../../infrastructure/http/pagination';
 import { deriveFileIntegrity, verifyClientHash } from './document-integrity';
+import { directUploadKeyFor, finalKeyForDirectUpload, PRESIGN_UPLOAD_EXPIRY_SECONDS } from './direct-upload-key';
+import { integrityGate, hasRecordedSha256, DocumentIntegrityMismatchError } from './download-integrity';
 
 /**
  * Multer memory-storage configuration shared by the single-file document upload routes.
@@ -186,6 +187,13 @@ function jobParamsFromMultipart(req: any): Record<string, unknown> {
   }
 }
 
+/**
+ * `S3StorageService.saveFileAt` — a write at a key the server chose. Optional, like the other
+ * S3-only capabilities on `StorageEngine` (presign, multipart): the local-disk driver has no
+ * presigned upload, so it never reaches the one route that needs this.
+ */
+type ServerKeyedWrite = { saveFileAt?: (key: string, content: Buffer, mimeType?: string) => Promise<string> };
+
 @ApiTags('Documents')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -330,9 +338,10 @@ export class DocumentController {
     // No bytes exist yet, so only the declared type is checkable here; finalize re-applies the
     // same helper with the object's real size once it has landed.
     assertUploadAllowed({ contentType });
-    const safeName = (body.fileName || 'upload.bin').replace(/[^\w.-]+/g, '_').slice(0, 120) || 'upload.bin';
-    const objectKey = `documents/direct/${randomUUID()}/${safeName}`;
-    const expiresIn = 900; // 15 minutes to complete the PUT
+    const objectKey = directUploadKeyFor(body.fileName);
+    // Five minutes to START the PUT (see direct-upload-key.ts). Finalize moves the object off this
+    // key, so the URL's remaining life can no longer reach a registered document either way.
+    const expiresIn = PRESIGN_UPLOAD_EXPIRY_SECONDS;
     const uploadUrl = await this.storage.getSignedUploadUrl(objectKey, contentType, expiresIn);
     return { objectKey, uploadUrl, method: 'PUT', headers: { 'Content-Type': contentType }, expiresIn };
   }
@@ -344,10 +353,9 @@ export class DocumentController {
   async finalizeUpload(@Body() body: FinalizeUploadRequestDto, @Req() req: any) {
     // Only keys minted by presignUpload can be finalized — never an arbitrary storage key,
     // so a caller cannot register another namespace's object (a pre-field PDF, someone
-    // else's return) as their own document.
-    if (!body.objectKey.startsWith('documents/direct/')) {
-      throw new BadRequestException('objectKey is not a direct-upload key issued by /documents/upload/presign.');
-    }
+    // else's return) as their own document. The parse is exact, not a prefix check: see
+    // direct-upload-key.ts.
+    const finalKey = finalKeyForDirectUpload(body.objectKey);
     /**
      * Idempotent, not merely repeatable. Verified live: finalizing the same objectKey twice
      * created two separate `documents` rows pointing at the identical storage object — the same
@@ -357,10 +365,25 @@ export class DocumentController {
      * whose bytes travel client→storage directly, so the client's own network can drop the
      * finalize response after the server already succeeded, and an honest retry resends the
      * identical request. Short-circuit before repeating the stat/scan/create work.
+     *
+     * The row now points at the server-owned final key, so that is what a retry is recognised by.
+     * Anything sitting at the direct key by then was PUT after the first finalize — through a URL
+     * that has not expired yet — and is deleted rather than left for a later finalize to register.
+     * The direct-key lookup stays for rows finalized before the move existed.
      */
-    const existing = await this.documentService.findByFilePath(body.objectKey);
+    const existing = (await this.documentService.findByFilePath(finalKey))
+      ?? (await this.documentService.findByFilePath(body.objectKey));
     if (existing) {
+      if (existing.filePath !== body.objectKey) {
+        await this.storage.deleteFile(body.objectKey).catch(() => undefined);
+      }
       return existing;
+    }
+    const writer = this.storage as StorageEngine & ServerKeyedWrite;
+    if (typeof writer.saveFileAt !== 'function') {
+      throw new NotImplementedException(
+        'Direct-to-storage upload is not available on this storage backend. Use POST /documents/upload or the resumable chunked upload endpoints.',
+      );
     }
     // Confirm the object actually landed before creating a row that claims it did.
     let size = 0;
@@ -382,25 +405,27 @@ export class DocumentController {
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
       throw err;
     }
-    // Malware-scan the object the client PUT straight to storage — the presigned upload bypassed the
-    // API, so this is the first point the bytes can be inspected. Delete + reject on a hit (or when a
-    // required scan can't run), so an infected object is never registered as a document.
     /**
-     * The presigned PUT bypassed the API, so these bytes did not arrive through it — but the
-     * malware scan reads the whole object back to inspect it, and that buffer is as good a source
-     * of truth as an upload buffer. It attests to what storage holds at registration time, which
-     * is precisely what a document's integrity metadata should say.
+     * Read ONCE. Everything after this line — the size re-check, the malware scan, the hash, and
+     * the bytes written to the final key — works from this one buffer, never from the direct key
+     * again. The direct key is client-writable until its URL expires, so a second read (the old
+     * in-place `sealObject`) could scan one file and keep another.
      *
-     * The earlier position was that this route cannot hash what it never receives. That is true
-     * of the PUT and false of finalize as implemented: the object is already fully in memory
-     * here, and the cost is already being paid by the scan.
+     * The presigned PUT bypassed the API, so these bytes did not arrive through it — but this
+     * buffer is as good a source of truth as an upload buffer: it is exactly what is stored.
      */
-    let integrity: ReturnType<typeof deriveFileIntegrity> | undefined;
+    let stored: Buffer;
+    let integrity: ReturnType<typeof deriveFileIntegrity>;
     try {
       const stream = await this.storage.getFileStream(body.objectKey);
       const parts: Buffer[] = [];
       for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      const stored = Buffer.concat(parts);
+      stored = Buffer.concat(parts);
+      // The object was replaced between the HeadObject above and this read: the size that passed
+      // the limit is not the size in hand, so refuse rather than guess which one was meant.
+      if (stored.length !== size) {
+        throw new ConflictException('The uploaded object changed while it was being finalized. Upload it again.');
+      }
       await this.fileScanner.scanOrThrow(stored, body.fileName, body.contentType);
       integrity = deriveFileIntegrity(stored, body.contentType);
     } catch (err) {
@@ -408,31 +433,43 @@ export class DocumentController {
       throw err;
     }
 
-    // The client wrote this object straight into the store, so the app never had the chance to
-    // encrypt it on the way in. It is encrypted here, after it has passed the scan and before it is
-    // registered — see document-cipher.ts. A failure leaves no plaintext document on the record.
+    // The scanned buffer, not the object, goes to the server-owned key — encrypted on the way in by
+    // `saveFileAt` exactly as `saveFile` encrypts (see document-cipher.ts).
     try {
-      await this.storage.sealObject?.(body.objectKey);
+      await writer.saveFileAt(finalKey, stored, body.contentType);
     } catch (err) {
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
       throw err;
     }
 
-    const doc = await this.documentService.create(
-      {
-        assessmentId: body.assessmentId,
-        fileName: body.fileName,
-        filePath: body.objectKey,
-        // `size` comes from a real HeadObject, so it was already trustworthy; the derived count
-        // is used anyway so one source describes every field.
-        fileSize: integrity?.byteLength ?? size,
-        mimeType: body.contentType,
-        type: body.type,
-        customerMasterVersionId: body.customerMasterVersionId,
-        integrity,
-      },
-      req?.user?.id || '00000000-0000-0000-0000-000000000000',
-    );
+    let doc: DocumentEntity;
+    try {
+      doc = await this.documentService.create(
+        {
+          assessmentId: body.assessmentId,
+          fileName: body.fileName,
+          filePath: finalKey,
+          // Counted from the buffer that was scanned and stored — equal to the HeadObject size by
+          // the check above.
+          fileSize: integrity.byteLength,
+          mimeType: body.contentType,
+          type: body.type,
+          customerMasterVersionId: body.customerMasterVersionId,
+          integrity,
+        },
+        req?.user?.id || '00000000-0000-0000-0000-000000000000',
+      );
+    } catch (err) {
+      // No row points at the final object; remove it. The direct object stays so the client can
+      // retry the finalize without re-uploading.
+      await this.storage.deleteFile(finalKey).catch(() => undefined);
+      throw err;
+    }
+
+    // Registered at the final key; the direct key is now dead weight and a write target.
+    await this.storage.deleteFile(body.objectKey).catch((err: any) => {
+      this.logger.warn(`Finalized ${doc.id} but could not delete its direct-upload object: ${err?.message}`);
+    });
 
     return doc;
   }
@@ -1236,7 +1273,59 @@ export class DocumentController {
     // Content-Length lets the client show real progress and detect a truncated transfer.
     res.setHeader('Content-Length', stat.size);
     const fileStream = await this.storage.getFileStream(doc.filePath);
-    fileStream.pipe(res);
+    // Rows recorded before integrity existed have nothing to compare against and are served as
+    // they always were. A recorded hash is checked before the file is released — see
+    // download-integrity.ts for what "before" means past the hold limit.
+    if (!hasRecordedSha256(doc.contentSha256)) {
+      fileStream.pipe(res);
+      return;
+    }
+    this.pipeVerified(fileStream, doc.contentSha256, res, doc);
+  }
+
+  /**
+   * Stream `source` to `res` through the integrity gate. On a mismatch nothing (or, past the hold
+   * limit, not the whole file) has been sent: the caller gets a 500 naming the problem when headers
+   * are still unsent, and a cut-short transfer otherwise. Either way it is logged loudly, because a
+   * stored document that no longer matches its hash is evidence that has been tampered with or
+   * corrupted, and someone has to go and find out which.
+   */
+  private pipeVerified(
+    source: NodeJS.ReadableStream,
+    expectedSha256: string,
+    res: Response,
+    doc: { id: string; fileName?: string; filePath?: string },
+  ): void {
+    const gate = integrityGate(expectedSha256);
+    const fail = (err: any) => {
+      source.unpipe?.(gate);
+      gate.unpipe(res);
+      if (err instanceof DocumentIntegrityMismatchError) {
+        this.logger.error(
+          `INTEGRITY MISMATCH on document ${doc.id} (${doc.fileName}) at ${doc.filePath}: recorded sha256 `
+          + `${err.expectedSha256}, storage returned ${err.actualSha256}. Download refused.`,
+        );
+      } else {
+        this.logger.error(`Download of document ${doc.id} failed mid-stream: ${err?.message}`);
+      }
+      if (!res.headersSent) {
+        for (const h of ['Content-Length', 'Content-Disposition', 'ETag', 'Last-Modified', 'Cache-Control', 'Accept-Ranges']) {
+          res.removeHeader(h);
+        }
+        res.status(500).json({
+          statusCode: 500,
+          code: err instanceof DocumentIntegrityMismatchError ? 'DOCUMENT_INTEGRITY_MISMATCH' : 'DOCUMENT_STREAM_FAILED',
+          message: err instanceof DocumentIntegrityMismatchError
+            ? 'This document no longer matches the file that was originally accepted, so it has not been served. Please report this to your administrator.'
+            : 'The document could not be read from storage.',
+        });
+      } else {
+        res.destroy(err);
+      }
+    };
+    source.on('error', fail);
+    gate.on('error', fail);
+    source.pipe(gate).pipe(res);
   }
 
   /**
@@ -1344,7 +1433,13 @@ export class DocumentController {
       + 'received, delegated, sent to OCR — have their own routes, which record the act. '
       + 'A packet only ever moves forward; see DOCUMENT_TRANSITIONS.',
   })
-  async updateStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDocumentStatusRequestDto, @Req() req: any) {
+  async updateStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateDocumentStatusRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.assertDocumentRegion(id, scope, 'document:updateStatus');
     const properRoute = DocumentController.STATUS_HAS_ITS_OWN_ROUTE[dto.status];
     if (properRoute) {
       throw new BadRequestException(
@@ -1416,7 +1511,24 @@ export class DocumentController {
   @Post(':id/receive')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Mark a dispatched document as received back' })
-  async receiveDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async receiveDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    /**
+     * Same fork `issueDownloadToken` makes. A pure assayer may only mark receipt of paperwork on a
+     * branch they hold an engaged assignment on — this route admitted ASSAYER with no ownership
+     * check at all, so any field account could flip any document in the system to RECEIVED (and
+     * page the desk about it). Staff get the region ceiling every other document write carries.
+     */
+    const roles = roleNames(req?.user?.roles);
+    const isPureAssayer = roles.includes(SystemRole.ASSAYER) && roles.every((r) => r === SystemRole.ASSAYER);
+    if (isPureAssayer) {
+      await this.documentService.assertAssayerMayReceive(id, req.user.assayerId ?? req.user.id);
+    } else {
+      await this.assertDocumentRegion(id, scope, 'document:receive');
+    }
     const userId = req?.user?.id || id;
     const doc = await this.documentService.receiveDocument(id, userId);
     return { success: true, data: doc, message: 'Document marked as received.' };
@@ -1756,7 +1868,12 @@ export class DocumentController {
   // belong to the OCR boundary, which receives results; nothing is submitted to it here.
   @RequirePermissions('document:edit:organization')
   @ApiOperation({ summary: 'Mark an audited PDF as sent to External OCR application' })
-  async sendToExternalOcr(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async sendToExternalOcr(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.assertDocumentRegion(id, scope, 'document:sendToExternalOcr');
     // Was a raw `assessmentRepository.update(...)` alongside a status write — the same
     // hand-rolled pattern that produced the cross-view drift repaired earlier. The service
     // owns the transition: it validates the source status, stamps the transport trail, writes
@@ -1875,7 +1992,10 @@ export class DocumentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: AssignDataEntryRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.assertDocumentRegion(id, scope, 'document:assignDataEntry');
+    // The service refuses an assignee who is not an active desk member — see assignForDataEntry.
     const doc = await this.documentService.assignForDataEntry(id, body.assigneeId, req.user.id);
     return doc;
   }
@@ -1883,8 +2003,14 @@ export class DocumentController {
   @Post(':id/complete-data-entry')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Hand a processed packet back to the data entry head' })
-  async completeDataEntry(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    const doc = await this.documentService.completeDataEntry(id, req.user.id);
+  async completeDataEntry(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.assertDocumentRegion(id, scope, 'document:completeDataEntry');
+    // Only the member it was delegated to, or a desk head, may hand it back — the service decides.
+    const doc = await this.documentService.completeDataEntry(id, req.user.id, roleNames(req?.user?.roles));
     return doc;
   }
 }

@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { JobOptions, Queue } from 'bull';
-import { In, LessThan, Repository } from 'typeorm';
+import { In, IsNull, LessThan, LessThanOrEqual, Repository } from 'typeorm';
 import { NotificationStatus } from '@fapoms/shared';
 import type { MessageChannel, OutboundMessageReceipt } from '@fapoms/shared';
 import { OutboundMessageEntity, OutboundMessageKind } from './outbound-message.entity';
@@ -11,6 +11,10 @@ import { OUTBOUND_EMAIL_QUEUE, OUTBOUND_SMS_QUEUE } from './notification.constan
 import { decryptField, encryptField } from '../../infrastructure/security/field-encryption';
 import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 import { NOTIFICATION_MESSAGE_LEG_LIST } from './notification-message-legs';
+import { errorAlerter, type ErrorAlerter } from '../../infrastructure/observability/error-alerter';
+import {
+  CHANNEL_HEALTH_WINDOW_MS, readChannelHealth, type ChannelHealth,
+} from './messaging-health';
 
 /**
  * The `entityType` a notification's email or text leg is queued under (`NotificationDeliveryWorker`).
@@ -118,6 +122,11 @@ export class OutboundMessageService {
   /** Settled rows are kept this long, for "did we email them?", then deleted. */
   static readonly KEEP_SETTLED_FOR_MS = 90 * 24 * 60 * 60_000;
   private static readonly SWEEP_BATCH = 200;
+  /** How long a message held back by a broken channel waits before the sweep tries it again. */
+  static readonly TRANSPORT_BACKOFF_MS = 10 * 60_000;
+
+  /** Where "every send on a channel is failing" is reported. Replaceable in tests. */
+  alerter: Pick<ErrorAlerter, 'report'> = errorAlerter;
 
   constructor(
     @InjectRepository(OutboundMessageEntity)
@@ -330,7 +339,7 @@ export class OutboundMessageService {
     const settled = await this.repo
       .createQueryBuilder()
       .update(OutboundMessageEntity)
-      .set({ status: 'SENT', sentAt: now, lastError: null, payload: null })
+      .set({ status: 'SENT', sentAt: now, lastError: null, payload: null, retryAfter: null })
       .where('id = :id', { id })
       .returning(['channel', 'entityType', 'entityId'])
       .execute();
@@ -409,6 +418,52 @@ export class OutboundMessageService {
     await this.repo.update({ id, status: 'SENDING' }, { status: 'QUEUED', lastError: reason.slice(0, 1000) });
   }
 
+  /**
+   * The CHANNEL failed (credentials refused, server unreachable) and the quick retries are spent:
+   * back to QUEUED — not FAILED — with `retry_after` pushed out, so the sweep tries it again later
+   * and fixing the credential delivers the backlog. The sweep's one-day give-up still applies.
+   */
+  async deferForTransport(id: string, reason: string, now = Date.now()): Promise<void> {
+    await this.repo.update(
+      { id, status: 'SENDING' },
+      {
+        status: 'QUEUED',
+        lastError: reason.slice(0, 1000),
+        retryAfter: new Date(now + OutboundMessageService.TRANSPORT_BACKOFF_MS),
+      },
+    );
+  }
+
+  /** Per channel: sends and failures in the last half hour, and whether the channel reads as down. */
+  channelHealth(now = Date.now()): Promise<ChannelHealth[]> {
+    return readChannelHealth((sql, params) => this.repo.query(sql, params), now);
+  }
+
+  /**
+   * Says so, out loud, when a channel has failures in the window and not one success.
+   *
+   * Nothing did before: a revoked Gmail app password failed every email for a morning and the only
+   * trace was each message's own FAILED row. The alerter groups by channel and rate-limits itself
+   * (one per key per fifteen minutes), so a two-minute sweep cannot flood the receiver.
+   */
+  private async reportFailingChannels(now: number): Promise<void> {
+    let health: ChannelHealth[];
+    try {
+      health = await this.channelHealth(now);
+    } catch (err: any) {
+      this.logger.warn(`Could not read channel health: ${err?.message ?? err}`);
+      return;
+    }
+    for (const h of health) {
+      if (!h.down) continue;
+      this.logger.error(
+        `Every ${OutboundMessageService.noun(h.channel)} in the last ${CHANNEL_HEALTH_WINDOW_MS / 60_000} minutes failed `
+          + `(${h.failing} failing, 0 sent). Check the ${h.channel === 'SMS' ? 'SMS gateway' : 'mail'} settings.`,
+      );
+      this.alerter.report({ method: 'JOB', route: `/outbound-messages/${h.channel.toLowerCase()}`, errorName: 'AllSendsFailing' });
+    }
+  }
+
   // ── The sweep ────────────────────────────────────────────────────────────
 
   /**
@@ -461,8 +516,13 @@ export class OutboundMessageService {
       reason: ABANDONED_REASON,
     });
 
+    // A row a broken channel deferred (`retry_after`) is left alone until its backoff passes.
+    const strandedBefore = LessThan(new Date(now - OutboundMessageService.STRANDED_AFTER_MS));
     const stranded = await this.repo.find({
-      where: { status: 'QUEUED', updatedAt: LessThan(new Date(now - OutboundMessageService.STRANDED_AFTER_MS)) },
+      where: [
+        { status: 'QUEUED', updatedAt: strandedBefore, retryAfter: IsNull() },
+        { status: 'QUEUED', updatedAt: strandedBefore, retryAfter: LessThanOrEqual(new Date(now)) },
+      ],
       order: { createdAt: 'ASC' },
       take: OutboundMessageService.SWEEP_BATCH,
       select: { id: true, channel: true },
@@ -504,6 +564,7 @@ export class OutboundMessageService {
         `Message sweep: re-queued ${summary.requeued}, abandoned ${summary.abandoned}, gave up on ${summary.expired}.`,
       );
     }
+    await this.reportFailingChannels(now);
     return summary;
   }
 }

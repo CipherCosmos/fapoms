@@ -54,6 +54,8 @@ export function mapAssayerStatementResponse(d: any): AssayerStatement {
       invoiceStatus: p.invoiceStatus ?? null,
       // Grandfathered rows — visible under the pre-invoicing rules, badged as such.
       preInvoicingEra: p.preInvoicingEra === true,
+      // The HOD's final approval (2026-09-24): approved by the office is not yet approved for payment.
+      hodApproved: p.hodApproved === true,
     })),
     payments: (d.payments || []).map((pm: any) => ({
       id: pm.id,

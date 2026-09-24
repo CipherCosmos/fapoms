@@ -41,6 +41,7 @@ const RAW_RESPONSE = {
       invoiceNumber: 'INV-2026-0007',
       invoiceStatus: 'APPROVED',
       preInvoicingEra: true,
+      hodApproved: true,
     },
   ],
   payments: [
@@ -59,6 +60,14 @@ const RAW_RESPONSE = {
     invitation: { id: 'inv-1', status: 'SUBMITTED', lineCount: 4 },
   },
 };
+
+const mapStatementWithout = (key: string) => mapAssayerStatementResponse({
+  ...RAW_RESPONSE,
+  payables: RAW_RESPONSE.payables.map((p: Record<string, unknown>) => {
+    const { [key]: _omit, ...rest } = p;
+    return rest;
+  }),
+});
 
 describe('mapAssayerStatementResponse', () => {
   it('maps every field the shared AssayerStatement type declares — none silently dropped', () => {
@@ -79,6 +88,8 @@ describe('mapAssayerStatementResponse', () => {
       invoiceNumber: 'INV-2026-0007',
       invoiceStatus: 'APPROVED',
       preInvoicingEra: true,
+      // The HOD's final approval (2026-09-24): "approved for payment" versus "awaiting final approval".
+      hodApproved: true,
     });
 
     expect(mapped.payments[0]).toMatchObject({
@@ -109,6 +120,8 @@ describe('mapAssayerStatementResponse', () => {
     expect(mapped.payables[0].invoiceNumber).toBeNull();
     expect(mapped.payables[0].invoiceStatus).toBeNull();
     expect(mapped.invoicing).toBeUndefined();
+    // A server from before the HOD step sends no flag: it reads as not yet approved for payment.
+    expect(mapStatementWithout('hodApproved').payables[0].hodApproved).toBe(false);
   });
 
   it('omits balanceAfter and invoicing on the gated (assayer-audience) shape without throwing', () => {

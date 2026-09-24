@@ -51,8 +51,8 @@ export const MoneyPosition: React.FC<{ data: BillingOverview }> = ({ data }) => 
           icon={<Wallet size={16} />} tone="var(--warning)" label="Owed to assayers"
           value={money(owedToAssayers)}
           sub={splitKnown
-            ? `${money(payouts.approved)} ready to pay · ${money(payouts.inClaimReview!)} with assayers · ${money(payouts.unbilled!)} not billed`
-            : `${money(payouts.approved)} ready to pay · ${money(payouts.paid)} paid out`}
+            ? `${money(payouts.approved - (payouts.awaitingHod ?? 0))} ready to pay · ${payouts.awaitingHod ? `${money(payouts.awaitingHod)} with the HOD · ` : ''}${money(payouts.inClaimReview!)} with assayers · ${money(payouts.unbilled!)} not billed`
+            : `${money(payouts.approved - (payouts.awaitingHod ?? 0))} ready to pay · ${money(payouts.paid)} paid out`}
         />
         <Big
           icon={<TrendingUp size={16} />} tone={margin.margin >= 0 ? 'var(--success)' : 'var(--danger)'} label="Margin"

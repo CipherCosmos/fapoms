@@ -38,7 +38,12 @@ export interface Assignment {
   completedWithoutCheckOutReason?: string | null;
   project: { name: string };
   assayer: { displayName: string; phone?: string | null };
-  projectBranch: { status?: string; branch: { name: string; state: string; city?: string | null } };
+  projectBranch: {
+    status?: string;
+    branch: { name: string; state: string; city?: string | null };
+    /** Sent on the single read for staff (identity only), not on lists. */
+    project?: { id: string; name: string; projectCode?: string | null } | null;
+  };
   assessment: { status?: string; branch: { name: string; state: string }; packetSize?: number } | null;
 }
 

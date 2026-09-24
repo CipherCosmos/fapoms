@@ -54,7 +54,6 @@ describe('applyOverridePolicy — what a stated reason waives', () => {
 
   it.each([
     AssignmentRule.DISTANCE_FLOOR,
-    AssignmentRule.ASSAYER_DOUBLE_BOOKED,
     AssignmentRule.BRANCH_ALREADY_ASSIGNED,
     AssignmentRule.BRANCH_NOT_OPEN,
     AssignmentRule.PROFILE_NOT_DEPLOYABLE,

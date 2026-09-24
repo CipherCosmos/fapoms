@@ -309,6 +309,11 @@ export const en = {
       withdrawFailedTitle: 'Could not withdraw',
     },
 
+    unlock: {
+      title: 'Confirm it is you to continue',
+      body: 'Your saved details and documents are protected. We will send a 6-digit code to your mobile number ending %{last4}. If that is no longer your number, ask HR to correct it.',
+      continue: 'Continue',
+    },
     otp: {
       title: 'Mobile number',
       verified: 'Verified',
@@ -646,6 +651,42 @@ export const en = {
     fileNotAccepted: 'That file could not be accepted. Choose a clearer photo or PDF and try again.',
     fileTypeNotAllowed: 'That file type is not accepted here. Use a photo or PDF.',
     fileTooLarge: 'That file is too large to send. Use a smaller photo or PDF.',
+    /**
+     * Refusals on a job, chosen by the server's code. These sentences are general on purpose: the
+     * server's own English carries the specifics (the dates, the distance), and in English that
+     * sentence is shown instead — see `server-errors.ts` (`BY_CODE_GENERAL`).
+     */
+    assayerOnLeave: 'You are on leave on the day of this job, so it cannot be accepted. Ask operations to move the date or give it to someone else.',
+    notScheduledToday: 'This job is not for today. Check-in opens on the day of the job. If the visit has moved, ask operations to change the date first.',
+    notYourAssignment: 'This job is no longer assigned to you. Pull down to refresh your list.',
+    assayerNotActive: 'Your account is not active, so you cannot take on or start work. Contact HR.',
+    invalidStateForCheckIn: 'Accept this job before you check in.',
+    complianceBlocked: 'You cannot take on new work until a check on your record is sorted out. Contact HR.',
+    invalidAssignmentTransition: 'This job has already moved on and cannot be changed from here. Pull down to refresh.',
+    tooFarFromBranch: 'You seem to be too far from the branch. Check-in works only at the branch itself. Step outside for a clear GPS fix and try again.',
+    acceptDateUnavailable: 'That date cannot be used for this job. Ask operations for another date.',
+    reassignAfterCheckIn: 'You have already checked in to this job, so it cannot be given to someone else. Speak to operations.',
+    officeCheckInReasonRequired: 'The office must give a reason when it checks someone in.',
+  },
+
+  /**
+   * Actions saved on the phone ("it will send by itself") that the server then refused. They stay
+   * listed until the assayer dismisses them, so a refused check-in or claim never vanishes.
+   */
+  queue: {
+    refusedTitle: 'Not accepted by the office',
+    refusedNotifyTitle: '%{what} was not accepted',
+    refusedLine: '%{what}: %{reason}',
+    refusedFallback: 'The office did not accept it.',
+    dismiss: 'OK',
+    dismissAccessibility: 'Dismiss: %{what}',
+    kinds: {
+      CHECK_IN: 'Your check-in',
+      CHECK_OUT: 'Your check-out',
+      ASSIGNMENT_STATUS: 'Your answer to a job offer',
+      EXPENSE_CLAIM: 'Your expense claim',
+      QUERY_MESSAGE: 'Your reply',
+    },
   },
 
   profile: {
@@ -838,6 +879,7 @@ export const en = {
         WORKFORCE: 'Your record',
         BILLING: 'Payments',
         SYSTEM: 'System',
+        FEEDBACK: 'Feedback',
       },
       categoryHints: {
         ASSIGNMENT: 'New offers, acceptances and cancellations',
@@ -847,6 +889,7 @@ export const en = {
         WORKFORCE: 'Certification expiry and profile changes',
         BILLING: 'Expense decisions and payouts',
         SYSTEM: 'Service notices and app updates',
+        FEEDBACK: 'Replies to problems and ideas you sent us',
       },
     },
     location: {
@@ -985,6 +1028,12 @@ export const en = {
     navigate: 'Navigate',
     checkOut: 'Check out',
     details: 'Details',
+    /** A job not on today (IST): no Check-in button, just when it is. */
+    jobOnDate: 'Your job is on %{date}',
+    checkInNotAvailable: 'Check-in is not available for this job right now.',
+    acceptNotAvailable: 'This offer cannot be accepted right now.',
+    /** A reopened job with no check-in: only the papers are left to redo. */
+    redoPapers: 'Send the papers again',
   },
 
   schedule: {
@@ -1101,6 +1150,12 @@ export const en = {
     checkOutFailedBody: 'Check-out failed. Please try again.',
     checkOutSavedOffline:
       'Your check-out from %{branch} will be sent when you are back online. The time recorded is when it arrives.',
+    /** Sending the return finishes the job, after which check-out can no longer be recorded. */
+    checkOutBeforeReturnTitle: 'Check out first?',
+    checkOutBeforeReturnBody:
+      'You are still checked in at %{branch}. Sending the papers finishes the job, and your leaving time can no longer be recorded after that.',
+    checkOutBeforeReturnCheckOut: 'Check out, then send',
+    checkOutBeforeReturnSendAnyway: 'Send without checking out',
   },
 
   scan: {
@@ -1168,6 +1223,10 @@ export const en = {
     submit: 'Submit expense',
     noAssignmentTitle: 'No assignment selected',
     noAssignmentBody: 'Open the assignment you are claiming for and file the expense from there.',
+    jobLabel: 'Which job is this for?',
+    /** Claims are only for visits under way or done (checked in, working, completed). */
+    noClaimableJobs: 'You can claim an expense once you have checked in to a job.',
+    chooseJob: 'Choose the job this expense is for.',
     invalidAmountTitle: 'Enter a valid amount',
     invalidAmountBody: 'Use digits only, for example 1000 or 1,000.',
     filedTitle: 'Claim filed',
@@ -1317,7 +1376,8 @@ export const en = {
     /** A hold is a flag over any of the three states, not a fourth one — hence the extra key. */
     payableStatus: {
       pending: 'Awaiting approval',
-      approved: 'Approved',
+      approved: 'Approved, awaiting final approval',
+      approvedForPayment: 'Approved for payment',
       paid: 'Paid',
       onHold: 'On hold',
       voided: 'Reversed',
@@ -1336,7 +1396,8 @@ export const en = {
     invoiceStatus: {
       invited: 'Sent to you',
       submitted: 'Submitted',
-      approved: 'Approved',
+      approved: 'Approved, awaiting final approval',
+      hodApproved: 'Approved for payment',
       paid: 'Paid',
       cancelled: 'Cancelled',
       superseded: 'Replaced by a newer invoice',

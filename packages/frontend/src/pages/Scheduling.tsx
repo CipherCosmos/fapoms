@@ -22,6 +22,7 @@ import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 import { workTabLabel } from './work/workTabs';
+import { readQueuePage, truncationNote } from './scheduling-queue-page';
 
 /**
  * Why an audit gets moved — previously not captured at all: `handleConfirmReschedule` only ever
@@ -263,15 +264,20 @@ export const Scheduling: React.FC = () => {
 
   const assignmentsQ = useQuery({
     queryKey: [...queryKeys.assignments.all, 'available', scopeKey],
-    queryFn: () => api.request<AssignmentOption[]>(`/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100&${scopeQuery}`),
+    // withMeta: the pagination total says how many there really are beyond the first 100.
+    queryFn: async () => readQueuePage<AssignmentOption>(await api.request<unknown>(
+      `/assignments?projectBranchStatus=ASSIGNMENT_CONFIRMED&unscheduledOnly=true&limit=100&${scopeQuery}`,
+      { withMeta: true },
+    )),
     staleTime: 5_000,
     refetchOnWindowFocus: true,
     refetchOnMount: 'always',
   });
   const isLoadingAssignments = assignmentsQ.isLoading;
   const assignmentsError = loadFailed(assignmentsQ);
-  const rawAssignments = assignmentsQ.data ?? [];
+  const rawAssignments = assignmentsQ.data?.rows ?? [];
   const assignments = Array.isArray(rawAssignments) ? rawAssignments : [];
+  const queueTruncation = truncationNote(assignments.length, assignmentsQ.data?.total ?? assignments.length);
 
   // The header's global scope is applied by the server (both queries send it, and both keys
   // include it). Re-filtering here would only duplicate the project dimension and still miss
@@ -662,7 +668,7 @@ export const Scheduling: React.FC = () => {
           */
           subtitle={[
             schedulesError ? 'active schedules unavailable' : `${scopedSchedules.length} active schedules`,
-            assignmentsError ? 'unscheduled offers unavailable' : `${scopedAssignments.length} unscheduled confirmed offers`,
+            assignmentsError ? 'unscheduled offers unavailable' : `${assignmentsQ.data?.total ?? scopedAssignments.length} unscheduled confirmed offers`,
           ].join(' · ')}
         />
 
@@ -877,7 +883,12 @@ export const Scheduling: React.FC = () => {
                 <span className="spinner" style={{ display: 'inline-block', marginBottom: 8 }} />
                 Loading unscheduled assignments…
               </div>
-            ) : scopedAssignments.length === 0 ? (
+            ) : (queueTruncation && (
+              <div style={{ padding: '6px 12px', fontSize: 'var(--text-2xs)', color: 'var(--warning)', borderBottom: '1px solid var(--border-color)' }}>
+                {queueTruncation}
+              </div>
+            )) || null}
+            {isLoadingAssignments || assignmentsError ? null : scopedAssignments.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '30px 16px', color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>
                 <CheckCircle2 size={24} style={{ margin: '0 auto 8px', opacity: 0.4, color: 'var(--success)' }} />
                 No unscheduled confirmed offers for the selected project.

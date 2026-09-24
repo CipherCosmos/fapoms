@@ -288,6 +288,36 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
   }
 
   /**
+   * Write a buffer at a key the SERVER chose, sealed exactly as `saveFile` seals.
+   *
+   * `saveFile` picks its own opaque key, which is right for every upload that arrives through the
+   * API. The presigned direct upload is different: its bytes landed at a key the client holds a
+   * write URL for, so finalize moves them to a key nobody outside this process can write — and it
+   * needs that key to be derived from the upload (so a retried finalize finds the same row) rather
+   * than freshly random. The caller passes the bytes it has already scanned and hashed, so what is
+   * written here is exactly what was inspected: there is no second read of the client-writable
+   * object in between.
+   */
+  async saveFileAt(key: string, content: Buffer, mimeType?: string): Promise<string> {
+    const cipherKey = documentKey();
+    const seal = cipherKey ? newSeal() : null;
+    const body = cipherKey && seal ? encryptBuffer(content, cipherKey, seal.iv) : content;
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentLength: body.length,
+        ...(mimeType ? { ContentType: mimeType } : {}),
+        ...(seal ? { Metadata: seal.metadata } : {}),
+        ...this.sseParams(),
+      }),
+    );
+    this.logger.log(`Saved object: ${key}`);
+    return key;
+  }
+
+  /**
    * Stream an object from the store, optionally restricted to a byte range.
    *
    * `start` / `end` are inclusive byte offsets (HTTP Range semantics).

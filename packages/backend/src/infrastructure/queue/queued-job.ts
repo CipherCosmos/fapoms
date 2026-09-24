@@ -26,9 +26,10 @@
  *
  * ## What it deliberately does NOT do
  *
- * It does not wrap `BullQueueManager`. That manager adds *named* jobs to the 'background-jobs'
- * queue while `BullProcessor` declares an unnamed `@Process()`, which in Bull means "handle only
- * jobs added with no name" — so every job routed through it currently dead-letters. Each queue
+ * It did not wrap `BullQueueManager` (deleted 2026-09-24 with its 'background-jobs' queue, which
+ * nothing enqueued onto). That manager added *named* jobs while `BullProcessor` declared an unnamed
+ * `@Process()`, which in Bull means "handle only jobs added with no name" — so every job routed
+ * through it dead-lettered. Each queue
  * introduced here registers its own processor with `@Process({ name })` handlers whose names
  * match exactly what is enqueued, which is the whole reason that defect cannot repeat here.
  */

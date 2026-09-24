@@ -64,7 +64,9 @@ export const ASSIGNMENT_TRANSITIONS: Record<AssignmentStatus, AssignmentStatus[]
   [AssignmentStatus.COMPLETED]: [],
   // A declined offer goes back on the market: reassigning it to somebody else is the whole
   // point, and it re-enters as a PENDING offer to that person (reassign, or a new offer through
-  // create, which reuses the declined row).
+  // create, which reuses the declined row). Both go through `AssignmentStateMachine.reassign`, so
+  // this edge is the only way back to PENDING either takes (create stopped writing it directly
+  // 2026-09-24).
   [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
   /**
    * Terminal. A cancellation is a decision that this work is not happening.

@@ -245,7 +245,7 @@ describe('DayTravelService.rebalance — applies the rule under the assayer lock
     expect(read.sql).toMatch(/a\.is_active = true/);
     // A payout approved/paid/part-paid or on a SUBMITTED/APPROVED/PAID bill; a client line INVOICED/PAID.
     expect(read.sql).toMatch(/ap\.status IN \('APPROVED','PAID'\)/);
-    expect(read.sql).toMatch(/ai\.status IN \('SUBMITTED','APPROVED','PAID'\)/);
+    expect(read.sql).toMatch(/ai\.status IN \('SUBMITTED','APPROVED','HOD_APPROVED','PAID'\)/);
     expect(read.sql).toMatch(/be\.state IN \('INVOICED','PAID'\)/);
     expect(read.sql).toMatch(/ORDER BY a\.created_at, a\.id/);
   });

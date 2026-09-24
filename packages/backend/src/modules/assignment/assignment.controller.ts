@@ -605,7 +605,19 @@ export class AssignmentController {
   ) {
     // No-op for the mobile app: an ASSAYER principal carries no region assignment.
     await this.regionGuard.assertAssignmentInScope(id, scope);
-    const assignment = await this.assignmentService.findOne(id);
+    const roles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    const isStaff = roles.some((r) => STAFF_ROLES.includes(r as SystemRole));
+    // Staff see which project the job belongs to (the detail drawer names it); only its identity
+    // is sent, not the project's commercial fields. The field app does not need it.
+    const assignment = await this.assignmentService.findOne(id, { withProject: isStaff });
+    const project = (assignment.projectBranch as any)?.project;
+    if (project) {
+      (assignment.projectBranch as any).project = {
+        id: project.id, name: project.name, projectCode: project.projectCode ?? null, clientId: project.clientId ?? null,
+      };
+    }
 
     /**
      * An assayer may read their own assignment and no one else's.
@@ -621,10 +633,7 @@ export class AssignmentController {
      * simply missed. Staff roles are unaffected — they are scoped by region, which is the control
      * that applies to them.
      */
-    const roles: string[] = (req.user?.roles ?? [])
-      .map((r: any) => (typeof r === 'string' ? r : r?.name))
-      .filter(Boolean);
-    if (roles.includes(SystemRole.ASSAYER) && !roles.some((r) => STAFF_ROLES.includes(r as SystemRole))
+    if (roles.includes(SystemRole.ASSAYER) && !isStaff
       && assignment.assayerId !== req.user?.id) {
       throw new ForbiddenException('You can only open an assignment of your own.');
     }

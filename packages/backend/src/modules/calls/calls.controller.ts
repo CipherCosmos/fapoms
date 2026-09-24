@@ -3,7 +3,8 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsString, IsUUID } from 'class-validator';
 import { JwtAuthGuard, RolesGuard, Roles, hasAnyRole } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
-import { CallsService } from './calls.service';
+import { CallsService, CallActor } from './calls.service';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 class InitiateCallDto {
   @IsUUID()
@@ -39,22 +40,22 @@ export class CallsController {
 
   @Post('initiate')
   @ApiOperation({ summary: 'Ring the other side of a clarification thread' })
-  async initiate(@Body() dto: InitiateCallDto, @Req() req: any) {
-    const data = await this.callsService.initiate(this.actor(req), dto.queryId);
+  async initiate(@Body() dto: InitiateCallDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    const data = await this.callsService.initiate(this.actor(req, scope), dto.queryId);
     return { success: true, data };
   }
 
   @Post('answer')
   @ApiOperation({ summary: 'Accept an incoming call' })
-  async answer(@Body() dto: RoomActionDto, @Req() req: any) {
-    const data = await this.callsService.answer(this.actor(req), dto.roomName);
+  async answer(@Body() dto: RoomActionDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    const data = await this.callsService.answer(this.actor(req, scope), dto.roomName);
     return { success: true, data };
   }
 
   @Post('decline')
   @ApiOperation({ summary: 'Decline an incoming call' })
-  async decline(@Body() dto: RoomActionDto, @Req() req: any) {
-    return await this.callsService.decline(this.actor(req), dto.roomName);
+  async decline(@Body() dto: RoomActionDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    return await this.callsService.decline(this.actor(req, scope), dto.roomName);
   }
 
   @Post('hangup')
@@ -63,12 +64,13 @@ export class CallsController {
     return await this.callsService.hangup(this.actor(req), dto.roomName);
   }
 
-  private actor(req: any): { id: string; name?: string; isAssayer: boolean } {
+  private actor(req: any, scope?: GlobalScope): CallActor {
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
     return {
       id: req.user.id,
       name: req.user?.displayName || req.user?.username || undefined,
       isAssayer: hasAnyRole(roles, [SystemRole.ASSAYER]),
+      scope,
     };
   }
 }

@@ -17,6 +17,80 @@
  */
 
 import * as xlsx from 'xlsx';
+import { BadRequestException } from '@nestjs/common';
+import { inspectZip, looksLikeZip } from './zip-limits';
+
+/**
+ * Ceilings on what an uploaded workbook may unpack to. An .xlsx is a ZIP, and a 50 MB upload can
+ * inflate to gigabytes; SheetJS would inflate all of it into memory before reading a row. 150 MB
+ * uncompressed is roughly a 15-30 MB .xlsx of ordinary data (sheet XML compresses 5-10:1) — far
+ * more than any roster or customer master import needs — and still a size one API process can
+ * parse without being killed; a bigger file is refused with advice to split it. A real workbook
+ * has a few dozen parts; 10,000 is only reached by an archive built to be one.
+ */
+export const MAX_WORKBOOK_UNCOMPRESSED_BYTES = 150 * 1024 * 1024;
+export const MAX_WORKBOOK_ENTRIES = 10_000;
+/**
+ * Rows read from any one sheet. SheetJS is told to stop one row past this, so a sheet that
+ * reaches it is refused out loud rather than silently cut short — an import that quietly dropped
+ * the tail of a file would be worse than one that refused it.
+ */
+export const MAX_SHEET_ROWS = 200_000;
+
+/**
+ * THE way an uploaded spreadsheet is opened. Every import goes through this, so the zip-bomb and
+ * row ceilings are applied once, not remembered (or forgotten) at each call site.
+ *
+ * Legacy .xls and CSV are not ZIPs: their size is already the upload cap, and they expand roughly
+ * one-to-one, so `sheetRows` is the ceiling that applies to them.
+ */
+export function readWorkbook(
+  fileBuffer: Buffer,
+  opts: xlsx.ParsingOptions = {},
+  /** Tests only — production always uses the ceilings above. */
+  limits: { maxUncompressedBytes?: number; maxEntries?: number; maxRows?: number } = {},
+): xlsx.WorkBook {
+  const maxRows = limits.maxRows ?? MAX_SHEET_ROWS;
+  if (looksLikeZip(fileBuffer)) {
+    const verdict = inspectZip(fileBuffer, {
+      maxUncompressedBytes: limits.maxUncompressedBytes ?? MAX_WORKBOOK_UNCOMPRESSED_BYTES,
+      maxEntries: limits.maxEntries ?? MAX_WORKBOOK_ENTRIES,
+    });
+    if (!verdict.ok) {
+      throw new BadRequestException(
+        verdict.reason === 'unreadable'
+          ? 'This Excel file could not be opened. Save it again in Excel (as .xlsx) and upload it again.'
+          : 'This Excel file is too large to import. Split it into smaller files, or save it as CSV, and upload again.',
+      );
+    }
+  }
+  const workbook = xlsx.read(fileBuffer, { ...opts, type: 'buffer', sheetRows: maxRows + 1 });
+  for (const name of workbook.SheetNames) {
+    if (sheetReachesRow(workbook.Sheets[name], maxRows)) {
+      throw new BadRequestException(
+        `Sheet "${name}" has more than ${maxRows.toLocaleString('en-IN')} rows. ` +
+          'Split it into smaller files and upload them one at a time.',
+      );
+    }
+  }
+  return workbook;
+}
+
+/**
+ * Does the sheet hold a real cell on 0-based row `r`? Asked of the one row past the ceiling, not
+ * of `!ref`: a sheet whose formatting runs to row 1,048,576 declares that range with three rows of
+ * data in it, and must not be refused for it.
+ */
+function sheetReachesRow(sheet: xlsx.WorkSheet | undefined, r: number): boolean {
+  const ref = sheet?.['!ref'];
+  if (!sheet || !ref) return false;
+  const range = xlsx.utils.decode_range(ref);
+  if (range.e.r < r) return false;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    if (sheet[xlsx.utils.encode_cell({ r, c })] !== undefined) return true;
+  }
+  return false;
+}
 
 /** A header reduced to something matchable: lowercase, alphanumeric only. */
 export function normaliseHeader(header: string): string {
@@ -117,7 +191,7 @@ export function parseSheet(
   expectedColumns: string[] = [],
   onlySheet?: string,
 ): ParsedSheet {
-  const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
+  const workbook = readWorkbook(fileBuffer);
   const expected = new Set(expectedColumns.map(normaliseHeader));
   const sheetNames =
     onlySheet && workbook.Sheets[onlySheet] ? [onlySheet] : workbook.SheetNames;

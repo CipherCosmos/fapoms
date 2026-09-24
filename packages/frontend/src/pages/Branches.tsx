@@ -22,6 +22,9 @@ import { userMessage } from '../services/errors';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { getZones } from '../services/planning';
 import { Page } from '../components/ui/Page';
+import { useQueryClient } from '@tanstack/react-query';
+import { useClientOptions } from '../hooks/useClients';
+import { queryKeys } from '../hooks/queryKeys';
 
 interface ClientOption {
   id: string;
@@ -343,13 +346,13 @@ export const Branches: React.FC = () => {
       void loadClients();
       if (selectedClientIdRef.current) void loadBranches(selectedClientIdRef.current);
     };
-    socket?.on('ProjectPlanningStarted', refresh);
-    socket?.on('ProjectBranchAssignmentConfirmed', refresh);
+    socket?.on('ProjectPlanningStartedEvent', refresh);
+    socket?.on('ProjectBranchAssignmentConfirmedEvent', refresh);
     socket?.on('branch:created', refresh);
     socket?.on('branch:updated', refresh);
     return () => {
-      socket?.off('ProjectPlanningStarted', refresh);
-      socket?.off('ProjectBranchAssignmentConfirmed', refresh);
+      socket?.off('ProjectPlanningStartedEvent', refresh);
+      socket?.off('ProjectBranchAssignmentConfirmedEvent', refresh);
       socket?.off('branch:created', refresh);
       socket?.off('branch:updated', refresh);
     };
@@ -386,18 +389,32 @@ export const Branches: React.FC = () => {
     }
   }, [branchIdParam, branches]);
 
+  /**
+   * The client picker, from the one shared client list (`useClientOptions`, `?limit=200`).
+   *
+   * This page fetched `GET /clients` itself with no limit, so the picker stopped at the server's
+   * default page of 20 — a 21st client could not be chosen here at all.
+   */
+  const queryClient = useQueryClient();
+  const clientOptions = useClientOptions();
+  useEffect(() => {
+    const list = clientOptions.data;
+    if (!list) return;
+    setClients(list.map((c) => ({ id: c.id, name: c.name, clientCode: c.clientCode ?? c.code ?? '' })));
+    if (list.length > 0 && !selectedClientIdRef.current) setSelectedClientId(list[0].id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientOptions.data]);
+  useEffect(() => {
+    if (!clientOptions.error) return;
+    // The client picker decides which estate the table below describes, so an empty picker is
+    // not a cosmetic loss: it silently narrows the page to whatever `selectedClientId` already
+    // was, or to nothing. Surfaced in the page's own message channel rather than a console
+    // line — the branch banner covers the rows, this covers the control that chooses them.
+    setMessage({ type: 'error', text: `The client list could not be loaded, so the picker above may be empty or out of date. ${userMessage(clientOptions.error)}` });
+  }, [clientOptions.error]);
+  // Live events refresh the shared list; the effect above then repaints the picker.
   const loadClients = async () => {
-    try {
-      const response = await api.request<ClientOption[]>('/clients');
-      setClients(response);
-      if (response.length > 0 && !selectedClientId) setSelectedClientId(response[0].id);
-    } catch (e) {
-      // The client picker decides which estate the table below describes, so an empty picker is
-      // not a cosmetic loss: it silently narrows the page to whatever `selectedClientId` already
-      // was, or to nothing. Surfaced in the page's own message channel rather than a console
-      // line — the branch banner covers the rows, this covers the control that chooses them.
-      setMessage({ type: 'error', text: `The client list could not be loaded, so the picker above may be empty or out of date. ${userMessage(e)}` });
-    }
+    await queryClient.invalidateQueries({ queryKey: queryKeys.clients.options });
   };
 
   /** One screenful. The server caps anything larger at 200, so this is the real ceiling too. */

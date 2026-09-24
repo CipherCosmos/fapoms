@@ -74,12 +74,13 @@ describe('ProtectedRoute', () => {
   });
 
   /**
-   * The page this role is no longer offered, asserted here as well as in route-permissions.spec:
-   * a refusal must never be redirected onto another refusal.
+   * The workforce console serves a custom role holding assayer:view again (`GET /hr/workforce` and
+   * `GET /assayers` carry `@AllowPermissionFallback()`), so the page opens for it — and still not
+   * for the same role without the grant.
    */
-  it('does not send a workforce-granted custom role to a workforce page its API refuses', () => {
+  it('opens the workforce console for a custom role granted assayer:view, and only then', () => {
     openAt('/hr', HR_OPERATOR, ['ASSAYER:VIEW:ORGANIZATION']);
-    expect(screen.queryByText('page @ /hr')).not.toBeInTheDocument();
+    expect(screen.getByText('page @ /hr')).toBeInTheDocument();
   });
 
   it('leaves a built-in role exactly where it was allowed to go', () => {

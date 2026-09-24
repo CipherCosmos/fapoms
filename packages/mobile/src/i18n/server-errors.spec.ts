@@ -131,3 +131,43 @@ describe('errors carrying a code', () => {
     expect(serverErrorText('Save failed (409)', 'errors.generic')).toBe('Save failed (409)');
   });
 });
+
+/**
+ * Refusals on a job, keyed by the code the check-in/accept routes and capability gates send. In
+ * English the server's own sentence is kept (it carries the date or distance); in Hindi, or with
+ * no sentence at all, the translated general sentence is shown instead of English.
+ */
+describe('job refusal codes', () => {
+  const JOB_CODES: Array<[string, keyof typeof en.errors]> = [
+    ['ASSAYER_ON_LEAVE', 'assayerOnLeave'],
+    ['NOT_SCHEDULED_TODAY', 'notScheduledToday'],
+    ['NOT_YOUR_ASSIGNMENT', 'notYourAssignment'],
+    ['ASSAYER_NOT_ACTIVE', 'assayerNotActive'],
+    ['INVALID_STATE_FOR_CHECK_IN', 'invalidStateForCheckIn'],
+    ['ASSAYER_COMPLIANCE_BLOCKED', 'complianceBlocked'],
+    ['INVALID_ASSIGNMENT_TRANSITION', 'invalidAssignmentTransition'],
+    ['TOO_FAR_FROM_BRANCH', 'tooFarFromBranch'],
+    ['ACCEPT_DATE_UNAVAILABLE', 'acceptDateUnavailable'],
+    ['REASSIGN_AFTER_CHECK_IN', 'reassignAfterCheckIn'],
+    ['OFFICE_CHECK_IN_REASON_REQUIRED', 'officeCheckInReasonRequired'],
+  ];
+
+  it.each(JOB_CODES)('%s has an English sentence used when the server sent none', (code, key) => {
+    expect(translateServerError(undefined, code)).toBe(en.errors[key]);
+    // The bare code in the message slot counts as "no sentence".
+    expect(translateServerError(code, code)).toBe(en.errors[key]);
+  });
+
+  it.each(JOB_CODES)('%s is translated in Hindi even when the server sent English', (code, key) => {
+    applyLanguagePreference('hi');
+    const text = translateServerError('You appear to be 3.2 km from this branch.', code);
+    expect(text).not.toBeNull();
+    expect(text).not.toBe(en.errors[key]);
+    expect(text).not.toContain('3.2 km');
+  });
+
+  it('keeps the specific English sentence in English', () => {
+    const sentence = 'You appear to be 3.2 km from this branch. Check-in works only at the branch itself.';
+    expect(serverErrorText(sentence, 'assignment.checkInFailedBody', 'TOO_FAR_FROM_BRANCH')).toBe(sentence);
+  });
+});

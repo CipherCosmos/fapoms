@@ -1,12 +1,12 @@
 import React from 'react';
-import { formatRupees as money, payableStatusLabel } from '@fapoms/shared';
+import { formatRupees as money } from '@fapoms/shared';
 import { useAssayerInvoices } from '../../hooks/useBilling';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import type { AssayerStatement } from '../../services/billing';
 import { BILLING_PAGE_SIZE } from '../../services/billing';
 import { fmtDate } from '../../utils/dates';
-import { AssayerInvoiceStatusPill } from './shared';
+import { AssayerInvoiceStatusPill, PayoutStatusPill } from './shared';
 import { PAY_WORDS } from './vocabulary';
 
 /**
@@ -26,9 +26,12 @@ export const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) =>
       <div style={{ fontSize: 'var(--text-md)', fontWeight: 700 }}>{data.assayerName ?? data.assayerId}</div>
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
         {data.assayerCode && <span>{data.assayerCode}</span>}
-        {/* PAN and the TDS section, for the finance manager reconciling withholding against the
-            payouts below. PAN is decrypted server-side; shown here only to billing staff. */}
-        <span>PAN: <strong style={{ color: data.pan ? 'var(--text-secondary)' : 'var(--danger)' }}>{data.pan ?? 'not on file'}</strong></span>
+        {/* Whether a PAN is on file, for the finance manager reconciling withholding against the
+            payouts below. Never the whole number: the server sends the last four (nothing to an
+            auditor); the full PAN is revealed on the assayer's record, where the reveal is audited. */}
+        <span>PAN: <strong style={{ color: data.pan || data.panOnFile ? 'var(--text-secondary)' : 'var(--danger)' }}>
+          {data.pan ? `${data.pan} (last 4 only)` : data.panOnFile ? 'on file' : 'not on file'}
+        </strong></span>
       </div>
     </div>
 
@@ -66,7 +69,9 @@ export const StatementPayouts: React.FC<{ data: AssayerStatement }> = ({ data })
         head={['Payout', 'Status', 'Invoice', 'Base', 'Travel', 'TDS', 'Total', PAY_WORDS.paid, PAY_WORDS.owed]}
         rows={data.payables.map((p) => [
           p.expenseId ? `${p.payableNumber} · reimbursement` : p.payableNumber,
-          p.onHold ? `${payableStatusLabel(p.status)} · on hold${p.holdReason ? ` (${p.holdReason})` : ''}` : payableStatusLabel(p.status),
+          // An office-approved payout is not payable until the HOD approves it; say so, as the pay
+          // screen does, instead of a bare "Approved".
+          <PayoutStatusPill status={p.status} onHold={p.onHold} holdReason={p.holdReason} hodApproved={p.hodApproved} />,
           // Which assayer invoice this row rides — labels the statement attaches itself
           // (the staff shape), so no lookup is needed here. Blank means never invited.
           p.invoiceNumber ? (

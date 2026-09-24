@@ -14,6 +14,9 @@ import { BackgroundJobTracker } from './background-job.tracker';
 import { BullQueueResolver } from './bull-queue.resolver';
 import { TRACKED_JOBS_QUEUE } from './background-jobs.contract';
 
+/** Bull settings for the tracked-jobs queue — see the note at its registration. */
+export const TRACKED_JOBS_QUEUE_SETTINGS = { lockDuration: 5 * 60_000 };
+
 /**
  * FAPOMS — the one mechanism for work that outlives its request (see `background-jobs.contract.ts`
  * for how a feature registers a kind, and `background-jobs.service.ts` for the lifecycle).
@@ -30,7 +33,14 @@ import { TRACKED_JOBS_QUEUE } from './background-jobs.contract';
 @Module({
   imports: [
     TypeOrmModule.forFeature([BackgroundJobEntity]),
-    BullModule.registerQueue({ name: TRACKED_JOBS_QUEUE }),
+    /*
+      `lockDuration` five minutes, not Bull's 30 s. An import parses a spreadsheet or geocodes in
+      long synchronous stretches that starve the lock-renewal timer; at 30 s Bull declared such a
+      job stalled and redelivered it while it was still running. A worker that really dies is
+      noticed a few minutes later instead — by Bull's stalled check and by the recovery sweep, which
+      goes by the row's heartbeat (`HEARTBEAT_INTERVAL_MS`), not by this lock.
+    */
+    BullModule.registerQueue({ name: TRACKED_JOBS_QUEUE, settings: TRACKED_JOBS_QUEUE_SETTINGS }),
     StorageModule,
   ],
   controllers: [BackgroundJobsController],

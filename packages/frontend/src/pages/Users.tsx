@@ -4,6 +4,7 @@ import { UsersRound, ShieldCheck, Activity as ActivityIcon } from 'lucide-react'
 import { DirectoryPanel } from './users/DirectoryPanel';
 import { RolesPermissionsPanel } from './users/RolesPermissionsPanel';
 import { ActivityFeed } from './users/ActivityFeed';
+import { canReadAuditLog, useCurrentRoles } from '../hooks/useCurrentRoles';
 import { PageHeader } from '../components/ui';
 import { Page } from '../components/ui/Page';
 
@@ -25,7 +26,12 @@ type TabKey = (typeof TABS)[number]['key'];
 export const Users: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const [fallbackTab, setFallbackTab] = useState<TabKey>('directory');
-  const tab = (params.get('tab') as TabKey) || fallbackTab;
+  // The Activity tab reads `/audit-log/*` (ADMIN, AUDITOR by name). A custom role granted user:view
+  // opens this page; the tab it could only get a 403 from is not offered to it.
+  const canAudit = canReadAuditLog(useCurrentRoles());
+  const tabs = TABS.filter((t) => t.key !== 'activity' || canAudit);
+  const requested = (params.get('tab') as TabKey) || fallbackTab;
+  const tab: TabKey = tabs.some((t) => t.key === requested) ? requested : 'directory';
   const setTab = (t: TabKey) => { setFallbackTab(t); setParams(t === 'directory' ? {} : { tab: t }, { replace: true }); };
 
   return (
@@ -44,7 +50,7 @@ export const Users: React.FC = () => {
       />
 
       <nav style={{ display: 'flex', gap: '2px', borderBottom: '1px solid var(--border-color)' }}>
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const Icon = t.icon;
           const active = tab === t.key;
           const title = t.key === 'directory'

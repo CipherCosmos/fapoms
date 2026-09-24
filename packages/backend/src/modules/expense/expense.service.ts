@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 
@@ -27,6 +27,7 @@ import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 export interface CreateExpenseDto {
   category: ExpenseCategory;
@@ -67,6 +68,8 @@ export class ExpenseService {
     private readonly billing: BillingEngineService,
     private readonly uow: UnitOfWork,
     private readonly regionGuard: RegionGuardService,
+    /** Live update for the claimant's phone and the desk; optional so older specs construct as before. */
+    @Optional() private readonly events?: DomainEventPublisher,
   ) {}
 
   /**
@@ -278,7 +281,9 @@ export class ExpenseService {
     const baseQuery = () =>
       this.expenseRepository.find({
         where: { assayerId, isActive: true, ...(status ? { status } : {}) },
-        relations: ['assignment'],
+        // The branch rides along so the phone can name where each claim was for (it showed
+        // "Unknown branch" on every claim: only the bare assignment row was loaded).
+        relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch'],
         order: { createdAt: 'DESC' },
       });
 
@@ -544,6 +549,24 @@ export class ExpenseService {
         reason: saved.reviewNotes ?? '',
       },
     });
+
+    /*
+      After the commit, so no screen refetches before the decision is readable. Ids and the verdict
+      only — the claimant's app re-reads its own (gated) claim list; the gateway sends this to
+      `user:<assayerId>` and the desk's operational rooms.
+    */
+    try {
+      this.events?.publish('expense:decided', {
+        eventType: 'expense:decided',
+        expenseId: saved.id,
+        assignmentId: saved.assignmentId,
+        assayerId: saved.assayerId,
+        status: saved.status,
+        userId,
+      });
+    } catch (err) {
+      this.logger.warn(`Could not publish expense:decided for ${saved.id}: ${(err as Error).message}`);
+    }
 
     return saved;
   }

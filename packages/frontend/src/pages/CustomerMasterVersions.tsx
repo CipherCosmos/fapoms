@@ -67,7 +67,8 @@ export const CustomerMasterVersions: React.FC = () => {
   useEffect(() => {
     const query = withScope(scopeParams);
     api
-      .request<ProjectOption[]>(`/projects${query ? `?${query}` : ''}`, { method: 'GET' })
+      // `limit=200` is the server's ceiling; the default page of 50 hid every later project.
+      .request<ProjectOption[]>(`/projects?limit=200${query ? `&${query}` : ''}`, { method: 'GET' })
       .then((list) => {
         setProjects(list);
         // The header's project, when it has fixed one — that is the narrowing rule, and it is why

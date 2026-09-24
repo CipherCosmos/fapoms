@@ -104,6 +104,7 @@ jest.mock('../../hooks/useBilling', () => {
     useApproveAssayerInvoice: jest.fn(idleMutation),
     useCancelAssayerInvoice: jest.fn(idleMutation),
     useSendInvoice: jest.fn(idleMutation),
+    useRequestInvoiceFinalApproval: jest.fn(idleMutation),
     useRecordBillingPayment: jest.fn(idleMutation),
     useCancelInvoice: jest.fn(idleMutation),
     useReversePayment: jest.fn(idleMutation),

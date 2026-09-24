@@ -11,6 +11,7 @@ import { AssayerRemarks } from '../../components/AssayerRemarks';
 import { api } from '../../services/api';
 import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { ScoreBreakdown } from './ScoreBreakdown';
+import { feeLabel, ratingLabel } from './detail-format';
 import type { AssayerDetail, Candidate } from '../PlanningWorkspace';
 
 /**
@@ -179,7 +180,7 @@ export const AssayerDetailModal: React.FC<{
                     <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '1px' }}>Avg Rating</div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--accent-primary)' }}>{Number(profile.performanceRating).toFixed(1)}</div>
+                    <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--accent-primary)' }}>{ratingLabel(profile.performanceRating)}</div>
                     <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '1px' }}>Perf. Rating</div>
                   </div>
                 </div>
@@ -240,7 +241,7 @@ export const AssayerDetailModal: React.FC<{
                         <span>{formatRouteDistance(candidate.distanceKm, candidate.distanceSource ?? null)}</span>
                         {candidate.durationMinutes != null && <span>{formatTravelTime(candidate.durationMinutes, candidate.distanceSource ?? null)}</span>}
                         <span title={candidate.usedFallbackBaseFee ? 'No priced rate on file — platform default, not a contracted figure.' : undefined}>
-                          Audit fee: {candidate.baseFee != null ? `₹${candidate.baseFee}` : '—'}{candidate.usedFallbackBaseFee ? ' (platform default)' : ''}
+                          Audit fee: {feeLabel(candidate.baseFee)}{candidate.usedFallbackBaseFee ? ' (platform default)' : ''}
                           {candidate.baseFee != null && <span style={{ opacity: 0.65 }}> + travel</span>}
                         </span>
                         {candidate.score != null && (
@@ -450,9 +451,9 @@ export const AssayerDetailModal: React.FC<{
                       {profile.activeCommercialProfile && (
                         <div style={{ padding: '8px', background: 'rgba(216,174,71,0.1)', borderRadius: '6px', border: '1px solid rgba(216,174,71,0.2)' }}>
                           <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--accent)', fontWeight: 700, marginBottom: '2px' }}>ACTIVE COMMERCIAL RATE</div>
-                          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>₹{profile.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
+                          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>{feeLabel(profile.activeCommercialProfile.baseFee)} / audit</div>
                           <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            Travel: ₹{profile.activeCommercialProfile.travelReimbursement || 0} | Daily: ₹{profile.activeCommercialProfile.dailyRate || 0}
+                            Travel: {feeLabel(profile.activeCommercialProfile.travelReimbursement || 0)} | Daily: {feeLabel(profile.activeCommercialProfile.dailyRate || 0)}
                           </div>
                         </div>
                       )}
@@ -470,7 +471,7 @@ export const AssayerDetailModal: React.FC<{
                               <div style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{ah.branch_city}, {ah.branch_state} | {ah.project_name || 'GSS Project'}</div>
                             </div>
                             <div style={{ textAlign: 'right' }}>
-                              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)' }}>₹{(ah.agreed_fee || ah.proposed_fee || 0).toLocaleString()}</div>
+                              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--warning)' }}>{feeLabel(ah.agreed_fee ?? ah.proposed_fee ?? 0)}</div>
                               <span style={{ fontSize: 'var(--text-3xs)', padding: '1px 5px', borderRadius: '3px', background: 'rgba(216,174,71,0.2)', color: 'var(--accent)', fontWeight: 600 }}>{ah.status}</span>
                             </div>
                           </div>

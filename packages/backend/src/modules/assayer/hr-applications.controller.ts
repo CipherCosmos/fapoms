@@ -13,6 +13,8 @@ import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
 import { UpdateDraftRequestDto } from './public-registration.controller';
 import { RegistrationApplicationService } from './registration-application.service';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 const staffUploadMulterOptions = {
   storage: memoryStorage(),
@@ -150,21 +152,34 @@ export class OpenWithoutInterviewDto {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('hr/applications')
 export class HrApplicationsController {
-  constructor(private readonly registrationApplications: RegistrationApplicationService) {}
+  /**
+   * The region ceiling (audit F5, 2026-09-24). The hiring pipeline carried none: a region-assigned
+   * account could list, open, approve or reject a candidate from anywhere in India, while the
+   * roster those candidates join was already scoped. A candidate's region is their application's
+   * state — see `RegionGuardService.assertApplicationInScope`. Reads honour
+   * `security.regionScope.mode`; writes always enforce. Every `:id` route asserts before it
+   * touches the row, so a refusal says "not yours" rather than disclosing the row's state.
+   */
+  constructor(
+    private readonly registrationApplications: RegistrationApplicationService,
+    private readonly regionGuard: RegionGuardService,
+  ) {}
 
   @Get()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'List self-registration applications, optionally filtered by status' })
-  async list(@Query('status') status?: ApplicationStatus) {
-    return await this.registrationApplications.listApplications(status);
+  async list(@Query('status') status?: ApplicationStatus, @GlobalScopeFilter() scope?: GlobalScope) {
+    const rows = await this.registrationApplications.listApplications(status);
+    return await this.regionGuard.narrowApplicationsToScope(rows, scope);
   }
 
   @Get(':id')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'One application, with its uploaded documents' })
-  async get(@Param('id', ParseUUIDPipe) id: string) {
+  async get(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'read');
     return await this.registrationApplications.getApplication(id);
   }
 
@@ -203,7 +218,9 @@ export class HrApplicationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: StaffDraftRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.updateStaffDraft(id, dto, req.user.id);
   }
 
@@ -215,7 +232,9 @@ export class HrApplicationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateMobileDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.updateApplicationMobile(id, dto.mobile, req.user.id);
   }
 
@@ -230,7 +249,9 @@ export class HrApplicationsController {
     @Param('requirement') requirement: string,
     @UploadedFile() file: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
@@ -265,7 +286,10 @@ export class HrApplicationsController {
     @Param('requirement') requirement: string,
     @Param('index', ParseIntPipe) index: number,
     @Res() res: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
+    // Before the file is looked up, so another region's candidate is refused, not described.
+    await this.regionGuard.assertApplicationInScope(id, scope, 'read');
     const { key, fileName } = await this.registrationApplications.documentFileKey(
       id, requirement as OnboardingDocument, index,
     );
@@ -285,7 +309,9 @@ export class HrApplicationsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ApproveApplicationDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     const userRoles = (req.user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
     const { assayer, gaps } = await this.registrationApplications.approve(
       id, req.user.id, userRoles, req.user.organizationId, dto,
@@ -299,7 +325,8 @@ export class HrApplicationsController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Send the candidate a fresh registration link, invalidating any earlier one' })
-  async resendInvite(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async resendInvite(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.resendInvite(id, req.user.id);
   }
 
@@ -307,7 +334,13 @@ export class HrApplicationsController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Decline the application' })
-  async reject(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RejectApplicationDto, @Req() req: any) {
+  async reject(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectApplicationDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.reject(id, req.user.id, dto.reason);
   }
 
@@ -315,7 +348,13 @@ export class HrApplicationsController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Ask the candidate for specific documents or corrections on the same link' })
-  async requestMoreInfo(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RequestMoreInfoDto, @Req() req: any) {
+  async requestMoreInfo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RequestMoreInfoDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.requestMoreInfo(id, req.user.id, {
       notes: dto.notes,
       documents: (dto.documents ?? []).map((d) => ({
@@ -340,7 +379,9 @@ export class HrApplicationsController {
     @Param('requirement') requirement: string,
     @Body() dto: ReviewApplicationDocumentDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertApplicationInScope(id, scope, 'write');
     return await this.registrationApplications.reviewApplicationDocument(
       id,
       requirement as OnboardingDocument,

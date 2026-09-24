@@ -82,6 +82,8 @@ export interface FeedbackAttachment {
   fileType: string;
   storageKey?: string;
   size?: number;
+  /** The upload route's proof that this caller uploaded the file; posted back verbatim. */
+  uploadToken?: string;
 }
 
 export interface CreateFeedbackInput {

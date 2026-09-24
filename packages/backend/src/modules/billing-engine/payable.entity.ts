@@ -45,6 +45,11 @@ import { PayoutDestinationEvidence } from './payout-destination';
   unique: true,
   where: '"expense_id" IS NOT NULL',
 })
+// The HOD's queue (2026-09-24): office-approved, not yet final-approved. Also in
+// 1801200000000-BillingFinalApproval — declared here for the same synchronize reason as above.
+@Index('idx_assayer_payables_awaiting_hod', ['approvedAt'], {
+  where: `"status" = 'APPROVED' AND "hod_approved_at" IS NULL`,
+})
 export class AssayerPayableEntity extends BaseEntity {
   @Column({ name: 'payable_number', length: 50, unique: true })
   payableNumber: string;
@@ -125,6 +130,33 @@ export class AssayerPayableEntity extends BaseEntity {
 
   @Column({ name: 'approved_by', type: 'uuid', nullable: true })
   approvedBy: string | null;
+
+  /**
+   * The HOD's final approval (owner, 2026-09-24) — the second approval, after the office's, that
+   * money needs before it can move. An APPROVED payable
+   * without it is waiting for the HOD; `recordDisbursement` and the bank file refuse it. Set by the
+   * HOD approving the payout itself, or the assayer bill it rides.
+   * Never backfilled: whatever was waiting at deploy waits for the HOD like everything after it.
+   */
+  @Column({ name: 'hod_approved_at', type: 'timestamptz', nullable: true })
+  hodApprovedAt: Date | null;
+
+  @Column({ name: 'hod_approved_by', type: 'uuid', nullable: true })
+  hodApprovedBy: string | null;
+
+  /**
+   * The last time the HOD sent it back to the office, by whom and why. Kept (not cleared by the
+   * office's next approval) so the HOD's second look sees what the first one said; every
+   * rejection is also a `billing_history` row.
+   */
+  @Column({ name: 'hod_rejected_at', type: 'timestamptz', nullable: true })
+  hodRejectedAt: Date | null;
+
+  @Column({ name: 'hod_rejected_by', type: 'uuid', nullable: true })
+  hodRejectedBy: string | null;
+
+  @Column({ name: 'hod_reject_reason', type: 'text', nullable: true })
+  hodRejectReason: string | null;
 
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt: Date | null;

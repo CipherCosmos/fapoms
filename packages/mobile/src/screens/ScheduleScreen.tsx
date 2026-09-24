@@ -9,6 +9,7 @@ import { assignmentStatusTone } from '../utils/statusTone';
 import { dayGroupHeader, dayKey, relativeDay } from '../utils/dates';
 import { useT, useLocale, serverErrorText, t as translate } from '../i18n';
 import { useSwipeSegments } from '../hooks/useSwipeSegments';
+import { acceptView, canSendReturn, checkInView } from './job-actions';
 
 const SCHEDULE_TABS = ['ACTIVE', 'DONE'] as const;
 
@@ -220,6 +221,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
           // Wording from @fapoms/shared, tone from the app's one tone map — this screen used
           // to keep its own copy of both, and they had drifted from HomeScreen's.
           const meta = { label: assignmentStatusLabel(a.status), tone: assignmentStatusTone(a.status) as Tone };
+          const now = new Date();
+          const accept = a.status === 'PENDING' ? acceptView(a) : null;
+          const checkIn = a.status === 'ACCEPTED' && !a.checkedInAt ? checkInView(a, now) : null;
+          const returnOnly = a.status === 'ACCEPTED' && canSendReturn(a, now);
 
           return (
             <FadeIn key={a.id} delay={Math.min(i, 6) * 45}>
@@ -255,18 +260,39 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     one. */}
                 {a.status === 'PENDING' && (
                   <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                    <Button label={tr('schedule.accept')} icon="checkmark" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
+                    <Button label={tr('schedule.accept')} icon="checkmark" loading={busyActionId === a.id} disabled={busyActionId != null || accept?.allowed === false} onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
                     <Button label={tr('schedule.decline')} icon="close" variant="neutral" disabled={busyActionId != null} onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
                   </View>
+                )}
+                {accept && !accept.allowed && (
+                  <AppText variant="small" tone="warning">
+                    {serverErrorText(accept.reason, 'home.acceptNotAvailable', accept.code)}
+                  </AppText>
                 )}
 
                 {a.status === 'ACCEPTED' && (
                   <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                    {onOpenMap && (
+                    {onOpenMap && !returnOnly && (
                       <Button label={tr('schedule.navigate')} icon="navigate" variant="neutral" onPress={() => onOpenMap(a)} style={{ flex: 1 }} />
                     )}
-                    <Button label={tr('schedule.checkIn')} icon="log-in-outline" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onCheckIn(a)} style={{ flex: 1 }} />
+                    {/* Check-in only on the job's own day (IST) or as the server says; a reopened
+                        job with no arrival is offered its papers instead. */}
+                    {returnOnly ? (
+                      <Button label={tr('home.redoPapers')} icon="scan" onPress={() => (onOpenScanner ? onOpenScanner(a) : onOpenPdfDocs(a))} style={{ flex: 1 }} />
+                    ) : checkIn?.kind === 'allowed' ? (
+                      <Button label={tr('schedule.checkIn')} icon="log-in-outline" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onCheckIn(a)} style={{ flex: 1 }} />
+                    ) : null}
                   </View>
+                )}
+                {!returnOnly && checkIn?.kind === 'other-day' && (
+                  <AppText variant="small" tone="muted">
+                    {tr('home.jobOnDate', { date: formatDateOnly(checkIn.date, { weekday: 'long', day: 'numeric', month: 'long' }) })}
+                  </AppText>
+                )}
+                {!returnOnly && checkIn?.kind === 'blocked' && (
+                  <AppText variant="small" tone="warning">
+                    {serverErrorText(checkIn.reason, 'home.checkInNotAvailable', checkIn.code)}
+                  </AppText>
                 )}
 
                 {(a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS') && (

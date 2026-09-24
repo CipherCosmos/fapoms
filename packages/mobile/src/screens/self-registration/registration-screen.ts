@@ -27,3 +27,25 @@ export function registrationScreenFor(status: string, statusOnly: boolean): Regi
   if (statusOnly) return status === ApplicationStatus.AWAITING_INFO ? 'expired-fix' : 'status';
   return FINISHED_STATUSES.has(status) ? 'status' : 'form';
 }
+
+/**
+ * A draft patch made safe to send while the link's saved answers are LOCKED (the server withheld
+ * them: no code verified in this session). The form on screen was then filled from a copy with the
+ * identity numbers left out, so a blank there is "not shown", never "cleared" — sending it would ask
+ * the server to wipe a PAN or account number the candidate cannot even see. Blank values (top level
+ * and in `record`) are dropped; anything actually typed goes through. Unlocked, the patch is as is.
+ */
+export function draftPatchForLock<P extends object>(patch: P, locked: boolean): Partial<P> {
+  if (!locked) return patch;
+  const blank = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'record' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const kept = Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([, v]) => !blank(v)));
+      if (Object.keys(kept).length > 0) out.record = kept;
+    } else if (!blank(value)) {
+      out[key] = value;
+    }
+  }
+  return out as Partial<P>;
+}

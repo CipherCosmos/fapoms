@@ -1,5 +1,5 @@
 import { AssignmentAction } from '@fapoms/shared';
-import { decideArrival, pruneHandled, usableFix, FRESH_FIX_MAX_AGE_MS } from './arrival';
+import { afterAutoCheckIn, decideArrival, pruneHandled, usableFix, FRESH_FIX_MAX_AGE_MS } from './arrival';
 import { MIN_WATCH_RADIUS_M, REGION_LIMIT, planGeofences, type WatchedZone } from './geofence-plan';
 import { nextRequest, permissionStep } from './permission-flow';
 import { extractPushData, planForPush } from './push-plan';
@@ -288,5 +288,20 @@ describe('permission flow', () => {
     expect(nextRequest({ ...f, foreground: 'granted' })).toBe('background');
     expect(nextRequest({ ...f, foreground: 'granted', background: 'granted' })).toBe('done');
     expect(nextRequest({ ...f, foreground: 'denied', foregroundCanAskAgain: false })).toBe('blocked');
+  });
+});
+
+describe('after an automatic check-in', () => {
+  it('a server refusal is final for today but refreshes the jobs and circles', () => {
+    expect(afterAutoCheckIn('refused')).toEqual({ retryLater: false, refreshJobs: true });
+  });
+
+  it('no position fix lets a later event try again, without a refresh', () => {
+    expect(afterAutoCheckIn('no-position')).toEqual({ retryLater: true, refreshJobs: false });
+  });
+
+  it('a check-in that went (or was saved) needs neither', () => {
+    expect(afterAutoCheckIn('done')).toEqual({ retryLater: false, refreshJobs: false });
+    expect(afterAutoCheckIn('queued')).toEqual({ retryLater: false, refreshJobs: false });
   });
 });

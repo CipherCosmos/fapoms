@@ -4,6 +4,15 @@ import { In, QueryFailedError, Repository } from 'typeorm';
 import type { BackgroundJobProgress, BackgroundJobStatus } from '@fapoms/shared';
 import { BackgroundJobEntity } from './background-job.entity';
 
+/**
+ * A RUNNING row untouched this long has lost its worker and may be claimed again. Three heartbeats
+ * (`HEARTBEAT_INTERVAL_MS`, 20 s) plus margin.
+ */
+export const RECLAIM_AFTER_MS = 90_000;
+
+/** How often a running job touches its row. Well inside `RECLAIM_AFTER_MS` and the recovery sweep's staleness. */
+export const HEARTBEAT_INTERVAL_MS = 20_000;
+
 /** Statuses a job is still open in — the dedupe index's predicate, in code. */
 export const OPEN_STATUSES: BackgroundJobStatus[] = ['QUEUED', 'RUNNING', 'AWAITING_REVIEW'];
 export const SETTLED_STATUSES: BackgroundJobStatus[] = ['SUCCEEDED', 'FAILED', 'CANCELLED'];
@@ -94,8 +103,13 @@ export class BackgroundJobStore {
   }
 
   /**
-   * Move to RUNNING. From QUEUED on a first run; from RUNNING when an idempotent kind is re-run
-   * after its worker died. Null when the row has left both (cancelled while waiting).
+   * Move to RUNNING. From QUEUED on a first run; from RUNNING only when the row has gone STALE —
+   * nothing has touched it for `RECLAIM_AFTER_MS`, so its worker is gone (a live run heartbeats
+   * every 20 s). Null when the row has left both, or is RUNNING and still being worked.
+   *
+   * It used to re-claim any RUNNING row. Bull redelivers a job whose lock lapsed (a long
+   * synchronous stretch blocks lock renewal), and that redelivery re-claimed and re-ran a job whose
+   * first handler was still running — two runs of one job, side by side.
    */
   async claim(id: string, exclusiveKey: string | null): Promise<BackgroundJobEntity | null> {
     try {
@@ -109,7 +123,10 @@ export class BackgroundJobStore {
           startedAt: () => 'COALESCE(started_at, now())',
           error: null,
         } as any)
-        .where('id = :id AND status IN (:...from)', { id, from: ['QUEUED', 'RUNNING'] })
+        .where(
+          `id = :id AND (status = 'QUEUED' OR (status = 'RUNNING' AND updated_at < now() - make_interval(secs => :staleSecs)))`,
+          { id, staleSecs: RECLAIM_AFTER_MS / 1000 },
+        )
         .execute();
       if (!result.affected) return null;
     } catch (err) {
@@ -136,6 +153,16 @@ export class BackgroundJobStore {
     return !!result.affected;
   }
 
+  /** Heartbeat: bump `updated_at` on a RUNNING row, so it never reads as abandoned while worked. */
+  async touch(id: string): Promise<void> {
+    await this.repo
+      .createQueryBuilder()
+      .update(BackgroundJobEntity)
+      .set({ updatedAt: () => 'now()' } as any)
+      .where('id = :id AND status = :running', { id, running: 'RUNNING' })
+      .execute();
+  }
+
   async patch(id: string, patch: Partial<BackgroundJobEntity>): Promise<void> {
     await this.repo.update({ id }, patch as any);
   }
@@ -156,7 +183,10 @@ export class BackgroundJobStore {
       .where('j.status IN (:...statuses)', { statuses: filter.statuses });
     if (filter.requestedBy) qb.andWhere('j.requested_by = :requestedBy', { requestedBy: filter.requestedBy });
     if (filter.withinRegions !== undefined && filter.withinRegions !== null) {
-      qb.andWhere('j.regions IS NOT NULL AND j.regions <@ CAST(:regions AS text[])', { regions: filter.withinRegions });
+      // `cardinality > 0`: an EMPTY array is contained in every array, so `'{}' <@ :regions` listed a
+      // job with no captured regions to every regional administrator — while `isVisibleTo`, which
+      // guards opening it, refused them. The list and the gate must give one answer.
+      qb.andWhere('j.regions IS NOT NULL AND cardinality(j.regions) > 0 AND j.regions <@ CAST(:regions AS text[])', { regions: filter.withinRegions });
     }
     if (filter.organizationId) qb.andWhere('j.organization_id = :org', { org: filter.organizationId });
     if (filter.kind) qb.andWhere('j.kind = :kind', { kind: filter.kind });

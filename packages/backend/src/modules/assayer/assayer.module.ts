@@ -40,6 +40,7 @@ import { AssayerController } from './assayer.controller';
 import { RosterQueryService } from './roster-query.service';
 import { AssayerSelfServiceController } from './assayer-self-service.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { DayTravelModule } from '../assignment/day-travel.module';
 import { GeoModule } from '../geo/geo.module';
 import { RegistrationApplicationService } from './registration-application.service';
 import { AssayerInterviewService } from './assayer-interview.service';
@@ -55,6 +56,9 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
   imports: [
     // HR and ops learn when someone becomes assignable, and when credentials fall due.
     NotificationsModule,
+    // Travel once per assayer per day: a departure's cancelled jobs re-decide their days. A leaf
+    // module (PricingModule + NotificationsModule only), so no cycle.
+    DayTravelModule,
     StorageModule,
     // For `GeoPrecisionService.enqueueBackfill` — the roster importer hands freshly imported
     // appraisers to the precision worker instead of leaving them for the nightly sweep.

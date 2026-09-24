@@ -13,6 +13,8 @@ import { assertUploadAllowed, uploadMulterOptions, SCAN_UPLOAD_TYPES, MAX_UPLOAD
 import { deriveFileIntegrity } from '../document/document-integrity';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 class RecordInterviewRequestDto {
   @IsString() @MinLength(1) @MaxLength(200)
@@ -70,6 +72,12 @@ export class AssayerInterviewController {
   constructor(
     private readonly interviews: AssayerInterviewService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
+    /**
+     * The region ceiling (audit F5, 2026-09-24): an interview reaches a region through the
+     * application its PASS opened — see `RegionGuardService.assertInterviewInScope`. Reads honour
+     * `security.regionScope.mode`; writes always enforce.
+     */
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   @Post()
@@ -101,7 +109,9 @@ export class AssayerInterviewController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AmendInterviewRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertInterviewInScope(id, scope, 'write');
     return await this.interviews.amend(id, dto, req.user.id);
   }
 
@@ -120,7 +130,10 @@ export class AssayerInterviewController {
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFile() file: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Before the file is scanned or stored: another region's interview gets nothing kept against it.
+    await this.regionGuard.assertInterviewInScope(id, scope, 'write');
     if (!file?.buffer?.length) throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     assertUploadAllowed({
       contentType: file.mimetype,
@@ -150,7 +163,9 @@ export class AssayerInterviewController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('index') index: string,
     @Res() res: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
+    await this.regionGuard.assertInterviewInScope(id, scope, 'read');
     const found = await this.interviews.fileKey(id, Number(index));
     if (!found) throw new NotFoundException('No such file on this interview.');
     const stream = await this.storage.getFileStream(found.key);

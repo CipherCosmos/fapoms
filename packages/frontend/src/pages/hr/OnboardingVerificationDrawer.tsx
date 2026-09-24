@@ -382,7 +382,7 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
                   className="btn btn-primary"
                   disabled={busy || outstanding.length > 0}
                   onClick={() => void advance()}
-                  title={outstanding.length > 0 ? `Finish ${outstanding.length} remaining item${outstanding.length === 1 ? '' : 's'} above first` : plan.next ? `Move to: ${plan.next}` : plan.actionLabel}
+                  title={outstanding.length > 0 ? `Finish ${outstanding.length} remaining item${outstanding.length === 1 ? '' : 's'} above first` : plan.next ? `Move to: ${assayerLifecycleLabel(plan.next)}` : plan.actionLabel}
                   style={{ fontSize: 'var(--text-sm)', padding: '8px 18px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
                   <CheckCircle2 size={15} /> {busy ? 'Saving…' : plan.actionLabel}

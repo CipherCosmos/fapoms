@@ -920,15 +920,60 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/billing?tab=assayer-invoices',
     skipActor: true,
   },
+  /*
+    Sent when the bill is cleared for payment — the HOD's final approval (2026-09-24), not the
+    office's approval before it. Telling the assayer "approved" at the office step would be a promise
+    the HOD could still take back.
+  */
   ASSAYER_INVOICE_APPROVED: {
     category: NotificationCategory.BILLING,
     priority: NotificationPriority.HIGH,
     roles: [],
     special: ['ASSIGNED_ASSAYER'],
     channels: IN_APP_PUSH_AND_EMAIL,
-    title: 'Invoice approved',
-    body: 'Your invoice ${invoiceNumber} (${count} audits) has been approved. Your earnings are updated in the app.',
+    title: 'Your bill is approved for payment',
+    body: 'Your bill ${invoiceNumber} (${count} audits) is approved for payment. Your earnings are updated in the app.',
     link: '/earnings',
+    skipActor: true,
+  },
+
+  /*
+    THE HOD'S FINAL APPROVAL (2026-09-24). Something the office approved is waiting for the HOD:
+    an assayer bill, a payout approved without a bill, an expense reimbursement, or a client invoice.
+    Admins by name; a custom role (an "HOD") only when it holds the final-approval permission AND
+    the billing read the queue's page needs — `usersHoldingPermission` requires every listed one.
+    Deduplicated per item and round by the emitter; bursts (a bulk approval) collapse into one line.
+  */
+  BILLING_FINAL_APPROVAL_NEEDED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [...ADMINS],
+    fallbackPermissions: ['BILLING:FINAL_APPROVE:ORGANIZATION', 'BILLING:VIEW:ORGANIZATION'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Final approval needed',
+    body: '${what} (₹${amount}) was approved by ${officeName} and is waiting for your final approval.',
+    link: '/billing?tab=final',
+    skipActor: true,
+    collapse: {
+      windowSeconds: 300,
+      title: '${count} items need your final approval',
+      body: '${count} bills, payouts or invoices approved by the office are waiting for your final approval.',
+      link: '/billing?tab=final',
+    },
+  },
+  /*
+    And back: the HOD sent it back to the office, with the reason — to whoever did the office's part
+    (approved the payout or bill, or sent the invoice up), addressed by name as RECORD_OWNER.
+  */
+  BILLING_FINAL_APPROVAL_REJECTED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Sent back by the HOD: ${what}',
+    body: '${hodName} did not give ${what} the final approval: "${reason}". It is back with the office to fix and approve again.',
+    link: '/billing?tab=${tab}',
     skipActor: true,
   },
 

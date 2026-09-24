@@ -497,7 +497,7 @@ const countsFor = async (assignmentId) => {
   // That transaction now runs on the worker, so the reads below wait for the run to FINISH: read
   // on the 202, "untouched" would be true merely because the worker had not got there yet.
   const refusedApproval = await billingRunAs(exec, '/billing-engine/payouts/approve',
-    { payableIds: [payable.id] });
+    { payableIds: [payable.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   const reason = (refusedApproval.result?.refused?.[0]?.reason
     ?? refusedApproval.r.body?.message ?? '').toString();
   if (!refusedApproval.result) {
@@ -538,7 +538,7 @@ const countsFor = async (assignmentId) => {
   // A refusal only means something if the same call would otherwise have succeeded. Without this
   // the three checks above would pass just as well against a payable that was broken anyway.
   const controlApprove = await billingRunAs(admin, '/billing-engine/payouts/approve',
-    { payableIds: [payable.id] });
+    { payableIds: [payable.id], reason: 'Acceptance probe: approved without a bill (assayer confirmed by phone)' });
   const [p3] = await q(`SELECT status, approved_by FROM assayer_payables WHERE id=$1`, [payable.id]);
   record('REL-35', p3.status === 'APPROVED' && p3.approved_by === admin.id,
     `control: a DIFFERENT account approves the same payable, so the refusal was the duties rule `

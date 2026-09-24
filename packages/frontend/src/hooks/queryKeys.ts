@@ -277,5 +277,9 @@ export const queryKeys = {
     pendingExpenses: () => ['billing', 'pendingExpenses'] as const,
     assignmentMoney: (assignmentId: string) => ['billing', 'assignmentMoney', assignmentId] as const,
     reconcilePreview: (since?: string) => ['billing', 'reconcilePreview', since ?? 'ALL'] as const,
+    /** The HOD's queue — under `billing` so every billing write (and socket event) refreshes it. */
+    finalApproval: () => ['billing', 'finalApproval'] as const,
+    /** Bank-account warnings for the payouts an approve/pay dialog is about to act on (audit F2/F3). */
+    destinationChecks: (payableIds: string[]) => ['billing', 'destinationChecks', ...payableIds] as const,
   },
 };

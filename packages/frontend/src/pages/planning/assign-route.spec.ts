@@ -1,4 +1,4 @@
-import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder, type LiveAssignment } from './assign-route';
+import { assignRoute, assignBlocker, reassignAndApply, reassignBody, feeToSend, postStopsInOrder, type LiveAssignment } from './assign-route';
 
 /**
  * Where a planning "assign" goes.
@@ -69,20 +69,50 @@ describe('assignBlocker — the reason is required for a reassignment', () => {
   });
 });
 
-describe('reassignAndApply', () => {
+describe('reassignAndApply — ONE request carries the move, fee, date and acceptance', () => {
   const call = (request: jest.Mock) => request.mock.calls.map(([url, opts]) => [
     url, opts?.method, opts?.body ? JSON.parse(opts.body) : undefined,
   ]);
 
-  it('posts to /reassign with the new assayer and the reason — never to POST /assignments', async () => {
-    const request = jest.fn().mockResolvedValue({ id: 'asg-1', status: 'PENDING', proposedFee: 3200, scheduledDate: '2026-09-30' });
-    await reassignAndApply(request, {
-      assignmentId: 'asg-1', newAssayerId: 'new-assayer', reason: '  Asha is unwell ', fee: 3200,
+  it('Send to app with an untouched fee: one POST, no proposedFee, no acceptance', async () => {
+    const request = jest.fn().mockResolvedValue({ id: 'asg-1', status: 'PENDING', proposedFee: 3200 });
+    const out = await reassignAndApply(request, {
+      assignmentId: 'asg-1', newAssayerId: 'new-assayer', reason: '  Asha is unwell ',
       scheduledDate: '2026-09-30', acceptOnBehalf: false,
     });
     expect(call(request)).toEqual([
-      ['/assignments/asg-1/reassign', 'POST', { newAssayerId: 'new-assayer', reason: 'Asha is unwell' }],
+      ['/assignments/asg-1/reassign', 'POST', { newAssayerId: 'new-assayer', reason: 'Asha is unwell', scheduledDate: '2026-09-30' }],
     ]);
+    expect(out).toEqual({ status: 'PENDING', proposedFee: 3200 });
+  });
+
+  it('Call & Assign with a typed fee: one POST with proposedFee + acceptOnBehalf — no PUT, no /accept', async () => {
+    const request = jest.fn().mockResolvedValue({ id: 'asg-1', status: 'ACCEPTED', proposedFee: 3500 });
+    const out = await reassignAndApply(request, {
+      assignmentId: 'asg-1', newAssayerId: 'new-assayer', reason: 'moved', fee: 3500,
+      scheduledDate: '2026-09-30', acceptOnBehalf: true,
+    });
+    expect(call(request)).toEqual([
+      ['/assignments/asg-1/reassign', 'POST', {
+        newAssayerId: 'new-assayer', reason: 'moved', proposedFee: 3500, scheduledDate: '2026-09-30',
+        acceptOnBehalf: true, acceptanceReason: 'Agreed at ₹3,500 during Call & Assign.',
+      }],
+    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.some(([, opts]) => opts?.method === 'PUT')).toBe(false);
+    expect(request.mock.calls.some(([url]) => String(url).endsWith('/accept'))).toBe(false);
+    expect(out.status).toBe('ACCEPTED');
+  });
+
+  it('Call & Assign with the fee untouched: accepts without naming a fee, so the server prices the day', () => {
+    expect(reassignBody({ assignmentId: 'a', newAssayerId: 'n', reason: 'r', acceptOnBehalf: true })).toEqual({
+      newAssayerId: 'n', reason: 'r', acceptOnBehalf: true, acceptanceReason: 'Agreed during Call & Assign.',
+    });
+  });
+
+  it('never posts to POST /assignments', async () => {
+    const request = jest.fn().mockResolvedValue({});
+    await reassignAndApply(request, { assignmentId: 'asg-1', newAssayerId: 'n', reason: 'r', acceptOnBehalf: false });
     expect(request.mock.calls.some(([url]) => url === '/assignments')).toBe(false);
   });
 
@@ -94,29 +124,27 @@ describe('reassignAndApply', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('applies the typed fee when the re-price differs, then accepts at it for Call & Assign', async () => {
-    const request = jest.fn()
-      .mockResolvedValueOnce({ id: 'asg-1', status: 'PENDING', proposedFee: 2800, scheduledDate: '2026-09-30T00:00:00.000Z' })
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ id: 'asg-1', status: 'ACCEPTED' });
-    const out = await reassignAndApply(request, {
-      assignmentId: 'asg-1', newAssayerId: 'new-assayer', reason: 'moved', fee: 3500,
-      scheduledDate: '2026-09-30', acceptOnBehalf: true,
-    });
-    expect(call(request)).toEqual([
-      ['/assignments/asg-1/reassign', 'POST', { newAssayerId: 'new-assayer', reason: 'moved' }],
-      ['/assignments/asg-1', 'PUT', { proposedFee: 3500, agreedFee: 3500 }],
-      ['/assignments/asg-1/accept', 'POST', { fee: 3500, reason: 'Agreed at ₹3,500 during Call & Assign.' }],
-    ]);
-    expect(out.status).toBe('ACCEPTED');
+  it('a refusal of the one request is the caller\'s to show — nothing half-done follows it', async () => {
+    const request = jest.fn().mockRejectedValue(new Error('REASSIGN_AFTER_CHECK_IN'));
+    await expect(reassignAndApply(request, {
+      assignmentId: 'asg-1', newAssayerId: 'n', reason: 'r', fee: 3000, acceptOnBehalf: true,
+    })).rejects.toThrow('REASSIGN_AFTER_CHECK_IN');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('feeToSend — only a fee the desk typed is sent', () => {
+  it('sends nothing while the box still holds the prefilled quote', () => {
+    expect(feeToSend('4300', false)).toBeUndefined();
   });
 
-  it('applies a changed date along with the fee', async () => {
-    const request = jest.fn().mockResolvedValue({ id: 'asg-1', status: 'PENDING', proposedFee: 3000, scheduledDate: '2026-09-30' });
-    await reassignAndApply(request, {
-      assignmentId: 'asg-1', newAssayerId: 'n', reason: 'moved', fee: 3000, scheduledDate: '2026-10-02', acceptOnBehalf: false,
-    });
-    expect(call(request)[1]).toEqual(['/assignments/asg-1', 'PUT', { scheduledDate: '2026-10-02' }]);
+  it('sends the typed figure once the desk edited it', () => {
+    expect(feeToSend('3000', true)).toBe(3000);
+  });
+
+  it('sends nothing for an edited-then-cleared or non-numeric box', () => {
+    expect(feeToSend('', true)).toBeUndefined();
+    expect(feeToSend('abc', true)).toBeUndefined();
   });
 });
 

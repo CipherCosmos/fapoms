@@ -34,6 +34,8 @@ import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/
 import { fetchWholeBranchDirectory } from '../services/branch-directory';
 import { Page } from '../components/ui/Page';
 import { GeoPrecisionBadge } from '../components/GeoPrecisionBadge';
+import { fetchAllProjectPages } from './project-export';
+import { downloadCsv } from '../utils/csv';
 import { CoordinatePinModal } from '../components/geo/CoordinatePinModal';
 
 interface ClientOption {
@@ -388,19 +390,19 @@ export const Projects: React.FC = () => {
     void loadClients();
     const socket = connectSocket();
     const refresh = () => { void loadProjects(); void loadClients(); };
-    socket?.on('ProjectPlanningStarted', refresh);
-    socket?.on('ProjectSchedulingReady', refresh);
-    socket?.on('ProjectExecutionStarted', refresh);
-    socket?.on('ProjectValidationStarted', refresh);
-    socket?.on('ProjectCompleted', refresh);
-    socket?.on('ProjectCancelled', refresh);
+    socket?.on('ProjectPlanningStartedEvent', refresh);
+    socket?.on('ProjectSchedulingReadyEvent', refresh);
+    socket?.on('ProjectExecutionStartedEvent', refresh);
+    socket?.on('ProjectValidationStartedEvent', refresh);
+    socket?.on('ProjectCompletedEvent', refresh);
+    socket?.on('ProjectCancelledEvent', refresh);
     return () => {
-      socket?.off('ProjectPlanningStarted', refresh);
-      socket?.off('ProjectSchedulingReady', refresh);
-      socket?.off('ProjectExecutionStarted', refresh);
-      socket?.off('ProjectValidationStarted', refresh);
-      socket?.off('ProjectCompleted', refresh);
-      socket?.off('ProjectCancelled', refresh);
+      socket?.off('ProjectPlanningStartedEvent', refresh);
+      socket?.off('ProjectSchedulingReadyEvent', refresh);
+      socket?.off('ProjectExecutionStartedEvent', refresh);
+      socket?.off('ProjectValidationStartedEvent', refresh);
+      socket?.off('ProjectCompletedEvent', refresh);
+      socket?.off('ProjectCancelledEvent', refresh);
     };
   }, []);
 
@@ -1068,18 +1070,17 @@ export const Projects: React.FC = () => {
         actions={<>
           <button onClick={async () => {
             try {
-              const data = projects.length > 0 ? projects : await api.request<ProjectItem[]>('/projects');
+              // Every page in scope, not only the rows the table has loaded so far.
+              const data = await fetchAllProjectPages<ProjectItem>(api.request.bind(api), scopeQueryRef.current);
               const header = ['Project Number', 'Name', 'Client', 'Status', 'Priority', 'Budget', 'Start Date', 'End Date'];
               const rows = data.map(p => [
                 p.projectNumber, p.name, p.client?.name || '', p.status, p.priority,
                 p.budget || '', p.startDate ? new Date(p.startDate).toLocaleDateString() : '',
                 p.endDate ? new Date(p.endDate).toLocaleDateString() : ''
               ]);
-              const csv = [header.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
-              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a'); a.href = url; a.download = `projects_export_${businessTodayDateKey()}.csv`; a.click();
-              URL.revokeObjectURL(url);
+              // The shared encoder: it neutralises a leading = + - @ TAB/CR so a project or client
+              // name cannot run as a spreadsheet formula when the file is opened.
+              downloadCsv(`projects_export_${businessTodayDateKey()}`, header, rows);
             } catch { setMessage({ type: 'error', text: 'Export failed' }); }
           }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: 'var(--text-sm)', fontWeight: 700 }}>
             <FileSpreadsheet size={15} /> Export

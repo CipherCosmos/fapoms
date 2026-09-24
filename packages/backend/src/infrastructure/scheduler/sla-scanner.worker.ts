@@ -14,6 +14,10 @@ import { DataIntegrityService } from '../../modules/assayer/data-integrity.servi
 import { EmailDigestService } from './email-digest.service';
 import { BillingEngineService } from '../../modules/billing-engine/billing-engine.service';
 import { businessTodayDateKey } from '@fapoms/shared';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource } from 'typeorm';
+import { withAdvisoryLock } from '../queue/advisory-lock';
+import { errorAlerter, type ErrorAlerter } from '../observability/error-alerter';
 
 @Injectable()
 @Processor('sla-scanner')
@@ -49,7 +53,12 @@ export class SlaScannerWorker {
     private readonly billingEngine: BillingEngineService,
     /** Re-checks over time — who is due soon, due, or held from work. Optional for older specs. */
     @Optional() private readonly compliance?: ComplianceStandingService,
+    /** For the one-scan-at-a-time lock. Optional so older specs construct the worker by hand. */
+    @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
+
+  /** Where a tick whose phases failed is reported. Replaceable in tests. */
+  alerter: Pick<ErrorAlerter, 'report'> = errorAlerter;
 
   /**
    * The morning email digest, on its own schedule (default 08:30 IST — see the module).
@@ -76,6 +85,32 @@ export class SlaScannerWorker {
    */
   @Process('scan')
   async runScan(_job: Job) {
+    /*
+      One scan at a time, cluster-wide. The queue's two loops (scan + digest) are shared by both
+      job names, a retry's backoff can land on the next tick, and every replica runs this worker —
+      so two scans could overlap and each send the same escalations before either had recorded
+      them. A tick that finds a scan still running skips; the next tick is fifteen minutes away.
+    */
+    if (!this.dataSource) return this.scanWithAlert();
+    const run = await withAdvisoryLock(this.dataSource, 'sla-scanner:scan', () => this.scanWithAlert());
+    if (!run.acquired) this.logger.warn('SLA scan skipped: the previous scan is still running.');
+  }
+
+  /** A tick with failed phases is reported through the alerter, then rethrown for Bull's retry. */
+  private async scanWithAlert(): Promise<void> {
+    try {
+      await this.scanOnce();
+    } catch (err) {
+      this.alerter.report({
+        method: 'JOB',
+        route: '/sla-scanner/scan',
+        errorName: err instanceof AggregateError ? 'AggregateError' : (err as Error)?.constructor?.name ?? 'Error',
+      });
+      throw err;
+    }
+  }
+
+  private async scanOnce() {
     const failures: Array<{ phase: string; error: unknown }> = [];
     let totalPhases = 0;
     const runPhase = async (phase: string, fn: () => Promise<unknown>) => {

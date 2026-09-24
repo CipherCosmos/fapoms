@@ -188,12 +188,28 @@ function byNewest(a: BackgroundJobSummary, b: BackgroundJobSummary): number {
   return b.createdAt.localeCompare(a.createdAt);
 }
 
+/**
+ * Whether `incoming` is older than what the list already shows.
+ *
+ * Timestamps alone cannot decide it: a pushed progress update is stamped by the API process's clock
+ * (`new Date()` in the runner), while a polled row carries the database's `updated_at`. With any skew
+ * between the two, a finished job's poll could be refused as "older" than the last progress push —
+ * leaving the tray spinning on a job that had ended — or an old push could repaint a finished one.
+ * So the lifecycle ranks first: a settled job never reopens (nothing on the server moves one back),
+ * so an open update never replaces a settled state, and a settled one always replaces an open state.
+ * Only between two open, or two settled, states does the clock decide.
+ */
+export function isStaleUpdate(existing: BackgroundJobSummary, incoming: BackgroundJobSummary): boolean {
+  const existingOpen = isBackgroundJobOpen(existing.status);
+  const incomingOpen = isBackgroundJobOpen(incoming.status);
+  if (existingOpen !== incomingOpen) return incomingOpen;
+  return existing.updatedAt > incoming.updatedAt;
+}
+
 /** The list with this job put where its status says it belongs, replacing any older copy. */
 export function mergeJob(list: BackgroundJobList, job: BackgroundJobSummary): BackgroundJobList {
   const existing = [...list.active, ...list.recent].find((j) => j.id === job.id);
-  // An update that arrives out of order (a slow poll answering after a push) must not repaint a
-  // newer state with an older one.
-  if (existing && existing.updatedAt > job.updatedAt) return list;
+  if (existing && isStaleUpdate(existing, job)) return list;
   const active = list.active.filter((j) => j.id !== job.id);
   const recent = list.recent.filter((j) => j.id !== job.id);
   if (isBackgroundJobOpen(job.status)) active.push(job);

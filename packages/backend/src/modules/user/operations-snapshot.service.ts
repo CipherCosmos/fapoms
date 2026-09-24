@@ -404,7 +404,9 @@ export class OperationsSnapshotService {
       focus,
       sections: [...sections],
 
-      attention: has('attention') ? attention : [],
+      // null (not []) when the role lacks the section: [] would render "nothing needs attention"
+      // to somebody who is simply not shown that section (W2, 2026-09-24).
+      attention: has('attention') ? attention : null,
       funnel: has('funnel') ? funnel : null,
       due: has('due') ? due : null,
       documents: has('documents') ? {

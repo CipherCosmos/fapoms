@@ -25,6 +25,7 @@ import { AssignmentMoneyCard } from '../billing/AssignmentMoneyCard';
 import { computeAssignmentAttention } from './useAssignmentQueue';
 import { readAttendance, formatAttendanceMoment } from './attendance';
 import type { Assignment, TimelineEvent } from './types';
+import { assignmentProjectName } from './assignment-project-name';
 
 interface AssignmentDetailDrawerProps {
   assignment?: Assignment;
@@ -443,7 +444,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
               <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> — {assignment.projectBranch.branch.state}</span>
             )}
           </p>
-          <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', margin: '1px 0 0' }}>{assignment.project?.name}</p>
+          <p style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', margin: '1px 0 0' }}>{assignmentProjectName(assignment) ?? '—'}</p>
         </div>
         <div style={{ background: 'rgba(216,174,71,0.06)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', border: '1px solid rgba(216,174,71,0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <Calendar size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />

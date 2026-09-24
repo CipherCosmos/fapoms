@@ -3,7 +3,7 @@ import {
   businessDateKey,
 } from '@fapoms/shared';
 import {
-  rowReader, parseSheet, describeMissingColumn, normaliseHeader, BLANK_HEADER, ParsedSheet,
+  rowReader, parseSheet, describeMissingColumn, normaliseHeader, BLANK_HEADER, ParsedSheet, readWorkbook,
 } from '../../core/excel/sheet-reader';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerService } from './assayer.service';
@@ -238,7 +238,7 @@ export class RosterImportService {
     file: Buffer,
     sheetName?: string,
   ): { sheet: xlsx.WorkSheet; parsed: ParsedSheet } {
-    const workbook = xlsx.read(file, { type: 'buffer', cellDates: true });
+    const workbook = readWorkbook(file, { cellDates: true });
 
     // Same header-row scan either way — an explicit sheetName only narrows WHICH sheet is
     // scanned, not whether a title row above the real headers is found on it. This used to

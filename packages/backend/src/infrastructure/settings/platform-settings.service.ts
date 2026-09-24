@@ -190,6 +190,11 @@ export class PlatformSettingsService implements OnModuleInit {
 
     const value = this.coerce(def, rawValue);
 
+    if (def.validate && value != null) {
+      const refusal = await def.validate(value);
+      if (refusal) throw new BadRequestException(refusal);
+    }
+
     if (def.secret && value != null) {
       /**
        * Refuse rather than store a credential in the clear.

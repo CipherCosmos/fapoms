@@ -99,6 +99,48 @@ export const en = {
       CANCELLED: 'Cancelled',
     },
   },
+  work: {
+    /** Actions not built in the new app yet: shown disabled with this, never an enabled button that fails. */
+    comingSoon: 'Coming soon in the new app',
+    accepted: 'Job accepted',
+    declined: 'Job declined',
+    declineTitle: 'Why can you not do this job?',
+    declineLabel: 'Reason',
+    declineHint: 'The office needs it to plan the branch again.',
+    declineSend: 'Send',
+    checkOutTitle: 'Leave this branch?',
+    checkOutBody: 'This records that you left %{place}. The time cannot be changed later.',
+    checkedOut: 'You have left %{place}',
+    /** Why a job action is not available, by the server's code. The server's English sentence is used in English. */
+    reasons: {
+      ASSAYER_ON_LEAVE: 'You are on leave on the day of this job. Ask the office to move the date.',
+      NOT_SCHEDULED_TODAY: 'This job is not today. You can check in on the day of the job.',
+      NOT_YOUR_ASSIGNMENT: 'This job is not yours any more.',
+      ASSAYER_NOT_ACTIVE: 'Your account is not active. Call HR.',
+      INVALID_STATE_FOR_CHECK_IN: 'Say yes to this job before you check in.',
+      ASSAYER_COMPLIANCE_BLOCKED: 'You cannot take new work until a check on your record is done. Call HR.',
+      INVALID_ASSIGNMENT_TRANSITION: 'This job has already moved on. Pull down to refresh.',
+      TOO_FAR_FROM_BRANCH: 'You seem too far from the branch. Go to the branch and try again.',
+      ACCEPT_DATE_UNAVAILABLE: 'That date cannot be used for this job. Ask the office for another.',
+      REASSIGN_AFTER_CHECK_IN: 'You have already checked in, so this job stays with you.',
+      OFFICE_CHECK_IN_REASON_REQUIRED: 'The office must give a reason to check you in.',
+    },
+  },
+  /** Something saved on the phone that the office then refused. Listed until dismissed. */
+  queue: {
+    title: 'Not accepted by the office',
+    line: '%{what}: %{reason}',
+    notifyTitle: '%{what} was not accepted',
+    fallback: 'The office did not accept it.',
+    dismiss: 'OK',
+    kinds: {
+      CHECK_IN: 'Your check-in',
+      CHECK_OUT: 'Your check-out',
+      ASSIGNMENT_STATUS: 'Your answer to a job',
+      EXPENSE_CLAIM: 'Your travel cost',
+      QUERY_MESSAGE: 'Your reply',
+    },
+  },
   arrival: {
     askTitle: 'Check in by itself when you reach the branch?',
     askBody:

@@ -509,6 +509,15 @@ describe('ExpenseService', () => {
       expect(expenseRepo.createQueryBuilder).not.toHaveBeenCalled();
     });
 
+    it("loads each claim's branch, so the phone can name it", async () => {
+      await buildModule('enforce');
+      expenseRepo.find.mockResolvedValue([]);
+      await service.findForAssayer(OWNER, undefined);
+      expect(expenseRepo.find).toHaveBeenCalledWith(expect.objectContaining({
+        relations: expect.arrayContaining(['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch']),
+      }));
+    });
+
     it('enforce mode filters out an assayer claim tied to an assignment outside the scope', async () => {
       await buildModule('enforce');
       expenseRepo.createQueryBuilder.mockReturnValue(

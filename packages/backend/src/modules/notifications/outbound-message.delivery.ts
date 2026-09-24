@@ -8,8 +8,15 @@ import type { OpenedEmail, OpenedSms, OutboundMessageJobData, OutboundMessageSer
 export interface TransportResult {
   success: boolean;
   error?: string;
-  /** True when retrying cannot help: a refused address or number, bad credentials, a missing template. */
+  /** True when retrying cannot help THIS message: a refused address or number, a missing template. */
   permanent?: boolean;
+  /**
+   * The channel is broken (credentials refused, server unreachable), not this message. Retried on
+   * Bull's normal backoff while attempts remain; after that it goes back to QUEUED on a long
+   * backoff (`deferForTransport`) instead of being settled FAILED, so fixing the credential
+   * delivers the backlog rather than leaving it permanently failed.
+   */
+  transportFault?: boolean;
 }
 
 /** One channel's way of sending, as the delivery routine needs it. */
@@ -73,6 +80,13 @@ export async function deliverOutboundMessage<M extends OpenedEmail | OpenedSms>(
 
   const attemptsAllowed = Number(job.opts?.attempts ?? 1);
   const error = result.error ?? wording.noAnswer;
+  if (result.transportFault && job.attemptsMade + 1 >= attemptsAllowed) {
+    // Out of quick retries, and the fault is the channel's: wait for it, do not give up on the
+    // message. The sweep re-queues it once the backoff passes; a day without success still ends in
+    // the sweep's give-up, so this cannot wait for ever.
+    await outbound.deferForTransport(id, error);
+    return;
+  }
   if (job.attemptsMade + 1 >= attemptsAllowed) {
     // Settled here rather than by throwing: a throw on the last attempt would leave the row
     // SENDING until the sweep gave up on it, reading as "still going" for fifteen minutes.

@@ -6,7 +6,7 @@
  * phones. Digits are Western Arabic (0-9) in every language — that is what bank papers, SMS and
  * the web desk use — while month names and "Today"/"morning" come from the catalogue.
  */
-import { parseCalendarDate } from '@fapoms/shared';
+import { parseCalendarDate, roundMoney } from '@fapoms/shared';
 import type { TranslationKey } from './catalogues';
 import type { TranslationVars } from './translate';
 
@@ -35,7 +35,8 @@ export function formatRupees(
   if (amount === null || amount === undefined || amount === '') return null;
   const value = typeof amount === 'number' ? amount : Number(String(amount).replace(/,/g, ''));
   if (!Number.isFinite(value)) return null;
-  const totalPaise = Math.round(Math.abs(value) * 100);
+  // Rounded to paise by the shared rule first: `Math.round(1.005 * 100)` is 100, not 101.
+  const totalPaise = Math.round(roundMoney(Math.abs(value)) * 100);
   const rupees = Math.floor(totalPaise / 100);
   const paise = totalPaise % 100;
   const showPaise = opts.paise === 'always' || paise !== 0;

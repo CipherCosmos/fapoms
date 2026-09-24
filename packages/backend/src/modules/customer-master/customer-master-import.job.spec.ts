@@ -1,3 +1,4 @@
+import { RECLAIM_AFTER_MS } from '../../infrastructure/background-jobs/background-job.store';
 import { randomUUID } from 'crypto';
 import { Readable } from 'stream';
 import { BadRequestException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
@@ -252,6 +253,9 @@ describe('the run', () => {
   it('a run whose worker died is FAILED with the versions-list sentence, and never run again', async () => {
     const { job } = await start();
     await store.claim(job.id, null); // the first worker got this far, then died
+    // …and nothing has touched the row since: a RUNNING row still being heartbeat is a live run,
+    // which the runner leaves alone rather than failing (`RECLAIM_AFTER_MS`).
+    store.rows.get(job.id)!.updatedAt = new Date(Date.now() - RECLAIM_AFTER_MS - 1_000);
 
     expect(await work(job.id)).toBe('interrupted');
 

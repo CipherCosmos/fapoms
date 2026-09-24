@@ -66,6 +66,9 @@ describe('NotificationSweeper', () => {
     return qb;
   };
 
+  const queueGetJob = jest.fn();
+  let existingJobs: Record<string, { getState: () => Promise<string>; remove: jest.Mock }> = {};
+
   const row = (over: Partial<any> = {}) => ({
     id: over.id ?? 'n-1',
     channels: [NotificationChannel.PUSH],
@@ -86,6 +89,8 @@ describe('NotificationSweeper', () => {
       updates.push({ id, patch });
       return { affected: 1 };
     });
+    queueGetJob.mockReset().mockImplementation(async (id: string) => existingJobs[id] ?? null);
+    existingJobs = {};
     queueAdd.mockReset().mockImplementation(async (name: string, data: any) => {
       queued.push({ name, data });
       return { id: String(queued.length) };
@@ -98,7 +103,7 @@ describe('NotificationSweeper', () => {
           provide: getRepositoryToken(NotificationEntity),
           useValue: { find, update, createQueryBuilder: makeBuilder },
         },
-        { provide: getQueueToken(NOTIFICATION_QUEUE), useValue: { add: queueAdd } },
+        { provide: getQueueToken(NOTIFICATION_QUEUE), useValue: { add: queueAdd, getJob: queueGetJob } },
       ],
     }).compile();
 
@@ -119,8 +124,23 @@ describe('NotificationSweeper', () => {
       expect(queueAdd).toHaveBeenCalledWith(
         'deliver',
         { notificationId: 'n-1' },
-        expect.objectContaining({ attempts: 5, backoff: { type: 'exponential', delay: 5000 } }),
+        expect.objectContaining({ attempts: 5, backoff: { type: 'exponential', delay: 5000 }, jobId: 'deliver:n-1' }),
       );
+    });
+
+    it('leaves a row whose delivery job is still waiting or running alone — one push, not two', async () => {
+      found = [row({ id: 'n-1' })];
+      existingJobs['deliver:n-1'] = { getState: async () => 'delayed', remove: jest.fn() };
+      expect(await sweeper.requeueStranded()).toBe(0);
+      expect(queueAdd).not.toHaveBeenCalled();
+    });
+
+    it('replaces a finished job kept under the id, since Bull will not add a second one', async () => {
+      found = [row({ id: 'n-1' })];
+      const old = { getState: async () => 'failed', remove: jest.fn(async () => undefined) };
+      existingJobs['deliver:n-1'] = old;
+      expect(await sweeper.requeueStranded()).toBe(1);
+      expect(old.remove).toHaveBeenCalled();
     });
 
     it('looks only at rows older than the grace period, oldest first, in a bounded batch', async () => {

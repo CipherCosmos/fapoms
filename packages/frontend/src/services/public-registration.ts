@@ -93,6 +93,15 @@ export interface RegistrationHydrateResult {
    * documents, and nothing can be changed through it. See the backend's `statusOnlyView`.
    */
   statusOnly?: boolean;
+  /** This browser proved the contact with a code in this session, so saved answers came back. */
+  sessionVerified?: boolean;
+  /**
+   * Answers or scans are on file and were WITHHELD because this browser has not proven the contact
+   * with a code yet. The page asks for a code before it shows (or re-saves) the form.
+   */
+  sensitiveLocked?: boolean;
+  /** What is on file and being withheld — names of the identity fields, and how many scans. */
+  sensitiveOnFile?: { fields: string[]; scans: number };
 }
 
 export interface UpdateRegistrationDraftInput {
@@ -131,8 +140,35 @@ const basePath = (token: string) => `/api/v1/public/registration/${encodeURIComp
 
 const call = publicCall;
 
+/*
+  THE LINK OPENS THE FORM; THE CODE OPENS WHAT IS ALREADY IN IT.
+
+  A successful code answers with a session key. Sent back in this header, it is what lets the server
+  return the candidate's saved identity numbers and scans; without it the link alone shows progress.
+  Kept in sessionStorage — this tab only, gone when it closes — and keyed by the end of the token so
+  two links opened in one tab do not share one.
+*/
+export const REGISTRATION_SESSION_HEADER = 'x-registration-session';
+const sessionSlot = (token: string) => `fapoms.reg-session.${token.slice(-16)}`;
+
+export function readRegistrationSession(token: string): string | null {
+  try { return sessionStorage.getItem(sessionSlot(token)); } catch { return null; }
+}
+
+export function rememberRegistrationSession(token: string, key: string | null | undefined): void {
+  try {
+    if (key) sessionStorage.setItem(sessionSlot(token), key);
+    else sessionStorage.removeItem(sessionSlot(token));
+  } catch { /* storage blocked: the code is simply asked for again next load */ }
+}
+
+function sessionHeaders(token: string): Record<string, string> {
+  const key = readRegistrationSession(token);
+  return key ? { [REGISTRATION_SESSION_HEADER]: key } : {};
+}
+
 export function hydrateRegistration(token: string): Promise<RegistrationHydrateResult> {
-  return call<RegistrationHydrateResult>(basePath(token));
+  return call<RegistrationHydrateResult>(basePath(token), { headers: sessionHeaders(token) });
 }
 
 /**
@@ -151,6 +187,7 @@ export interface RegistrationOtpSent {
 export function requestRegistrationOtp(token: string, phone: string): Promise<RegistrationOtpSent> {
   return call(`${basePath(token)}/otp/request`, {
     method: 'POST',
+    headers: sessionHeaders(token),
     body: JSON.stringify({ phone }),
   });
 }
@@ -170,11 +207,22 @@ export function otpSentWords(delivery: Pick<RegistrationOtpSent, 'channel' | 'se
   return `A 6-digit code has been ${where} to ${delivery.sentTo}. It expires in 5 minutes.`;
 }
 
-export function verifyRegistrationOtp(token: string, phone: string, code: string): Promise<{ verified: boolean }> {
-  return call(`${basePath(token)}/otp/verify`, {
+export interface RegistrationOtpVerified {
+  verified: boolean;
+  /** What the code proved: a texted code proves the mobile, an emailed one only the mailbox. */
+  channel?: 'SMS' | 'EMAIL';
+  sessionKey?: string;
+  sessionExpiresInSeconds?: number;
+}
+
+/** Verifies the code and keeps the session key it mints, so this tab can read its saved answers. */
+export async function verifyRegistrationOtp(token: string, phone: string, code: string): Promise<RegistrationOtpVerified> {
+  const result = await call<RegistrationOtpVerified>(`${basePath(token)}/otp/verify`, {
     method: 'POST',
     body: JSON.stringify({ phone, code }),
   });
+  if (result?.sessionKey) rememberRegistrationSession(token, result.sessionKey);
+  return result;
 }
 
 export interface CheckPhoneConflictResult {
@@ -197,6 +245,7 @@ export function updateRegistrationDraft(
 ): Promise<RegistrationApplication> {
   return call<RegistrationApplication>(`${basePath(token)}/draft`, {
     method: 'PATCH',
+    headers: sessionHeaders(token),
     body: JSON.stringify(patch),
   });
 }
@@ -320,7 +369,7 @@ export async function getRegistrationDocumentFileBlob(
   index = 0,
 ): Promise<Blob> {
   const path = `${basePath(token)}/documents/${encodeURIComponent(requirement)}/file/${index}`;
-  const response = await fetchWithTimeout(path, { timeoutMs: LONG_TIMEOUT_MS });
+  const response = await fetchWithTimeout(path, { timeoutMs: LONG_TIMEOUT_MS, headers: sessionHeaders(token) });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw fromResponse(response.status, body);

@@ -1220,3 +1220,43 @@ describe('the bank account on the desk form', () => {
   });
 });
 
+
+/**
+ * A NUMBER ON FILE IS SHOWN, NOT EDITED.
+ *
+ * Every staff read gives PAN, Aadhaar and the bank account as their last four. A box holding that
+ * mask let a clerk correct one character and save the mask over the real number; so it is shown
+ * read-only with Replace, and the mask (or Replace's blank) is never sent back.
+ */
+describe('identity numbers already on file', () => {
+  const seededView = {
+    ...VIEW,
+    application: {
+      ...APPLICATION, fullName: 'Ramesh Iyer', state: 'Kerala',
+      extendedProfile: { fields: { panNumber: '••••••234F' } },
+    },
+  };
+  const startAtIdentity = async () => {
+    wireApi({ [`GET /hr/applications/${APP_ID}`]: seededView });
+    await mount();
+    await click(/Continue/);
+    await click(/^Continue/); // address → ID and bank
+  };
+
+  it('shows the masked PAN read-only, with Replace, and sends nothing for it untouched', async () => {
+    await startAtIdentity();
+    expect(await screen.findByTestId('masked-panNumber')).toHaveTextContent('••••••234F');
+    expect(screen.queryByLabelText(/^PAN Number/)).not.toBeInTheDocument();
+    await click(/^Continue/);
+    expect(JSON.stringify(lastPatch())).not.toContain('234F');
+  });
+
+  it('Replace opens an empty box; a blank is not sent, a newly typed number is', async () => {
+    await startAtIdentity();
+    await click(/^Replace/);
+    expect((screen.getByLabelText(/^PAN Number/) as HTMLInputElement).value).toBe('');
+    type(/^PAN Number/, 'ABCDE1234F');
+    await click(/^Continue/);
+    expect(lastPatch()).toEqual({ record: { panNumber: 'ABCDE1234F' } });
+  });
+});

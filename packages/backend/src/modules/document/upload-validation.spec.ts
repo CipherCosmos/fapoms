@@ -74,6 +74,39 @@ describe('assertUploadAllowed', () => {
     });
   });
 
+  /**
+   * The octet-stream door used to be the only one that looked at the name. A concrete declared
+   * type with a name of another kind — `report.html` as `application/pdf` — passed, and the file
+   * was stored and later opened under that name.
+   */
+  describe('the name must agree with the declared type, for every declared type', () => {
+    it.each([
+      ['application/pdf', 'report.html'],
+      ['application/pdf', 'return.exe'],
+      ['image/jpeg', 'pan.pdf'],
+      ['image/png', 'photo.svg'],
+      ['application/vnd.ms-excel', 'branches.pdf'],
+      ['text/csv', 'branches.jpg'],
+      ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'branches.docx'],
+    ])('refuses %s named %s', (contentType, fileName) => {
+      expect(() => assertUploadAllowed({ contentType, fileName, size: 10 })).toThrow(/not a kind of file this accepts/i);
+    });
+
+    it.each([
+      ['application/pdf', 'return.PDF'],
+      ['image/jpeg', 'IMG_0001.heic'],       // same kind: a phone's HEIC labelled JPEG
+      ['image/jpeg', 'saved.jfif'],
+      ['application/vnd.ms-excel', 'branches.xlsx'],
+      ['text/csv', 'branches.csv'],
+      ['image/jpeg', 'Mr. Sharma PAN'],     // no real extension: the declared type speaks
+      ['application/pdf', 'scan'],
+      ['application/pdf', 'Report v1.2'],    // an all-digit tail is a version, not an extension
+      ['image/jpeg', 'IMG_2026.09.24'],
+    ])('accepts %s named %s', (contentType, fileName) => {
+      expect(() => assertUploadAllowed({ contentType, fileName, size: 10 })).not.toThrow();
+    });
+  });
+
   describe('a narrower set, for identity documents', () => {
     it('takes a scan or a PDF', () => {
       for (const contentType of ['image/jpeg', 'application/pdf']) {

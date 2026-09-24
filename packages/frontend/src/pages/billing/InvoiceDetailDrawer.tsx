@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
-import { Send, Banknote, Ban, Undo2, Printer } from 'lucide-react';
+import { Send, Banknote, Ban, Undo2, Printer, ShieldCheck } from 'lucide-react';
 import { DetailDrawer, StyledInput, Select, useConfirm, useToast } from '../../components/ui';
-import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment } from '../../hooks/useBilling';
-import { InvoiceStatus, PaymentMethod, paymentMethodLabel } from '@fapoms/shared';
+import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment, useRequestInvoiceFinalApproval } from '../../hooks/useBilling';
+import { InvoiceStatus, PaymentMethod, paymentMethodLabel, AWAITING_HOD_MESSAGE } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { LoadFailure } from '../../components/LoadFailure';
 import { loadFailed } from '../../queryClient';
 import { todayDateKey } from '../../utils/statusLabels';
 import { moneyExact as money } from '../../utils/money';
 import { billingApi } from '../../services/billing';
-import { openInvoicePrintWindow } from './invoicePrint';
+import { openInvoicePrintWindow, taxInvoicePrintBlockedReason } from './invoicePrint';
 import { InvoiceStatusPill, LineStatePill, fmtDate, inputStyle, th, td, tdNum } from './shared';
 
 // Named by the shared label layer, never by de-casing the enum — see the same note in
@@ -52,7 +52,9 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const { confirm, confirmDialog } = useConfirm();
   const invoiceQuery = useBillingInvoice(invoiceId);
   const invoice = invoiceQuery.data;
+  const printBlocked = invoice ? taxInvoicePrintBlockedReason(invoice.status) : null;
   const send = useSendInvoice();
+  const requestFinal = useRequestInvoiceFinalApproval();
   const pay = useRecordBillingPayment();
   const cancel = useCancelInvoice();
   const reverse = useReversePayment();
@@ -135,13 +137,21 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const doSend = async () => {
     const ok = await confirm({
       title: 'Mark this invoice as sent?',
-      message: <>Mark <strong>{invoice.invoiceNumber}</strong> as sent to the client{invoice.clientName ? <> ({invoice.clientName})</> : null}. It moves out of Draft and becomes payable, and payments can then be recorded against it.</>,
+      message: <>Mark <strong>{invoice.invoiceNumber}</strong> as sent to the client{invoice.clientName ? <> ({invoice.clientName})</> : null}. The HOD has approved it; it becomes payable, and payments can then be recorded against it.</>,
       confirmLabel: 'Sent to client',
       reversible: false,
     });
     if (!ok) return;
     try { await send.mutateAsync(invoice.id); toast('success', 'Invoice marked as sent'); }
     catch (e) { toast({ type: 'error', title: 'Could not send', message: userMessage(e) }); }
+  };
+
+  /** DRAFT → with the HOD (2026-09-24). Only an invoice the HOD approved can be marked sent. */
+  const doRequestFinal = async () => {
+    try {
+      await requestFinal.mutateAsync(invoice.id);
+      toast('success', `${invoice.invoiceNumber} sent for the HOD's final approval`);
+    } catch (e) { toast({ type: 'error', title: 'Could not send for final approval', message: userMessage(e) }); }
   };
 
   const doPay = async () => {
@@ -196,10 +206,21 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       subtitle={<InvoiceStatusPill status={invoice.status} partPaid={partPaid} />}
       footer={canAct ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
-          {(invoice.status === InvoiceStatus.DRAFT || (invoice.status === InvoiceStatus.ISSUED && Number(invoice.paidAmount) === 0)) && (
+          {(invoice.status === InvoiceStatus.DRAFT || invoice.status === InvoiceStatus.AWAITING_HOD || invoice.status === InvoiceStatus.HOD_APPROVED || (invoice.status === InvoiceStatus.ISSUED && Number(invoice.paidAmount) === 0)) && (
             <button onClick={() => setCancelOpen((o) => !o)} className="btn btn-secondary" title="Cancel this invoice — its lines return to unbilled" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Ban size={14} /> Cancel invoice</button>
           )}
           {invoice.status === InvoiceStatus.DRAFT && (
+            <button onClick={doRequestFinal} disabled={requestFinal.isPending} className="btn btn-secondary" title="Send this draft to the HOD for the final approval — it can go to the client once they approve it" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><ShieldCheck size={14} /> Send for final approval</button>
+          )}
+          {/*
+            "Sent to client" is shown on a draft and while it is with the HOD, disabled with the reason,
+            so nobody wonders where it went. Only an invoice the HOD approved can go (the server
+            refuses the rest with AWAITING_HOD_APPROVAL).
+          */}
+          {(invoice.status === InvoiceStatus.DRAFT || invoice.status === InvoiceStatus.AWAITING_HOD) && (
+            <button disabled className="btn btn-primary" title={`${AWAITING_HOD_MESSAGE} — only an invoice the HOD has approved can be marked sent to the client.`} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
+          )}
+          {invoice.status === InvoiceStatus.HOD_APPROVED && (
             <button onClick={doSend} disabled={send.isPending} className="btn btn-primary" title="Mark this invoice as sent — it becomes payable and outstanding" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><Send size={14} /> Sent to client</button>
           )}
           {invoice.status === InvoiceStatus.ISSUED && (
@@ -209,11 +230,28 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       ) : undefined}
     >
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button onClick={doPrint} disabled={printing} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
-          title="Open the GST tax invoice as a print-ready A4 page — use the browser's Print to save it as a PDF for the client">
+        {/* Only a sent or paid invoice is a tax invoice (audit E1) — disabled, with the reason, otherwise. */}
+        <button onClick={doPrint} disabled={printing || !!printBlocked} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title={printBlocked ?? "Open the GST tax invoice as a print-ready A4 page — use the browser's Print to save it as a PDF for the client"}>
           <Printer size={14} /> {printing ? 'Preparing…' : 'Print / PDF invoice'}
         </button>
       </div>
+
+      {invoice.status === InvoiceStatus.AWAITING_HOD && (
+        <div role="note" style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', background: 'var(--status-pending-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+          With the HOD for the final approval{invoice.hodRequestedAt ? ` since ${fmtDate(invoice.hodRequestedAt)}` : ''}. It can be marked sent to the client once they approve it.
+        </div>
+      )}
+      {invoice.status === InvoiceStatus.HOD_APPROVED && (
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)', background: 'var(--status-active-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+          ✓ Approved by the HOD{invoice.hodApprovedAt ? ` on ${fmtDate(invoice.hodApprovedAt)}` : ''}. Ready to be marked sent to the client.
+        </div>
+      )}
+      {invoice.status === InvoiceStatus.DRAFT && invoice.hodRejectReason && (
+        <div role="note" style={{ fontSize: 'var(--text-xs)', color: 'var(--warning)', background: 'var(--status-pending-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+          Sent back by the HOD{invoice.hodRejectedAt ? ` on ${fmtDate(invoice.hodRejectedAt)}` : ''}: <em>{invoice.hodRejectReason}</em>
+        </div>
+      )}
 
       {cancelOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>

@@ -205,9 +205,26 @@ export function canApproveJoiners(roles: SystemRole[], permissions?: string[]): 
   return allowed(roles, [SystemRole.ADMIN], 'ASSAYER:APPROVE:ORGANIZATION', permissions);
 }
 
-/** Soft deleting an assayer profile requires assayer:delete:organization. */
-export function canDeleteAssayers(roles: SystemRole[], permissions?: string[]): boolean {
-  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:DELETE:ORGANIZATION', permissions);
+/**
+ * The HOD's final billing approval (2026-09-24): after the office approves, before money moves.
+ * Admin by name (Developer through the hierarchy); any custom role given
+ * BILLING:FINAL_APPROVE:ORGANIZATION — an "HOD" built in Users & Roles. OPERATIONS deliberately
+ * not: the office approves, somebody above it signs off. Mirrors the backend's
+ * `@Roles(ADMIN) + @AllowPermissionFallback() + billing:final_approve` on every final-approval route.
+ */
+export function canGiveFinalBillingApproval(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN], 'BILLING:FINAL_APPROVE:ORGANIZATION', permissions);
+}
+
+/**
+ * Soft deleting an assayer profile. `DELETE /assayers/:id` is `@Roles(ADMIN)` with no permission
+ * fallback, so it is a NAME: ADMIN, and DEVELOPER through the hierarchy. OPERATIONS holds
+ * `assayer:delete:organization` (it removes workforce attributes and documents with it) and a
+ * custom role may too, but neither is let through this route — offering them the button was a
+ * guaranteed 403. `permissions` is accepted and ignored so existing call sites need no edit.
+ */
+export function canDeleteAssayers(roles: SystemRole[], _permissions?: string[]): boolean {
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /**
@@ -255,6 +272,43 @@ export function hasAnyRole(roles: SystemRole[], allowed: SystemRole[]): boolean 
   return expandRoles(roles).some((r) => allowed.includes(r as SystemRole));
 }
 
+/**
+ * `GET /clients` — the client list behind filters and pickers. `@Roles(...STAFF_ROLES)` by name
+ * with no fallback (there is no organisation-level client permission to fall back on), so a role
+ * built in Admin → Roles is refused; a page offered to one must not fire it in the background.
+ */
+export function canReadAuditLog(roles: SystemRole[]): boolean {
+  // `/audit-log/*` is `@Roles(ADMIN, AUDITOR)` with no fallback: a custom role granted user:view
+  // opens People & access, but its activity feed would only 403.
+  return hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.AUDITOR]);
+}
+
+export function canListClients(roles: SystemRole[]): boolean {
+  return isStaffRole(roles);
+}
+
+/**
+ * The backend's `STAFF_ROLES` (auth/staff-roles.ts), by NAME: the gate on `GET /clients`,
+ * `GET /search` and `GET /scope/options`, none of which offers a permission fallback. A role built
+ * in Admin → Roles is not on it, so app-wide chrome must not fire those for it in the background.
+ */
+export function isStaffRole(roles: SystemRole[]): boolean {
+  return hasAnyRole(roles, [
+    SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR,
+    SystemRole.AUDITOR, SystemRole.PRODUCT_SUPPORT,
+  ]);
+}
+
+/** The signed-in roles, read NOW (not memoised) — for providers that outlive a sign-in. */
+export function readCachedRoles(): SystemRole[] {
+  try {
+    const user = JSON.parse(localStorage.getItem('fapoms_user_cache') || 'null');
+    return ((user?.roles ?? []) as any[]).map((r) => (typeof r === 'string' ? r : r?.name)).filter(Boolean) as SystemRole[];
+  } catch {
+    return [];
+  }
+}
+
 /** Branch records are operations' to maintain; audit and finance only read them. */
 export function canManageBranches(roles: SystemRole[], permissions?: string[]): boolean {
   return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'BRANCH:EDIT:ORGANIZATION', permissions);
@@ -269,9 +323,14 @@ export function canManageProjects(roles: SystemRole[], permissions?: string[]): 
   return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'PROJECT:EDIT:ORGANIZATION', permissions);
 }
 
-/** Deleting a project is admin-only on the backend. */
-export function canDeleteProjects(roles: SystemRole[], permissions?: string[]): boolean {
-  return allowed(roles, [SystemRole.ADMIN], 'PROJECT:DELETE:ORGANIZATION', permissions);
+/**
+ * Deleting a project is admin-only on the backend: `DELETE /projects/:id` is `@Roles(ADMIN)` with
+ * no permission fallback. A NAME, not `project:delete:organization` — OPERATIONS holds that grant
+ * (for unlinking a branch from a project) and read from the cache it showed Delete to every
+ * operations user, whose click could only 403. `permissions` is accepted and ignored.
+ */
+export function canDeleteProjects(roles: SystemRole[], _permissions?: string[]): boolean {
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /**
@@ -478,6 +537,17 @@ export function canDeleteClients(roles: SystemRole[]): boolean {
  */
 export function canManageClients(roles: SystemRole[]): boolean {
   return hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS]);
+}
+
+/**
+ * A client's billing terms — tax, bank details, the rate card — saved together by the Billing tab.
+ * `PUT /clients/:id/billing` is `@Roles(ADMIN)` alone (no fallback), narrower than the
+ * `PUT /clients/:id` the same Save also calls. Gating the whole Save on this, not on
+ * `canManageClients`, is what stops an OPERATIONS click from writing the rate card and then being
+ * refused the tax/bank half — a half-applied save reported as a failure.
+ */
+export function canEditClientBilling(roles: SystemRole[]): boolean {
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /** The signed-in user's own id, from the same cache App.tsx populates on login. */

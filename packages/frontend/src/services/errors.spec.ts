@@ -266,3 +266,27 @@ describe('a gate that already names the person and the gap', () => {
     expect(userMessage(err)).toMatch(/placed on hold or suspended/);
   });
 });
+
+/**
+ * The two refusals a planning assign can meet on the way to one request. Both server sentences
+ * name the assayer and the job, which the table's generic wording cannot.
+ */
+describe('planning assign refusals keep the server’s sentence', () => {
+  it('OFFER_ALREADY_WITH_ASSAYER — names the assayer and says to use Call & Assign', () => {
+    const sentence = 'This branch is already offered to Asha Rao (ASG-0042) and the offer is waiting for their answer. '
+      + 'Nothing new was created. If they agreed on the phone, use Call & Assign to record their acceptance on that offer.';
+    const err = fromResponse(409, { message: sentence, code: 'OFFER_ALREADY_WITH_ASSAYER' });
+    expect(userMessage(err)).toContain('Asha Rao (ASG-0042)');
+  });
+
+  it('OFFER_ALREADY_WITH_ASSAYER — has its own fallback when the server sent no sentence', () => {
+    const err = fromResponse(409, { code: 'OFFER_ALREADY_WITH_ASSAYER' });
+    expect(userMessage(err)).toMatch(/already offered to this assayer/);
+  });
+
+  it('REASSIGN_AFTER_CHECK_IN — names who checked in', () => {
+    const sentence = 'Asha Rao checked in at Andheri West at 10:14, so this job can no longer be moved. Cancel it instead.';
+    const err = fromResponse(409, { message: sentence, code: 'REASSIGN_AFTER_CHECK_IN' });
+    expect(userMessage(err)).toContain('Asha Rao checked in at Andheri West');
+  });
+});

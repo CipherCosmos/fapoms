@@ -3,7 +3,9 @@ import { AppState, AppStateStatus } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { flushQueue } from '../services/location-queue';
-import { enqueueAndRun, processActionQueue, toSubmitOutcome, type SubmitOutcome, type QueuedAction } from '../services/action-queue';
+import { dismissAction, enqueueAndRun, getRefusedActions, processActionQueue, subscribeActionQueue, toSubmitOutcome, type SubmitOutcome, type QueuedAction } from '../services/action-queue';
+import { QUIET_RELOAD_EVENTS, notificationMovesJobs } from '../services/assignment-live-events';
+import { refusalNotice } from '../i18n/refusal-notice';
 import type { AssignmentStatusPayload, RejectPayload } from '../services/action-dispatchers';
 import { actionDispatchers } from '../services/action-dispatchers';
 import { connectMobileSocket } from '../services/socket';
@@ -38,6 +40,12 @@ interface AssignmentContextType {
     expense: { category: 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'; amount: number; description?: string },
     requestKey?: string,
   ) => Promise<SubmitOutcome>;
+  /**
+   * Actions saved on the phone that the server later refused (a check-in on the wrong day, a
+   * claim over the limit). Shown with the server's reason until the assayer dismisses them.
+   */
+  refusedActions: QueuedAction[];
+  dismissRefusedAction: (id: string) => Promise<void>;
 }
 
 const CACHE_KEY = 'assignments';
@@ -187,27 +195,19 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     /**
      * Quiet reloads. These change what the screen should show but do not warrant interrupting
      * someone mid-audit with a banner — the desk's own notification covers anything that
-     * genuinely needs attention.
-     *
-     * Deliberately NOT here any more: `assignment:counter-offered` (fee negotiation was removed
-     * from the app — the event no longer exists), `assignment:fee-updated` (the gateway stopped
-     * emitting it to assayer sockets when the app went money-blind; a fee edit at the desk is
-     * ops-internal now), and `billing:created` (never emitted by the gateway at all — the real
-     * billing events, `billing:payout-changed` and `billing:assayer-invoice-changed`, move the
-     * statement and the invoice invitation, which App.tsx owns and reloads, not this list).
+     * genuinely needs attention. The list, and why each name is (or is not) on it, lives in
+     * `assignment-live-events.ts`, where the node tests can hold it to what the server emits.
      */
-    const QUIET_EVENTS = [
-      'query:raised',
-      'query:responded',
-      'query:resolved',
-      'document:dispatched',
-      'document:received',
-      'document:uploaded',
-      'document:status-changed',
-    ];
+    const QUIET_EVENTS = QUIET_RELOAD_EVENTS;
+
+    /** A job taken away (or cancelled, reopened) arrives as a notification: reload for it too. */
+    const handleNotification = (payload: unknown) => {
+      if (notificationMovesJobs(payload)) reloadSoon();
+    };
 
     socket.on('assignment:status-changed', handleStatusChange);
     socket.on('assignment:created', handleNewAssignment);
+    socket.on('notification:new', handleNotification);
     QUIET_EVENTS.forEach((e) => socket.on(e, reloadSoon));
 
     /**
@@ -230,6 +230,7 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (timer) clearTimeout(timer);
       socket.off('assignment:status-changed', handleStatusChange);
       socket.off('assignment:created', handleNewAssignment);
+      socket.off('notification:new', handleNotification);
       QUIET_EVENTS.forEach((e) => socket.off(e, reloadSoon));
       socket.off('connect', reloadSoon);
       socket.off('connect', flushLocationQueueOnReconnect);
@@ -300,8 +301,45 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
    * rather than here) because the queue itself is one shared, module-level store.
    */
   const drainActionQueue = useCallback(() => {
-    void processActionQueue(actionDispatchers).then(() => loadAssignments().catch(() => {}));
+    void processActionQueue(actionDispatchers)
+      .then((report) => {
+        // Each refusal is said once, out loud: the assayer was told this was saved and would
+        // send by itself, so a silent refusal would leave them believing it went through. The
+        // entry itself stays on the queue (the banner reads it) until they dismiss it.
+        for (const entry of report.refused) {
+          const notice = refusalNotice(entry);
+          void scheduleLocalNotification(notice.title, notice.reason, { type: 'ACTION_REFUSED', kind: entry.kind }, 'HIGH')
+            .catch(() => undefined);
+        }
+      })
+      .catch(() => undefined)
+      // Reloaded after every drain — and so after any refusal — so the screen shows what the
+      // server now holds (a refused check-in's job still waiting, a job that moved away).
+      .then(() => loadAssignments().catch(() => {}));
   }, [loadAssignments]);
+
+  /** The refused actions, kept current as the queue changes (a drain, a dismissal, sign-out). */
+  const [refusedActions, setRefusedActions] = useState<QueuedAction[]>([]);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setRefusedActions([]);
+      return;
+    }
+    let live = true;
+    const read = () => {
+      void getRefusedActions().then((list) => { if (live) setRefusedActions(list); }).catch(() => undefined);
+    };
+    read();
+    const unsubscribe = subscribeActionQueue(read);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, [isAuthenticated, user?.id]);
+
+  const dismissRefusedAction = useCallback(async (id: string) => {
+    await dismissAction(id);
+  }, []);
 
   /**
    * Drain on mount (an app start finds whatever survived the last kill), on the app returning to
@@ -336,6 +374,8 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         updateAssignmentStatus,
         rejectAssignment,
         submitExpense,
+        refusedActions,
+        dismissRefusedAction,
       }}
     >
       {children}

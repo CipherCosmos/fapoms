@@ -134,7 +134,7 @@ describe('OutboundMessageService.receiptFor', () => {
     id: 'e1', channel: 'EMAIL', kind: 'ACCOUNT_SETUP_LINK', status: 'FAILED', recipient: 'x@example.com', subject: 's',
     payload: null, attempts: 5, lastError: 'Email is not set up on this system, so it was not sent.',
     entityType: null, entityId: null, requestedBy: 'owner', createdAt: new Date(), updatedAt: new Date(),
-    sentAt: null, failedAt: new Date(), ...over,
+    sentAt: null, failedAt: new Date(), retryAfter: null, ...over,
   });
 
   it("answers the person who asked for it, with the reason it failed", async () => {
@@ -596,8 +596,32 @@ describe('OutboundMessageService.sweep', () => {
     await service.sweep(NOW);
 
     const [{ where }] = (repo.find.mock.calls as any[])[0];
-    expect(where.status).toBe('QUEUED');
-    expect(where.updatedAt.value).toEqual(new Date(NOW - 2 * 60_000));
+    // Two branches: never deferred, or deferred by a broken channel and past its backoff.
+    expect(where).toHaveLength(2);
+    for (const branch of where) {
+      expect(branch.status).toBe('QUEUED');
+      expect(branch.updatedAt.value).toEqual(new Date(NOW - 2 * 60_000));
+    }
+    expect(where[0].retryAfter._type).toBe('isNull');
+    expect(where[1].retryAfter._type).toBe('lessThanOrEqual');
+    expect(where[1].retryAfter.value).toEqual(new Date(NOW));
+  });
+
+  it('alerts when a channel has failures in the window and no send, and not when it has sends', async () => {
+    const { service, repo } = setup();
+    const report = jest.fn();
+    service.alerter = { report };
+    (repo as any).query = jest.fn(async () => [
+      { channel: 'EMAIL', sent: '0', failing: '7' },
+      { channel: 'SMS', sent: '3', failing: '2' },
+    ]);
+
+    await service.sweep(NOW);
+
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledWith({ method: 'JOB', route: '/outbound-messages/email', errorName: 'AllSendsFailing' });
+    const [, params] = (repo as any).query.mock.calls[0];
+    expect(params[0]).toEqual(new Date(NOW - 30 * 60_000));
   });
 
   it.each(['failed', 'completed'])(

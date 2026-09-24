@@ -201,8 +201,18 @@ const REVIEWED: Record<string, string> = {
     'idempotency replay, and the stored key\'s hash includes both the acting userId and the acting assayerId — a different actor replaying the same clientRequestId gets 409, never the stored record',
   'modules/billing-engine/billing-engine.service.ts :: BillingEngineService.approvePayableInTx':
     'the payable is already APPROVED, so there is nothing to approve; returns null, not the row',
+  'modules/billing-engine/billing-engine.service.ts :: BillingEngineService.hodApprovePayableInTx':
+    'the payable already has the HOD\'s final approval, so there is nothing to approve; returns null, not the row (the route already asserted the caller\'s region and permission)',
+  'modules/billing-engine/billing-engine.service.ts :: BillingEngineService.hodApproveInvoice':
+    'the invoice is already HOD_APPROVED — the double-press; returns the row the caller (billing:final_approve, region already asserted by the route) can read anyway, and changes nothing',
+  'modules/billing-engine/assayer-invoice.service.ts :: AssayerInvoiceService.hodApprove':
+    'the bill is already HOD_APPROVED — the double-press; returns the summary the caller (billing:final_approve, region already asserted by the route) can read anyway, and changes nothing',
+  'modules/billing-engine/final-approval.service.ts :: FinalApprovalService.assertInScope':
+    'it IS the guard for the final-approval batch: an unrestricted caller has no region to check',
   'modules/billing-engine/billing-engine.service.ts :: BillingEngineService.recordDisbursement':
     'a payment with this reference already exists on this payable — a replay of a disbursement that happened, creating no second one; the caller already reads payments through the payouts list',
+  'modules/assayer/registration-application.service.ts :: RegistrationApplicationService.lockedDraftPatch':
+    'nothing sensitive is on file yet, so there is nothing for an un-unlocked link to overwrite or redirect; the patch goes through unchanged (the link token itself was already resolved by updateDraft)',
   'modules/scheduling/scheduling.controller.ts :: SchedulingController.getAssayerWorkload':
     'no assayer or no date was named — returns an empty result, naming nobody',
 };

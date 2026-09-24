@@ -18,7 +18,8 @@ import { AssayerDetailModal } from './planning/AssayerDetailModal';
 import { type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
 import { CoveragePlanModal } from './planning/CoveragePlanModal';
-import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder } from './planning/assign-route';
+import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder, feeToSend } from './planning/assign-route';
+import { feeQuoteRequestBody, dayTravelNote } from './planning/fee-quote';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
 import {
   getProjects,
@@ -85,6 +86,11 @@ interface FeeQuote {
   /** Mode and one-way minutes of the recommended option; null on the legacy per-km path. */
   travelMode?: string | null;
   travelDurationMinutes?: number | null;
+  /**
+   * True when this assayer's travel for the quoted day (`onDate`) is already paid on another of
+   * their jobs; `total` is then the base fee alone.
+   */
+  travelAlreadyCharged?: boolean;
 }
 
 /** One priced mode from the transport rate card, as `TransportRateService.estimate()` returns it. */
@@ -157,7 +163,7 @@ export interface Candidate {
    * planned date ("On leave 2026-08-10 to 2026-08-14."). Being booked elsewhere that day is no
    * longer a clash — one assayer may take several branches on one day (2026-09-24).
    * Null means genuinely free. Relaxing the filter reveals the person; it must not conceal the
-   * clash, or the operator dispatches into a double-booking believing the list was clean.
+   * clash, or the operator dispatches someone who is on leave believing the list was clean.
    */
   dateConflict?: string | null;
   /** The client's service limit, set only when this candidate is beyond it. */
@@ -517,6 +523,15 @@ export const PlanningWorkspace: React.FC = () => {
   const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
   /** The total fee (base + travel) agreed on the call, as typed into the assign modal. */
   const [agreedFeeInput, setAgreedFeeInput] = useState('');
+  /**
+   * Whether the desk typed in the fee box. The box is prefilled with the rate card's quote as a
+   * reading; only a figure the desk actually typed is sent as `proposedFee` (see `feeToSend`).
+   * Otherwise the server records its own day-aware quote — sending the travel-inclusive prefill
+   * made it the "desk's" number and charged travel twice on an assayer's second job that day.
+   */
+  const [feeEdited, setFeeEdited] = useState(false);
+  /** Drops a quote answer that a newer request (another candidate, another date) superseded. */
+  const quoteSeqRef = useRef(0);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
   /**
@@ -1465,18 +1480,23 @@ export const PlanningWorkspace: React.FC = () => {
    * (the server quotes it again regardless), but the operator has to be told they are committing
    * without seeing it.
    */
-  const fetchFeeQuote = async (c: Candidate): Promise<FeeQuote | null> => {
+  const fetchFeeQuote = async (c: Candidate, onDate: string = scheduledAuditDate): Promise<FeeQuote | null> => {
+    const pb = branches.find((b) => b.id === selectedBranchId);
+    // On a reassign, the job being moved must not count as "travel already paid" that day.
+    const route = pb ? assignRoute(pb.assignment, c.id) : null;
     try {
       return await api.request<FeeQuote>('/pricing/quote', {
         method: 'POST',
-        body: JSON.stringify({
+        body: JSON.stringify(feeQuoteRequestBody({
           assayerId: c.id,
-          projectId: selectedProjectId || undefined,
-          distanceKm: c.distanceKm || 0,
-          durationMinutes: c.durationMinutes && c.durationMinutes > 0 ? c.durationMinutes : undefined,
-          roadSource: c.durationMinutes && c.durationMinutes > 0 ? (c.distanceSource ?? 'ESTIMATE') : undefined,
-          branchId: branches.find((b) => b.id === selectedBranchId)?.branchId || undefined,
-        }),
+          projectId: selectedProjectId,
+          distanceKm: c.distanceKm,
+          durationMinutes: c.durationMinutes,
+          distanceSource: c.distanceSource,
+          branchId: pb?.branchId,
+          onDate,
+          excludeAssignmentId: route?.kind === 'reassign' ? route.assignmentId : undefined,
+        })),
       });
     } catch {
       return null;
@@ -1491,6 +1511,8 @@ export const PlanningWorkspace: React.FC = () => {
   const openAssignment = async (c: Candidate, agreedOnCall: boolean) => {
     setSelectedCandidate(c);
     setReassignReasonInput('');
+    setFeeEdited(false);
+    const seq = ++quoteSeqRef.current;
     setLoadingCommercial(true);
     // The only thing the two buttons disagree about: whether somebody has already said yes.
     // The money is typed in the same box either way.
@@ -1501,6 +1523,7 @@ export const PlanningWorkspace: React.FC = () => {
       // here from a hardcoded ₹8/km and a ₹1200 fallback, which meant the recommended fee shown
       // to ops could differ from what the server actually stored on assign.
       const quote = await fetchFeeQuote(c);
+      if (seq !== quoteSeqRef.current) return;
       if (!quote) throw new Error('quote unavailable');
       setFeeQuote(quote);
       setAgreedFeeInput(String(Math.round(Number(quote.total))));
@@ -1542,6 +1565,23 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const handleSendToApp = (c: Candidate) => openAssignment(c, false);
 
+  /**
+   * Re-quote when the form's date changes while it is open. Travel is paid once per assayer per
+   * day, so the figure for Tuesday (their second job) and Wednesday (their first) differ. A fee
+   * the desk typed is theirs and is left alone; only the prefill follows the quote.
+   */
+  useEffect(() => {
+    if (!showAssignModal || !selectedCandidate) return;
+    const seq = ++quoteSeqRef.current;
+    void fetchFeeQuote(selectedCandidate, scheduledAuditDate).then((quote) => {
+      if (seq !== quoteSeqRef.current || !quote) return;
+      setFeeQuote(quote);
+      if (!feeEdited) setAgreedFeeInput(String(Math.round(Number(quote.total))));
+    });
+  // Only the date re-quotes; opening the form quotes in `openAssignment`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduledAuditDate]);
+
   /** What the open assign modal will do — see `assignRoute`. Drives its reason box and its button. */
   const modalRoute = selectedCandidate && selectedPb ? assignRoute(selectedPb.assignment, selectedCandidate.id) : null;
   const modalBlocker = modalRoute ? assignBlocker(modalRoute, reassignReasonInput) : null;
@@ -1567,49 +1607,55 @@ export const PlanningWorkspace: React.FC = () => {
       setMessage({ type: 'error', text: blocker });
       return;
     }
+    // Only a fee the desk typed is sent. Untouched, the box holds the quote it was prefilled
+    // with, and the server records its own day-aware figure instead (see `feeToSend`).
+    const typedFee = feeToSend(agreedFeeInput, feeEdited);
     if (route.kind === 'reassign') {
       try {
-        const fee = Number(agreedFeeInput);
+        // ONE request: the move, the typed fee, the date and (Call & Assign) the acceptance.
         const moved = await reassignAndApply(api.request.bind(api), {
           assignmentId: route.assignmentId,
           newAssayerId: selectedCandidate.id,
           reason: reassignReasonInput,
-          fee,
+          fee: typedFee,
           scheduledDate: scheduledAuditDate || undefined,
           acceptOnBehalf: assignDirectly,
         });
-        recordCall(selectedCandidate.id, 'AGREED', fee, 'Agreed during Call & Assign (reassigned)');
+        const recordedFee = typedFee ?? (moved.proposedFee != null ? Number(moved.proposedFee) : Number(agreedFeeInput));
+        // A call outcome of AGREED is only true when somebody agreed on a call — Call & Assign.
+        // Send to app leaves an offer nobody has answered yet.
+        if (assignDirectly) recordCall(selectedCandidate.id, 'AGREED', recordedFee, 'Agreed during Call & Assign (reassigned)');
         setShowAssignModal(false);
         const confirmed = moved.status === 'ACCEPTED';
         setMessage({
           type: 'success',
           text: `Moved this branch from ${route.fromName} to ${selectedCandidate.displayName}. Both have been told. `
             + (confirmed
-              ? `${selectedCandidate.displayName} is confirmed at ${money(fee)} — no acceptance needed.`
+              ? `${selectedCandidate.displayName} is confirmed at ${money(recordedFee)} — no acceptance needed.`
               : `It stays pending until ${selectedCandidate.displayName} accepts on the mobile app.`),
         });
         refreshBranches();
         refreshCandidates();
       } catch (err: unknown) {
-        // A failure after the move itself (fee or acceptance) still leaves the branch with the new
-        // assayer, so the list is refreshed to show where it actually stands.
+        // One request, one transaction: a refusal means nothing moved. Refreshed anyway, in case
+        // somebody else changed the branch meanwhile (the usual reason for a refusal).
         setMessage({ type: 'error', text: userMessage(err) });
         refreshBranches();
       }
       return;
     }
     try {
-      const created = await api.request<{ status?: string }>('/assignments', {
+      const created = await api.request<{ status?: string; proposedFee?: number | string | null }>('/assignments', {
         method: 'POST',
         body: JSON.stringify({
           projectBranchId: selectedBranchId,
           assayerId: selectedCandidate.id,
-          proposedFee: Number(agreedFeeInput),
+          proposedFee: typedFee,
           scheduledDate: scheduledAuditDate,
           autoSchedule: autoDispatch,
           acceptOnBehalf: assignDirectly,
           acceptanceReason: assignDirectly
-            ? `Agreed at ${money(agreedFeeInput)} during Call & Assign.`
+            ? (typedFee != null ? `Agreed at ${money(typedFee)} during Call & Assign.` : 'Agreed during Call & Assign.')
             : undefined,
           /**
            * Sent only when a rule on this candidate actually needs waiving.
@@ -1628,7 +1674,11 @@ export const PlanningWorkspace: React.FC = () => {
       // when. `call_logs` has existed since the first migration with nowhere writing to it, so
       // a negotiated fee had no supporting record if the assayer later disputed it. Logged
       // after the assignment so a logging failure can never cost the assignment itself.
-      recordCall(selectedCandidate.id, 'AGREED', Number(agreedFeeInput), 'Agreed during Call & Assign');
+      // AGREED only for Call & Assign: Send to app is an offer nobody has answered yet.
+      if (assignDirectly) {
+        const recordedFee = typedFee ?? (created?.proposedFee != null ? Number(created.proposedFee) : Number(agreedFeeInput));
+        recordCall(selectedCandidate.id, 'AGREED', recordedFee, 'Agreed during Call & Assign');
+      }
 
       // Reports what the server actually did, not what was asked for. Direct assignment can fall
       // back to a PENDING offer if the confirmation could not be applied, and telling ops the job
@@ -2851,7 +2901,7 @@ export const PlanningWorkspace: React.FC = () => {
               server re-checks every constraint per branch, so some offers may still bounce. */}
           {selectedCandidate && (
             <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
-              Each branch is validated separately — distance, double-booking and holiday rules still apply.
+              Each branch is validated separately — distance, leave and holiday rules still apply.
             </span>
           )}
 
@@ -3065,7 +3115,7 @@ export const PlanningWorkspace: React.FC = () => {
                 </label>
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>₹</span>
-                  <input type="number" value={agreedFeeInput} onChange={e => setAgreedFeeInput(e.target.value)} required
+                  <input type="number" value={agreedFeeInput} onChange={e => { setAgreedFeeInput(e.target.value); setFeeEdited(true); }} required
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-base)', boxSizing: 'border-box' }} />
                 </div>
                 {/*
@@ -3077,6 +3127,11 @@ export const PlanningWorkspace: React.FC = () => {
                 <div style={{ marginTop: '6px', fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                   {loadingCommercial ? 'Reading the rate card…' : feeReferenceLine(feeQuote)}
                 </div>
+                {!loadingCommercial && dayTravelNote(feeQuote) && (
+                  <div style={{ marginTop: '4px', fontSize: 'var(--text-3xs)', color: 'var(--success)', fontWeight: 600, lineHeight: 1.5 }}>
+                    {dayTravelNote(feeQuote)}
+                  </div>
+                )}
               </div>
               {/*
                 * The rule this assignment will break, and the box that lets it through.
@@ -3117,7 +3172,7 @@ export const PlanningWorkspace: React.FC = () => {
                 costs by the recommended mode, with the alternatives, so the caller can argue
                 in specifics ("bus both ways is ₹240") instead of feel. Server-quoted — this
                 modal computes nothing. */}
-            {feeQuote?.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended && (
+            {feeQuote?.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended && !feeQuote.travelAlreadyCharged && (
               <div style={{ marginTop: '12px', padding: '10px 12px', background: 'rgba(216,174,71,0.06)', border: '1px dashed rgba(216,174,71,0.35)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 700, color: 'var(--text-primary)' }}>
                   <Bus size={12} /> Recommended fee includes ₹{feeQuote.travelFee.toLocaleString()} travel — {feeQuote.transport.recommended.modeLabel}, round trip

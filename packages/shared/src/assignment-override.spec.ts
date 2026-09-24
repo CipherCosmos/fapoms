@@ -24,13 +24,12 @@ describe('what a stated reason may waive', () => {
   });
 
   /**
-   * Two different kinds of "no". Three of these are physically impossible; the distance FLOOR is
+   * Two different kinds of "no". The other three are facts about the branch or the profile; the distance FLOOR is
    * the one integrity rule deliberately kept out of an operator's hands — it exists to stop
    * somebody valuing gold at a branch beside their own home.
    */
   it.each([
     AssignmentRule.DISTANCE_FLOOR,
-    AssignmentRule.ASSAYER_DOUBLE_BOOKED,
     AssignmentRule.BRANCH_ALREADY_ASSIGNED,
     AssignmentRule.BRANCH_NOT_OPEN,
     AssignmentRule.PROFILE_NOT_DEPLOYABLE,

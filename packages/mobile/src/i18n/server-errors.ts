@@ -1,5 +1,5 @@
 import { isApiErrorCode, type ApiErrorCode } from '@fapoms/shared';
-import { t, type TranslationKey } from './i18n';
+import { getActiveLocale, t, type TranslationKey } from './i18n';
 
 /**
  * Turning an error sentence from somewhere else into one this app can translate.
@@ -167,6 +167,34 @@ const BY_CODE: Partial<Record<ApiErrorCode, TranslationKey>> = {
 };
 
 /**
+ * Refusals on a job whose server sentence usually carries a VALUE — the dates of a leave, the
+ * distance from the branch, the day the job is on, the status it is in. The flat `BY_CODE` rule
+ * above would throw that value away, so these follow a different one:
+ *
+ *  - in English, the server's own sentence wins whenever there is one (it is the same language and
+ *    says more — "You appear to be 3.2 km from this branch" beats "too far");
+ *  - in any other language, or when the server sent no sentence at all (a capability gate without
+ *    a reason), this general, translated sentence is shown — an accurate sentence the assayer can
+ *    read beats a specific one they cannot.
+ *
+ * Codes from `@fapoms/shared`'s `ASSIGNMENT_ERROR_CODES` / `ATTENDANCE_ERROR_CODES`, as the
+ * check-in, check-out and accept/decline routes and the `capabilities` gates send them.
+ */
+const BY_CODE_GENERAL: Partial<Record<ApiErrorCode, TranslationKey>> = {
+  ASSAYER_ON_LEAVE: 'errors.assayerOnLeave',
+  NOT_SCHEDULED_TODAY: 'errors.notScheduledToday',
+  NOT_YOUR_ASSIGNMENT: 'errors.notYourAssignment',
+  ASSAYER_NOT_ACTIVE: 'errors.assayerNotActive',
+  INVALID_STATE_FOR_CHECK_IN: 'errors.invalidStateForCheckIn',
+  ASSAYER_COMPLIANCE_BLOCKED: 'errors.complianceBlocked',
+  INVALID_ASSIGNMENT_TRANSITION: 'errors.invalidAssignmentTransition',
+  TOO_FAR_FROM_BRANCH: 'errors.tooFarFromBranch',
+  ACCEPT_DATE_UNAVAILABLE: 'errors.acceptDateUnavailable',
+  REASSIGN_AFTER_CHECK_IN: 'errors.reassignAfterCheckIn',
+  OFFICE_CHECK_IN_REASON_REQUIRED: 'errors.officeCheckInReasonRequired',
+};
+
+/**
  * Messages that carry a value worth keeping. Matched before the plain patterns below, because
  * each one produces a different sentence depending on what it captured.
  */
@@ -208,6 +236,11 @@ export function translateServerError(raw: unknown, code?: unknown): string | nul
   if (typeof code === 'string' && isApiErrorCode(code)) {
     const byCode = BY_CODE[code];
     if (byCode) return t(byCode);
+    const general = BY_CODE_GENERAL[code];
+    // The bare code in the message slot (a refusal that sent no sentence) is not a sentence.
+    const hasSentence = typeof raw === 'string' && raw.trim() !== '' && raw.trim() !== code;
+    // English with a server sentence: the sentence is more specific — let it through (null).
+    if (general) return hasSentence && getActiveLocale() === 'en' ? null : t(general);
   }
 
   if (typeof raw !== 'string') return null;

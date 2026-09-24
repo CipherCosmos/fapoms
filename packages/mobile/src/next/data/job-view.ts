@@ -22,6 +22,17 @@ export const ACTION_ORDER: readonly AssignmentAction[] = [
   AssignmentAction.REPORT_ISSUE,
 ];
 
+/**
+ * The actions this build of the new app actually carries out. Anything else the server lists is
+ * drawn disabled and marked "coming soon" — never an enabled button that only says "not ready".
+ */
+export const WIRED_ACTIONS: ReadonlySet<string> = new Set([
+  AssignmentAction.ACCEPT,
+  AssignmentAction.DECLINE,
+  AssignmentAction.CHECK_IN,
+  AssignmentAction.CHECK_OUT,
+]);
+
 /** Buttons drawn in the danger colour. */
 const DANGER: ReadonlySet<string> = new Set([AssignmentAction.DECLINE]);
 /** Buttons drawn as the quiet (secondary) style. */
@@ -36,8 +47,10 @@ export interface ActionView {
   code?: string;
   /** When it opens, if time is the only obstacle. */
   opensAt?: string;
-  /** Visual weight. Exactly one `main` per job: the first allowed non-danger, non-quiet action. */
+  /** Visual weight. Exactly one `main` per job: the first allowed, wired, non-danger, non-quiet action. */
   weight: 'main' | 'quiet' | 'danger';
+  /** Listed by the server but not built in this app yet: shown disabled as "coming soon". */
+  comingSoon: boolean;
 }
 
 /**
@@ -56,8 +69,9 @@ export function actionsFor(assignment: Pick<AssayerAssignment, 'capabilities'>):
   let mainTaken = false;
   return ordered.map((action) => {
     const gate = gateFor(gates, action);
-    let weight: ActionView['weight'] = DANGER.has(action) ? 'danger' : QUIET.has(action) ? 'quiet' : 'quiet';
-    if (!DANGER.has(action) && !QUIET.has(action) && gate.allowed && !mainTaken) {
+    const comingSoon = !WIRED_ACTIONS.has(action);
+    let weight: ActionView['weight'] = DANGER.has(action) && !comingSoon ? 'danger' : 'quiet';
+    if (!comingSoon && !DANGER.has(action) && !QUIET.has(action) && gate.allowed && !mainTaken) {
       weight = 'main';
       mainTaken = true;
     }
@@ -68,6 +82,7 @@ export function actionsFor(assignment: Pick<AssayerAssignment, 'capabilities'>):
       code: gate.allowed ? undefined : gate.code,
       opensAt: gate.allowed ? undefined : gate.opensAt,
       weight,
+      comingSoon,
     };
   });
 }

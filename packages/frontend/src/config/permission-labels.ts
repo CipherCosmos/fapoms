@@ -109,6 +109,8 @@ const ACTION_LABELS: Record<string, string> = {
   UPLOAD: 'Upload',
   DOWNLOAD: 'Download',
   MODIFY: 'Reschedule',
+  // The HOD's sign-off after the office's approval, before money moves (2026-09-24).
+  FINAL_APPROVE: 'Final billing approval (HOD)',
 };
 
 /**

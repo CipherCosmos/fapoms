@@ -40,6 +40,64 @@ const OTP_SEND_MAX_PER_WINDOW = 5;
 const OTP_MAX_VERIFY_ATTEMPTS = 5;
 
 /**
+ * THE LINK OPENS THE FORM; THE CODE OPENS WHAT IS ALREADY IN IT.
+ *
+ * The invite link is a bearer credential that ends up in browser history, forwarded messages and
+ * proxy logs. It used to be enough, on its own, to read back a half-filled application — PAN,
+ * Aadhaar, bank account and every scan. Those now come back only to a browser (or phone) that has
+ * proven the contact on file with a code in THIS session: a successful `verifyOtp` mints a random
+ * session key, the client sends it back in this header, and only its hash is kept, beside the
+ * token's, for a short sliding window. A leaked link without the key sees progress, not answers.
+ */
+export const REGISTRATION_SESSION_HEADER = 'x-registration-session';
+export const REGISTRATION_SESSION_TTL_SECONDS = 30 * 60;
+
+function registrationSessionCacheKey(tokenHash: string, sessionKey: string): string {
+  return `regotp:session:${tokenHash}:${hashCode(sessionKey)}`;
+}
+
+/** Which of the secret identity numbers this application holds a non-empty value for. */
+function secretFieldsOnFile(application: { extendedProfile?: unknown } | null | undefined): string[] {
+  const fields = ((application?.extendedProfile as { fields?: Record<string, unknown> } | null)?.fields ?? {});
+  return REGISTRATION_SECRET_FIELD_KEYS.filter((key) => {
+    const value = fields[key];
+    return value != null && String(value).trim() !== '';
+  });
+}
+
+/**
+ * The application with its secret identity numbers taken out — what a link that has not been
+ * unlocked with a code may carry. Removed rather than masked: the form must never be able to
+ * round-trip a placeholder back as the number, and `sensitiveOnFile` says what is being withheld.
+ */
+function withoutSecretFields<T extends { extendedProfile?: unknown }>(application: T): T {
+  const profile = application?.extendedProfile as Record<string, unknown> | null | undefined;
+  const fields = profile?.fields as Record<string, unknown> | undefined;
+  if (!profile || !fields) return application;
+  const next = { ...fields };
+  for (const key of REGISTRATION_SECRET_FIELD_KEYS) delete next[key];
+  return { ...application, extendedProfile: { ...profile, fields: next } } as T;
+}
+
+/** What a locked link is told is on file, without saying what it is. */
+export interface RegistrationSensitiveOnFile {
+  /** Secret identity fields holding a value (`panNumber`, `aadhaarNumber`, `bankAccountNumber`). */
+  fields: string[];
+  /** How many scans are attached across every requirement. */
+  scans: number;
+}
+
+function onFileSummary(
+  application: { extendedProfile?: unknown },
+  documents: Array<{ filePaths?: string[] | null }>,
+): RegistrationSensitiveOnFile {
+  return {
+    fields: secretFieldsOnFile(application),
+    scans: documents.reduce((n, d) => n + (d.filePaths?.length ?? 0), 0),
+  };
+}
+
+/**
  * The floor on the reason for admitting a candidate no interview ever saw.
  *
  * Matched by `OpenWithoutInterviewDto`'s `@MinLength(10)` so a caller that skips the controller
@@ -544,6 +602,16 @@ const CANDIDATE_RESENDABLE_DOCUMENTS: readonly OnboardingDocument[] = [
   OnboardingDocument.PHOTOGRAPH,
   ...VERIFIED_DOCUMENTS,
 ];
+
+/**
+ * A code accepted: which channel it proved (a texted code proves the mobile, an emailed one only
+ * the mailbox) and the session key that unlocks the saved answers for this caller.
+ */
+export interface RegistrationOtpVerification {
+  channel: 'SMS' | 'EMAIL';
+  sessionKey: string;
+  sessionExpiresInSeconds: number;
+}
 
 /** Which channel carried a registration verification code, and where, masked for the page to show. */
 export interface RegistrationOtpDelivery {
@@ -1083,11 +1151,20 @@ export class RegistrationApplicationService {
     return application;
   }
 
-  async hydrate(rawToken: string): Promise<{
+  async hydrate(rawToken: string, sessionKey?: string | null): Promise<{
     application: AssayerApplicationEntity;
     documents: AssayerApplicationDocumentEntity[];
     documentsRequested: readonly OnboardingDocument[];
+    /** The link's contact has been proven with a code (token-wide, 24h) — what `submit` needs. */
     otpVerified: boolean;
+    /** THIS caller proved it with a code in this session — see `REGISTRATION_SESSION_HEADER`. */
+    sessionVerified: boolean;
+    /**
+     * Answers or scans are on file and are being withheld because this caller has not proven the
+     * contact in this session. The page must ask for a code before it shows (or re-saves) the form.
+     */
+    sensitiveLocked: boolean;
+    sensitiveOnFile: RegistrationSensitiveOnFile;
     /** What the form must show, and agree to, before it collects anything. */
     consentNotice: ConsentNotice & { grievanceContact: string };
     /**
@@ -1148,21 +1225,64 @@ export class RegistrationApplicationService {
         infoRequests: [],
         journey: await this.approvedJourney(application),
         statusOnly: false,
+        // Nothing to unlock: a submitted application's link carries no answers at all.
+        sessionVerified: false,
+        sensitiveLocked: false,
+        sensitiveOnFile: { fields: [], scans: 0 },
       };
     }
 
+    /*
+      BEFORE THE CODE, PROGRESS; AFTER IT, THE ANSWERS.
+
+      The candidate's own answers come back readable only to a caller that proved the contact on
+      file with a code in this session. Without that, the identity numbers are left out and the
+      scans' keys are replaced by placeholders (and `readDocument` refuses the bytes), and the page
+      is told what is on file so it can ask for a code before showing — or re-saving — the form.
+    */
+    const sessionVerified = await this.registrationSessionUnlocked(rawToken, sessionKey);
+    const sensitiveOnFile = onFileSummary(application, documents);
+    const sensitiveLocked = !sessionVerified && (sensitiveOnFile.fields.length > 0 || sensitiveOnFile.scans > 0);
     return {
-      // The candidate's own answers, readable, so a resumed form shows what they typed. Theirs to
-      // see; the link is locked down the moment they submit (above).
-      application: { ...application, extendedProfile: openProfile(application.extendedProfile as Record<string, unknown> | null) } as AssayerApplicationEntity,
-      documents,
+      application: sessionVerified
+        ? { ...application, extendedProfile: openProfile(application.extendedProfile as Record<string, unknown> | null) } as AssayerApplicationEntity
+        : withoutSecretFields(application),
+      documents: sessionVerified
+        ? documents
+        : documents.map((d) => ({
+          ...d,
+          filePaths: (d.filePaths ?? []).map(() => '[on file]'),
+        })) as AssayerApplicationDocumentEntity[],
       documentsRequested: documentsRequestedFor(application.employmentCategory),
       otpVerified: Boolean(verified),
+      sessionVerified,
+      sensitiveLocked,
+      sensitiveOnFile,
       consentNotice: await this.consentNotice(),
       infoRequests: readApplicationInfoRequests(application.infoRequests),
       journey: null,
       statusOnly: false,
     };
+  }
+
+  /**
+   * Whether this caller unlocked the link with a code in this session. Sliding: every use renews
+   * the window, so a candidate working through the form is not asked again mid-way, while a key
+   * left idle (or copied out of a browser) stops working after `REGISTRATION_SESSION_TTL_SECONDS`.
+   */
+  private async registrationSessionUnlocked(rawToken: string, sessionKey?: string | null): Promise<boolean> {
+    if (typeof sessionKey !== 'string' || sessionKey.length < 16 || sessionKey.length > 200) return false;
+    const key = registrationSessionCacheKey(hashCode(rawToken), sessionKey);
+    const session = await this.cache.getJson<Record<string, unknown>>(key);
+    if (!session) return false;
+    await this.cache.setJson(key, session, REGISTRATION_SESSION_TTL_SECONDS);
+    return true;
+  }
+
+  /** What is on file that a locked link must not see — read fresh, documents included. */
+  private async sensitiveOnFileFor(application: AssayerApplicationEntity): Promise<RegistrationSensitiveOnFile> {
+    const documents = await this.applicationDocuments.find({ where: { applicationId: application.id } });
+    return onFileSummary(application, documents);
   }
 
   /**
@@ -1193,6 +1313,9 @@ export class RegistrationApplicationService {
         : [],
       journey: await this.approvedJourney(application),
       statusOnly: true,
+      sessionVerified: false,
+      sensitiveLocked: false,
+      sensitiveOnFile: { fields: [], scans: 0 } as RegistrationSensitiveOnFile,
     };
   }
 
@@ -1261,7 +1384,7 @@ export class RegistrationApplicationService {
    * Answers which channel carried the code and a masked destination, so the page can say "texted to
    * ••••• 4455" or "emailed to r•••@example.com" rather than guess.
    */
-  async requestOtp(rawToken: string, phone: string): Promise<RegistrationOtpDelivery> {
+  async requestOtp(rawToken: string, phone: string, sessionKey?: string | null): Promise<RegistrationOtpDelivery> {
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
@@ -1278,6 +1401,30 @@ export class RegistrationApplicationService {
     const conflict = await this.checkMobileConflict(phone, application.organizationId, application.id, application.promotedAssayerId);
     if (conflict) {
       throw new ConflictException(conflict.message);
+    }
+    /*
+      ONCE THERE IS SOMETHING TO PROTECT, THE CODE GOES WHERE THE LINK-HOLDER CANNOT CHOOSE.
+
+      A code proves whoever reads it — so if the link alone could name the number, anybody holding
+      a leaked link could type their own phone, read their own code and unlock the candidate's PAN,
+      Aadhaar, bank account and scans. So while answers or scans are on file and this caller has
+      not unlocked them, the code goes only to the number already on the application (or its email,
+      which a locked link cannot change either — see `updateDraft`). A wrong number on file is for
+      HR to correct; a candidate who has unlocked may move to a new number as before.
+    */
+    const samePhone = (a: unknown, b: unknown) => {
+      const na = normalisePhone(a);
+      return na !== null && na === normalisePhone(b);
+    };
+    if (!samePhone(phone, application.mobile)
+      && !(await this.registrationSessionUnlocked(rawToken, sessionKey))) {
+      const onFile = await this.sensitiveOnFileFor(application);
+      if (onFile.fields.length > 0 || onFile.scans > 0) {
+        throw new BadRequestException(
+          `Your saved answers are protected by the number on your application, ${maskedMobile(application.mobile)}. `
+          + 'The code goes to that number. If it is no longer yours, ask HR to correct it.',
+        );
+      }
     }
     const tokenHash = hashCode(rawToken);
 
@@ -1353,6 +1500,7 @@ export class RegistrationApplicationService {
           entityId: application.id,
         });
         if (texted?.sent) {
+          await this.recordOtpChannel(tokenHash, 'SMS');
           return {
             channel: 'SMS',
             sentTo: maskedMobile(phone),
@@ -1387,6 +1535,7 @@ export class RegistrationApplicationService {
         entityId: application.id,
       });
       if (result?.sent) {
+        await this.recordOtpChannel(tokenHash, 'EMAIL');
         return {
           channel: 'EMAIL',
           sentTo: maskedEmail(application.email),
@@ -1409,12 +1558,12 @@ export class RegistrationApplicationService {
     );
   }
 
-  async verifyOtp(rawToken: string, phone: string, code: string): Promise<void> {
+  async verifyOtp(rawToken: string, phone: string, code: string): Promise<RegistrationOtpVerification> {
     const tokenHash = hashCode(rawToken);
     const codeKey = `regotp:code:${tokenHash}`;
     const failKey = `regotp:fail:${tokenHash}`;
 
-    const pending = await this.cache.getJson<{ hash: string; phone: string }>(codeKey);
+    const pending = await this.cache.getJson<{ hash: string; phone: string; channel?: 'SMS' | 'EMAIL' }>(codeKey);
     if (!pending) {
       throw new BadRequestException('That code has expired or has not been requested.');
     }
@@ -1436,10 +1585,16 @@ export class RegistrationApplicationService {
 
     // Success: invalidate code and fail counter immediately so code cannot be verified twice
     await this.cache.del(codeKey, failKey);
-    await this.cache.setJson(`regotp:verified:${tokenHash}`, { phone }, OTP_VERIFIED_TTL_SECONDS);
+    /*
+      WHICH THING THE CODE PROVED. A texted code proves the phone; an emailed one proves only the
+      mailbox the invite already went to, and says nothing about the number typed beside it. A code
+      stored before the channel was recorded is treated as the weaker one — never over-claimed.
+    */
+    const channel: 'SMS' | 'EMAIL' = pending.channel === 'SMS' ? 'SMS' : 'EMAIL';
+    await this.cache.setJson(`regotp:verified:${tokenHash}`, { phone, channel }, OTP_VERIFIED_TTL_SECONDS);
 
     /**
-     * The number the candidate confirmed becomes the number on the application.
+     * The number the candidate confirmed by TEXT becomes the number on the application.
      *
      * Both forms have always rendered "Your mobile number", and the answer was used to key a cache
      * entry and then thrown away: `mobile` was not editable on the draft, so the number promoted
@@ -1450,16 +1605,47 @@ export class RegistrationApplicationService {
      * Written here rather than on every keystroke because this is the moment it is confirmed. What
      * HR typed is not lost: the interview row keeps it, and the review screen shows both so a
      * mismatch is somebody's decision rather than a silent overwrite.
+     *
+     * Only by text. When the code went by email the number was never proven, so HR's entry is not
+     * overwritten here "as verified" — the candidate's typed number still reaches the draft through
+     * the ordinary `mobile` field, as an unproven answer, and the audit line says which it was.
      */
     const application = await this.findByRawToken(rawToken);
     const conflict = await this.checkMobileConflict(phone, application.organizationId, application.id, application.promotedAssayerId);
     if (conflict) {
       throw new ConflictException(conflict.message);
     }
-    if (applicationIsEditableByCandidate(application.status) && application.mobile !== phone) {
+    if (channel === 'SMS' && applicationIsEditableByCandidate(application.status) && application.mobile !== phone) {
       application.mobile = phone;
       await this.applications.save(application);
     }
+    await this.auditService.recordEventSafe({
+      category: EventCategory.WORKFLOW,
+      eventType: channel === 'SMS' ? 'REGISTRATION_MOBILE_VERIFIED' : 'REGISTRATION_EMAIL_VERIFIED',
+      entityType: 'ASSAYER_APPLICATION',
+      entityId: application.id,
+      remarks: channel === 'SMS'
+        ? `Mobile ${maskedMobile(phone)} verified by a texted code.`
+        : `Verified by a code emailed to ${application.email ? maskedEmail(application.email) : 'the address on file'}; `
+          + `the mobile ${maskedMobile(phone)} was typed by the candidate and is NOT proven.`,
+    });
+
+    // The session key that unlocks this caller's saved answers — see `REGISTRATION_SESSION_HEADER`.
+    // Returned once, kept only as a hash.
+    const sessionKey = randomBytes(32).toString('base64url');
+    await this.cache.setJson(
+      registrationSessionCacheKey(tokenHash, sessionKey),
+      { channel, at: Date.now() },
+      REGISTRATION_SESSION_TTL_SECONDS,
+    );
+    return { channel, sessionKey, sessionExpiresInSeconds: REGISTRATION_SESSION_TTL_SECONDS };
+  }
+
+  /** Which channel carried the code now pending on this link — read back by `verifyOtp`. */
+  private async recordOtpChannel(tokenHash: string, channel: 'SMS' | 'EMAIL'): Promise<void> {
+    const codeKey = `regotp:code:${tokenHash}`;
+    const pending = await this.cache.getJson<Record<string, unknown>>(codeKey);
+    if (pending) await this.cache.setJson(codeKey, { ...pending, channel }, OTP_TTL_SECONDS);
   }
 
   private async assertOtpVerified(rawToken: string): Promise<void> {
@@ -1501,13 +1687,19 @@ export class RegistrationApplicationService {
 
   // ── Draft ────────────────────────────────────────────────────────────────
 
-  async updateDraft(rawToken: string, patch: UpdateApplicationDraftDto): Promise<AssayerApplicationEntity> {
+  async updateDraft(
+    rawToken: string,
+    incomingPatch: UpdateApplicationDraftDto,
+    sessionKey?: string | null,
+  ): Promise<AssayerApplicationEntity> {
     const application = await this.findByRawToken(rawToken);
     if (!applicationIsEditableByCandidate(application.status)) {
       throw new BadRequestException('This application is no longer editable.');
     }
     // The first answer is the first collection — this is the line consent has to come before.
     this.assertConsented(application);
+    const unlocked = await this.registrationSessionUnlocked(rawToken, sessionKey);
+    const patch = unlocked ? incomingPatch : await this.lockedDraftPatch(application, incomingPatch);
     if (patch.mobile && normalisePhone(patch.mobile) !== normalisePhone(application.mobile)) {
       const conflict = await this.checkMobileConflict(patch.mobile, application.organizationId, application.id, application.promotedAssayerId);
       if (conflict) {
@@ -1522,11 +1714,47 @@ export class RegistrationApplicationService {
       `hydrate` already opens them and this response feeds the same form, so returning the stored
       value put "enc:v1:sJ9hA…" into the PAN box the moment the draft saved — and the next keystroke
       would have sent that back as the number. Found by probing the running system, not by a test.
+
+      Readable only to a caller who unlocked the link with a code this session; anybody else gets
+      the save acknowledged without the identity numbers (see `hydrate`).
     */
+    if (!unlocked) return withoutSecretFields(stored);
     return {
       ...stored,
       extendedProfile: openProfile(stored.extendedProfile as Record<string, unknown> | null),
     } as AssayerApplicationEntity;
+  }
+
+  /**
+   * A draft patch from a caller who has NOT unlocked the link, made safe for what is on file.
+   *
+   * Such a caller was never shown the identity numbers, so a blank arriving for one of them is not
+   * a decision to erase it — it is a form (an older phone build saving every box, say) that simply
+   * never had the value. The blank is dropped; a real new number still replaces the old one, which
+   * discloses nothing. And the contact a code would be sent to cannot be moved from under the
+   * candidate while there is something on file to protect — otherwise a leaked link could point
+   * the code at its own phone or mailbox and unlock everything.
+   */
+  private async lockedDraftPatch(
+    application: AssayerApplicationEntity,
+    patch: UpdateApplicationDraftDto,
+  ): Promise<UpdateApplicationDraftDto> {
+    const onFile = await this.sensitiveOnFileFor(application);
+    if (onFile.fields.length === 0 && onFile.scans === 0) return patch;
+    const sameText = (a: unknown, b: unknown) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+    const mobileMoves = patch.mobile !== undefined && !sameText(normalisePhone(patch.mobile) ?? patch.mobile, normalisePhone(application.mobile) ?? application.mobile);
+    const emailMoves = patch.email !== undefined && !sameText(patch.email, application.email);
+    if (mobileMoves || emailMoves) {
+      throw new ForbiddenException(
+        'Verify your mobile number to change your contact details — your saved answers are protected by them.',
+      );
+    }
+    if (!patch.record || onFile.fields.length === 0) return patch;
+    const record = { ...patch.record };
+    for (const key of onFile.fields) {
+      if (key in record && (record[key] == null || String(record[key]).trim() === '')) delete record[key];
+    }
+    return { ...patch, record };
   }
 
   /**
@@ -1639,7 +1867,12 @@ export class RegistrationApplicationService {
       userId: actorUserId,
       remarks: `Filled in at the HR desk for ${saved.fullName ?? saved.mobile}; approval must come from a different account.`,
     });
-    return saved;
+    /*
+      The same view GET /hr/applications/:id gives: identity numbers as their last four. This
+      returned the saved row as stored, so the desk wizard received sealed ciphertext
+      ("enc:v1:…") and put it in the PAN box — where the next save would have sent it back.
+    */
+    return RegistrationApplicationService.withoutInviteSecret(maskApplication(saved)) as AssayerApplicationEntity;
   }
 
   /**
@@ -1842,7 +2075,8 @@ export class RegistrationApplicationService {
     application.consentVersion = consentVersion;
     // The words they saw, kept beside the acceptance — see the column's note.
     application.consentNotice = await this.consentNotice() as unknown as Record<string, unknown>;
-    return this.applications.save(application);
+    // Answered to a link that may not have been unlocked with a code: never the identity numbers.
+    return withoutSecretFields(await this.applications.save(application));
   }
 
   /**
@@ -2116,6 +2350,9 @@ export class RegistrationApplicationService {
     rawToken: string,
     requirement: OnboardingDocument,
     index: number,
+    sessionKey?: string | null,
+    /** The controller already verified a scan link signed for exactly this scan (see registration-scan-link.ts). */
+    scanLinkVerified = false,
   ): Promise<{ key: string; fileName: string }> {
     const application = await this.findByRawToken(rawToken);
     // The scans behind a submitted application are the desk's to open, through its own logged-in
@@ -2125,6 +2362,10 @@ export class RegistrationApplicationService {
         'This application has been submitted, so its documents can no longer be opened from the '
         + 'registration link. Contact HR if something needs changing.',
       );
+    }
+    // A scan is an identity document: the link alone does not open it, the code does.
+    if (!scanLinkVerified && !(await this.registrationSessionUnlocked(rawToken, sessionKey))) {
+      throw new ForbiddenException('Verify your mobile number to view your saved scans.');
     }
     const row = await this.applicationDocuments.findOne({ where: { applicationId: application.id, requirement } });
     const key = row?.filePaths?.[index];
@@ -2367,6 +2608,12 @@ export class RegistrationApplicationService {
       entityId: saved.id,
       organizationId: effectiveOrgId ?? undefined,
       ownerUserId: interview?.interviewedByUserId ?? undefined,
+      /*
+        Per submission, not per application: the default key (type:id) let only the FIRST
+        submission notify — a resubmission after HR asked for more reached nobody. Each ask is a
+        review (`reviewedAt`), so a resubmission is keyed on the ask it answers.
+      */
+      dedupeKey: `ASSAYER_APPLICATION_SUBMITTED:${saved.id}:${wasAwaitingInfo ? (saved.reviewedAt ? new Date(saved.reviewedAt).toISOString() : 'resubmitted') : 'first'}`,
     });
 
     if (saved.email) {
@@ -2394,7 +2641,8 @@ export class RegistrationApplicationService {
       }).catch((err) => this.logger.warn(`Could not queue candidate submission confirmation: ${err?.message}`));
     }
 
-    return saved;
+    // Answered to the link: the sealed identity numbers stay out of it (see `hydrate`).
+    return withoutSecretFields(saved);
   }
 
   // ── HR review ────────────────────────────────────────────────────────────
@@ -2406,13 +2654,27 @@ export class RegistrationApplicationService {
    * and always did; nothing read it. ADMIN and DEVELOPER still read across by design, which is
    * what `tenantWhere` returning the clause unchanged means for them.
    */
-  async listApplications(status?: ApplicationStatus): Promise<AssayerApplicationEntity[]> {
+  async listApplications(status?: ApplicationStatus): Promise<Omit<AssayerApplicationEntity, 'tokenHash' | 'tokenExpiresAt'>[]> {
     const rows = await this.applications.find({
       where: tenantWhere<AssayerApplicationEntity>(status ? { status } : {}),
       order: { createdAt: 'DESC' },
     });
     // Masked: a queue of candidates is not a reason to hand out everybody's PAN and bank account.
-    return rows.map((row) => maskApplication(row));
+    return rows.map((row) => RegistrationApplicationService.withoutInviteSecret(maskApplication(row)));
+  }
+
+  /**
+   * The row as a staff screen may receive it: without the invite link's hash and expiry.
+   *
+   * The queue used to return the entity whole, so every OPERATIONS session held the SHA-256 of
+   * every live candidate link. A hash of a 256-bit random token is not reversible, but it is the
+   * lookup key `resolveRawToken` matches on, it is never a thing any screen draws, and a secret's
+   * derivative has no business in a list payload. The expiry goes with it: nothing on the desk
+   * reads it, and "whose link is still live" is a question for the resend flow, not the queue.
+   */
+  private static withoutInviteSecret(row: AssayerApplicationEntity): Omit<AssayerApplicationEntity, 'tokenHash' | 'tokenExpiresAt'> {
+    const { tokenHash: _tokenHash, tokenExpiresAt: _tokenExpiresAt, ...rest } = row;
+    return rest;
   }
 
   /**
@@ -2428,7 +2690,7 @@ export class RegistrationApplicationService {
    * somebody's decision rather than a silent overwrite.
    */
   async getApplication(id: string): Promise<{
-    application: AssayerApplicationEntity;
+    application: Omit<AssayerApplicationEntity, 'tokenHash' | 'tokenExpiresAt'>;
     documents: AssayerApplicationDocumentEntity[];
     gaps: Array<{ key: string; label: string; blocks: string }>;
     invitedMobile: string | null;
@@ -2463,7 +2725,9 @@ export class RegistrationApplicationService {
      */
     infoRequests: ApplicationInfoRequestItem[];
   }> {
-    const application = await this.applications.findOne({ where: { id } });
+    // `tenantWhere`, as the queue above already is: another organisation's candidate is "not
+    // found" here, not a file handed to whoever learned its id.
+    const application = await this.applications.findOne({ where: tenantWhere<AssayerApplicationEntity>({ id }) });
     if (!application) throw new NotFoundException('Application not found.');
     const documents = await this.applicationDocuments.find({ where: { applicationId: id } });
 
@@ -2501,7 +2765,8 @@ export class RegistrationApplicationService {
     return {
       // Masked: the reviewer needs to see WHICH numbers are on file and that they are well-formed,
       // not the numbers themselves. The record's own audited reveal exists for the rare case.
-      application: maskApplication(application),
+      // And without the invite link's hash, for the reason `withoutInviteSecret` gives.
+      application: RegistrationApplicationService.withoutInviteSecret(maskApplication(application)),
       documents,
       gaps: this.registrationGaps(application),
       invitedMobile: invitedMobile === application.mobile ? null : invitedMobile,
@@ -3298,6 +3563,8 @@ export class RegistrationApplicationService {
       assayerId: assayer.id,
       entityType: 'ASSAYER',
       entityId: assayer.id,
+      // Per code: a rehired person promoted again under a new code is told again.
+      dedupeKey: `ASSAYER_CODE_ISSUED:${assayer.id}:${assayer.assayerCode}`,
     });
 
     if (application.email) {

@@ -25,7 +25,8 @@ import {
 } from './self-registration/registration-form';
 import { ConsentGate } from './self-registration/ConsentGate';
 import { RegistrationStatus } from './self-registration/RegistrationStatus';
-import { registrationScreenFor } from './self-registration/registration-screen';
+import { draftPatchForLock, registrationScreenFor } from './self-registration/registration-screen';
+import { UnlockSavedAnswers } from './self-registration/UnlockSavedAnswers';
 import { StepPersonal } from './self-registration/StepPersonal';
 import { StepAddress } from './self-registration/StepAddress';
 import { StepBank } from './self-registration/StepBank';
@@ -79,6 +80,13 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   const [journey, setJourney] = useState<CandidateJourneyProgress | null>(null);
   /** The link has expired and only shows progress — the server sends nothing to fill a form from. */
   const [statusOnly, setStatusOnly] = useState(false);
+  /**
+   * Saved answers or scans are on file and were withheld: no code verified in this session. The
+   * form stays shut behind a code prompt until one is (`UnlockSavedAnswers`), and nothing blank is
+   * saved meanwhile (`draftPatchForLock`). Mirrored in a ref for the save callback.
+   */
+  const [sensitiveLocked, setSensitiveLocked] = useState(false);
+  const lockedRef = useRef(false);
   const [consentNotice, setConsentNotice] = useState<RegistrationHydration['consentNotice'] | null>(null);
 
   const [form, setForm] = useState<RegistrationFormValues | null>(null);
@@ -129,7 +137,14 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
       setPhase('loadError');
       return;
     }
-    const data = result.data;
+    applyHydration(result.data);
+    setPhase('ready');
+    // `applyHydration` only calls state setters, which are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Puts a hydrate answer on screen — on opening the link, and again after unlocking it. */
+  const applyHydration = (data: RegistrationHydration) => {
     const seeded = seedRegistrationForm(data.application);
     const fields = data.application.extendedProfile?.fields ?? {};
     setApplication(data.application);
@@ -149,8 +164,20 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
       ? { latitude: Number(fields.latitude), longitude: Number(fields.longitude) }
       : null);
     setActiveStep(resumableRegistrationStep(inferRegistrationStep(data.application, data.documents), seeded));
-    setPhase('ready');
-  }, []);
+    lockedRef.current = Boolean(data.sensitiveLocked);
+    setSensitiveLocked(Boolean(data.sensitiveLocked));
+  };
+
+  /** A right code opened the saved answers: read them again, now with the session key. */
+  const reloadAfterUnlock = useCallback(async () => {
+    const res = await SelfRegistrationApi.hydrate(token);
+    if (!res.success) {
+      feedback.error(tr('selfRegistration.loadFailedTitle'), serverErrorText(res.error, 'selfRegistration.loadFailedTitle', res.code));
+      return;
+    }
+    applyHydration(res.data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, feedback, tr]);
 
   const handleTokenSubmit = () => {
     if (!tokenInput.trim()) {
@@ -162,7 +189,9 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
   // ── Saving ───────────────────────────────────────────────────────────────
 
-  const save = useCallback((patch: DraftPatch) => {
+  const save = useCallback((incoming: DraftPatch) => {
+    // Locked, a blank box means "not shown", never "cleared" — see `draftPatchForLock`.
+    const patch = draftPatchForLock(incoming, lockedRef.current) as DraftPatch;
     if (!token || Object.keys(patch).length === 0) return;
     setSaving((n) => n + 1);
     setSaved(false);
@@ -478,6 +507,25 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
         application={application} journey={journey} onExit={onExit}
         statusOnly={statusOnly} infoRequests={infoRequests}
       />
+    );
+  }
+
+  // ── Render: saved answers locked behind a code ───────────────────────────
+
+  if (sensitiveLocked) {
+    return (
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: t.colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <AmbientGlow />
+        <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.lg, flexGrow: 1, justifyContent: 'center' }} keyboardShouldPersistTaps="handled">
+          <UnlockSavedAnswers
+            token={token}
+            mobile={application.mobile ?? ''}
+            email={application.email ?? null}
+            onUnlocked={() => { void reloadAfterUnlock(); }}
+          />
+          <Button label={tr('common.close')} variant="ghost" onPress={onExit} />
+        </ScrollView>
+      </KeyboardAvoidingView>
     );
   }
 

@@ -1,7 +1,8 @@
 import {
   Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors,
-  BadRequestException, Res, ParseIntPipe,
+  BadRequestException, Res, ParseIntPipe, Headers,
 } from '@nestjs/common';
+import { issueRegistrationScanLink, registrationScanLinkIsValid, REGISTRATION_SCAN_LINK_TTL_SECONDS } from './registration-scan-link';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { Throttle } from '@nestjs/throttler';
@@ -12,7 +13,9 @@ import {
 import { OnboardingDocument, EmploymentCategory } from '@fapoms/shared';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
-import { RegistrationApplicationService, UpdateApplicationDraftDto } from './registration-application.service';
+import {
+  RegistrationApplicationService, UpdateApplicationDraftDto, REGISTRATION_SESSION_HEADER,
+} from './registration-application.service';
 
 const publicUploadMulterOptions = {
   storage: memoryStorage(),
@@ -138,17 +141,22 @@ export class PublicRegistrationController {
   @Get(':token')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @ApiOperation({ summary: 'Resolve an invite link to its application draft' })
-  async hydrate(@Param('token') token: string) {
-    return await this.registrationApplications.hydrate(token);
+  async hydrate(@Param('token') token: string, @Headers(REGISTRATION_SESSION_HEADER) session?: string) {
+    // Without the session key a successful code minted, saved identity numbers and scans stay out.
+    return await this.registrationApplications.hydrate(token, session);
   }
 
   @Post(':token/otp/request')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Send a mobile verification code (by text when SMS is set up, else by email)' })
-  async requestOtp(@Param('token') token: string, @Body() dto: RequestOtpDto) {
+  async requestOtp(
+    @Param('token') token: string,
+    @Body() dto: RequestOtpDto,
+    @Headers(REGISTRATION_SESSION_HEADER) session?: string,
+  ) {
     // Which channel carried it and a masked destination, so the page says where to look.
     // The code itself is NEVER returned to the caller or logged.
-    const result = await this.registrationApplications.requestOtp(token, dto.phone);
+    const result = await this.registrationApplications.requestOtp(token, dto.phone, session);
     return { sent: true, ...result };
   }
 
@@ -156,15 +164,25 @@ export class PublicRegistrationController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Verify a mobile verification code' })
   async verifyOtp(@Param('token') token: string, @Body() dto: VerifyOtpDto) {
-    await this.registrationApplications.verifyOtp(token, dto.phone, dto.code);
-    return { verified: true };
+    /*
+      `channel` says what the code proved (a text proves the mobile; an email only the mailbox).
+      `sessionKey` is what the client sends back in the `x-registration-session` header to read its
+      saved answers and scans — returned once, stored only as a hash, expiring after
+      `sessionExpiresInSeconds` of disuse.
+    */
+    const result = await this.registrationApplications.verifyOtp(token, dto.phone, dto.code);
+    return { verified: true, ...result };
   }
 
   @Patch(':token/draft')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @ApiOperation({ summary: 'Autosave the profile-creation draft' })
-  async updateDraft(@Param('token') token: string, @Body() dto: UpdateDraftRequestDto) {
-    return await this.registrationApplications.updateDraft(token, dto);
+  async updateDraft(
+    @Param('token') token: string,
+    @Body() dto: UpdateDraftRequestDto,
+    @Headers(REGISTRATION_SESSION_HEADER) session?: string,
+  ) {
+    return await this.registrationApplications.updateDraft(token, dto, session);
   }
 
   @Get(':token/lookup/ifsc/:code')
@@ -265,6 +283,28 @@ export class PublicRegistrationController {
     return await this.registrationApplications.submit(token);
   }
 
+  /**
+   * A two-minute link to one scan, for a PDF the phone must hand to a viewer that cannot send the
+   * session header. Only a caller who unlocked the form this session gets one (the same check the
+   * scan itself makes), and the link opens that one page and nothing else.
+   */
+  @Get(':token/documents/:requirement/file/:index/link')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOperation({ summary: 'A short-lived link to one attached scan, for a viewer that cannot send headers' })
+  async documentLink(
+    @Param('token') token: string,
+    @Param('requirement') requirement: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Headers(REGISTRATION_SESSION_HEADER) session?: string,
+  ): Promise<{ path: string; expiresInSeconds: number }> {
+    await this.registrationApplications.documentFileKeyForToken(token, requirement as OnboardingDocument, index, session);
+    const t = issueRegistrationScanLink(token, requirement, index);
+    return {
+      path: `/public/registration/${encodeURIComponent(token)}/documents/${encodeURIComponent(requirement)}/file/${index}?t=${encodeURIComponent(t)}`,
+      expiresInSeconds: REGISTRATION_SCAN_LINK_TTL_SECONDS,
+    };
+  }
+
   @Get(':token/documents/:requirement/file/:index')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @ApiOperation({ summary: 'Stream one attached scan for candidate preview' })
@@ -273,9 +313,14 @@ export class PublicRegistrationController {
     @Param('requirement') requirement: string,
     @Param('index', ParseIntPipe) index: number,
     @Res() res: any,
+    @Headers(REGISTRATION_SESSION_HEADER) session?: string,
+    @Query('t') scanLink?: string,
   ): Promise<void> {
+    // Refused (403) unless this caller unlocked the link with a code this session, or carries a
+    // scan link signed for exactly this page (see `documentLink`).
     const { key, fileName } = await this.registrationApplications.documentFileKeyForToken(
-      token, requirement as OnboardingDocument, index,
+      token, requirement as OnboardingDocument, index, session,
+      registrationScanLinkIsValid(scanLink, token, requirement, index),
     );
     const stream = await this.registrationApplications.openDocumentStream(key);
     res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);

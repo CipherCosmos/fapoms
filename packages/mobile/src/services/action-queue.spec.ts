@@ -31,6 +31,7 @@ import {
   adoptUnownedActions,
   toSubmitOutcome,
   NOT_SIGNED_IN_ERROR,
+  getRefusedActions,
 } from './action-queue';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -253,6 +254,57 @@ describe('processActionQueue', () => {
 
     expect(ok).toHaveBeenCalledTimes(1);
     expect(await getQueuedActions()).toHaveLength(0);
+  });
+
+  /**
+   * The defect: an action saved offline ("it will send by itself") and later refused by the server
+   * was dropped by the drain without a word — the assayer believed the check-in or claim had gone.
+   */
+  it('keeps a refusal from a background drain visible, with its reason and code, and reports it once', async () => {
+    const offline: ActionDispatcher = jest.fn(async () => {
+      throw new Error('timeout');
+    });
+    await enqueueAndRun('CHECK_IN', { lat: 1, lng: 2 }, offline);
+
+    const refuse: ActionDispatcher = jest.fn(async () => ({
+      success: false,
+      retryable: false,
+      error: 'This audit is scheduled for Friday.',
+      code: 'NOT_SCHEDULED_TODAY',
+    }));
+    const report = await processActionQueue({ CHECK_IN: refuse });
+
+    expect(report.refused).toHaveLength(1);
+    expect(report.refused[0]).toMatchObject({ kind: 'CHECK_IN', status: 'ERROR', code: 'NOT_SCHEDULED_TODAY', error: 'This audit is scheduled for Friday.' });
+    expect(report.sent).toBe(0);
+
+    const refused = await getRefusedActions();
+    expect(refused).toHaveLength(1);
+    expect(refused[0].code).toBe('NOT_SCHEDULED_TODAY');
+
+    // Never sent again, and not reported again by the next drain.
+    const again = await processActionQueue({ CHECK_IN: refuse });
+    expect(refuse).toHaveBeenCalledTimes(1);
+    expect(again.refused).toHaveLength(0);
+    expect(await getRefusedActions()).toHaveLength(1);
+
+    // Gone once the assayer dismisses it.
+    await dismissAction(refused[0].id);
+    expect(await getRefusedActions()).toHaveLength(0);
+  });
+
+  it('counts what went through', async () => {
+    await enqueueAction('CHECK_IN', { lat: 1, lng: 2 });
+    const report = await processActionQueue({ CHECK_IN: jest.fn(async () => ({ success: true })) });
+    expect(report).toEqual({ refused: [], sent: 1 });
+  });
+
+  it("shows only the signed-in person's refusals", async () => {
+    await enqueueAction('CHECK_IN', { lat: 1, lng: 2 });
+    await processActionQueue({ CHECK_IN: jest.fn(async () => ({ success: false, retryable: false, error: 'no' })) });
+    expect(await getRefusedActions()).toHaveLength(1);
+    setActionQueueOwner(ASSAYER_B);
+    expect(await getRefusedActions()).toHaveLength(0);
   });
 
   it('leaves a kind with no registered dispatcher untouched', async () => {

@@ -8,7 +8,7 @@
 jest.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 jest.mock('./api.service', () => ({ getApiBaseUrl: () => 'http://localhost:3001/api/v1' }));
 
-import { SelfRegistrationApi, registrationLinkApiRoot } from './self-registration.service';
+import { SelfRegistrationApi, registrationLinkApiRoot, registrationSessionHeaders } from './self-registration.service';
 
 const APP = 'http://localhost:3001/api/v1';
 const RIG = 'http://localhost:8080/api/v1';
@@ -91,5 +91,58 @@ describe('SelfRegistrationApi.open', () => {
     fetchMock.mockResolvedValueOnce(found());
     await SelfRegistrationApi.open('other-token');
     expect(calledUrls()[2]).toBe(`${APP}/public/registration/other-token`);
+  });
+});
+
+/**
+ * A registration link's saved identity numbers and scans are withheld until the link's code is
+ * verified in this session. The key the verify answers with must ride on every later read and
+ * save — and only for the link it was minted for.
+ */
+describe('the registration session key', () => {
+  const headerOf = (i: number) => ((fetchMock.mock.calls[i][1] as RequestInit).headers as Record<string, string>)['x-registration-session'];
+
+  it('is kept from a verified code and sent when opening, saving, asking for a code and sending scans', async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { success: true, data: { verified: true, sessionKey: 'k'.repeat(43) } }));
+    await SelfRegistrationApi.verifyOtp('link-one', '9876543210', '123456');
+
+    fetchMock.mockResolvedValue(found());
+    await SelfRegistrationApi.hydrate('link-one');
+    await SelfRegistrationApi.updateDraft('link-one', { fullName: 'A' });
+    await SelfRegistrationApi.requestOtp('link-one', '9876543210');
+    await SelfRegistrationApi.uploadDocument('link-one', 'PAN_CARD', { uri: 'file:///x.jpg', name: 'x.jpg' });
+    for (let i = 1; i <= 4; i++) expect(headerOf(i)).toBe('k'.repeat(43));
+    expect(registrationSessionHeaders('link-one')).toEqual({ 'x-registration-session': 'k'.repeat(43) });
+  });
+
+  it('is not sent for a different link, nor before any code was verified', async () => {
+    fetchMock.mockResolvedValue(found());
+    await SelfRegistrationApi.hydrate('another-link-token');
+    expect(headerOf(0)).toBeUndefined();
+  });
+
+  it('is not kept from a failed verify', async () => {
+    fetchMock.mockResolvedValueOnce(json(400, { message: 'Wrong code' }));
+    await SelfRegistrationApi.verifyOtp('link-three', '9876543210', '000000');
+    expect(registrationSessionHeaders('link-three')).toEqual({});
+  });
+});
+
+/**
+ * 2026-09-24: a PDF scan is opened by the phone's viewer, which cannot send the session header.
+ * The app asks (with the header) for a two-minute link to that one page and opens that.
+ */
+describe('SelfRegistrationApi.documentOpenUrl', () => {
+  it('asks for a link with the session header and returns an address on the same server', async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { success: true, data: { path: `/public/registration/${TOKEN}/documents/PAN_CARD/file/0?t=123.sig` } }));
+    const res = await SelfRegistrationApi.documentOpenUrl(TOKEN, 'PAN_CARD', 0);
+    expect(calledUrls()[0]).toBe(`${APP}/public/registration/${TOKEN}/documents/PAN_CARD/file/0/link`);
+    expect(res).toEqual({ success: true, data: `${APP}/public/registration/${TOKEN}/documents/PAN_CARD/file/0?t=123.sig` });
+  });
+
+  it('opens nothing when the server refuses (still locked)', async () => {
+    fetchMock.mockResolvedValueOnce(json(403, { message: 'Verify your mobile number to view your saved scans.' }));
+    const res = await SelfRegistrationApi.documentOpenUrl(TOKEN, 'PAN_CARD', 0);
+    expect(res.success).toBe(false);
   });
 });

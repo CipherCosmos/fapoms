@@ -2,7 +2,7 @@ import { Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Quer
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback, RolesFallbackPermissions, AnyAuthenticated } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { BILLING_READ_ROLES } from '../billing-engine/billing-roles';
 import { BillingState } from '@fapoms/shared';
@@ -218,6 +218,9 @@ export class ReportsController {
   // A POST that reads: it only enqueues the export its GET twin performs, and produces the same
   // workbook. Requiring `billing:create` would let a role that may not see the book order it.
   @Roles(...BILLING_READ_ROLES)
+  // A custom role holding billing:view opens /billing (GET /billing-engine/overview honours the
+  // fallback), so its Export button must be served too — the same grant, the same scope.
+  @AllowPermissionFallback()
   @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Queue the billing export; returns a job id to poll' })
   async queueBilling(
@@ -244,6 +247,10 @@ export class ReportsController {
   @Post('command-center/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(...STAFF_ROLES)
+  // /executive-map is offered to a custom role holding planning:view (GET /planning/command-center
+  // honours it), so its export is too. Fallback-only: PermissionsGuard would otherwise demand the
+  // grant from every STAFF_ROLES caller.
+  @RolesFallbackPermissions('planning:view:organization')
   @ApiOperation({ summary: 'Queue the Command Center territory export; returns a job id to poll' })
   async queueCommandCenter(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     const enqueued = await this.reportJobsService.enqueueCommandCenter({ scope: scope ?? null }, this.requester(req));
@@ -312,7 +319,11 @@ export class ReportsController {
    * poll, because they were refused one.
    */
   @Get('jobs/:jobId')
-  @Roles(...STAFF_ROLES)
+  // Open to any signed-in account because the ownership check in ReportJobsService IS the gate: the
+  // only job reachable is one this account created, and creating one is where each export's own
+  // audience (roles, or a custom role's grant) is enforced. A STAFF_ROLES list here refused a custom
+  // role the status of the very export it had just been allowed to queue.
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Poll a queued report export for progress and, once done, its file metadata' })
   async reportJob(@Param('jobId') jobId: string, @Req() req: any) {
     return await this.reportJobsService.status(jobId, req.user?.id);
@@ -326,7 +337,8 @@ export class ReportsController {
    * never a way around the ownership rule that governs polling.
    */
   @Get('jobs/:jobId/download')
-  @Roles(...STAFF_ROLES)
+  // Same rule as the poll above: ownership, checked before the file is read.
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Download the workbook produced by a completed export job' })
   async downloadReportJob(@Param('jobId') jobId: string, @Req() req: any, @Res() res: Response): Promise<void> {
     const { buffer, meta } = await this.reportJobsService.download(jobId, req.user?.id);

@@ -18,7 +18,12 @@ import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocom
 import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
 import { AssayerService } from '../assayer/assayer.service';
-import { cancelOpenAssignmentsForClosure, ClosureCancelledAssignment } from '../assignment/closure-cancellation';
+import {
+  announceCancelledAssignments,
+  cancelOpenAssignmentsForClosure,
+  ClosureCancelledAssignment,
+  onSiteRefusalMessage,
+} from '../assignment/closure-cancellation';
 import { DayTravelService } from '../assignment/assignment-day-travel';
 
 /** A header reduced to letters and digits, lower-cased — so "STATE", "State" and "state" are one. */
@@ -649,8 +654,8 @@ export class BranchService {
         userId,
         cancelReason: 'Branch deactivated by operations',
         auditRemarks: `Auto-cancelled due to deactivation of branch ${branch.name}`,
-        onSiteRefusal: (a) => new ConflictException(
-          `Cannot deactivate branch "${branch.name}": Assignment ${a.assignmentNumber} is currently ${a.status}. Field audit is actively in progress on site. Operational intervention required before deactivating this branch.`,
+        onSiteRefusal: (_a, all) => new ConflictException(
+          onSiteRefusalMessage(`Cannot deactivate branch "${branch.name}"`, all),
         ),
         auditService: this.auditService,
       });
@@ -702,47 +707,25 @@ export class BranchService {
       return rows;
     });
 
-    // Committed. Now tell people — never about a closure that rolled back.
-    for (const a of cancelled) {
-      // Owner decision 2026-09-24: the assayer holding this job is told, in words, and their
-      // phone refreshes.
-      if (a.assayerId) {
-        this.notificationDispatch?.emitSafe({
-          type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE',
-          entityType: 'ASSIGNMENT',
-          entityId: a.id,
-          actorUserId: userId,
-          assayerId: a.assayerId,
-          dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}:${a.entityVersion}`,
-          payload: {
-            assignmentId: a.id,
-            assignmentNumber: a.assignmentNumber,
-            branchName: branch.name,
-            because: 'the office has closed this branch',
-          },
-        });
-        this.refreshPush?.assignmentChanged(a.assayerId, a.id);
-      }
-      this.eventPublisher.publish('assignment:status-changed', {
-        eventType: 'assignment:status-changed',
-        assignmentId: a.id,
-        assignmentNumber: a.assignmentNumber,
-        previousState: a.previousStatus,
-        newState: AssignmentStatus.CANCELLED,
-        userId,
-      });
-    }
-    // Sharing ends with an assayer's last committed job, as it does for a single cancel.
-    for (const assayerId of new Set(cancelled.map((a) => a.assayerId).filter((x): x is string => !!x))) {
-      await this.assayerService?.disableLiveTrackingWhenWorkEnds(assayerId, userId);
-    }
-    // Travel once per assayer per day (E2): a cancelled job may have carried its day's journey;
-    // the next job that assayer has that day takes it over. After commit; never throws.
-    await this.dayTravel?.rebalanceMany(
-      cancelled.map((a) => ({ assayerId: a.assayerId, day: a.scheduledDate })),
+    // Committed. Now tell people — never about a closure that rolled back. The one announcer every
+    // bulk cancel shares (owner decision 2026-09-24): the assayer is told in words and their phone
+    // refreshes, the desk gets its copy, the status change is published, sharing ends with the
+    // assayer's last committed job, and the day's travel is re-decided.
+    await announceCancelledAssignments(cancelled, {
+      notificationDispatch: this.notificationDispatch,
+      eventPublisher: this.eventPublisher,
+      refreshPush: this.refreshPush,
+      disableLiveTrackingWhenWorkEnds: this.assayerService
+        ? (assayerId, uid) => this.assayerService!.disableLiveTrackingWhenWorkEnds(assayerId, uid)
+        : null,
+      dayTravel: this.dayTravel,
+    }, {
       userId,
-      `branch ${branch.name} was closed`,
-    );
+      reason: `Branch ${branch.name} was closed by operations`,
+      assayerNotice: 'closure',
+      because: 'the office has closed this branch',
+      travelReason: `branch ${branch.name} was closed`,
+    });
   }
 
   // -----------------------------------------------------------------------

@@ -20,7 +20,7 @@ import { connectMobileSocket } from './src/services/socket';
 import { registerAndroidNotificationChannels } from './src/services/notification.service';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
 import { countOpenQueries, countResolvedQueries } from './src/utils/queries';
-import { parseRupeeInput, formatRupees } from '@fapoms/shared';
+import { parseRupeeInput, formatRupees, formatDateOnly } from '@fapoms/shared';
 import type { AssayerInvoiceInvitation } from '@fapoms/shared';
 
 // Context Providers
@@ -42,6 +42,8 @@ import { SelfRegistrationScreen } from './src/screens/SelfRegistrationScreen';
 import { ChangePasswordScreen } from './src/screens/ChangePasswordScreen';
 import { LockScreen } from './src/screens/LockScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
+import { expenseJobChoices, preselectExpenseJob, shouldOfferCheckOutBeforeReturn } from './src/screens/job-actions';
+import { RefusedActionsBanner } from './src/components/RefusedActionsBanner';
 import { ScheduleScreen } from './src/screens/ScheduleScreen';
 import { PdfDocsScreen } from './src/screens/PdfDocsScreen';
 import { QueriesScreen } from './src/screens/QueriesScreen';
@@ -69,7 +71,7 @@ function AppMain() {
   const tr = useT();
   const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock, skipUnlock, recheckRegistration } = useAuth();
   const { location, refreshLocation } = useLocation();
-  const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense, stale, lastSyncedAt } = useAssignments();
+  const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense, stale, lastSyncedAt, refusedActions, dismissRefusedAction } = useAssignments();
 
   const [selectedTab, setSelectedTab] = useState<TabType>('HOME');
   /** Whether the logged-out branch is showing `SelfRegistrationScreen` instead of `LoginScreen`.
@@ -587,10 +589,10 @@ function AppMain() {
    * A real device fix is required for the same reason check-in requires one: this is attendance
    * evidence, and a departure recorded at a fabricated position is worse than no departure at all.
    */
-  const handleCheckOut = async (assignment: AssayerAssignment) => {
+  const handleCheckOut = async (assignment: AssayerAssignment, opts: { alreadyConfirmed?: boolean } = {}) => {
     if (busyActionId) return;
 
-    const confirmed = await new Promise<boolean>((resolve) => {
+    const confirmed = opts.alreadyConfirmed || await new Promise<boolean>((resolve) => {
       Alert.alert(
         tr('assignment.checkOutConfirmTitle'),
         tr('assignment.checkOutConfirmBody', { branch: assignment.branchName }),
@@ -654,6 +656,35 @@ function AppMain() {
     } finally {
       setBusyActionId(null);
     }
+  };
+
+  /**
+   * Before the audited return goes: sending it finishes the job, after which the departure can no
+   * longer be recorded. So an assayer still checked in (arrived, not left) is asked first —
+   * check out then send, send anyway, or stop. Resolves whether to go ahead with the send.
+   */
+  const confirmCheckOutBeforeReturn = async (assignment: AssayerAssignment): Promise<boolean> => {
+    if (!shouldOfferCheckOutBeforeReturn(assignment)) return true;
+    const choice = await new Promise<'checkout' | 'send' | 'cancel'>((resolve) => {
+      Alert.alert(
+        tr('assignment.checkOutBeforeReturnTitle'),
+        tr('assignment.checkOutBeforeReturnBody', { branch: assignment.branchName }),
+        [
+          { text: tr('common.cancel'), style: 'cancel', onPress: () => resolve('cancel') },
+          { text: tr('assignment.checkOutBeforeReturnSendAnyway'), onPress: () => resolve('send') },
+          { text: tr('assignment.checkOutBeforeReturnCheckOut'), onPress: () => resolve('checkout') },
+        ],
+        { cancelable: true, onDismiss: () => resolve('cancel') },
+      );
+    });
+    if (choice === 'cancel') return false;
+    if (choice === 'checkout') await handleCheckOut(assignment, { alreadyConfirmed: true });
+    return true;
+  };
+
+  /** Quick scan from Home/Schedule — the scan goes straight to the office, so ask first. */
+  const openQuickScan = async (assignment: AssayerAssignment) => {
+    if (await confirmCheckOutBeforeReturn(assignment)) overlay.open({ name: 'scanner', assignment });
   };
 
   /**
@@ -941,7 +972,12 @@ function AppMain() {
             uploadingPdf={paperwork.uploading}
             onSelectPdfFile={paperwork.selectFile}
             onOpenScanner={() => overlay.open({ name: 'scanner', assignment: openPaperwork })}
-            onSubmitCompletedPdf={() => { void paperwork.submit().then((ok) => { if (ok) paperwork.close(); }); }}
+            onSubmitCompletedPdf={() => {
+              void (async () => {
+                if (!(await confirmCheckOutBeforeReturn(openPaperwork))) return;
+                if (await paperwork.submit()) paperwork.close();
+              })();
+            }}
             onOpenExpenseModal={() =>
               // Claim is filed against the assignment whose paperwork is open — the one the
               // assayer is demonstrably working on.
@@ -955,6 +991,8 @@ function AppMain() {
           </>
         ) : (
         <>
+        {/* Saved-offline actions the office then refused, with its reason, until dismissed. */}
+        <RefusedActionsBanner refused={refusedActions} onDismiss={(id) => { void dismissRefusedAction(id); }} />
         {selectedTab === 'HOME' && (
           <HomeScreen
             assignments={assignments}
@@ -965,7 +1003,7 @@ function AppMain() {
             onOpenAssignment={paperwork.open}
             onCheckIn={handleCheckIn}
             onCheckOut={handleCheckOut}
-            onScan={(a) => overlay.open({ name: 'scanner', assignment: a })}
+            onScan={(a) => { void openQuickScan(a); }}
             onNavigate={(a) => overlay.open({ name: 'navigate', assignment: a })}
             onAcceptOffer={(a) => handleAcceptAssignment(a.id)}
             onDeclineOffer={(a) => overlay.open({ name: 'reject', assignmentId: a.id, reason: '', requestKey: generateClientRequestId() })}
@@ -992,7 +1030,7 @@ function AppMain() {
             onCheckIn={handleCheckIn}
             onCheckOut={handleCheckOut}
             onOpenPdfDocs={paperwork.open}
-            onOpenScanner={(a) => overlay.open({ name: 'scanner', assignment: a })}
+            onOpenScanner={(a) => { void openQuickScan(a); }}
             onOpenQueryChat={(a) => overlay.open({ name: 'queryChat', assignment: a })}
             onOpenMap={(a) => overlay.open({ name: 'navigate', assignment: a })}
             onLoadOlderHistory={loadOlderHistory}
@@ -1016,13 +1054,10 @@ function AppMain() {
             invitation={invitation}
             onOpenInvoiceReview={() => overlay.open({ name: 'invoiceReview' })}
             onOpenExpenseModal={() => {
-              // From the Earnings tab there is no open job, so tie the claim to the one the
-              // assayer is currently on (checked in / in progress / accepted). If there is
-              // none, the modal explains it must be filed from the assignment.
-              const active = assignments.find(
-                (a) => a.status === 'CHECKED_IN' || a.status === 'IN_PROGRESS' || a.status === 'ACCEPTED',
-              );
-              overlay.open({ name: 'expense', assignment: active ?? null });
+              // From the Earnings tab there is no open job: the assayer picks it in the form, from
+              // the jobs a claim is allowed on (checked in, working, completed — and not refused by
+              // the server's CLAIM_EXPENSE verdict). Preselected only when there is exactly one.
+              overlay.open({ name: 'expense', assignment: null });
             }}
           />
         )}
@@ -1256,13 +1291,20 @@ function AppMain() {
         <ExpenseModal
           visible
           onClose={overlay.close}
-          onAddExpense={async (category, amount, description, requestKey) => {
-            // Against the assignment chosen at the entry point, never assignments[0]. The old
-            // code filed every claim against whatever assignment happened to sort first — so a
-            // travel claim for today's branch could land on a completed job from weeks ago, and
-            // with an empty list it was silently dropped with no error.
-            if (!expense.assignment?.id) {
-              feedback.error(tr('expense.noAssignmentTitle'), tr('expense.noAssignmentBody'));
+          jobs={expenseJobChoices(assignments).map((a) => ({
+            id: a.id,
+            label: [a.branchName || a.assignmentCode, a.scheduledDate ? formatDateOnly(a.scheduledDate, { day: 'numeric', month: 'short' }) : '']
+              .filter(Boolean)
+              .join(' · '),
+          }))}
+          initialJobId={preselectExpenseJob(expenseJobChoices(assignments), expense.assignment)}
+          onAddExpense={async (category, amount, description, requestKey, jobId) => {
+            // Against the job the assayer picked in the form (preselected from where it was opened
+            // when that job can take a claim), never assignments[0]. The old code filed every claim
+            // against whatever assignment happened to sort first.
+            const claimFor = expenseJobChoices(assignments).find((a) => a.id === jobId);
+            if (!claimFor) {
+              feedback.error(tr('expense.noAssignmentTitle'), tr('expense.chooseJob'));
               return;
             }
             /**
@@ -1280,7 +1322,7 @@ function AppMain() {
               return;
             }
             const res = await submitExpense(
-              expense.assignment.id,
+              claimFor.id,
               { category: category as any, amount: parsedAmount, description },
               requestKey,
             );

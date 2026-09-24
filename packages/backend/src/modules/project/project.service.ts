@@ -22,7 +22,12 @@ import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, Sy
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { buildWorkbook } from '../reports/excel-export';
 import { AssayerService } from '../assayer/assayer.service';
-import { cancelOpenAssignmentsForClosure, ClosureCancelledAssignment } from '../assignment/closure-cancellation';
+import {
+  announceCancelledAssignments,
+  cancelOpenAssignmentsForClosure,
+  ClosureCancelledAssignment,
+  onSiteRefusalMessage,
+} from '../assignment/closure-cancellation';
 import { DayTravelService } from '../assignment/assignment-day-travel';
 import { ASSIGNED_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
@@ -773,8 +778,8 @@ export class ProjectService implements OnModuleInit {
           userId,
           cancelReason: 'Project cancelled by operations',
           auditRemarks: `Auto-cancelled due to cancellation of project ${project.name}`,
-          onSiteRefusal: (a) => new ConflictException(
-            `Cannot cancel project "${project.name}": Assignment ${a.assignmentNumber} is currently ${a.status}. Field audit is actively in progress on site. Operational intervention required before cancelling this project.`,
+          onSiteRefusal: (_a, all) => new ConflictException(
+            onSiteRefusalMessage(`Cannot cancel project "${project.name}"`, all),
           ),
           auditService: this.auditService,
         });
@@ -787,47 +792,23 @@ export class ProjectService implements OnModuleInit {
     const committedEvent = projectEvent as { constructor: { name: string } } | null;
     if (committedEvent) this.eventPublisher.publish(committedEvent.constructor.name, committedEvent as any);
 
-    // Committed. Tell the people whose work this stopped — never about a rolled-back cancel.
-    for (const a of cancelled) {
-      // Owner decision 2026-09-24: the assayer holding this job is told, in words, and their
-      // phone refreshes.
-      if (a.assayerId) {
-        this.notificationDispatch.emitSafe({
-          type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE',
-          entityType: 'ASSIGNMENT',
-          entityId: a.id,
-          actorUserId: userId,
-          assayerId: a.assayerId,
-          dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}:${a.entityVersion}`,
-          payload: {
-            assignmentId: a.id,
-            assignmentNumber: a.assignmentNumber,
-            branchName: a.branchName ?? 'the branch',
-            because: 'the office has stopped this audit project',
-          },
-        });
-        this.refreshPush?.assignmentChanged(a.assayerId, a.id);
-      }
-      this.eventPublisher.publish('assignment:status-changed', {
-        eventType: 'assignment:status-changed',
-        assignmentId: a.id,
-        assignmentNumber: a.assignmentNumber,
-        previousState: a.previousStatus,
-        newState: AssignmentStatus.CANCELLED,
-        userId,
-      });
-    }
-    // Sharing ends with an assayer's last committed job, as it does for a single cancel.
-    for (const assayerId of new Set(cancelled.map((a) => a.assayerId).filter((x): x is string => !!x))) {
-      await this.assayerService?.disableLiveTrackingWhenWorkEnds(assayerId, userId);
-    }
-    // Travel once per assayer per day (E2): a cancelled job may have carried its day's journey;
-    // the next job that assayer has that day (on another project) takes it over. Never throws.
-    await this.dayTravel?.rebalanceMany(
-      cancelled.map((a) => ({ assayerId: a.assayerId, day: a.scheduledDate })),
+    // Committed. Tell the people whose work this stopped — never about a rolled-back cancel. The
+    // one announcer every bulk cancel shares; see `announceCancelledAssignments`.
+    await announceCancelledAssignments(cancelled, {
+      notificationDispatch: this.notificationDispatch,
+      eventPublisher: this.eventPublisher,
+      refreshPush: this.refreshPush,
+      disableLiveTrackingWhenWorkEnds: this.assayerService
+        ? (assayerId, uid) => this.assayerService!.disableLiveTrackingWhenWorkEnds(assayerId, uid)
+        : null,
+      dayTravel: this.dayTravel,
+    }, {
       userId,
-      `project ${project.name} was cancelled`,
-    );
+      reason: `Project ${project.name} was stopped by operations`,
+      assayerNotice: 'closure',
+      because: 'the office has stopped this audit project',
+      travelReason: `project ${project.name} was cancelled`,
+    });
     return result;
   }
 

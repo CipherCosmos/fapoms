@@ -6,6 +6,7 @@ import { OutboxEntity } from './outbox.entity';
 import { DomainEventPublisher, EVENTS_REQUIRING_A_NAMED_SUBSCRIBER } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../cache/cache.service';
 import { MetricsService } from '../observability/metrics.service';
+import { errorAlerter, type ErrorAlerter } from '../observability/error-alerter';
 
 /** How long an undispatched row is left alone before the relay claims it. */
 const FAST_PATH_GRACE_MS = 30_000;
@@ -36,6 +37,9 @@ export class OutboxRelay {
     // metrics registry that is not wired can never stop an event being relayed.
     @Optional() private readonly metrics?: MetricsService,
   ) {}
+
+  /** Where a dead-lettered event is reported. Replaceable in tests. */
+  alerter: Pick<ErrorAlerter, 'report'> = errorAlerter;
 
   /**
    * Publish everything the fast path did not.
@@ -133,6 +137,7 @@ export class OutboxRelay {
           // trace: `failed_at` is now on the row, the row is listed by GET
           // /admin/outbox/dead-letters, and this counter makes it alertable.
           this.metrics?.outboxDeadLettered.inc({ event: row.eventName });
+          this.alerter.report({ method: 'OUTBOX', route: `/outbox/${row.eventName}`, errorName: 'DeadLetter' });
           this.logger.error(
             `Outbox event ${row.id} (${row.eventName}) abandoned after ${attempts} attempts and dead-lettered: ` +
               `${message}. Replay it from Administration -> Outbox once the cause is fixed.`,

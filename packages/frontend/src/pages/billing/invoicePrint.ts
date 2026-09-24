@@ -1,4 +1,4 @@
-import { formatRupees } from '@fapoms/shared';
+import { formatRupees, invoiceStatusLabel, InvoiceStatus } from '@fapoms/shared';
 import type { InvoiceDocument } from '../../services/billing';
 
 /**
@@ -16,6 +16,27 @@ import type { InvoiceDocument } from '../../services/billing';
  */
 
 const money = (n: number) => formatRupees(n, { decimals: 2 });
+
+/**
+ * The only states in which the document is a TAX INVOICE (audit E1, 2026-09-24).
+ *
+ * A draft, one with the HOD, or one the HOD approved but nobody has sent, is not an invoice the
+ * client has received — printing it headed "TAX INVOICE" with a number and a GST split hands out a
+ * document that looks exactly like the real thing for money nobody has billed yet. Decision: the
+ * print button is disabled until the invoice is sent (ISSUED) or paid, with the reason as its
+ * tooltip, rather than printing a watermarked proforma nobody asked for.
+ */
+export const TAX_INVOICE_PRINTABLE_STATUSES: readonly InvoiceStatus[] = [InvoiceStatus.ISSUED, InvoiceStatus.PAID];
+
+export const canPrintTaxInvoice = (status: InvoiceStatus | string | null | undefined): boolean =>
+  TAX_INVOICE_PRINTABLE_STATUSES.includes(status as InvoiceStatus);
+
+/** Why the tax invoice cannot be printed yet, said as what has to happen first; null when it can. */
+export function taxInvoicePrintBlockedReason(status: InvoiceStatus | string | null | undefined): string | null {
+  if (canPrintTaxInvoice(status)) return null;
+  if (status === InvoiceStatus.CANCELLED) return 'A cancelled invoice is not a tax invoice and cannot be printed.';
+  return `This invoice is "${invoiceStatusLabel(status)}" — it is not a tax invoice until it has been sent to the client, so it cannot be printed yet.`;
+}
 
 /** Escape text destined for HTML — client names, notes and addresses are data, never markup. */
 function esc(value: unknown): string {
@@ -50,7 +71,7 @@ function addressBlock(value: string | null, whatToSet: string): string {
     .join('<br/>');
 }
 
-function buildHtml(doc: InvoiceDocument): string {
+export function buildInvoiceHtml(doc: InvoiceDocument): string {
   const inter = doc.taxMode === 'INTER';
   const t = doc.totals;
 
@@ -155,7 +176,7 @@ function buildHtml(doc: InvoiceDocument): string {
         <h1>TAX INVOICE</h1>
         <div class="kv"><b>No:</b> ${esc(doc.invoice.number)}</div>
         <div class="kv"><b>Date:</b> ${fmtDate(doc.invoice.issueDate)}</div>
-        <div class="kv muted">${esc(doc.invoice.status)}</div>
+        <div class="kv muted">${esc(invoiceStatusLabel(doc.invoice.status))}</div>
       </div>
     </div>
 
@@ -233,11 +254,14 @@ function buildHtml(doc: InvoiceDocument): string {
  * caller can tell the operator to allow pop-ups rather than leaving them staring at nothing.
  */
 export function openInvoicePrintWindow(doc: InvoiceDocument): void {
+  // The button is disabled for these; this is the backstop for any other caller.
+  const blocked = taxInvoicePrintBlockedReason(doc.invoice.status);
+  if (blocked) throw new Error(blocked);
   const win = window.open('', '_blank');
   if (!win) {
     throw new Error('Your browser blocked the invoice tab. Allow pop-ups for this site and try again.');
   }
   win.document.open();
-  win.document.write(buildHtml(doc));
+  win.document.write(buildInvoiceHtml(doc));
   win.document.close();
 }

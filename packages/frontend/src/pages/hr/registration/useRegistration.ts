@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { REGISTRATION_RECORD_FIELD_KEYS, businessDateKey, type SourceReferral } from '@fapoms/shared';
+import {
+  REGISTRATION_RECORD_FIELD_KEYS, REGISTRATION_SECRET_FIELD_KEYS, businessDateKey, looksMasked, type SourceReferral,
+} from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { fieldErrorKeys, userMessage } from '../../../services/errors';
 import { stringifyList } from '../AssayerForms';
@@ -83,6 +85,20 @@ export interface ApplicationView {
 }
 
 /**
+ * The form as it may be sent: a secret identity field still holding the saved mask, or emptied by
+ * Replace and left blank, keeps the saved value — so nothing is sent for it. Only a newly typed,
+ * unmasked number replaces what is on file.
+ */
+export function withSecretsKept(form: Record<string, string>, saved: Record<string, string>): Record<string, string> {
+  const out = { ...form };
+  for (const key of REGISTRATION_SECRET_FIELD_KEYS) {
+    const now = (out[key] ?? '').trim();
+    if (looksMasked(saved[key]) && (now === '' || looksMasked(now))) out[key] = saved[key];
+  }
+  return out;
+}
+
+/**
  * An application as the form's boxes.
  *
  * Two sources, one rule: a key on the registration allow-list lives under `extendedProfile.fields`;
@@ -93,10 +109,11 @@ export interface ApplicationView {
  * `+919876543210` sitting behind the `+91` the field itself prints, so the box reads
  * `+91 +919876543210` and any save normalises it into a different number.
  *
- * Identity numbers are NOT blanked here, and that is a real difference from the record page. An
- * application stores them as typed — the masking and the audited reveal belong to `assayers`,
- * where they are encrypted — so the desk sees what it entered and a resumed form round-trips. The
- * value is the same one the candidate's own form shows them.
+ * Identity numbers (PAN, Aadhaar, bank account) arrive as their last four — `••••••234F`. The
+ * application stores them sealed and every staff read masks them (`maskApplication` on the
+ * server), so the box would otherwise hold the mask. The wizard shows such a value read-only with
+ * a Replace action, and `withSecretsKept` below makes sure a mask, or the blank a Replace leaves
+ * before anything is typed, is never sent back as the number.
  */
 export function snapshotApplication(view: ApplicationView): Record<string, string> {
   const { application } = view;
@@ -179,6 +196,8 @@ export interface RegistrationState {
 }
 
 export interface Registration extends RegistrationState {
+  /** What the server last answered, as boxes — secret identity fields arrive masked. */
+  saved: Record<string, string>;
   set: (key: string, value: string) => void;
   merge: (values: Record<string, string>) => void;
   /**
@@ -300,7 +319,8 @@ export function useRegistration(applicationId: string): Registration {
    * one, nothing ever did.
    */
   const commit = useCallback(async (extras?: StaffExtras): Promise<boolean> => {
-    const { form: f, saved: s } = latest.current;
+    const { saved: s } = latest.current;
+    const f = withSecretsKept(latest.current.form, s);
     setBusy(true);
     clearError();
     try {
@@ -342,6 +362,8 @@ export function useRegistration(applicationId: string): Registration {
 
   return {
     form,
+    /** What the server last answered, as boxes — secret identity fields arrive masked. */
+    saved,
     application: view?.application ?? null,
     applicationId,
     documents: view?.documents ?? [],

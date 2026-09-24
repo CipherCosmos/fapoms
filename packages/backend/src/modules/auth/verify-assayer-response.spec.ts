@@ -1,17 +1,16 @@
 import { AuthController } from './auth.controller';
 
 /**
- * The pre-login check has to pass on what it worked out.
+ * The pre-login identifier check says the same thing about everybody.
  *
- * `verifyAssayerIdentifier` learned to distinguish "no such account" from "an account with no
- * password", because 540 sign-in-eligible assayers were imported from the roster and never sent an
- * invite. The controller then shaped a fixed object and dropped the flag, so the service did the
- * work and the app never saw it — the failure mode of a hand-shaped response, and invisible from
- * either side alone.
+ * It is unauthenticated. It used to answer with the person's name, their assayer code, and whether
+ * their account had ever been given a password — so walking codes or phone numbers through it
+ * produced a staff directory, annotated with which accounts were easiest to hijack. The login
+ * endpoint already refuses to tell a wrong password from a missing account; this route must not
+ * undo that.
  *
- * The shaping itself stays deliberate: this route is unauthenticated, so it returns existence and
- * a display name and nothing else. This test is what keeps the allow-list honest rather than
- * silently lossy.
+ * Field-app builds in circulation still call it after a failed sign-in and read only
+ * `needsAppAccess`; with the flag absent they show the ordinary credential message.
  */
 describe('the pre-login identifier check', () => {
   const controllerWith = (found: any) => {
@@ -20,44 +19,27 @@ describe('the pre-login identifier check', () => {
     return c;
   };
 
-  it('forwards needsAppAccess so the app can say access has not been issued', async () => {
-    const c = controllerWith({ displayName: 'Meera Iyer', assayerCode: 'AS-01', needsAppAccess: true });
+  const cases: Array<[string, any]> = [
+    ['a recognised account with a password', { displayName: 'Meera Iyer', assayerCode: 'AS-01' }],
+    ['a recognised account never given app access', { displayName: 'Meera Iyer', assayerCode: 'AS-01', needsAppAccess: true }],
+    ['an identifier nobody holds', null],
+  ];
 
-    const res: any = await c.verifyAssayer({ identifier: 'AS-01' });
-
-    expect(res).toEqual({
-      verified: true, displayName: 'Meera Iyer', assayerCode: 'AS-01', needsAppAccess: true,
-    });
+  it.each(cases)('answers identically for %s', async (_label, found) => {
+    const c = controllerWith(found);
+    const res = await c.verifyAssayer({ identifier: 'AS-01' });
+    expect(res).toEqual({ accepted: true });
   });
 
-  it('omits the flag entirely for an account that has a password', async () => {
-    // Absent rather than false: the app treats a missing flag as "nothing special about this
-    // account", and an explicit false would read as a claim the check did not make.
+  it('never names the person, echoes the code, or says whether they have a password', async () => {
+    const c = controllerWith({ displayName: 'Meera Iyer', assayerCode: 'AS-01', needsAppAccess: true, phone: '9999999999' });
+    const body = JSON.stringify(await c.verifyAssayer({ identifier: 'AS-01' }));
+    expect(body).not.toMatch(/Meera|AS-01|needsAppAccess|displayName|assayerCode|9999999999|verified/);
+  });
+
+  it('does not even look the identifier up, so timing cannot tell them apart either', async () => {
     const c = controllerWith({ displayName: 'Meera Iyer', assayerCode: 'AS-01' });
-
-    const res: any = await c.verifyAssayer({ identifier: 'AS-01' });
-
-    expect(res).toEqual({ verified: true, displayName: 'Meera Iyer', assayerCode: 'AS-01' });
-  });
-
-  it('still says nothing at all about an identifier it does not recognise', async () => {
-    const c = controllerWith(null);
-
-    const res: any = await c.verifyAssayer({ identifier: 'nobody' });
-
-    expect(res).toEqual({ verified: false });
-  });
-
-  it('never returns contact details or identifiers the caller did not supply', async () => {
-    // The route is unauthenticated. Whatever the service grows later, this response stays a
-    // deliberate allow-list rather than a spread of the row.
-    const c = controllerWith({
-      displayName: 'Meera Iyer', assayerCode: 'AS-01',
-      phone: '9999999999', email: 'meera@example.com', panNumber: 'ABCDE1234F', id: 'asr-1',
-    });
-
-    const res: any = await c.verifyAssayer({ identifier: 'AS-01' });
-
-    expect(Object.keys(res).sort()).toEqual(['assayerCode', 'displayName', 'verified']);
+    await c.verifyAssayer({ identifier: 'AS-01' });
+    expect(c.authService.verifyAssayerIdentifier).not.toHaveBeenCalled();
   });
 });

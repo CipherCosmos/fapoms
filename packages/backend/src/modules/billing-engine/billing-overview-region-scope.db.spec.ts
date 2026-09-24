@@ -468,6 +468,8 @@ describe('billing overview region scoping, reconciled against the real schema', 
         // pA1 is the only live, un-held PENDING payable in A, and no fixture payable is on an
         // assayer invoice, so all of `due` is still unbilled and nothing is in claim review.
         unbilled: 990, unbilledCount: 1, inClaimReview: 0, inClaimReviewCount: 0,
+        // The HOD's final approval (2026-09-24): the one approved payable has none yet.
+        awaitingHod: 1980, awaitingHodCount: 1,
       });
       expect(out.margin.cost).toBe(11000);            // 1100 + 2200 + 3300 + 4400
       expect(out.tax.tdsWithheldFromAssayers).toBe(1100);
@@ -845,7 +847,10 @@ describe('billing overview region scoping, reconciled against the real schema', 
       // The pre-fix query predates the unbilled / in-claim-review split, so it has nothing to say about
       // those two fields. Compare the seven it does compute, and hold the new ones to the identity that
       // defines them: every due payable is either not yet on an assayer invoice or already claimed on one.
-      const { unbilled, unbilledCount, inClaimReview, inClaimReviewCount, ...headline } = out.payouts;
+      const { unbilled, unbilledCount, inClaimReview, inClaimReviewCount, awaitingHod, awaitingHodCount, ...headline } = out.payouts;
+      // The HOD split (2026-09-24) is a part of `approved`, never more than it.
+      expect(awaitingHodCount!).toBeLessThanOrEqual(headline.approvedCount);
+      expect(awaitingHod!).toBeLessThanOrEqual(headline.approved);
       expect(headline).toEqual({
         due: r2(num(pay.due)), approved: r2(num(pay.approved)), paid: r2(num(pay.paid)), held: r2(num(pay.held)),
         dueCount: num(pay.due_count), approvedCount: num(pay.approved_count), heldCount: num(pay.held_count),
@@ -952,6 +957,7 @@ describe('billing overview region scoping, reconciled against the real schema', 
       expect(out.payouts).toEqual({
         due: 0, approved: 0, paid: 0, held: 0, dueCount: 0, approvedCount: 0, heldCount: 0,
         unbilled: 0, unbilledCount: 0, inClaimReview: 0, inClaimReviewCount: 0,
+        awaitingHod: 0, awaitingHodCount: 0,
       });
       expect(out.receivables).toEqual({
         unbilled: 0, invoiced: 0, collected: 0, outstanding: 0, held: 0,

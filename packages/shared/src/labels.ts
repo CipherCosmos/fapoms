@@ -131,6 +131,8 @@ export const PAYABLE_STATUS_LABELS: Record<AssayerPayableStatus, string> = {
 
 export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
   [InvoiceStatus.DRAFT]: 'Draft',
+  [InvoiceStatus.AWAITING_HOD]: 'Awaiting final approval',
+  [InvoiceStatus.HOD_APPROVED]: 'Approved, ready to send',
   [InvoiceStatus.ISSUED]: 'Sent',
   [InvoiceStatus.PAID]: 'Paid',
   [InvoiceStatus.CANCELLED]: 'Cancelled',

@@ -25,16 +25,25 @@
  *  - Tracking is advisory. A row write that fails is logged and the work carries on.
  */
 
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource } from 'typeorm';
+import { withAdvisoryLock } from '../queue/advisory-lock';
 import type { Job } from 'bull';
 import type { Readable } from 'stream';
 import type { BackgroundJobProgress, BackgroundJobResult } from '@fapoms/shared';
 import type { StorageEngine } from '../storage/storage-engine.interface';
 import { progressReporter, type ProgressCallback, type QueuedJobEnvelope } from '../queue/queued-job';
 import { BackgroundJobEntity } from './background-job.entity';
-import { BackgroundJobStore } from './background-job.store';
+import { BackgroundJobStore, HEARTBEAT_INTERVAL_MS } from './background-job.store';
 import { BackgroundJobsService } from './background-jobs.service';
 import { messageFor, PROGRESS_WRITE_INTERVAL_MS } from './background-job.runner';
+
+
+/** The advisory-lock key serialising tracked runs on one feature queue. */
+export const trackedQueueLockKey = (queue: string | null | undefined): string => `tracked-queue:${queue ?? '-'}`;
+/** The advisory-lock key a running tracked job holds, probed by the recovery sweep. */
+export const trackedJobLockKey = (id: string): string => `tracked-job:${id}`;
 
 /** What a tracked handler is handed. */
 export interface TrackedRun {
@@ -59,11 +68,15 @@ export interface TrackOptions<R> {
 @Injectable()
 export class BackgroundJobTracker {
   private readonly logger = new Logger(BackgroundJobTracker.name);
+  /** How often a run waiting for its queue's lock asks again. */
+  lockPollMs = 5_000;
 
   constructor(
     private readonly store: BackgroundJobStore,
     private readonly jobs: BackgroundJobsService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
+    /** For the one-run-per-queue advisory lock. Optional so specs can build the tracker by hand. */
+    @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
 
   async run<R>(
@@ -151,11 +164,14 @@ export class BackgroundJobTracker {
     };
 
     let result: R;
+    const heartbeat = this.startHeartbeat(claimed.id);
     try {
-      result = await work(tracked);
+      result = await this.serialized(claimed, () => work(tracked), tracked);
     } catch (err) {
       await this.settleFailure(claimed, bullJob, err, progress);
       throw err;
+    } finally {
+      clearInterval(heartbeat);
     }
 
     let summary: BackgroundJobResult;
@@ -177,6 +193,41 @@ export class BackgroundJobTracker {
       this.logger.warn(`Could not record the outcome of tracked job ${claimed.id}: ${(err as Error).message}`);
     }
     return result;
+  }
+
+  /**
+   * Run the handler holding two Postgres advisory locks: one for its QUEUE, so two tracked runs on
+   * one queue never overlap anywhere in the cluster, and one for this JOB, which the recovery sweep
+   * probes (`trackedJobLockKey`) before declaring a run dead.
+   *
+   * Why: Bull's `timeout` failed a job without stopping its handler, and a stalled job is
+   * redelivered while its first handler may still be running — both started a second write run
+   * beside the first. The timeouts are gone from the write queues; this is what makes "one at a
+   * time" true across replicas and redeliveries. A run that finds its queue busy waits, visibly.
+   */
+  private async serialized<R>(row: BackgroundJobEntity, work: () => Promise<R>, tracked: TrackedRun): Promise<R> {
+    if (!this.dataSource) return work();
+    const run = await withAdvisoryLock(
+      this.dataSource,
+      [trackedQueueLockKey(row.runnerQueue), trackedJobLockKey(row.id)],
+      work,
+      { wait: true, pollMs: this.lockPollMs, onWait: () => tracked.stage('Waiting for the previous run to finish') },
+    );
+    if (!run.acquired) throw new Error('Could not take the run lock.');
+    return run.result;
+  }
+
+  /**
+   * Touch the row while the handler runs, so "RUNNING and not updated for a minute" reliably means
+   * the worker is gone. A handler that reports no progress for minutes (one big transaction) used
+   * to look exactly like a dead one to the recovery sweep and to a stalled redelivery's claim.
+   */
+  private startHeartbeat(id: string): ReturnType<typeof setInterval> {
+    const timer = setInterval(() => {
+      void this.store.touch(id).catch(() => undefined);
+    }, HEARTBEAT_INTERVAL_MS);
+    (timer as any).unref?.();
+    return timer;
   }
 
   /**

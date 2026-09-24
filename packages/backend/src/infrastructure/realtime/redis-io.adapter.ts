@@ -4,6 +4,7 @@ import { ServerOptions } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis-client.module';
+import { realtimeHealth } from './realtime-health';
 
 /**
  * Socket.IO adapter backed by Redis pub/sub.
@@ -89,6 +90,7 @@ export class RedisIoAdapter extends IoAdapter {
       // Applies to the default namespace and every namespace created afterwards
       // (the gateway's `/events` namespace included).
       server.adapter(this.adapterConstructor);
+      realtimeHealth.crossProcessFanOut = true;
     }
     return server;
   }

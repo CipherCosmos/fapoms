@@ -141,7 +141,14 @@ export const DailyRunPanel: React.FC<{
    */
   canDispatch?: boolean;
   canSendToOcr?: boolean;
-}> = ({ projectId, onDispatch, onSendToOcr, onDownload, onError, onSuccess, canDispatch = true, canSendToOcr = true }) => {
+  /**
+   * Upload and download, by the same rule (document-actions.ts): the upload routes are ADMIN,
+   * OPERATIONS, DESK and the download token also DESK_OPERATOR — never AUDITOR or CLIENT_USER.
+   * Omitted: offered, as before.
+   */
+  canUpload?: boolean;
+  canDownload?: boolean;
+}> = ({ projectId, onDispatch, onSendToOcr, onDownload, onError, onSuccess, canDispatch = true, canSendToOcr = true, canUpload = true, canDownload = true }) => {
   const [auditDate, setAuditDate] = useState(tomorrowISO());
   const [run, setRun] = useState<DailyRun | null>(null);
   const [loading, setLoading] = useState(false);
@@ -299,7 +306,7 @@ export const DailyRunPanel: React.FC<{
                 Nothing can be generated until the client sends the customer master file for {auditDate}.
               </div>
             </div>
-            <FileUploadButton label="Upload client file" busy={importBusy} onFile={uploadBatch} />
+            {canUpload && <FileUploadButton label="Upload client file" busy={importBusy} onFile={uploadBatch} />}
           </div>
         )}
         {/* The upload, then the reconciliation while it runs — restored after a refresh. */}
@@ -370,7 +377,7 @@ export const DailyRunPanel: React.FC<{
             <div style={{ fontSize: 'var(--text-3xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
               Step 2 · {run.branches.length} branch{run.branches.length === 1 ? '' : 'es'} scheduled for this date
             </div>
-            {s && s.toGenerate > 0 && (
+            {canUpload && s && s.toGenerate > 0 && (
               <label style={{
                 marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '5px 12px', fontSize: 'var(--text-2xs)', fontWeight: 600,
@@ -453,7 +460,7 @@ export const DailyRunPanel: React.FC<{
                   }}>{meta.label}</span>
 
                   {/* Exactly one action, matching nextAction — no menu of mostly-invalid buttons. */}
-                  {b.nextAction === 'GENERATE_PDF' && (
+                  {b.nextAction === 'GENERATE_PDF' && canUpload && (
                     <FileUploadButton label="Upload packet" busy={busy} onFile={(f) => uploadPacket(b, f)} />
                   )}
                   {b.nextAction === 'DISPATCH' && b.pdf && canDispatch && (
@@ -473,7 +480,7 @@ export const DailyRunPanel: React.FC<{
                       <ArrowRightCircle size={11} /> {busy ? '…' : 'Send for scanning'}
                     </button>
                   )}
-                  {b.pdf && (
+                  {b.pdf && canDownload && (
                     <button onClick={() => onDownload(b.pdf!.id)} title={`Download paperwork file for ${b.branchName}`} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 'var(--text-2xs)' }}>
                       Download
                     </button>

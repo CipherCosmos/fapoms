@@ -35,7 +35,7 @@ import type { StorageEngine } from '../storage/storage-engine.interface';
 import { runAsJobActor } from '../queue/job-actor';
 import { BackgroundJobEntity } from './background-job.entity';
 import { BackgroundJobRegistry } from './background-job.registry';
-import { BackgroundJobStore, ExclusiveSlotBusyError } from './background-job.store';
+import { BackgroundJobStore, ExclusiveSlotBusyError, HEARTBEAT_INTERVAL_MS, RECLAIM_AFTER_MS } from './background-job.store';
 import { BackgroundJobsService, INTERRUPTED_MESSAGE } from './background-jobs.service';
 import {
   BackgroundJobCancelledError,
@@ -84,6 +84,12 @@ export class BackgroundJobRunner {
       return this.fail(row, `This server does not know how to run "${backgroundJobLabel(row.kind)}" jobs any more.`);
     }
 
+    // RUNNING and touched recently: its handler is alive elsewhere (a stalled-lock redelivery, not a
+    // dead worker). Neither re-run it nor fail it — the live run will settle the row.
+    if (row.status === 'RUNNING' && Date.now() - new Date(row.updatedAt).getTime() < RECLAIM_AFTER_MS) {
+      return 'skipped';
+    }
+
     if (row.status === 'RUNNING' && !definition.idempotent) {
       await this.fail(row, definition.interruptedMessage ?? INTERRUPTED_MESSAGE);
       return 'interrupted';
@@ -105,6 +111,9 @@ export class BackgroundJobRunner {
     this.jobs.publish(claimed);
 
     const context = this.contextFor(claimed);
+    // Heartbeat, so a long silent stretch of work is never mistaken for a dead worker.
+    const heartbeat = setInterval(() => { void this.store.touch(claimed.id).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS);
+    (heartbeat as any).unref?.();
     try {
       const outcome = await runAsJobActor(claimed.actor, () => definition.run(context.ctx));
       return await this.finish(claimed, outcome, context.lastProgress());
@@ -117,6 +126,8 @@ export class BackgroundJobRunner {
       }
       this.logger.error(`Background job ${claimed.id} (${claimed.kind}) failed: ${(err as Error)?.stack ?? err}`);
       return this.fail(claimed, messageFor(err), context.lastProgress());
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 

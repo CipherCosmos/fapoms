@@ -38,4 +38,10 @@ export class FeedbackAttachmentDto {
   /** Returned by the upload route and posted back verbatim; declared so they are not rejected. */
   @IsOptional() @IsString() @MaxLength(512) storageKey?: string;
   @IsOptional() @IsNumber() size?: number;
+  /**
+   * The upload route's proof that the caller uploaded this file (see `attachment-grant.ts`).
+   * Optional here only so a missing one reaches the service and gets a sentence a person can
+   * act on instead of a validator's; the service refuses every attachment without a valid one.
+   */
+  @IsOptional() @IsString() @MaxLength(200) uploadToken?: string;
 }

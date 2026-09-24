@@ -22,8 +22,21 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 import {
   EventCategory, DocumentStatus, DocumentType, DispatchMethod, businessTodayDateKey,
-  DOCUMENT_TRANSITIONS, canTransitionDocument, AssignmentStatus,
+  DOCUMENT_TRANSITIONS, canTransitionDocument, AssignmentStatus, SystemRole, expandRoles,
 } from '@fapoms/shared';
+
+/**
+ * The roles that work the data entry desk: the head (DESK) works packets too, alongside operators.
+ * One list, read by the delegation picker (`dataEntryTeam`) and by the check that refuses a
+ * delegation to anyone the picker would not have offered.
+ */
+const DATA_ENTRY_ROLES: readonly string[] = [SystemRole.DESK, SystemRole.DESK_OPERATOR];
+
+/**
+ * Who may hand a packet back on someone else's behalf: the desk head and the business owner
+ * (DEVELOPER reaches ADMIN through `expandRoles`). Everyone else hands back only their own.
+ */
+const DATA_ENTRY_HEAD_ROLES: readonly string[] = [SystemRole.DESK, SystemRole.ADMIN];
 
 /** Branch rows returned when the caller names no window. */
 const BRANCH_PAGE_DEFAULT = 25;
@@ -205,9 +218,9 @@ export class DocumentService {
       WHERE u.is_active = true
         -- Heads also work packets themselves, so they are valid assignees alongside
         -- validators — the desk's working members.
-        AND r.name IN ('DESK', 'DESK', 'DESK_OPERATOR')
+        AND r.name = ANY($1)
       ORDER BY name
-    `);
+    `, [[...DATA_ENTRY_ROLES]]);
   }
 
   /**
@@ -245,6 +258,27 @@ export class DocumentService {
         + 'so it cannot be delegated to data entry.',
       );
     }
+    /**
+     * The assignee must be someone the picker (`dataEntryTeam`) would have offered: an existing,
+     * active account holding a desk role. This took any string and wrote it onto the packet —
+     * a deactivated leaver, an assayer, a finance user, or an id that matches nobody — and the
+     * packet then sat "being worked" by a person who could never see it in their queue.
+     */
+    const [eligible] = await this.documentRepository.manager.query(
+      `SELECT u.id
+       FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.id = $1 AND u.is_active = true AND r.name = ANY($2)
+       LIMIT 1`,
+      [assigneeId, [...DATA_ENTRY_ROLES]],
+    );
+    if (!eligible) {
+      throw new BadRequestException(
+        'That person cannot be given this packet: only an active member of the data entry desk can be delegated work.',
+      );
+    }
+
     // Captured before the transition below, or the audit row would record the new status
     // as both the previous and the new one.
     const previousStatus = doc.status;
@@ -325,10 +359,20 @@ export class DocumentService {
    * validation case. Before this, nothing ever advanced a case past PENDING, so
    * the head's review queue and the data entry queue had no connection at all.
    */
-  async completeDataEntry(documentId: string, actorId: string): Promise<DocumentEntity> {
+  async completeDataEntry(documentId: string, actorId: string, actorRoles: readonly string[] = []): Promise<DocumentEntity> {
     const doc = await this.findOne(documentId);
     if (!doc.assignedToUserId) {
       throw new BadRequestException('This packet has not been delegated to anyone.');
+    }
+    /**
+     * A hand-back says "I did this work". Any desk operator could say it about a packet delegated
+     * to someone else — closing a colleague's work, and advancing the validation case, in their
+     * name. Only the assignee may; the head (or ADMIN) may close it on their behalf. Roles absent
+     * means no head override, never the reverse.
+     */
+    const isHead = expandRoles([...actorRoles]).some((r) => DATA_ENTRY_HEAD_ROLES.includes(r));
+    if (doc.assignedToUserId !== actorId && !isHead) {
+      throw new ForbiddenException('This packet is delegated to someone else. Only they, or the desk head, can hand it back.');
     }
     /**
      * A hand-back is a one-time act, not a status re-statement — unlike `updateStatus`, nothing
@@ -1486,7 +1530,23 @@ export class DocumentService {
      * bank branch's paperwork is exactly what "you are not assigned to the branch this document
      * belongs to" is meant to gate, so a called-off assignment must not count as one.
      */
-    const linked = await this.assignmentRepository
+    const linked = await this.countEngagedAssignmentsOnAssessmentBranch(assessment, assayerId);
+
+    if (linked === 0) {
+      throw new BadRequestException('You are not assigned to the branch this document belongs to.');
+    }
+  }
+
+  /**
+   * Engaged assignments this assayer holds on the project/branch an assessment belongs to — the
+   * ownership test behind both `assertAssayerMayDownload` and `assertAssayerMayReceive`, written
+   * once so the two cannot drift.
+   */
+  private async countEngagedAssignmentsOnAssessmentBranch(
+    assessment: { projectId: string; branchId: string },
+    assayerId: string,
+  ): Promise<number> {
+    return this.assignmentRepository
       .createQueryBuilder('a')
       .innerJoin('project_branches', 'pb', 'pb.id = a.project_branch_id')
       .where('a.assayer_id = :assayerId', { assayerId })
@@ -1498,9 +1558,25 @@ export class DocumentService {
       .andWhere('pb.project_id = :projectId', { projectId: assessment.projectId })
       .andWhere('pb.branch_id = :branchId', { branchId: assessment.branchId })
       .getCount();
+  }
 
+  /**
+   * `POST /documents/:id/receive` for a field assayer: only paperwork on a branch they hold an
+   * engaged assignment on. Unlike the download check, a document with no assessment is REFUSED —
+   * there is no branch to prove ownership against, and marking receipt is a write, so the absence
+   * of evidence is not permission.
+   */
+  async assertAssayerMayReceive(documentId: string, assayerId: string): Promise<void> {
+    const doc = await this.findOne(documentId);
+    const assessment = doc.assessmentId
+      ? await this.assessmentRepository.findOne({ where: { id: doc.assessmentId } }).catch(() => null)
+      : null;
+    if (!assessment || !assayerId) {
+      throw new ForbiddenException('You are not assigned to the branch this document belongs to.');
+    }
+    const linked = await this.countEngagedAssignmentsOnAssessmentBranch(assessment, assayerId);
     if (linked === 0) {
-      throw new BadRequestException('You are not assigned to the branch this document belongs to.');
+      throw new ForbiddenException('You are not assigned to the branch this document belongs to.');
     }
   }
 

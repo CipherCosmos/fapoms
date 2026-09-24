@@ -5,6 +5,7 @@ import { useClientContacts, useAddContact, useDeleteContact } from '../../hooks/
 import type { ClientContact } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { SkeletonList } from '../../components/ui/Loading';
+import { canDeleteClients, canManageClients, useCurrentRoles } from '../../hooks/useCurrentRoles';
 
 /** Digits only, then a `+91` unless the number already carries the country code. */
 const normalisePhone = (raw: string): string => {
@@ -50,6 +51,11 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   const { confirm, confirmDialog } = useConfirm();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', email: '', phone: '', designation: '', department: '', isPrimary: false });
+  // Mirrors client.controller.ts: adding a contact is ADMIN/OPERATIONS, removing one ADMIN alone,
+  // neither with a permission fallback — so each control shows only where its request is served.
+  const roles = useCurrentRoles();
+  const canAdd = canManageClients(roles);
+  const canRemove = canDeleteClients(roles);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,9 +108,11 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Contacts ({contacts.length})</span>
-        <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Plus size={12} /> Add
-        </button>
+        {canAdd && (
+          <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Plus size={12} /> Add
+          </button>
+        )}
       </div>
 
       {isLoading ? (
@@ -127,12 +135,14 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
                 <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><Phone size={11} /> {c.phone}</span>
               </div>
             </div>
-            <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 4 }} aria-label="Remove contact"><X size={14} /></button>
+            {canRemove && (
+              <button onClick={() => handleDelete(c)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 4 }} aria-label="Remove contact"><X size={14} /></button>
+            )}
           </div>
         ))
       )}
 
-      {showForm && (
+      {showForm && canAdd && (
         <Modal open onClose={() => setShowForm(false)} title="Add Contact" width="460px" asForm onSubmit={handleSubmit} footer={
           <>
             <button type="button" onClick={() => setShowForm(false)} className="btn btn-secondary">Cancel</button>

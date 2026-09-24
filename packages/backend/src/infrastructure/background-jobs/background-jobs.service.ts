@@ -716,7 +716,10 @@ export function isVisibleTo(
 ): boolean {
   if (row.requestedBy === reader.userId) return true;
   if (!isAdministrator(reader)) return false;
-  if (reader.organizationId && row.organizationId && reader.organizationId !== row.organizationId) return false;
+  // Same rule as the admin list's SQL (`organization_id = :org`): a reader who belongs to an
+  // organisation sees only that organisation's rows — a row with NO organisation included, which
+  // the list never showed but this gate used to open.
+  if (reader.organizationId && row.organizationId !== reader.organizationId) return false;
   if (reader.regions === null) return true;
   if (!row.regions || row.regions.length === 0) return false;
   return row.regions.every((r) => reader.regions!.includes(r));

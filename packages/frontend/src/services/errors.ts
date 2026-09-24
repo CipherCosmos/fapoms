@@ -329,11 +329,33 @@ const DOMAIN_ERROR_TRANSLATIONS: Partial<Record<ApiErrorCode, DomainErrorEntry>>
     requiresRefresh: true,
   },
   REASSIGN_AFTER_CHECK_IN: {
+    // The server names the assayer and the job; that sentence is the better one.
+    preferServerMessage: true,
     message: 'The assayer has already checked in at this branch, so the job can no longer be moved to someone else.',
     category: 'non-retryable',
     translationCategory: 'business_rule',
     title: 'Already Checked In',
     action: 'Cancel the job instead, then plan the branch again.',
+    requiresRefresh: true,
+  },
+  RESCHEDULE_NOT_ALLOWED: {
+    // The server names the job and why (checked in, or finished); that sentence is the better one.
+    preferServerMessage: true,
+    message: 'This job can no longer be moved to another date.',
+    category: 'non-retryable',
+    translationCategory: 'business_rule',
+    title: 'Cannot Reschedule',
+    action: 'Only an open offer or an accepted job nobody has checked in to can take a new date.',
+    requiresRefresh: true,
+  },
+  OFFER_ALREADY_WITH_ASSAYER: {
+    // The server names the assayer and the offer number, and says what to do instead.
+    preferServerMessage: true,
+    message: 'This branch is already offered to this assayer and is waiting for their answer. Nothing new was created.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Already Offered To Them',
+    action: 'If they agreed on the phone, use Call & Assign to record their acceptance on that offer.',
     requiresRefresh: true,
   },
   BRANCH_HAS_LIVE_OFFER: {

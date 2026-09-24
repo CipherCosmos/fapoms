@@ -87,6 +87,7 @@ describe('E2 — travel is charged once per assayer per day', () => {
         save: jest.fn(async (e: any) => { if (e?.previousAssayerId === undefined) saved.push({ ...e }); return e; }),
       };
       const svc: any = Object.create(AssignmentService.prototype);
+      svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
       svc.uow = { run: jest.fn(async (work: any) => work(manager, jest.fn())) };
       svc.assignmentRepository = { manager: { query: jest.fn(async () => []) }, findOne: jest.fn(async () => row) };
       svc.repriceForAssayer = jest.fn(async () => ({
@@ -158,6 +159,7 @@ describe('reassign is atomic with the desk\'s fee, date and confirmation', () =>
     };
     const emits: any[] = [];
     const svc: any = Object.create(AssignmentService.prototype);
+    svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
     svc.uow = { run: jest.fn(async (work: any) => work(manager, (ev: string, p: any) => emits.push({ ev, p }))) };
     svc.assignmentRepository = { manager: { query: jest.fn(async () => []) }, findOne: jest.fn(async () => ({ ...row, projectBranch: { ...row.projectBranch } })) };
     svc.repriceForAssayer = jest.fn(async () => ({
@@ -173,7 +175,7 @@ describe('reassign is atomic with the desk\'s fee, date and confirmation', () =>
     svc.ruleBypass = { isBypassed: jest.fn(async () => false), noteBypass: jest.fn() };
     svc.notificationDispatch = { emitSafe: jest.fn() };
     svc.projectService = { initiateBranchPlanning: jest.fn() };
-    svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })) };
+    svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
     svc.autoScheduleOnAcceptance = jest.fn(async () => ({ scheduleId: 'sch-1', scheduledDate: '2026-10-05' }));
     svc.dayTravel = { rebalanceMany: jest.fn(async () => undefined) };
     svc.documentService = { notifyAcceptedAssayerOfDispatchedPacket: jest.fn(async () => 0) };
@@ -259,6 +261,39 @@ describe('reassign is atomic with the desk\'s fee, date and confirmation', () =>
       'ops-1',
       expect.stringContaining('reassigned'),
     );
+  });
+
+  // ── B5 / B7 / B9 (2026-09-24) ──────────────────────────────────────────────────────────────
+  it('B5: checks the incoming assayer on the job\'s own day even when the date is not changing', async () => {
+    const { svc, raw } = make();
+    raw.constraintEvaluator.checkDateAvailability = jest.fn(async () => ({ passed: false, reason: 'Leave Conflict: 2026-10-05' }));
+    await expect(svc.reassignAssignment('asn-1', 'as-new', 'ops-1', 'r')).rejects.toThrow(/Leave Conflict/);
+    expect(raw.constraintEvaluator.checkDateAvailability).toHaveBeenCalledWith(expect.objectContaining({
+      assayerId: 'as-new', scheduledDate: new Date('2026-10-05'), excludeAssignmentId: 'asn-1',
+    }));
+    expect(raw.uow.run).not.toHaveBeenCalled();
+  });
+
+  it('B7: a plain reassignment publishes assignment:status-changed naming both assayers', async () => {
+    const { svc, emits } = make();
+    await svc.reassignAssignment('asn-1', 'as-new', 'ops-1', 'r');
+    const changed = emits.filter((e) => e.ev === 'assignment:status-changed');
+    expect(changed).toHaveLength(1);
+    expect(changed[0].p).toMatchObject({ assignmentId: 'asn-1', assayerId: 'as-new', oldAssayerId: 'as-old', newAssayerId: 'as-new' });
+    expect(emits.find((e) => e.ev === 'assignment:reassigned')!.p).toMatchObject({ oldAssayerId: 'as-old', newAssayerId: 'as-new', assayerId: 'as-new' });
+  });
+
+  it('B9: a skills gap is waived by the reassignment reason and recorded; the distance floor refuses', async () => {
+    const { svc, raw, audits } = make();
+    raw.constraintEvaluator.checkSkillsAndCertifications = jest.fn(() => ({ passed: false, rule: 'SKILLS_AND_CERTIFICATIONS', reason: 'Missing XRF certification.' }));
+    await svc.reassignAssignment('asn-1', 'as-new', 'ops-1', 'only certified-pending assayer nearby');
+    const reassigned = audits.find((a) => a.eventType === 'ASSIGNMENT_REASSIGNED');
+    expect(reassigned.metadata.overrides).toEqual([expect.objectContaining({ rule: 'SKILLS_AND_CERTIFICATIONS', overrideReason: 'only certified-pending assayer nearby' })]);
+
+    const second = make();
+    second.raw.constraintEvaluator.checkDistancePolicy = jest.fn(() => ({ passed: false, rule: 'DISTANCE_FLOOR', reason: 'Lives within 5 km of the branch.' }));
+    await expect(second.svc.reassignAssignment('asn-1', 'as-new', 'ops-1', 'r')).rejects.toThrow(/within 5 km/);
+    expect(second.raw.uow.run).not.toHaveBeenCalled();
   });
 });
 
@@ -363,6 +398,7 @@ describe('E9 — reassign until check-in, through the table', () => {
         save: jest.fn(),
       };
       const svc: any = Object.create(AssignmentService.prototype);
+      svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
       svc.uow = { run: jest.fn(async (work: any) => work(manager, jest.fn())) };
       svc.assignmentRepository = { manager: { query: jest.fn(async () => []) }, findOne: jest.fn(async () => null) };
       svc.assayerService = { findOne: jest.fn(async () => ({ id: 'as-new', status: AssayerStatus.ACTIVE, isActive: true })) };

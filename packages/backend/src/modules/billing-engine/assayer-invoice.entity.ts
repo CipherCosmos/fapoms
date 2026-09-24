@@ -12,7 +12,10 @@ import { AssayerInvoiceStatus } from '@fapoms/shared';
  * would be a second formula, which is the exact defect the one-calculator invariant exists to
  * prevent.
  *
- *   INVITED → SUBMITTED → APPROVED     (+ CANCELLED from either pre-approval state)
+ *   INVITED → SUBMITTED → APPROVED → HOD_APPROVED → PAID   (+ CANCELLED from either pre-approval state)
+ *
+ * APPROVED is the office's approval; HOD_APPROVED the HOD's final approval (2026-09-24), without
+ * which none of the bill's payouts can be paid. An HOD rejection sends it back to SUBMITTED.
  *
  * INVITED is ops saying "bill us for this work" — the assayer has seen nothing yet. SUBMITTED
  * is the assayer's confirmation of the on-screen figures (the reveal), idempotent by
@@ -67,6 +70,32 @@ export class AssayerInvoiceEntity extends BaseEntity {
 
   @Column({ name: 'approved_by', type: 'uuid', nullable: true })
   approvedBy: string | null;
+
+  /**
+   * The HOD's final approval (owner, 2026-09-24) — the second approval, after the office's, that
+   * money needs before it can move. Moves the bill
+   * APPROVED → HOD_APPROVED and stamps every line it approves with the same.
+   * Never backfilled: whatever was waiting at deploy waits for the HOD like everything after it.
+   */
+  @Column({ name: 'hod_approved_at', type: 'timestamptz', nullable: true })
+  hodApprovedAt: Date | null;
+
+  @Column({ name: 'hod_approved_by', type: 'uuid', nullable: true })
+  hodApprovedBy: string | null;
+
+  /**
+   * The last time the HOD sent it back to the office, by whom and why. Kept (not cleared by the
+   * office's next approval) so the HOD's second look sees what the first one said; every
+   * rejection is also a `billing_history` row.
+   */
+  @Column({ name: 'hod_rejected_at', type: 'timestamptz', nullable: true })
+  hodRejectedAt: Date | null;
+
+  @Column({ name: 'hod_rejected_by', type: 'uuid', nullable: true })
+  hodRejectedBy: string | null;
+
+  @Column({ name: 'hod_reject_reason', type: 'text', nullable: true })
+  hodRejectReason: string | null;
 
   @Column({ name: 'cancelled_at', type: 'timestamptz', nullable: true })
   cancelledAt: Date | null;

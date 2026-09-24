@@ -4,9 +4,9 @@ import {
   Copy, Check, Trash2, RefreshCw, Loader2, X,
 } from 'lucide-react';
 import * as mfa from '../../services/mfa';
-import type { MfaFactor, MfaStatus } from '../../services/mfa';
+import type { MfaFactor, MfaStatus, MfaStepUpProof } from '../../services/mfa';
 import { userMessage } from '../../services/errors';
-import { useToast, useConfirm, AlertBanner } from '../../components/ui';
+import { useToast, AlertBanner, Modal } from '../../components/ui';
 import { QrCode } from '../../components/QrCode';
 
 /** One card per factor. `phase` tracks where an in-progress enrolment has reached. */
@@ -41,6 +41,13 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: 'var(--text-base)', outline: 'none',
 };
 
+/**
+ * An action that weakens the account, waiting for the person to prove it is them. The server
+ * refuses both without the current password or a fresh authenticator code, so a session left open
+ * on a shared desk (or stolen) cannot switch 2FA off or mint itself new recovery codes.
+ */
+type StepUp = { kind: 'disable'; factor: MfaFactor } | { kind: 'regenerate' };
+
 /** Group a base32 setup key into 4-char blocks so it can be typed into an authenticator by hand. */
 function groupSecret(secret: string): string {
   return (secret.match(/.{1,4}/g) || [secret]).join(' ');
@@ -48,7 +55,6 @@ function groupSecret(secret: string): string {
 
 export const MfaPanel: React.FC = () => {
   const { toast } = useToast();
-  const { confirm, confirmDialog } = useConfirm();
 
   const [status, setStatus] = useState<MfaStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +63,10 @@ export const MfaPanel: React.FC = () => {
   const [flowError, setFlowError] = useState<string | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [copied, setCopied] = useState(false);
+  const [stepUp, setStepUp] = useState<StepUp | null>(null);
+  const [proof, setProof] = useState<MfaStepUpProof>({});
+  const [stepUpBusy, setStepUpBusy] = useState(false);
+  const [stepUpError, setStepUpError] = useState<string | null>(null);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -133,37 +143,34 @@ export const MfaPanel: React.FC = () => {
     }
   };
 
-  const removeFactor = async (factor: MfaFactor) => {
-    const ok = await confirm({
-      title: `Turn off ${FACTOR_META[factor].label}?`,
-      message: 'You will no longer be asked for this factor when you sign in. If it is your only factor, your account goes back to password-only.',
-      confirmLabel: 'Turn off',
-      reversible: false,
-      tone: 'danger',
-    });
-    if (!ok) return;
-    try {
-      await mfa.disableMfa(factor);
-      await refresh();
-      toast({ type: 'success', message: `${FACTOR_META[factor].label} turned off.` });
-    } catch (e) {
-      toast({ type: 'error', title: 'Could not turn it off', message: userMessage(e) });
-    }
+  const openStepUp = (next: StepUp) => {
+    setProof({}); setStepUpError(null); setStepUpBusy(false); setStepUp(next);
   };
+  const closeStepUp = () => { setStepUp(null); setProof({}); setStepUpError(null); setStepUpBusy(false); };
 
-  const regenerate = async () => {
-    const ok = await confirm({
-      title: 'Generate new recovery codes?',
-      message: 'Your current recovery codes stop working immediately. Save the new ones somewhere safe.',
-      confirmLabel: 'Generate new codes',
-      reversible: false,
-    });
-    if (!ok) return;
+  const removeFactor = (factor: MfaFactor) => openStepUp({ kind: 'disable', factor });
+  const regenerate = () => openStepUp({ kind: 'regenerate' });
+
+  const hasProof = !!proof.currentPassword || (proof.code ?? '').trim().length >= 6;
+
+  /** Run the waiting action with the proof typed in. A wrong answer keeps the dialog open to retry. */
+  const submitStepUp = async () => {
+    if (!stepUp || !hasProof) return;
+    setStepUpBusy(true); setStepUpError(null);
     try {
-      const { recoveryCodes: codes } = await mfa.regenerateRecoveryCodes();
-      setRecoveryCodes(codes);
+      if (stepUp.kind === 'disable') {
+        await mfa.disableMfa(stepUp.factor, proof);
+        closeStepUp();
+        await refresh();
+        toast({ type: 'success', message: `${FACTOR_META[stepUp.factor].label} turned off.` });
+      } else {
+        const { recoveryCodes: codes } = await mfa.regenerateRecoveryCodes(proof);
+        closeStepUp();
+        setRecoveryCodes(codes);
+      }
     } catch (e) {
-      toast({ type: 'error', title: 'Could not regenerate codes', message: userMessage(e) });
+      setStepUpError(userMessage(e));
+      setStepUpBusy(false);
     }
   };
 
@@ -398,7 +405,65 @@ export const MfaPanel: React.FC = () => {
         </div>
       )}
 
-      {confirmDialog}
+      <Modal
+        open={!!stepUp}
+        onClose={closeStepUp}
+        width={440}
+        asForm
+        onSubmit={(e) => { e.preventDefault(); void submitStepUp(); }}
+        title={stepUp?.kind === 'disable'
+          ? `Turn off ${FACTOR_META[stepUp.factor].label}?`
+          : 'Generate new recovery codes?'}
+        footer={
+          <>
+            <button type="button" className="btn btn-secondary" onClick={closeStepUp}>Cancel</button>
+            <button
+              type="submit" className="btn btn-primary" disabled={!hasProof || stepUpBusy}
+              style={stepUp?.kind === 'disable'
+                ? { background: 'var(--danger)', borderColor: 'var(--danger)', opacity: hasProof ? 1 : 0.5, gap: 8 }
+                : { opacity: hasProof ? 1 : 0.5, gap: 8 }}
+            >
+              {stepUpBusy && <Loader2 size={15} className="spin" />}
+              {stepUp?.kind === 'disable' ? 'Turn off' : 'Generate new codes'}
+            </button>
+          </>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <p style={{ fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--text-secondary)', margin: 0 }}>
+            {stepUp?.kind === 'disable'
+              ? 'You will no longer be asked for this factor when you sign in. If it is your only factor, your account goes back to password-only.'
+              : 'Your current recovery codes stop working immediately. Save the new ones somewhere safe.'}
+          </p>
+          <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--danger)', margin: 0 }}>This cannot be undone.</p>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)', margin: 0 }}>
+            To confirm it is you, enter your current password{active('TOTP') ? ' or a code from your authenticator app' : ''}.
+          </p>
+          {stepUpError && <AlertBanner type="error" message={stepUpError} />}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label htmlFor="mfa-stepup-password" style={labelStyle}>CURRENT PASSWORD</label>
+            <input
+              id="mfa-stepup-password" type="password" autoComplete="current-password" autoFocus
+              value={proof.currentPassword ?? ''}
+              title="Type the password you sign in with"
+              onChange={(e) => setProof({ ...proof, currentPassword: e.target.value })}
+              style={inputStyle}
+            />
+          </div>
+          {active('TOTP') && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 240 }}>
+              <label htmlFor="mfa-stepup-code" style={labelStyle}>OR AUTHENTICATOR CODE</label>
+              <input
+                id="mfa-stepup-code" inputMode="numeric" autoComplete="one-time-code" placeholder="000000" maxLength={8}
+                value={proof.code ?? ''}
+                title="Type the 6-digit code your authenticator app shows now"
+                onChange={(e) => setProof({ ...proof, code: e.target.value })}
+                style={{ ...inputStyle, letterSpacing: 4, textAlign: 'center' }}
+              />
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };

@@ -8,7 +8,7 @@ import type { BackgroundJobKind, BackgroundJobStatus } from '@fapoms/shared';
 import { getRequestContext } from '../../core/context/request-context';
 import { BackgroundJobEntity } from './background-job.entity';
 import { BackgroundJobRegistry } from './background-job.registry';
-import { ExclusiveSlotBusyError, type JobListFilter, OPEN_STATUSES } from './background-job.store';
+import { ExclusiveSlotBusyError, type JobListFilter, OPEN_STATUSES, RECLAIM_AFTER_MS } from './background-job.store';
 import { BackgroundJobsService, INTERRUPTED_MESSAGE, isVisibleTo, type JobReader } from './background-jobs.service';
 import { BackgroundJobRunner, CANCEL_CHECK_INTERVAL_MS, exclusiveKeyFor, messageFor } from './background-job.runner';
 import { BackgroundJobRecovery, MAX_ATTEMPTS } from './background-jobs.recovery';
@@ -61,33 +61,37 @@ class FakeStore {
     return { job: this.clone(row)!, inserted: true };
   }
 
-  async setBullJobId(id: string, bullJobId: string) { this.touch(id, { bullJobId }); }
+  async setBullJobId(id: string, bullJobId: string) { this.set(id, { bullJobId }); }
 
   async claim(id: string, exclusiveKey: string | null) {
     const row = this.rows.get(id);
     if (!row || !['QUEUED', 'RUNNING'].includes(row.status)) return null;
+    // As the real statement: a RUNNING row is re-claimed only once it has gone stale.
+    if (row.status === 'RUNNING' && row.updatedAt.getTime() >= Date.now() - RECLAIM_AFTER_MS) return null;
     if (exclusiveKey && [...this.rows.values()].some((r) => r.id !== id && r.status === 'RUNNING' && r.exclusiveKey === exclusiveKey)) {
       throw new ExclusiveSlotBusyError();
     }
-    this.touch(id, { status: 'RUNNING', exclusiveKey, attempts: row.attempts + 1, startedAt: row.startedAt ?? new Date(), error: null });
+    this.set(id, { status: 'RUNNING', exclusiveKey, attempts: row.attempts + 1, startedAt: row.startedAt ?? new Date(), error: null });
     return this.findById(id);
   }
 
   async transition(id: string, from: BackgroundJobStatus[], patch: Partial<BackgroundJobEntity>) {
     const row = this.rows.get(id);
     if (!row || !from.includes(row.status)) return null;
-    this.touch(id, patch);
+    this.set(id, patch);
     return this.findById(id);
   }
 
   async writeProgress(id: string, progress: any) {
     const row = this.rows.get(id);
     if (!row || row.status !== 'RUNNING') return false;
-    this.touch(id, { progress });
+    this.set(id, { progress });
     return true;
   }
 
-  async patch(id: string, patch: Partial<BackgroundJobEntity>) { this.touch(id, patch); }
+  async patch(id: string, patch: Partial<BackgroundJobEntity>) { this.set(id, patch); }
+
+  async touch(id: string) { if (this.rows.get(id)?.status === 'RUNNING') this.set(id, {}); }
 
   async requestCancel(id: string, by: string) {
     return this.transition(id, ['RUNNING'], { cancelRequestedAt: new Date(), cancelRequestedBy: by });
@@ -122,7 +126,7 @@ class FakeStore {
     row.updatedAt = new Date(Date.now() - ms);
   }
 
-  private touch(id: string, patch: Partial<BackgroundJobEntity>) {
+  private set(id: string, patch: Partial<BackgroundJobEntity>) {
     const row = this.rows.get(id);
     if (!row) return;
     Object.assign(row, patch, { updatedAt: new Date() });
@@ -225,6 +229,7 @@ describe('an interrupted non-idempotent kind', () => {
     const b = (await service.create({ kind: FAKE, actor: actor(), regions: null, file: file('b') })).job;
     await store.claim(a.id, null);
     await store.claim(b.id, null);
+    store.age(a.id, RECLAIM_AFTER_MS + 1_000); // and its worker died — nothing has touched it since
 
     // A redelivered (stalled) Bull job finds its row RUNNING.
     await work(a.id);
@@ -706,6 +711,7 @@ describe('after a worker dies', () => {
       registry.register(define({ idempotent: false, run }));
       const { job } = await service.create({ kind: FAKE, actor: actor(), regions: null, file: file() });
       await store.claim(job.id, null); // the first worker got this far, then died
+      store.age(job.id, RECLAIM_AFTER_MS + 1_000);
 
       expect(await work(job.id)).toBe('interrupted');
       expect(run).not.toHaveBeenCalled();
@@ -718,11 +724,28 @@ describe('after a worker dies', () => {
       registry.register(define({ idempotent: true, run: async (ctx) => { stages.push(ctx.job.progress.stage); return succeed({ summary: 'ok' }); } }));
       const { job } = await service.create({ kind: FAKE, actor: actor(), regions: null, file: file() });
       await store.claim(job.id, null);
+      store.age(job.id, RECLAIM_AFTER_MS + 1_000);
 
       expect(await work(job.id)).toBe('SUCCEEDED');
       expect(store.rows.get(job.id)!.attempts).toBe(2);
       expect(stages).toEqual(['Restarting after an interruption']);
     });
+
+    it.each([false, true])(
+      'a RUNNING row still being worked (idempotent=%s) is neither failed nor run a second time',
+      async (idempotent) => {
+        // A stalled-LOCK redelivery: Bull thinks the job died, but its handler is alive and the row
+        // was touched moments ago. Running it again is two runs side by side.
+        const run = jest.fn(async () => succeed({ summary: 'ran' }));
+        registry.register(define({ idempotent, run }));
+        const { job } = await service.create({ kind: FAKE, actor: actor(), regions: null, file: file() });
+        await store.claim(job.id, null);
+
+        expect(await work(job.id)).toBe('skipped');
+        expect(run).not.toHaveBeenCalled();
+        expect(store.rows.get(job.id)!.status).toBe('RUNNING');
+      },
+    );
   });
 
   describe('the recovery sweep (Bull has lost the job)', () => {

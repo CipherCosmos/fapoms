@@ -8,6 +8,7 @@ import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from './infrastructure/redis/redis-client.module';
 import { realtimeHealth } from './infrastructure/realtime/realtime-health';
 import { probeDatabase } from './health-probe';
+import { messagingStatus, readChannelHealth } from './modules/notifications/messaging-health';
 
 /**
  * Unauthenticated liveness/readiness checks.
@@ -64,7 +65,22 @@ export class HealthController {
     // unreachable Redis reports down.
     const realtime = this.realtimeStatus();
     const ready = database === 'up' && redis !== 'down' && realtime !== 'degraded';
-    return { status: ready ? 'ok' : 'degraded', database, redis, realtime };
+    /*
+      Reported, but deliberately NOT part of `ready`: a mail server refusing our password is not a
+      reason to pull every API replica out of rotation — that would turn an email outage into a
+      full outage. It is here so a probe or dashboard reading this body sees it.
+    */
+    const messaging = database === 'up' ? await this.messagingStatus() : 'unknown';
+    return { status: ready ? 'ok' : 'degraded', database, redis, realtime, messaging };
+  }
+
+  /** `degraded` when some channel has failures in the last half hour and no send at all. */
+  private async messagingStatus(): Promise<'ok' | 'degraded' | 'unknown'> {
+    try {
+      return messagingStatus(await readChannelHealth((sql, params) => this.dataSource.query(sql, params)));
+    } catch {
+      return 'unknown';
+    }
   }
 
   /**

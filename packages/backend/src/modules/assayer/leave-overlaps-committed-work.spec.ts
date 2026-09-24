@@ -36,15 +36,32 @@ describe('leave may not cover accepted work', () => {
     expect(svc.assayerRepository.save).not.toHaveBeenCalled();
   });
 
-  it('lets STAFF record the same overlapping leave — they reassign the work afterwards', async () => {
+  it('lets STAFF record the same overlapping leave — never refused on the leave', async () => {
     const svc = build(thursday);
-    // The staff path never asks the diary; it goes on to the ordinary save.
-    await svc
+    const err = await svc
       .update(ASSAYER, { leaves: [{ startDate: '2026-09-30', endDate: '2026-10-02' }] } as any, 'hr-1', { selfEdit: false })
-      .catch(() => undefined);
-    expect(svc.dataSource.query).not.toHaveBeenCalled();
+      .catch((e: any) => e);
+    // Whatever else this minimal harness trips on, it is not the leave rule.
+    expect(err?.code ?? err?.getResponse?.()?.code).not.toBe(ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK);
+  });
+
+  /** B12 (2026-09-24): HR is told which accepted jobs the leave covers — a warning, not a refusal. */
+  it('warns STAFF, listing the accepted jobs the new leave covers', async () => {
+    const svc = build(thursday);
+    const warning = await svc.leaveOverCommittedWorkWarning(ASSAYER, [], [{ startDate: '2026-09-30', endDate: '2026-10-02' }]);
+    expect(warning).toMatchObject({
+      code: ASSAYER_ERROR_CODES.LEAVE_OVERLAPS_ASSIGNED_WORK,
+      assignments: [{ assignmentNumber: 'ASN-0042', day: '2026-10-01', branchName: 'Thrissur Main' }],
+    });
+    expect(warning.message).toMatch(/Leave saved, but it covers work .*01 Oct 2026 at Thrissur Main \(ASN-0042\)/);
+    expect(await build(thursday).leaveOverCommittedWorkWarning(ASSAYER, [], [{ startDate: '2026-10-05', endDate: '2026-10-06' }])).toBeNull();
+  });
+
+  it('the staff update carries the warning on its response', async () => {
+    const svc = build(thursday);
+    svc.leaveOverCommittedWorkWarning = jest.fn(async () => ({ code: 'X', message: 'm', assignments: [] }));
     await svc.update(ASSAYER, { leaves: [{ startDate: '2026-09-30', endDate: '2026-10-02' }] } as any, 'hr-1').catch(() => undefined);
-    expect(svc.dataSource.query).not.toHaveBeenCalled();
+    expect(svc.leaveOverCommittedWorkWarning).toHaveBeenCalledWith(ASSAYER, [], [{ startDate: '2026-09-30', endDate: '2026-10-02' }]);
   });
 
   it('the controller marks an assayer principal as a self-edit and staff as not', async () => {

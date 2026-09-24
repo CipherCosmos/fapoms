@@ -302,7 +302,8 @@ describe('Phase 0.1 Financial Durability — End-to-End Boundary & Idempotency V
           provide: PlatformSettingsService,
           useValue: {
             get: jest.fn(),
-            getNumber: jest.fn(async (_k, fallback) => fallback),
+            // s.194J threshold 0: the pre-threshold behaviour these tests were written against.
+            getNumber: jest.fn(async (k: string, fallback: number) => (k === 'billing.tds194jThresholdRupees' ? 0 : fallback)),
             getMany: jest.fn(async () => ({})),
           },
         },

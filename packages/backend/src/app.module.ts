@@ -41,7 +41,6 @@ import { GeoModule } from './modules/geo/geo.module';
 import { SearchModule } from './modules/search/search.module';
 import { CustomerMasterModule } from './modules/customer-master/customer-master.module';
 import { ValidationQueryModule } from './modules/validation-query/validation-query.module';
-import { QueueModule } from './infrastructure/queue/queue.module';
 import { SlaScannerModule } from './infrastructure/scheduler/sla-scanner.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { BillingEngineModule } from './modules/billing-engine/billing-engine.module';
@@ -250,7 +249,6 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
     AssayerRemarksModule,
 
     // Background job queue
-    QueueModule,
     // Uploads and other work that outlives its request: stored, queued, tracked on a row, and
     // restored by every screen from the server (`/jobs`, the Jobs tray).
     BackgroundJobsModule,

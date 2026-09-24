@@ -153,7 +153,7 @@ export class SmsProvider implements OnModuleInit {
     } catch (err: any) {
       // An adapter is written not to throw; this is the belt to that promise, and it names no text.
       this.logger.warn(`${transport.name} SMS send failed unexpectedly: ${err?.message ?? 'unknown error'}.`);
-      return { success: false, error: 'The SMS gateway could not be reached.' };
+      return { success: false, error: 'The SMS gateway could not be reached.', transportFault: true };
     }
   }
 

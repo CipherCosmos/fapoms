@@ -37,6 +37,13 @@ import { SMS_TEMPLATE_REGISTRY } from '../../infrastructure/notifications/sms-te
 const RAW_TOKEN = 'a'.repeat(64);
 /** What the service stores for RAW_TOKEN — sha256 hex, the same `hashCode` the MFA codes use. */
 const TOKEN_HASH = require('crypto').createHash('sha256').update(RAW_TOKEN).digest('hex');
+/**
+ * A session key a successful code minted for this browser — see REGISTRATION_SESSION_HEADER. Only
+ * its hash is kept, beside the token's; `unlocked()` seeds the cache as `verifyOtp` would.
+ */
+const SESSION_KEY = 'k'.repeat(43);
+const SESSION_CACHE_KEY = `regotp:session:${TOKEN_HASH}:${require('crypto').createHash('sha256').update(SESSION_KEY).digest('hex')}`;
+const unlocked = (extra: Record<string, any> = {}) => ({ [SESSION_CACHE_KEY]: { channel: 'SMS', at: 0 }, ...extra });
 
 type Row = Record<string, any>;
 
@@ -334,16 +341,41 @@ describe('the registration link after the form is submitted', () => {
     },
   );
 
-  it('still gives the candidate their whole form while it is theirs to fill in', async () => {
-    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT) });
-    const view = await service.hydrate(RAW_TOKEN);
+  it('still gives the candidate their whole form while it is theirs to fill in — once they have proven the code', async () => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT), cache: unlocked() });
+    const view = await service.hydrate(RAW_TOKEN, SESSION_KEY);
     expect(JSON.stringify(view)).toContain('ABCDE1234F');
+    expect(view).toMatchObject({ sessionVerified: true, sensitiveLocked: false });
+  });
+
+  /**
+   * THE LINK ALONE IS NOT ENOUGH. A link leaks — browser history, a forwarded message, a proxy log.
+   * Before this browser proves the contact with a code, the saved identity numbers and scans stay
+   * out, and the page is told what is on file so it can ask for the code.
+   */
+  it.each([
+    ['no session key', undefined],
+    ['a made-up session key', 'z'.repeat(43)],
+  ])('withholds identity numbers and scans from a link with %s', async (_label, key) => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT), cache: unlocked() });
+    const view = await service.hydrate(RAW_TOKEN, key as any);
+    const text = JSON.stringify(view);
+    for (const secret of ['ABCDE1234F', '234567890124', '50100123456789', 'uploads/1-pan.jpg']) {
+      expect(text).not.toContain(secret);
+    }
+    expect(view).toMatchObject({ sessionVerified: false, sensitiveLocked: true });
+    expect(view.sensitiveOnFile.fields).toEqual(expect.arrayContaining(['panNumber']));
+  });
+
+  it('refuses a saved scan through the link until the code has been proven', async () => {
+    const { service } = makeService({ application: withProfile(ApplicationStatus.DRAFT) });
+    await expect(service.documentFileKeyForToken(RAW_TOKEN, 'PHOTOGRAPH' as any, 0)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   /** Sent back for more information, it is the candidate's form again. */
   it('gives the form back when HR asks for more information', async () => {
-    const { service } = makeService({ application: withProfile(ApplicationStatus.AWAITING_INFO) });
-    const view = await service.hydrate(RAW_TOKEN);
+    const { service } = makeService({ application: withProfile(ApplicationStatus.AWAITING_INFO), cache: unlocked() });
+    const view = await service.hydrate(RAW_TOKEN, SESSION_KEY);
     expect(JSON.stringify(view)).toContain('ABCDE1234F');
   });
 
@@ -680,7 +712,7 @@ describe('pre-account OTP', () => {
       });
       // The texted code is the one the cache holds for this phone — verifying with it works.
       const code = ctx.phone.receive.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
-      await expect(ctx.service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
+      await expect(ctx.service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toMatchObject({ channel: 'SMS' });
     });
 
     /** A gateway that refuses one text must not strand the candidate when their mailbox works. */
@@ -796,8 +828,8 @@ describe('pre-account OTP', () => {
     await expect(service.verifyOtp(RAW_TOKEN, '9822014455', '000000')).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.verifyOtp(RAW_TOKEN, '9999999999', code)).rejects.toBeInstanceOf(BadRequestException);
 
-    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
-    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455' });
+    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toMatchObject({ channel: 'EMAIL' });
+    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455', channel: 'EMAIL' });
   });
 
   it('caps how many codes one phone number may receive across tokens to prevent SMS bombing', async () => {
@@ -836,9 +868,15 @@ describe('pre-account OTP', () => {
     const code = mailbox.send.mock.calls[0][0].text.match(/\b(\d{6})\b/)![1];
 
     // Verification succeeds
-    await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).resolves.toBeUndefined();
+    const result = await service.verifyOtp(RAW_TOKEN, '9822014455', code);
+    expect(result).toMatchObject({ channel: 'EMAIL', sessionExpiresInSeconds: expect.any(Number) });
+    expect(result.sessionKey.length).toBeGreaterThanOrEqual(32);
     expect(cacheData[`regotp:code:${TOKEN_HASH}`]).toBeUndefined();
-    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455' });
+    expect(cacheData[`regotp:verified:${TOKEN_HASH}`]).toEqual({ phone: '9822014455', channel: 'EMAIL' });
+    // Only the key's hash is stored; the key itself unlocks this browser's saved answers.
+    expect(JSON.stringify(cacheData)).not.toContain(result.sessionKey);
+    const view = await service.hydrate(RAW_TOKEN, result.sessionKey);
+    expect(view.sessionVerified).toBe(true);
 
     // Attempting to reuse the exact same code again fails immediately
     await expect(service.verifyOtp(RAW_TOKEN, '9822014455', code)).rejects.toThrow(/That code has expired or has not been requested/i);
@@ -1088,6 +1126,25 @@ describe('submitting', () => {
         }),
       }),
     );
+  });
+
+  it('keys the HR notice per submission, so a resubmission after an ask notifies again', async () => {
+    const first = makeService({ application: ready(), cache: verified() });
+    await first.service.submit(RAW_TOKEN);
+    const firstKey = (first.notificationDispatch!.emitSafe.mock.calls as any[])
+      .find((c: any[]) => c[0].type === 'ASSAYER_APPLICATION_SUBMITTED')![0].dedupeKey;
+
+    const again = makeService({
+      application: ready({ status: ApplicationStatus.AWAITING_INFO, reviewedAt: new Date('2026-09-20T10:00:00Z') }),
+      cache: verified(),
+    });
+    await again.service.submit(RAW_TOKEN);
+    const againKey = (again.notificationDispatch!.emitSafe.mock.calls as any[])
+      .find((c: any[]) => c[0].type === 'ASSAYER_APPLICATION_SUBMITTED')![0].dedupeKey;
+
+    expect(firstKey).toMatch(/:first$/);
+    expect(againKey).toContain('2026-09-20T10:00:00.000Z');
+    expect(againKey).not.toBe(firstKey);
   });
 
   it('queues a confirmation email to the candidate when email is present', async () => {
@@ -1971,11 +2028,24 @@ describe('the application carries the whole person', () => {
  * — for the first critical field there is.
  */
 describe('the candidate owns their own phone number', () => {
-  const withPending = (phone: string, code: string) => ({
+  const withPending = (phone: string, code: string, channel: 'SMS' | 'EMAIL' = 'SMS') => ({
     [`regotp:code:${TOKEN_HASH}`]: {
       hash: require('crypto').createHash('sha256').update(code).digest('hex'),
       phone,
+      channel,
     },
+  });
+
+  /**
+   * An EMAILED code proves the mailbox, not the number typed beside it — so HR's number is not
+   * replaced by it "as verified", and the audit line says the mobile is unproven.
+   */
+  it('does not overwrite the number on file when the code went by email', async () => {
+    const ctx = makeService({ cache: withPending('9812345678', '123456', 'EMAIL') });
+    const result = await ctx.service.verifyOtp(RAW_TOKEN, '9812345678', '123456');
+    expect(result.channel).toBe('EMAIL');
+    expect(ctx.application!.mobile).toBe('9822014455');
+    expect(ctx.auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'REGISTRATION_EMAIL_VERIFIED' }));
   });
 
   it('writes the confirmed number onto the application', async () => {
@@ -2008,9 +2078,9 @@ describe('the candidate owns their own phone number', () => {
     expect(ctx.application!.mobile).toBe('9822014455');
   });
 
-  it('lets them correct it before verifying, too', async () => {
-    const ctx = makeService();
-    await ctx.service.updateDraft(RAW_TOKEN, { mobile: '9800000001' } as never);
+  it('lets them correct it before verifying, too (a browser that has unlocked the link)', async () => {
+    const ctx = makeService({ cache: unlocked() });
+    await ctx.service.updateDraft(RAW_TOKEN, { mobile: '9800000001' } as never, SESSION_KEY);
     expect(ctx.applications.save.mock.calls.at(-1)![0].mobile).toBe('9800000001');
   });
 
@@ -2031,9 +2101,9 @@ describe('the candidate owns their own phone number', () => {
   });
 
   it('rejects updateDraft when mobile is changed to a conflicting number', async () => {
-    const ctx = makeService();
+    const ctx = makeService({ cache: unlocked() });
     ctx.assayers.findOne.mockResolvedValueOnce({ assayerCode: 'AS002', displayName: 'Another Assayer' } as never);
-    await expect(ctx.service.updateDraft(RAW_TOKEN, { mobile: '9899999999' } as never)).rejects.toThrow(
+    await expect(ctx.service.updateDraft(RAW_TOKEN, { mobile: '9899999999' } as never, SESSION_KEY)).rejects.toThrow(
       /already in use by somebody on our roster/i,
     );
   });
@@ -2678,9 +2748,17 @@ describe('the desk filling in an application', () => {
 
     expect(saved.fullName).toBe('Ramesh Kulkarni');
     expect(saved.city).toBe('Pune');
-    expect((saved.extendedProfile as any).fields).toMatchObject({
-      panNumber: 'ABCDE1234F', bankName: 'State Bank',
-    });
+    // Answered with the same masked view GET /hr/applications/:id gives — never the number, and
+    // never the sealed ciphertext ("enc:v1:…") that used to land in the PAN box.
+    const fields = (saved.extendedProfile as any).fields;
+    expect(fields).toMatchObject({ bankName: 'State Bank' });
+    expect(fields.panNumber).toMatch(/234F$/);
+    expect(fields.panNumber).not.toContain('ABCDE1234F');
+    expect(fields.panNumber.startsWith('enc:')).toBe(false);
+    expect(saved).not.toHaveProperty('tokenHash');
+    // …while what went to the database is the real value, not the mask the desk was shown.
+    const stored = ctx.applications.save.mock.calls.at(-1)![0];
+    expect((stored.extendedProfile as any).fields.panNumber).not.toMatch(/^\*/);
   });
 
   it('refuses a field registration may not set, rather than storing it quietly', async () => {
@@ -2690,7 +2768,7 @@ describe('the desk filling in an application', () => {
     const saved = await ctx.service.updateStaffDraft('app-1', {
       record: { panNumber: 'ABCDE1234F', lifecycleStatus: 'ACTIVE', qualificationScore: 100 },
     }, 'hr-maker');
-    expect((saved.extendedProfile as any).fields).toEqual({ panNumber: 'ABCDE1234F' });
+    expect(Object.keys((saved.extendedProfile as any).fields)).toEqual(['panNumber']);
   });
 
   it('checks a PAN at the moment it is typed, the same as the candidate’s form does', async () => {
@@ -3272,11 +3350,11 @@ describe('the identity numbers a candidate types', () => {
   });
 
   it('gives the candidate their own numbers back, so a resumed form still shows them', async () => {
-    const ctx = makeService({ cache: verified() });
-    await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never);
+    const ctx = makeService({ cache: unlocked(verified()) });
+    await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never, SESSION_KEY);
     ctx.application!.extendedProfile = { fields: storedFields(ctx) };
 
-    const view = await ctx.service.hydrate(RAW_TOKEN);
+    const view = await ctx.service.hydrate(RAW_TOKEN, SESSION_KEY);
     expect((view.application.extendedProfile as any).fields.panNumber).toBe('ABCDE1234F');
   });
 
@@ -3285,8 +3363,8 @@ describe('the identity numbers a candidate types', () => {
    * same boxes the candidate is typing into.
    */
   it('answers a draft save with the number, not the ciphertext that was stored', async () => {
-    const ctx = makeService({ cache: verified() });
-    const saved = await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never);
+    const ctx = makeService({ cache: unlocked(verified()) });
+    const saved = await ctx.service.updateDraft(RAW_TOKEN, { record: { panNumber: 'ABCDE1234F' } } as never, SESSION_KEY);
 
     expect((saved.extendedProfile as any).fields.panNumber).toBe('ABCDE1234F');
     // ...while what actually went to the database stayed sealed.
@@ -3785,5 +3863,37 @@ describe('submitting without a photograph', () => {
     const ctx = makeService({ application: ready(), cache: verified() });
     const saved = await ctx.service.submit(RAW_TOKEN);
     expect(saved.status).toBe(ApplicationStatus.PENDING_VALIDATION);
+  });
+});
+
+/**
+ * THE HR REVIEW READS STAY IN THE CALLER'S ORGANISATION, AND CARRY NO LINK SECRET.
+ *
+ * `getApplication` found a candidate by id alone while the queue beside it was tenant-scoped, so an
+ * id from another organisation opened that organisation's file. And both handed the invite link's
+ * hash and expiry to every desk session that read the queue.
+ */
+describe('HR review reads', () => {
+  const ORG = '11111111-1111-4111-8111-111111111111';
+  const asOps = <T>(fn: () => T): T =>
+    runWithRequestContext({ method: 'GET', route: '/hr/applications', organizationId: ORG, roleNames: ['OPERATIONS'] } as any, fn);
+
+  it('looks a single application up inside the caller’s organisation', async () => {
+    const ctx = makeService();
+    await asOps(() => ctx.service.getApplication('app-1'));
+    expect(ctx.applications.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 'app-1', organizationId: ORG }) }),
+    );
+  });
+
+  it('never returns the invite token hash or its expiry — list or detail', async () => {
+    const ctx = makeService();
+    const list = await asOps(() => ctx.service.listApplications());
+    const detail = await asOps(() => ctx.service.getApplication('app-1'));
+    for (const row of [...list, detail.application]) {
+      expect(row).not.toHaveProperty('tokenHash');
+      expect(row).not.toHaveProperty('tokenExpiresAt');
+    }
+    expect(JSON.stringify(list)).not.toContain(TOKEN_HASH);
   });
 });

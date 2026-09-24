@@ -112,11 +112,12 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
      * `/executive-map` stays open because its own content (`GET /planning/command-center`) fills
      * completely; only a client filter is short. This page's content is the project.
      *
-     * `@RolesFallbackPermissions('project:view:organization')` on `ProjectController.findAll`
-     * restores it; the permission belongs back here in the same change.
+     * `ProjectController.findAll` now carries `@RolesFallbackPermissions('project:view:organization')`,
+     * so the picker fills for a custom role — which therefore needs BOTH grants to be offered this.
      */
     path: '/planning',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['PLANNING:VIEW:ORGANIZATION', 'PROJECT:VIEW:ORGANIZATION'],
   },
   {
     // The Operations Inbox: every assignment awaiting a desk decision (call tasks for
@@ -175,27 +176,15 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
   },
   {
     /**
-     * The workforce console. The permission is OFF, and that is a correction, not a retreat.
-     *
-     * The line that stood here said "GET /hr/workforce asks for assayer:view:organization and
-     * answers a custom role holding it, so the web app must too". Half of that was true. The route
-     * (`modules/assayer/hr.controller.ts`) does declare `assayer:view:organization` — but its
-     * `@Roles(ADMIN, OPERATIONS)` carries neither `@AllowPermissionFallback()` nor
-     * `@RolesFallbackPermissions(...)`, so `RolesGuard` hard-denies every unrecognised role before
-     * it ever looks at a permission. Measured against a custom role holding exactly
-     * ASSAYER:VIEW:ORGANIZATION: `GET /hr/workforce` → 403.
-     *
-     * So this table was opening a page whose data is refused — the one thing the type's own note
-     * says it must not do. What the operator got was worse than a closed door: "The workforce
-     * figures could not be loaded just now. An unknown problem occurred. Please try again." —
-     * honest that something failed, wrong about what, and an invitation to retry forever.
-     *
-     * ONE LINE fixes it properly, and it is not in this workstream's files: add
-     * `@AllowPermissionFallback()` beside the `@RequirePermissions('assayer:view:organization')` on
-     * `HrController.workforce`. Restore this key in the same change.
+     * The workforce console. `GET /hr/workforce` declares assayer:view:organization AND carries
+     * `@AllowPermissionFallback()` (HrController.workforce), so a role built in Admin → Roles
+     * holding that grant loads it — this entry names the same permission. The permission was off
+     * for a while because the route refused every custom role; `custom-role-page-parity.spec.ts`
+     * (backend) now pins both ends together.
      */
     path: '/hr',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
   {
     /**
@@ -355,16 +344,15 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     /**
      * The approver's list of joiners awaiting approval before training (`/hr/approvals`).
      *
-     * ADMIN only, and no permission — for now. The approval itself can be granted to a custom
-     * role (ASSAYER:APPROVE), and the queue endpoint accepts one; but this page sits inside the HR
-     * section, whose layout loads `GET /hr/workforce`, which refuses every custom role (see the
-     * `/hr` entry above). Opening this route to a custom approver would open a page whose data is
-     * refused. When `/hr` gets its permission back, give this entry
-     * ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'] in the same change.
+     * ADMIN by name, and a custom approver role by permission: the approval routes and the queue
+     * accept ASSAYER:APPROVE, and the section's own data (`GET /hr/workforce`), the person's file
+     * (`GET /assayers/:id`) and the dossier (view + approve) now honour a custom role too — so the
+     * page this opens can load. Both grants are needed (the dossier asks for both).
      * OPERATIONS is left out on purpose: HR prepares the file, somebody above HR decides it.
      */
     path: '/hr/approvals',
     allowedRoles: [SystemRole.ADMIN],
+    requiredPermissions: ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'],
   },
   {
     // The approve side of the destructive-action two-person rule: a DEVELOPER requests a data
@@ -459,11 +447,11 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // Permission off, mirroring `/data-entry` — a redirect must never outlive its target's gate.
   },
   {
-    // A redirect into `/hr/roster`, so it carries what `/hr` carries — which since this change is
-    // roles only. `GET /assayers` declares `assayer:view:organization` and offers no fallback
-    // (`modules/assayer/**`), so admitting a custom role here sent it to a roster that answers 403.
+    // A redirect into `/hr/roster`, so it carries what `/hr` carries. `GET /assayers` now honours
+    // the permission fallback (field-level visibility still fails closed for a custom role).
     path: '/assayers',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
 ];
 
