@@ -107,7 +107,11 @@ const EVENT_KEYS: [string, ...any[]][] = [
     publishes `assayer:updated` too) did not appear on an open map until its five-minute cache ran
     out AND the map was opened again. Reported as "created assayer doesn't come on the map".
   */
-  ].map((event): [string, ...any[]] => [event, queryKeys.hr.rosterAll, queryKeys.hr.workforce, queryKeys.assayers.all, queryKeys.commandCenter.all]),
+  /*
+    And the approver's list (`/hr/approvals`, and its counts): sent for approval puts somebody on it,
+    approval (→ training) and rejection (→ inactive) take them off.
+  */
+  ].map((event): [string, ...any[]] => [event, queryKeys.hr.rosterAll, queryKeys.hr.workforce, queryKeys.assayers.all, queryKeys.commandCenter.all, queryKeys.hr.approvals]),
 ];
 
 /**

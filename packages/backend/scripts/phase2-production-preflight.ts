@@ -69,12 +69,12 @@ async function runPreflight() {
     GROUP BY assayer_id, scheduled_date
     HAVING count(*) > 1
   `);
+  // Informational only since 2026-09-24: an assayer may hold several branches on one day, and
+  // migration 1800800000000 drops idx_assignments_single_active_assayer_day. Not a blocker.
   if (assayerDayConflicts.length > 0) {
-    console.error(`[FAIL] Found ${assayerDayConflicts.length} assayer/day conflict(s)!`);
-    console.table(assayerDayConflicts);
-    blockingConflicts += assayerDayConflicts.length;
+    console.log(`[INFO] ${assayerDayConflicts.length} assayer/day(s) carry more than one in-flight assignment (allowed).`);
   } else {
-    console.log('[PASS] Zero conflicting active assignments per assayer/day. Safe for idx_assignments_single_active_assayer_day.');
+    console.log('[INFO] No assayer holds more than one in-flight assignment on any day.');
   }
 
   // 3. Check Employment Date Anomalies

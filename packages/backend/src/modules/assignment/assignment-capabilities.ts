@@ -18,6 +18,8 @@
  *                 evaluateCheckOut
  *   SUBMIT_RETURN evaluateSubmitReturn       DocumentController.replayOrRefuseOnFinishedJob
  *   CLAIM_EXPENSE evaluateExpenseClaim       ExpenseService.create
+ *   (desk)        evaluateExpenseApproval    ExpenseService.review (approving a claim — not a field
+ *                                            action; here because it shares `liveFeeBillId`)
  *   REPORT_ISSUE  evaluateReportIssue        AssignmentService.reportIssue
  *   (every one)   evaluateOwnership          the assayer-side ownership checks on those routes
  *
@@ -32,6 +34,7 @@
  */
 import {
   ActionGate,
+  AssayerInvoiceStatus,
   AssayerPayableStatus,
   AssayerStatus,
   AssignmentAction,
@@ -74,6 +77,27 @@ export interface CapabilityAssayer {
   status?: AssayerStatus | string | null;
   isActive?: boolean | null;
   lifecycleStatus?: string | null;
+  /** Recorded leave, as `assayers.leaves` stores it (YYYY-MM-DD, both ends inclusive). */
+  leaves?: Array<{ startDate?: string | null; endDate?: string | null }> | null;
+}
+
+/**
+ * The leave range covering `day` (IST business day), or null. Both ends inclusive, compared as
+ * `YYYY-MM-DD` keys — the same reading `ConstraintEvaluator.checkLeaves` uses.
+ */
+export function leaveCovering(
+  leaves: CapabilityAssayer['leaves'],
+  day: Date | string | null | undefined,
+): { startDate: string; endDate: string } | null {
+  if (!day || !leaves?.length) return null;
+  const key = businessDateKey(day);
+  if (!key) return null;
+  for (const leave of leaves) {
+    const start = String(leave?.startDate ?? '').slice(0, 10);
+    const end = String(leave?.endDate ?? '').slice(0, 10);
+    if (start && end && key >= start && key <= end) return { startDate: start, endDate: end };
+  }
+  return null;
 }
 
 /** The job's live fee payable, as the expense rule reads it. */
@@ -115,10 +139,16 @@ export function evaluateOwnership(
  * status is judged (a missing row is not refused here — the route never did).
  */
 export function evaluateAcceptOffer(
-  assignment: Pick<CapabilityAssignment, 'status'>,
+  assignment: Pick<CapabilityAssignment, 'status' | 'scheduledDate'>,
   assayer: CapabilityAssayer | null | undefined,
   complianceBlockers: string[],
   audience: Audience = 'desk',
+  /**
+   * `leaveRuleSuspended`: an administrator's ASSAYER_LEAVE rule-bypass window is open.
+   * `onDate`: the date the job will be accepted FOR, when the desk names one while accepting;
+   * otherwise the job's own date.
+   */
+  options: { leaveRuleSuspended?: boolean; onDate?: Date | string | null } = {},
 ): Gate {
   const A = AssignmentAction.ACCEPT;
   if (assayer && assayer.status != null && (assayer.status !== AssayerStatus.ACTIVE || assayer.isActive === false)) {
@@ -135,6 +165,20 @@ export function evaluateAcceptOffer(
     return refuse(A, ASSIGNMENT_ERROR_CODES.INVALID_ASSIGNMENT_TRANSITION, audience === 'assayer'
       ? `This offer can no longer be accepted — it is ${lower(assignment.status)}.`
       : `Invalid transition path from '${assignment.status}' to '${AssignmentStatus.ACCEPTED}'`);
+  }
+  /**
+   * The job's date falls on the assayer's recorded leave — nobody may accept it, the assayer or the
+   * desk on their behalf (owner decision 2026-09-24, E8). It is the JOB's date that matters: being
+   * on leave today does not stop accepting a job for another day. Staff editing the leave itself
+   * are not refused; the offer simply stays unacceptable until the date or the leave changes.
+   */
+  const jobDay = options.onDate ?? assignment.scheduledDate ?? null;
+  const leave = options.leaveRuleSuspended ? null : leaveCovering(assayer?.leaves, jobDay);
+  if (leave) {
+    const day = businessDateKey(jobDay as Date | string);
+    return refuse(A, ASSIGNMENT_ERROR_CODES.ASSAYER_ON_LEAVE, audience === 'assayer'
+      ? `You are on leave on ${day} (${leave.startDate} to ${leave.endDate}), so this job cannot be accepted. Ask operations to move the date or give it to someone else.`
+      : `${assayer?.displayName ?? 'This assayer'} is on leave on ${day} (${leave.startDate} to ${leave.endDate}), so this job cannot be accepted for that date.`);
   }
   return allow(A);
 }
@@ -349,6 +393,17 @@ export const PAY_SETTLED_STATUSES: readonly AssayerPayableStatus[] = [
 ];
 
 /**
+ * The assayer bill the job's LIVE fee payable is on, or null — the one answer to "is this job on a
+ * bill?" that both expense rules read (claiming: `evaluateExpenseClaim`; approving:
+ * `evaluateExpenseApproval`). A voided payable from an earlier, reopened completion is history and
+ * is never "on a bill"; every path that takes a payable off a bill clears the link.
+ */
+export function liveFeeBillId(feePayable: CapabilityFeePayable | null | undefined): string | null {
+  if (!feePayable || !isLivePayable(feePayable.status)) return null;
+  return feePayable.assayerInvoiceId || null;
+}
+
+/**
  * A new expense claim: the visit is under way, and the job's LIVE fee payable is neither on a bill
  * (any bill state) nor already approved or paid. Owner decision 2026-09-24: claims are made before
  * billing. See `ExpenseService.create` for the reasoning behind each half.
@@ -362,18 +417,90 @@ export function evaluateExpenseClaim(
     return refuse(E, OTHER_CONFLICT_ERROR_CODES.EXPENSE_VISIT_NOT_STARTED,
       `Expenses can only be claimed once the visit is under way — this assignment is ${assignment.status}.`);
   }
-  if (feePayable && isLivePayable(feePayable.status)) {
-    if (feePayable.assayerInvoiceId) {
-      return refuse(E, OTHER_CONFLICT_ERROR_CODES.EXPENSE_JOB_ALREADY_BILLED,
-        'This job is already on a bill. Claims must be made before billing.');
-    }
-    if (PAY_SETTLED_STATUSES.includes(feePayable.status as AssayerPayableStatus)) {
-      return refuse(E, OTHER_CONFLICT_ERROR_CODES.EXPENSE_PAYOUT_ALREADY_APPROVED,
-        `The pay for this job has already been ${feePayable.status === AssayerPayableStatus.PAID ? 'paid' : 'approved'}. `
-        + 'Claims must be made before billing.');
-    }
+  if (liveFeeBillId(feePayable)) {
+    return refuse(E, OTHER_CONFLICT_ERROR_CODES.EXPENSE_JOB_ALREADY_BILLED,
+      'This job is already on a bill. Claims must be made before billing.');
+  }
+  if (feePayable && isLivePayable(feePayable.status)
+    && PAY_SETTLED_STATUSES.includes(feePayable.status as AssayerPayableStatus)) {
+    return refuse(E, OTHER_CONFLICT_ERROR_CODES.EXPENSE_PAYOUT_ALREADY_APPROVED,
+      `The pay for this job has already been ${feePayable.status === AssayerPayableStatus.PAID ? 'paid' : 'approved'}. `
+      + 'Claims must be made before billing.');
   }
   return allow(E);
+}
+
+// ── Approving an expense claim (desk) ─────────────────────────────────────────────────────────
+
+/**
+ * Assayer-bill states in which the bill has been SENT — the assayer has confirmed it (SUBMITTED)
+ * or it has gone further (APPROVED, PAID). An INVITED bill is ops saying "bill us for this"; the
+ * assayer has seen nothing yet, so a claim approved then still reaches them before they confirm.
+ */
+export const SENT_BILL_STATUSES: readonly AssayerInvoiceStatus[] = [
+  AssayerInvoiceStatus.SUBMITTED,
+  AssayerInvoiceStatus.APPROVED,
+  AssayerInvoiceStatus.PAID,
+];
+
+export interface ExpenseApprovalBlock {
+  code: string;
+  reason: string;
+}
+
+export type ExpenseApprovalDecision =
+  | { allowed: true; blocks: [] }
+  /** `code`/`reason` are the first block's; `blocks` lists every one that applies, in order. */
+  | { allowed: false; blocks: ExpenseApprovalBlock[]; code: string; reason: string };
+
+/**
+ * Approving a claim (owner decision 2026-09-24). Refused when any of these holds — each with its
+ * own code, and the sentence names which:
+ *
+ *   1. the assignment is CANCELLED                  EXPENSE_APPROVAL_ASSIGNMENT_CANCELLED
+ *   2. the claim's assayer no longer holds the job  EXPENSE_APPROVAL_ASSAYER_REASSIGNED
+ *      (reassigned away, or unassigned)
+ *   3. the job's live fee payable is on a bill that EXPENSE_APPROVAL_JOB_ON_SENT_BILL
+ *      has been sent (`SENT_BILL_STATUSES`) — "on a bill" is `liveFeeBillId`, the same answer the
+ *      claim rule reads; `billStatus` is the status of THAT bill, loaded by the caller
+ *
+ * Every one of them can be overridden by a senior with a written reason — that is the route's
+ * business (`ExpenseService.review`), not this function's. Rejecting a claim is never blocked.
+ */
+export function evaluateExpenseApproval(
+  assignment: Pick<CapabilityAssignment, 'status' | 'assayerId' | 'assignmentNumber' | 'id'>,
+  claim: { assayerId: string },
+  feePayable: CapabilityFeePayable | null | undefined,
+  billStatus: AssayerInvoiceStatus | string | null | undefined,
+): ExpenseApprovalDecision {
+  const job = assignment.assignmentNumber ?? assignment.id;
+  const blocks: ExpenseApprovalBlock[] = [];
+  if (assignment.status === AssignmentStatus.CANCELLED) {
+    blocks.push({
+      code: OTHER_CONFLICT_ERROR_CODES.EXPENSE_APPROVAL_ASSIGNMENT_CANCELLED,
+      reason: `Assignment ${job} has been cancelled.`,
+    });
+  }
+  if (assignment.assayerId !== claim.assayerId) {
+    blocks.push({
+      code: OTHER_CONFLICT_ERROR_CODES.EXPENSE_APPROVAL_ASSAYER_REASSIGNED,
+      reason: `The assayer who made this claim no longer holds assignment ${job} — it has been reassigned.`,
+    });
+  }
+  if (liveFeeBillId(feePayable) && billStatus && SENT_BILL_STATUSES.includes(billStatus as AssayerInvoiceStatus)) {
+    blocks.push({
+      code: OTHER_CONFLICT_ERROR_CODES.EXPENSE_APPROVAL_JOB_ON_SENT_BILL,
+      reason: `The pay for assignment ${job} is on an assayer bill that has already been sent (${lower(String(billStatus))}).`,
+    });
+  }
+  if (blocks.length === 0) return { allowed: true, blocks: [] };
+  return {
+    allowed: false,
+    blocks,
+    code: blocks[0].code,
+    reason: `This claim cannot be approved: ${blocks.map((b) => b.reason).join(' ')} `
+      + 'A senior can still approve it by writing a reason.',
+  };
 }
 
 // ── Reporting a problem ───────────────────────────────────────────────────────────────────────
@@ -439,6 +566,8 @@ export interface CapabilityContext {
   arrivalRadiusMeters?: number | null;
   /** The job's live fee payable, from one batched read. */
   feePayable?: CapabilityFeePayable | null;
+  /** Is the recorded-leave rule (ASSAYER_LEAVE) suspended by a rule-bypass window? Accept only. */
+  leaveRuleSuspended?: boolean;
 }
 
 /**
@@ -458,7 +587,9 @@ export function buildAssignmentCapabilities(
     if (!owned.allowed) return owned;
     switch (action) {
       case AssignmentAction.ACCEPT:
-        return evaluateAcceptOffer(assignment, ctx.assayer, ctx.complianceBlockers, 'assayer');
+        return evaluateAcceptOffer(assignment, ctx.assayer, ctx.complianceBlockers, 'assayer', {
+          leaveRuleSuspended: ctx.leaveRuleSuspended,
+        });
       case AssignmentAction.DECLINE:
         return evaluateDeclineOffer(assignment, 'assayer');
       case AssignmentAction.CHECK_IN: {

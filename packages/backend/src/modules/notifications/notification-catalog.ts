@@ -280,10 +280,10 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   ASSIGNMENT_REJECTED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
-    // Also to ADMINS: this is the auto-decline-on-negotiation-limit path too (see
-    // AssignmentService.proposeCounterFee), and an OPS-only audience resolved to zero
-    // recipients on a deployment with no active OPERATIONS_MANAGER/EXECUTIVE — a stalled
-    // branch nobody was told about. SLA_BREACHED and ESCALATED already carry this fallback.
+    // Also to ADMINS: an OPS-only audience resolved to zero recipients on a deployment with no
+    // active operations user — a stalled branch nobody was told about. SLA_BREACHED and
+    // ESCALATED already carry this fallback. (A timed-out offer is NOT reported through this
+    // type: `autoDeclineExpiredOffers` suppresses it and sends ASSIGNMENT_AUTO_DECLINED alone.)
     roles: [...OPS, ...ADMINS],
     // Same permission /planning's own route requires (planning.controller.ts) — a custom
     // role that can already open the planning queue a decline needs a replacement from.
@@ -299,15 +299,34 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
    * polling — the assignment simply vanishes from a later fetch — so an assayer who
    * is told nothing keeps it on their schedule and can drive to a branch that no
    * longer expects them. Push, always.
+   *
+   * The assayer's copy only. It used to reach OPS too, so the desk read "Your audit at …" about
+   * somebody else's work; the office's copy is ASSIGNMENT_CANCELLED_DESK below, emitted beside
+   * this one by the same cancellation.
    */
   ASSIGNMENT_CANCELLED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.CRITICAL,
-    roles: OPS,
+    roles: [],
     special: ['ASSIGNED_ASSAYER'],
     channels: IN_APP_PUSH_AND_EMAIL,
     title: 'Assignment cancelled',
     body: 'Your audit at ${branchName} on ${scheduledDate} has been cancelled. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The desk's copy of a cancellation, in the third person and naming the assayer. Same audience,
+   * priority and channels the combined type had for OPS, so nobody who heard about cancellations
+   * before stops hearing — only the wording changed.
+   */
+  ASSIGNMENT_CANCELLED_DESK: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: OPS,
+    channels: IN_APP_PUSH_AND_EMAIL,
+    title: 'Assignment cancelled',
+    body: 'Audit at ${branchName} on ${scheduledDate} cancelled — ${assayerName}. Reason: ${reason}',
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
@@ -365,6 +384,54 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: BOTH_CHANNELS,
     title: 'Job opened again',
     body: 'The office opened your job at ${branchName} again. Please open it to see what is needed. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The office checked the assayer in on their behalf (`AssignmentService.recordCheckIn`, staff
+   * path) — owner decision 2026-09-24 (E12). Neutral on purpose: a record of what happened and why,
+   * not an accusation. The office's reason is always present (the route refuses without one).
+   */
+  ASSIGNMENT_CHECKED_IN_BY_OFFICE: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Checked in by the office',
+    body: 'The office checked you in at ${branchName}. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * A job reached COMPLETED — by any path: the office completing it, the assayer's return upload
+   * closing it, or the calendar's completion (owner decision 2026-09-24). Always sent to the
+   * assayer, including when their own upload closed it: it is the confirmation that it did.
+   * `skipActor` does not apply to the assayer (actors are office users), and is false to say so.
+   */
+  ASSIGNMENT_COMPLETED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job complete',
+    body: 'Your job at ${branchName} is complete. Thank you.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: false,
+  },
+  /**
+   * The desk's copy of a completion, for whoever created the job (`RECORD_OWNER`, from the
+   * assignment's `createdBy`). Skipped when that person is the one who completed it.
+   */
+  ASSIGNMENT_COMPLETED_DESK: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP,
+    title: 'Audit completed',
+    body: 'Audit at ${branchName} completed — ${assayerName}.',
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },

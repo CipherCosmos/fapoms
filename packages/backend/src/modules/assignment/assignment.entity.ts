@@ -171,6 +171,14 @@ export class AssignmentEntity extends BaseEntity {
   checkInTimeOutcome: string | null;
 
   /**
+   * The written reason, when the office (ADMIN/OPERATIONS) checked the assayer in on their behalf —
+   * owner decision 2026-09-24. Non-null means an office check-in; `checkInTimeOutcome` is then
+   * `NOT_FROM_ASSAYER`. Null on every check-in the assayer made themselves. Migration 1800900000000.
+   */
+  @Column({ name: 'check_in_office_reason', type: 'text', nullable: true })
+  checkInOfficeReason: string | null;
+
+  /**
    * The other end of the on-site window. Same shape as the check-in columns above, because it is
    * the same evidence about the opposite moment.
    *

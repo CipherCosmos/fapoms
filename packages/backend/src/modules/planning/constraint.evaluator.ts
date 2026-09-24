@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository } from 'typeorm';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { HolidayService } from '../holiday/holiday.service';
@@ -8,7 +8,6 @@ import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assaye
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { businessDateKey, BypassableRule, AssignmentRule } from '@fapoms/shared';
-import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
 export interface ConstraintContext {
@@ -74,7 +73,10 @@ export class ConstraintEvaluator {
   /**
    * Every rule that decides whether one assayer may work one date, in one place.
    *
-   * These four checks existed individually and each caller picked its own subset, so the
+   * Three checks now — holiday, leave, project timeline. The fourth, double-booking, was retired
+   * by the owner on 2026-09-24: an assayer may take several branches on one day.
+   *
+   * These checks existed individually and each caller picked its own subset, so the
    * answer to "can this assayer work this date?" depended on which screen asked. Creating an
    * assignment checked holidays and double-booking; SchedulingService.create checked leave,
    * project timeline and holidays; rescheduling checked none of them; and the candidate list
@@ -97,8 +99,7 @@ export class ConstraintEvaluator {
     scheduledDate: Date;
     excludeAssignmentId?: string;
   }): Promise<ConstraintResult> {
-    const { assayer, project, scheduledDate, excludeAssignmentId } = params;
-    const assayerId = params.assayerId ?? assayer?.id ?? null;
+    const { assayer, project, scheduledDate } = params;
 
     const holiday = await this.checkHoliday(params.branchState || '', scheduledDate, params.clientId ?? undefined);
     if (!holiday.passed) return holiday;
@@ -113,53 +114,9 @@ export class ConstraintEvaluator {
       if (!timeline.passed) return timeline;
     }
 
-    if (assayerId) {
-      const booking = await this.checkDoubleBooking(assayerId, scheduledDate, excludeAssignmentId);
-      if (!booking.passed) return booking;
-    }
-
-    return { passed: true };
-  }
-
-  /**
-   * Evaluates if the assayer has a double-booking conflict on the scheduled date.
-   */
-  async checkDoubleBooking(
-    assayerId: string,
-    scheduledDate: Date,
-    excludeAssignmentId?: string,
-  ): Promise<ConstraintResult> {
-    const doubleBooked = await this.assignmentRepository.findOne({
-      where: {
-        assayerId,
-        // `scheduledDate` is a `date` column — match on the date-only key, not a Date-with-time,
-        // which never equals a midnight `date` value in Postgres and silenced this guard.
-        scheduledDate: businessDateKey(scheduledDate) as any,
-        // Every status that makes the day exclusive — not just ACCEPTED, and not only the
-        // committed ones. Checking in moves an assignment to CHECKED_IN, which made the person
-        // invisible to this guard: they could be booked a second branch for the same date while
-        // standing in the first one. PENDING counts too, because
-        // `idx_assignments_single_active_assayer_day` counts it, and a rule the database will
-        // enforce anyway is better stated here where the message can name the conflict.
-        status: In(DAY_EXCLUSIVE_ASSIGNMENT_STATUSES),
-        isActive: true,
-      },
-    });
-
-    // Moving an assignment must not collide with the assignment being moved.
-    if (doubleBooked && excludeAssignmentId && doubleBooked.id === excludeAssignmentId) {
-      return { passed: true };
-    }
-
-    if (doubleBooked) {
-      if (this.ruleBypass.isBypassedSync(BypassableRule.DOUBLE_BOOKING)) {
-        return this.allowBypassed(BypassableRule.DOUBLE_BOOKING, `would have collided with ${doubleBooked.assignmentNumber}`);
-      }
-      return {
-        passed: false,
-        reason: `Assayer double booking: already committed to assignment ${doubleBooked.assignmentNumber} on ${businessDateKey(scheduledDate)}.`,
-      };
-    }
+    // No "already booked that day" check any more: owner decision 2026-09-24 (E2) — one assayer
+    // may hold several branches on the same day, with no limit. `assayerId` and
+    // `excludeAssignmentId` stay in the signature so existing callers need not change.
 
     return { passed: true };
   }

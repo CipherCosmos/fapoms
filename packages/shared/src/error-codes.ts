@@ -118,6 +118,42 @@ export const ASSIGNMENT_ERROR_CODES = {
    * field app's capability list and the route that refuses can share one code.
    */
   INVALID_ASSIGNMENT_TRANSITION: 'INVALID_ASSIGNMENT_TRANSITION',
+  /**
+   * The job's date falls inside the assayer's recorded leave, so the offer cannot be accepted — by
+   * the assayer or by the desk on their behalf (owner decision 2026-09-24). Accepting, while on
+   * leave today, a job for another date is fine; this is about the JOB's date.
+   */
+  ASSAYER_ON_LEAVE: 'ASSAYER_ON_LEAVE',
+  /**
+   * The desk named a date while accepting, and that date is not workable — a holiday or non-working
+   * day for the client, or outside the project's dates. (Leave has its own code, `ASSAYER_ON_LEAVE`.)
+   */
+  ACCEPT_DATE_UNAVAILABLE: 'ACCEPT_DATE_UNAVAILABLE',
+  /**
+   * Reassigning a job the assayer has already checked in to. Once somebody has arrived the visit is
+   * theirs; the office cancels it instead (owner decision 2026-09-24).
+   */
+  REASSIGN_AFTER_CHECK_IN: 'REASSIGN_AFTER_CHECK_IN',
+  /**
+   * A new assignment was asked for on a branch whose offer is still open with an assayer. Moving
+   * that offer is a reassignment (`POST /assignments/:id/reassign`), which tells the assayer who
+   * loses it; creating over it used to move it silently.
+   */
+  BRANCH_HAS_LIVE_OFFER: 'BRANCH_HAS_LIVE_OFFER',
+  /**
+   * A new offer was asked for on a branch whose open offer is ALREADY with this same assayer, and
+   * the desk did not say they agreed on the call. Nothing is created; the offer waits for their
+   * answer. With `acceptOnBehalf` (Call & Assign) the acceptance is applied to that offer instead.
+   */
+  OFFER_ALREADY_WITH_ASSAYER: 'OFFER_ALREADY_WITH_ASSAYER',
+  /**
+   * Reopen refused: the branch's papers have gone to the client — the validation case is
+   * SUBMITTED, or the branch is CLOSED (what submission moves it to). A redo of papers the client
+   * already holds is a conversation with the client, not a reopen.
+   */
+  REOPEN_PAPERS_WITH_CLIENT: 'REOPEN_PAPERS_WITH_CLIENT',
+  /** Staff checking an assayer in from the office must say why (owner decision 2026-09-24). */
+  OFFICE_CHECK_IN_REASON_REQUIRED: 'OFFICE_CHECK_IN_REASON_REQUIRED',
 } as const;
 
 export const ASSAYER_ERROR_CODES = {
@@ -341,6 +377,9 @@ export const OTHER_CONFLICT_ERROR_CODES = {
    * Field paperwork refused because the assignment has reached the end of its life (completed,
    * declined or cancelled — `isAssignmentTerminal`). If a return genuinely needs replacing, the
    * assignment is reopened by operations first.
+   *
+   * Also the refusal for escalating (marking urgent) a closed assignment: there is no work left
+   * for anybody to hurry, and the assayer would be told to "open it now" about a job that is gone.
    */
   ASSIGNMENT_CLOSED: 'ASSIGNMENT_CLOSED',
   /**
@@ -359,6 +398,26 @@ export const OTHER_CONFLICT_ERROR_CODES = {
    * been checked into (or was declined or cancelled). Claims open at check-in.
    */
   EXPENSE_VISIT_NOT_STARTED: 'EXPENSE_VISIT_NOT_STARTED',
+  /**
+   * Approving an expense claim refused: its assignment has been cancelled. A senior may approve
+   * anyway with a written reason (`evaluateExpenseApproval`, `ExpenseService.review`).
+   */
+  EXPENSE_APPROVAL_ASSIGNMENT_CANCELLED: 'EXPENSE_APPROVAL_ASSIGNMENT_CANCELLED',
+  /**
+   * Approving an expense claim refused: the assayer who made it no longer holds the assignment
+   * (reassigned away). A senior may approve anyway with a written reason.
+   */
+  EXPENSE_APPROVAL_ASSAYER_REASSIGNED: 'EXPENSE_APPROVAL_ASSAYER_REASSIGNED',
+  /**
+   * Approving an expense claim refused: the job's fee payout is on an assayer bill that has been
+   * sent (SUBMITTED, APPROVED or PAID). A senior may approve anyway with a written reason.
+   */
+  EXPENSE_APPROVAL_JOB_ON_SENT_BILL: 'EXPENSE_APPROVAL_JOB_ON_SENT_BILL',
+  /**
+   * A reason was written to approve a refused expense claim anyway, but the caller is not a senior
+   * (`EXPENSE_APPROVAL_OVERRIDE_ROLES` in `expense-approval.ts`). The refusal stands; a senior has to approve it.
+   */
+  EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED: 'EXPENSE_APPROVAL_OVERRIDE_NOT_PERMITTED',
 } as const;
 
 // ---------------------------------------------------------------------------

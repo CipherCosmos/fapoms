@@ -1368,7 +1368,7 @@ async function main() {
     ['approve a payout', (await billingRun('auditor', '/billing-engine/payouts/approve', { payableIds: [p1.id] })).r],
     ['pay a payout', (await billingRun('auditor', '/billing-engine/payouts/pay', { payableIds: [p1.id], paymentReference: `${TAG}-AUD`, method: 'NEFT' })).r],
     ['change a panel standing', await PUT_(`/assayers/${a1.id}/empanelment/${b1.clientId}`, cast.auditor.token, { status: 'REJECTED', statusReason: 'auditor probe' })],
-    ['suspend a platform rule', await POST('/admin/rule-bypass', cast.auditor.token, { rules: ['DOUBLE_BOOKING'], reason: 'auditor probe of the bypass control' })],
+    ['suspend a platform rule', await POST('/admin/rule-bypass', cast.auditor.token, { rules: ['HOLIDAY_CALENDAR'], reason: 'auditor probe of the bypass control' })],
   ];
   const classified = attempts.map(([what, r]) => ({ what, ...denial(r, 403), status: r.status }));
   check('every write the auditor attempts is refused, and refused as a forbidden action rather than a missing one',

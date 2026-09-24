@@ -7,11 +7,13 @@
  * soon are registered:
  *   - accepted, not yet checked in, not removed;
  *   - scheduled today or tomorrow (tomorrow so an early start works even if the OS did not run the
- *     overnight refresh; the arrival handler still refuses a job that is not for today);
+ *     overnight refresh). Check-in is open only on the job's own IST day (midnight to midnight), so
+ *     reaching tomorrow's branch today does not check in: the arrival handler says which day the
+ *     job is on instead;
  *   - the server sent a check-in zone; and
- *   - the server's CHECK_IN gate is allowed, or it is not allowed only until a time (`opensAt`)
- *     within those two days. A gate refused for any other reason (or no gate: older server) is
- *     not watched — "not allowed" means not allowed.
+ *   - the server's CHECK_IN gate is allowed, or it is not allowed only until a time (`opensAt`, the
+ *     start of the job's day) within those two days. A gate refused for any other reason (or no
+ *     gate: older server) is not watched — "not allowed" means not allowed.
  * Kept: the soonest first, then the nearest (when a last position is known), up to the cap.
  *
  * The circle watched is the server's `arrivalRadiusMeters` ("you have arrived", default 200) when
@@ -44,16 +46,11 @@ export interface WatchedZone {
   watchRadius: number;
   /** Radius the server enforces for check-in. */
   serverRadius: number;
-  /**
-   * Also report LEAVING this circle. Only for a job whose check-in opens later: an early arrival
-   * is remembered and checked in once it opens, unless the person left in between.
-   */
-  notifyOnExit: boolean;
   /** Shown in the "You have reached X" notification. */
   label: string;
   /** Local `YYYY-MM-DD` the job is scheduled for. */
   day: string;
-  /** When check-in opens, if not yet. */
+  /** When check-in opens (the start of the job's day), if not yet — the server's `opensAt`. */
   opensAt?: string;
 }
 
@@ -121,7 +118,6 @@ export function planGeofences(
       longitude: zone.longitude,
       watchRadius: Math.round(Math.min(MAX_WATCH_RADIUS_M, Math.max(MIN_WATCH_RADIUS_M, circle))),
       serverRadius,
-      notifyOnExit: !!opensAt,
       label: [a.branchName, a.bankName].filter(Boolean).join(', ') || a.id,
       day: localDayKey(a.scheduledDate) ?? '',
       ...(opensAt ? { opensAt } : {}),
@@ -135,7 +131,7 @@ export function planGeofences(
 
   // Order-independent, and blind to the label (renaming a branch does not re-register circles).
   const signature = zones
-    .map((z) => `${z.assignmentId}@${z.latitude.toFixed(6)},${z.longitude.toFixed(6)}r${z.watchRadius}${z.notifyOnExit ? 'x' : ''}`)
+    .map((z) => `${z.assignmentId}@${z.latitude.toFixed(6)},${z.longitude.toFixed(6)}r${z.watchRadius}`)
     .sort()
     .join('|');
   return { zones, signature };

@@ -32,14 +32,21 @@ export class OnboardingApprovalController {
     return { id: req.user.id, name: req.user.displayName ?? req.user.username ?? null };
   }
 
-  /** Everybody awaiting a decision — the approver's list. Declared before `:assayerId` routes. */
+  /**
+   * Everybody awaiting a decision — the approver's list. Declared before `:assayerId` routes.
+   *
+   * Held to the caller's regions, like every other route here: opening a person already asserts
+   * their region (`history`), so a regional approver used to be listed joiners from every region
+   * and refused on each one they opened. The list now leaves those out, by the same rule.
+   */
   @Get('approvals/queue')
   @Roles(SystemRole.ADMIN)
   @AllowPermissionFallback()
   @RequirePermissions('assayer:approve:organization')
   @ApiOperation({ summary: 'People awaiting approval before training' })
-  async queue() {
-    return await this.approvals.queue();
+  async queue(@GlobalScopeFilter() scope?: GlobalScope) {
+    const rows = await this.approvals.queue();
+    return rows.filter((r) => this.regionGuard.isRegionAllowed(r.region, scope));
   }
 
   @Get(':assayerId/approval')

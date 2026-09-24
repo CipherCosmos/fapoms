@@ -26,7 +26,8 @@ describe('planGeofences', () => {
   it('watches today’s and tomorrow’s accepted jobs that the server says can be checked in to', () => {
     const plan = planGeofences([job('a'), job('b', { scheduledDate: '2026-09-25' })], { now, platform: 'android' });
     expect(plan.zones.map((z) => z.assignmentId)).toEqual(['a', 'b']);
-    expect(plan.zones[0]).toMatchObject({ label: 'Branch a, SBI', day: '2026-09-24', watchRadius: 2000, serverRadius: 2000, notifyOnExit: false });
+    expect(plan.zones[0]).toMatchObject({ label: 'Branch a, SBI', day: '2026-09-24', watchRadius: 2000, serverRadius: 2000 });
+    expect(plan.zones[0]).not.toHaveProperty('notifyOnExit');
   });
 
   it('watches the server’s arrival circle when it sends one, else the check-in zone', () => {
@@ -49,10 +50,14 @@ describe('planGeofences', () => {
     ]);
   });
 
-  it('asks the OS for exit events only on circles whose check-in opens later', () => {
-    const later = job('o', { capabilities: { actions: [{ action: 'CHECK_IN', allowed: false, opensAt: new Date(2026, 8, 24, 10, 0).toISOString() }], checkInZone: { latitude: 18.5, longitude: 73.8, radiusMeters: 500 } } });
-    const plan = planGeofences([job('a'), later], { now, platform: 'android' });
-    expect(plan.zones.map((z) => [z.assignmentId, z.notifyOnExit])).toEqual([['a', false], ['o', true]]);
+  it('keeps tomorrow’s job watched with the server’s opening time, so a wrong-day arrival can say the day', () => {
+    const opensAt = '2026-09-24T18:30:00.000Z'; // midnight IST, 25 Sep
+    const tomorrow = job('t', {
+      scheduledDate: '2026-09-25',
+      capabilities: { actions: [{ action: 'CHECK_IN', allowed: false, code: 'NOT_SCHEDULED_TODAY', opensAt }], checkInZone: { latitude: 18.5, longitude: 73.8, radiusMeters: 500 } },
+    });
+    const plan = planGeofences([tomorrow], { now, platform: 'android' });
+    expect(plan.zones).toEqual([expect.objectContaining({ assignmentId: 't', day: '2026-09-25', opensAt })]);
   });
 
   it('skips jobs that are not accepted, already checked in, removed, or not for today/tomorrow', () => {
@@ -121,27 +126,39 @@ describe('planGeofences', () => {
 });
 
 describe('decideArrival', () => {
-  const zone: WatchedZone = { assignmentId: 'a', latitude: 18.5, longitude: 73.8, watchRadius: 500, serverRadius: 500, notifyOnExit: false, label: 'X', day: '2026-09-24' };
-  const base = { eventType: 'enter' as const, regionId: 'a', zones: [zone], today: '2026-09-24', now, handled: {} };
+  const zone: WatchedZone = { assignmentId: 'a', latitude: 18.5, longitude: 73.8, watchRadius: 500, serverRadius: 500, label: 'X', day: '2026-09-24' };
+  const base = { eventType: 'enter' as const, regionId: 'a', zones: [zone], today: '2026-09-24', handled: {} };
 
   it('checks in on entering today’s zone', () => {
     expect(decideArrival(base)).toEqual({ kind: 'check-in', zone });
   });
 
-  it('ignores leaving, unknown regions, other days, repeats and jobs already checked in', () => {
+  it('ignores leaving, unknown regions, repeats and jobs already checked in', () => {
     expect(decideArrival({ ...base, eventType: 'exit' })).toMatchObject({ kind: 'ignore', why: 'exit' });
     expect(decideArrival({ ...base, regionId: 'zz' })).toMatchObject({ why: 'unknown-region' });
-    expect(decideArrival({ ...base, zones: [{ ...zone, day: '2026-09-25' }] })).toMatchObject({ why: 'not-today' });
     expect(decideArrival({ ...base, handled: { a: '2026-09-24' } })).toMatchObject({ why: 'already-handled' });
     expect(decideArrival({ ...base, handled: { a: '2026-09-23' } })).toMatchObject({ kind: 'check-in' });
     expect(decideArrival({ ...base, current: { status: 'CHECKED_IN' } })).toMatchObject({ why: 'already-checked-in' });
     expect(decideArrival({ ...base, current: { status: 'ACCEPTED', checkedInAt: 'x' } })).toMatchObject({ why: 'already-checked-in' });
   });
 
-  it('does not send before check-in opens', () => {
-    const opensAt = new Date(2026, 8, 24, 9, 0).toISOString();
-    expect(decideArrival({ ...base, zones: [{ ...zone, opensAt }] })).toEqual({ kind: 'too-early', zone: { ...zone, opensAt }, opensAt });
-    expect(decideArrival({ ...base, zones: [{ ...zone, opensAt }], now: new Date(2026, 8, 24, 9, 1) })).toMatchObject({ kind: 'check-in' });
+  /**
+   * Owner decision 2026-09-24: check-in is open any time on the job's own IST day and never waits
+   * to "retry" later. Reaching a branch on another day tells the person which day — once a day —
+   * and sends nothing. (Mutation: comparing only `opensAt` against the clock, or dropping the day
+   * check, turns these into `check-in`.)
+   */
+  it('on the wrong day, says so instead of checking in — once a day, and not once checked in', () => {
+    const tomorrowZone = { ...zone, day: '2026-09-25', opensAt: '2026-09-24T18:30:00.000Z' };
+    expect(decideArrival({ ...base, zones: [tomorrowZone] })).toEqual({ kind: 'wrong-day', zone: tomorrowZone });
+    expect(decideArrival({ ...base, zones: [{ ...zone, day: '2026-09-23' }] })).toMatchObject({ kind: 'wrong-day' });
+    expect(decideArrival({ ...base, zones: [tomorrowZone], handled: { a: '2026-09-24' } })).toMatchObject({ why: 'already-handled' });
+    expect(decideArrival({ ...base, zones: [tomorrowZone], current: { status: 'CHECKED_IN' } })).toMatchObject({ why: 'already-checked-in' });
+  });
+
+  it('checks in on the job’s day even when the zone still carries yesterday’s opening time', () => {
+    // A zone planned yesterday carries opensAt = today's midnight; on the day it must not wait.
+    expect(decideArrival({ ...base, zones: [{ ...zone, opensAt: '2026-09-23T18:30:00.000Z' }] })).toMatchObject({ kind: 'check-in' });
   });
 
   it('prunes the handled record to today', () => {

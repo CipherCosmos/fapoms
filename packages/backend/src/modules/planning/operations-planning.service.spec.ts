@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { OperationsPlanningService, deploymentRequestId } from './operations-planning.service';
+import { OperationsPlanningService, deploymentRequestId, deployFeeFor } from './operations-planning.service';
 import { CoveragePlanningEngine } from './coverage-planning.engine';
 import { AssignmentService } from '../assignment/assignment.service';
 import { ProjectQueryService } from '../project/project-query.service';
@@ -38,7 +38,7 @@ describe('OperationsPlanningService', () => {
   };
 
   // Deployment reuses the single-branch date suggester; by default every branch's first
-  // workable date is the same, so tests exercise the capacity spreading rather than holidays.
+  // workable date is the same, so tests exercise the per-branch spacing rather than holidays.
   const mockPlanningService = {
     suggestAuditDate: jest.fn().mockResolvedValue({ date: '2026-01-05', skipped: [] }),
   };
@@ -103,7 +103,7 @@ describe('OperationsPlanningService', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('deploys the assayer, branch and fee that were actually approved', async () => {
+  it('deploys the assayer and branch that were actually approved, and leaves the price to create()', async () => {
     const activeVersion = {
       versionNumber: 1,
       planData: {
@@ -131,9 +131,12 @@ describe('OperationsPlanningService', () => {
     // Previously this asserted only that create() was called — which it was, with a hardcoded
     // 'as-1' and a flat 1500 fee against whichever project branch happened to be first.
     expect(mockAssignmentService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ projectBranchId: 'pb-1', assayerId: 'as-real-1', proposedFee: 1800 }),
+      expect.objectContaining({ projectBranchId: 'pb-1', assayerId: 'as-real-1' }),
       'u-1',
     );
+    // The cluster's estimate is not a fee anybody typed: create() prices the job (quote + travel
+    // once a day). Sending it made every deployed offer a base-only, desk-typed-looking figure.
+    expect(mockAssignmentService.create.mock.calls[0][0]).not.toHaveProperty('proposedFee');
   });
 
   it('refuses to mark a plan DEPLOYED when it produced no assignments', async () => {
@@ -160,7 +163,7 @@ describe('OperationsPlanningService', () => {
     expect(mockPlanRepository.save).not.toHaveBeenCalled();
   });
 
-  it('splits a cluster fee across its branches rather than charging each the full amount', async () => {
+  it('never sends the cluster estimate (whole or split) as a fee — create() prices each branch', async () => {
     mockPlanRepository.findOne.mockResolvedValue({
       id: 'cp-1',
       projectId: 'p-1',
@@ -180,7 +183,55 @@ describe('OperationsPlanningService', () => {
     await service.executeApprovedPlan('cp-1', 'u-1');
 
     const fees = mockAssignmentService.create.mock.calls.map((c: any[]) => c[0].proposedFee);
-    expect(fees).toEqual([900, 900]);
+    expect(fees).toEqual([undefined, undefined]);
+  });
+
+  describe('item 2 — the engine fee is an estimate; only a desk-typed fee is sent', () => {
+    const planWith = (branchAssignments: any[]) => ({
+      id: 'cp-1', projectId: 'p-1', status: CoveragePlanStatus.APPROVED, currentVersion: 1,
+      versions: [{ versionNumber: 1, planData: { clusters: [{ id: 'c-1', branchIds: branchAssignments.map((b) => b.branchId), branchAssignments }] } }],
+    });
+
+    it('omits the engine\'s no-travel quote (fee) so create() quotes the journey and applies travel once', async () => {
+      mockPlanRepository.findOne.mockResolvedValue(planWith([{ branchId: 'b-1', assayerId: 'as-1', fee: 1500 }]));
+      mockAssignmentService.create.mockResolvedValue({ id: 'asg-1' });
+      await service.executeApprovedPlan('cp-1', 'u-1');
+      expect(mockAssignmentService.create).toHaveBeenCalledTimes(1);
+      expect(mockAssignmentService.create.mock.calls[0][0]).not.toHaveProperty('proposedFee');
+    });
+
+    it('sends the fee the desk typed on the plan, and only that', async () => {
+      mockPlanRepository.findOne.mockResolvedValue(planWith([{ branchId: 'b-1', assayerId: 'as-1', fee: 1500, deskFee: 2100 }]));
+      mockAssignmentService.create.mockResolvedValue({ id: 'asg-1' });
+      await service.executeApprovedPlan('cp-1', 'u-1');
+      expect(mockAssignmentService.create.mock.calls[0][0].proposedFee).toBe(2100);
+    });
+
+    it('still deploys a branch whose plan carries no fee at all (the old "no quoted fee" skip is gone)', async () => {
+      mockPlanRepository.findOne.mockResolvedValue(planWith([{ branchId: 'b-1', assayerId: 'as-1', fee: null }]));
+      mockAssignmentService.create.mockResolvedValue({ id: 'asg-1' });
+      const result = await service.executeApprovedPlan('cp-1', 'u-1');
+      expect(result.deployed).toHaveLength(1);
+    });
+
+    it('deployFeeFor: a typed number, else nothing', () => {
+      expect(deployFeeFor({ deskFee: 0 })).toBe(0);
+      expect(deployFeeFor({ deskFee: 1750 })).toBe(1750);
+      expect(deployFeeFor({ deskFee: null })).toBeUndefined();
+      expect(deployFeeFor({})).toBeUndefined();
+    });
+
+    it('a manual override carries its typed fee into the saved plan', async () => {
+      mockPlanRepository.findOne.mockResolvedValue(null);
+      mockPlanningEngine.generateCoveragePlan.mockResolvedValueOnce({
+        clusters: [{ id: 'c-1', branchIds: ['b-1'], branchAssignments: [{ branchId: 'b-1', assayerId: 'as-1', fee: 1500 }] }],
+      } as any);
+      mockPlanRepository.create.mockImplementationOnce((x: any) => x);
+      const created: any[] = [];
+      mockVersionRepository.create.mockImplementationOnce((x: any) => { created.push(x); return x; });
+      await service.createOrRegeneratePlan('p-1', [{ branchId: 'b-1', assayerId: 'as-2', justification: 'nearer', deskFee: 1999 }], 'u-1');
+      expect(created[0].planData.clusters[0].branchAssignments[0]).toMatchObject({ assayerId: 'as-2', deskFee: 1999 });
+    });
   });
 
   it('gives each branch its own workable date instead of stacking them all on one day', async () => {
@@ -308,7 +359,7 @@ describe('OperationsPlanningService', () => {
     ]);
   });
 
-  it("does not burn the assayer's daily capacity slot on a rejected attempt, so a sibling branch can still use that day", async () => {
+  it('retries a rejected branch onto a day its assayer already works — there is no daily cap (E2)', async () => {
     mockPlanRepository.findOne.mockResolvedValue({
       id: 'cp-1',
       projectId: 'p-1',
@@ -324,9 +375,8 @@ describe('OperationsPlanningService', () => {
       { id: 'pb-2', branchId: 'b-2' },
     ]);
     // b-1's first attempt (2026-01-05) is rejected for a date reason the resolver missed and
-    // succeeds the next day. Previously the rejected attempt still reserved 2026-01-05 in the
-    // in-memory capacity map for nothing — booking it only on success is what lets the executor
-    // retry at all without a phantom slot skewing every branch that follows.
+    // succeeds the next day — the day its sibling b-2 is spaced onto. Since 2026-09-24 one assayer
+    // may hold several branches on one day, so nothing pushes b-2 further out.
     mockAssignmentService.create
       .mockRejectedValueOnce(new BadRequestException('Holiday Conflict: Target date is a holiday in Maharashtra.'))
       .mockResolvedValue({ id: 'asg-ok' });
@@ -334,9 +384,55 @@ describe('OperationsPlanningService', () => {
     const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
 
     expect(result.skipped).toHaveLength(0);
-    expect(result.deployed).toHaveLength(2);
-    const dates = result.deployed.map((d) => d.scheduledDate);
-    expect(new Set(dates).size).toBe(2);
+    expect(result.deployed.map((d) => d.scheduledDate)).toEqual(['2026-01-06', '2026-01-06']);
+  });
+
+  it('puts a cluster planned as one day of work on one day, for its one assayer (E2)', async () => {
+    mockPlanRepository.findOne.mockResolvedValue({
+      id: 'cp-1',
+      projectId: 'p-1',
+      status: CoveragePlanStatus.APPROVED,
+      currentVersion: 1,
+      versions: [{
+        versionNumber: 1,
+        planData: { clusters: [{ id: 'c-1', assignedAssayerId: 'as-real-1', branchIds: ['b-1', 'b-2', 'b-3'], estimatedTotalFee: 2700, branchCount: 3, estimatedDurationDays: 1 }] },
+      }],
+    });
+    mockProjectQueryService.findProjectBranches.mockResolvedValue([
+      { id: 'pb-1', branchId: 'b-1' },
+      { id: 'pb-2', branchId: 'b-2' },
+      { id: 'pb-3', branchId: 'b-3' },
+    ]);
+    mockAssignmentService.create.mockReset().mockResolvedValue({ id: 'asg-ok' });
+
+    const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+
+    expect(result.deployed.map((d) => d.scheduledDate)).toEqual(['2026-01-05', '2026-01-05', '2026-01-05']);
+    expect(mockAssignmentService.create.mock.calls.map((c: any[]) => c[0].assayerId)).toEqual(['as-real-1', 'as-real-1', 'as-real-1']);
+  });
+
+  it('shares a multi-day cluster out over its days, several a day when there are more branches than days', async () => {
+    mockPlanRepository.findOne.mockResolvedValue({
+      id: 'cp-1',
+      projectId: 'p-1',
+      status: CoveragePlanStatus.APPROVED,
+      currentVersion: 1,
+      versions: [{
+        versionNumber: 1,
+        planData: { clusters: [{ id: 'c-1', assignedAssayerId: 'as-real-1', branchIds: ['b-1', 'b-2', 'b-3', 'b-4'], estimatedTotalFee: 3600, branchCount: 4, estimatedDurationDays: 2 }] },
+      }],
+    });
+    mockProjectQueryService.findProjectBranches.mockResolvedValue([
+      { id: 'pb-1', branchId: 'b-1' },
+      { id: 'pb-2', branchId: 'b-2' },
+      { id: 'pb-3', branchId: 'b-3' },
+      { id: 'pb-4', branchId: 'b-4' },
+    ]);
+    mockAssignmentService.create.mockReset().mockResolvedValue({ id: 'asg-ok' });
+
+    const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+
+    expect(result.deployed.map((d) => d.scheduledDate)).toEqual(['2026-01-05', '2026-01-05', '2026-01-06', '2026-01-06']);
   });
   /**
    * A deploy is safe to run again.
@@ -370,7 +466,7 @@ describe('OperationsPlanningService', () => {
       ]);
     };
 
-    it('leaves a branch an earlier run booked alone, counts it as deployed, and spreads the rest around its day', async () => {
+    it('leaves a branch an earlier run booked alone, counts it as deployed, and books the rest normally', async () => {
       approvedTwoBranchPlan();
       const earlierKey = deploymentRequestId('cp-1', 3, 'pb-1');
       mockPlanRepository.manager.query.mockResolvedValue([
@@ -380,12 +476,13 @@ describe('OperationsPlanningService', () => {
 
       const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
 
-      // Only the branch nobody had booked is written — and not onto the day the earlier run gave as-1.
+      // Only the branch nobody had booked is written. It may share as-1's day with the earlier
+      // run's branch: several branches per assayer per day are allowed (E2).
       expect(mockAssignmentService.create).toHaveBeenCalledTimes(1);
-      expect(mockAssignmentService.create.mock.calls[0][0]).toMatchObject({ projectBranchId: 'pb-2', scheduledDate: '2026-01-06' });
+      expect(mockAssignmentService.create.mock.calls[0][0]).toMatchObject({ projectBranchId: 'pb-2', scheduledDate: '2026-01-05' });
       expect(result.deployed).toEqual([
         { branchId: 'b-1', assignmentId: 'asg-earlier', scheduledDate: '2026-01-05' },
-        { branchId: 'b-2', assignmentId: 'asg-new', scheduledDate: '2026-01-06' },
+        { branchId: 'b-2', assignmentId: 'asg-new', scheduledDate: '2026-01-05' },
       ]);
       expect(result.alreadyDeployedCount).toBe(1);
       expect(mockPlanRepository.manager.query).toHaveBeenCalledWith(

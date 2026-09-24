@@ -6,6 +6,7 @@ import { AssayerPayableStatus, AssignmentStatus, OTHER_CONFLICT_ERROR_CODES, Reg
 import { ExpenseService } from './expense.service';
 import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { AssayerInvoiceEntity } from '../billing-engine/assayer-invoice.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
@@ -127,6 +128,8 @@ describe('ExpenseService', () => {
         ExpenseService,
         { provide: getRepositoryToken(ExpenseEntity), useValue: expenseRepo },
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
+        // The approval rules read the status of the bill carrying the job's pay; no bill in these tests.
+        { provide: getRepositoryToken(AssayerInvoiceEntity), useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         { provide: NotificationDispatchService, useValue: dispatch },
         { provide: BillingEngineService, useValue: billing },

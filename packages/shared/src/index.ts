@@ -92,6 +92,9 @@ export * from './service-logs';
 // Lives here so a translated client keys off a code rather than matching the English sentence.
 export * from './error-codes';
 
+// Approving an expense claim the rules refuse: who may override, and on which refusals
+export * from './expense-approval';
+
 // Cleans the workforce-attribute vocabulary endpoint's raw rows into name lists — one
 // implementation, read by both the web hook and the mobile service that used to each carry their
 // own de-dupe/sort.

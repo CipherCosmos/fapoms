@@ -69,7 +69,7 @@ const AUTHORIZATION_CALLS = [
   'assertAssayerMayDownload', 'assertJobVisibleTo', 'assertClientAllowed',
   'assertSegregationOfDuties', 'assertAssayerAssignedToBranch',
   'assertDocumentRegion', 'assertMaySubmitReturnFor', 'assertAssayerOwnsQuery',
-  'assertCanOverrideEmpanelment', 'assertMayOverride', 'assertAudienceAllowed',
+  'assertMayOverride', 'assertAudienceAllowed',
   'requireOrganizationId',
   // Check-in and check-out refuse with a structured result rather than an exception, so the
   // predicate itself has to be named here — otherwise the two routes this file exists for would
@@ -170,8 +170,6 @@ const REVIEWED: Record<string, string> = {
     'a staff caller, already role-gated on the route — these routes are object-scoped for assayers only',
   'modules/document/document.controller.ts :: DocumentController.assertMaySubmitReturnFor':
     'a staff caller uploading on an assayer\'s behalf, already role-gated; createdBy records who really did it',
-  'modules/assignment/assignment.service.ts :: AssignmentService.assertCanOverrideEmpanelment':
-    'no override was requested, or the rule is not one an override applies to',
   'modules/assignment/assignment-target-eligibility.policy.ts :: AssignmentTargetEligibilityService.assertMayOverride':
     'nothing is barred, so there is no override for this to permit or refuse',
   // ── The tenant escape hatch, declared per operation rather than inferred.

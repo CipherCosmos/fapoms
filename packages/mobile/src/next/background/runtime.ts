@@ -10,30 +10,22 @@
  */
 import * as BackgroundTask from 'expo-background-task';
 import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 import { actionDispatchers, type CheckInOutPayload } from '../../services/action-dispatchers';
 import { NOT_SIGNED_IN_ERROR, enqueueAndRun, getQueuedActions, processActionQueue, type QueuedAction } from '../../services/action-queue';
 import { MobileApiService } from '../../services/api.service';
 import { flushQueue, queuedCount } from '../../services/location-queue';
-import { ANDROID_CHANNELS, registerAndroidNotificationChannels, scheduleLocalNotification } from '../../services/notification.service';
+import { registerAndroidNotificationChannels, scheduleLocalNotification } from '../../services/notification.service';
 import { isStampCurrent, stampSession } from '../../services/session-epoch';
 import { readCache, readPreference, writeCache } from '../../services/token-store';
 import { getUploads, processOutbox } from '../../services/upload-outbox';
 import { sendOne } from '../../hooks/useUploadOutbox';
 import type { AssayerAssignment } from '../../types/mobile-app';
 import { translatorFor } from '../i18n/catalogues';
-import { formatDayTime, localDayKey } from '../i18n/format';
+import { formatDate, localDayKey } from '../i18n/format';
 import { readStoredLanguage } from '../i18n/stored-language';
 import { decideArrival, pruneHandled, usableFix, type Fix } from './arrival';
-import {
-  backgroundIntervalMinutes,
-  decidePending,
-  istDayKey,
-  reminderTime,
-  type PendingArrival,
-} from './pending-arrival';
 import { planGeofences, type WatchedZone } from './geofence-plan';
 import { ensureSession } from './headless-session';
 import { ARRIVAL_EXPLAINED_KEY, type PermissionFacts } from './permission-flow';
@@ -49,7 +41,6 @@ const JOBS_CACHE = 'assignments';
 const GEOFENCE_CACHE = 'next_geofences';
 const ARRIVALS_CACHE = 'next_arrivals';
 const SYNC_CACHE = 'next_sync';
-const PENDING_CACHE = 'next_pending_arrivals';
 const INTERVAL_CACHE = 'next_sync_interval';
 
 interface JobsCache {
@@ -160,7 +151,7 @@ export async function syncGeofences(userId: string, jobs: readonly AssayerAssign
         longitude: z.longitude,
         radius: z.watchRadius,
         notifyOnEnter: true,
-        notifyOnExit: z.notifyOnExit,
+        notifyOnExit: false,
       })),
     );
   }
@@ -173,10 +164,6 @@ export async function stopBackgroundWatching(): Promise<void> {
   if (Platform.OS === 'web') return;
   const started = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK).catch(() => false);
   if (started) await Location.stopGeofencingAsync(GEOFENCE_TASK).catch(() => undefined);
-  // Any waiting early arrival belongs to the session that is ending: drop it and its reminder.
-  const pending = await readCache<PendingRecord>(PENDING_CACHE);
-  for (const p of pending?.items ?? []) await cancelReminder(p);
-  await writeCache(PENDING_CACHE, null);
 }
 
 // ── Check-in ─────────────────────────────────────────────────────────────────────────────────
@@ -233,25 +220,11 @@ export async function checkIn(assignmentId: string, arrivedAt: string): Promise<
   return { kind: 'refused', message: result.error, code: result.code };
 }
 
-// ── Early arrivals ───────────────────────────────────────────────────────────────────────────
+// ── Arrivals ─────────────────────────────────────────────────────────────────────────────────
 
-interface PendingRecord {
-  ownerId: string;
-  items: PendingArrival[];
-}
 interface HandledRecord {
   ownerId: string;
   handled: Record<string, string>;
-}
-
-async function readPending(userId: string): Promise<PendingArrival[]> {
-  const rec = await readCache<PendingRecord>(PENDING_CACHE);
-  return rec && rec.ownerId === userId ? rec.items : [];
-}
-
-async function writePending(userId: string, items: PendingArrival[]): Promise<void> {
-  await writeCache(PENDING_CACHE, { ownerId: userId, items } satisfies PendingRecord);
-  await ensureSyncInterval(backgroundIntervalMinutes(items.length, BACKGROUND_INTERVAL_MINUTES));
 }
 
 async function readHandled(userId: string, today: string): Promise<Record<string, string>> {
@@ -263,37 +236,11 @@ async function writeHandled(userId: string, handled: Record<string, string>): Pr
   await writeCache(ARRIVALS_CACHE, { ownerId: userId, handled } satisfies HandledRecord);
 }
 
-async function cancelReminder(p: PendingArrival): Promise<void> {
-  if (p.reminderId) await Notifications.cancelScheduledNotificationAsync(p.reminderId).catch(() => undefined);
-}
-
 /**
- * The fallback: a notice a little after check-in opens, telling them to tap. Cancelled as soon as
- * the automatic attempt resolves, so it only ever shows when the phone did not wake in time.
+ * Ask the OS for background runs every `minutes`. Re-registers only when the registered interval
+ * differs (an earlier build may have registered another one).
  */
-async function scheduleReminder(p: PendingArrival, now: Date): Promise<string | undefined> {
-  const when = reminderTime(p, now);
-  if (!when || Platform.OS === 'web') return undefined;
-  const t = translatorFor(await readStoredLanguage());
-  try {
-    return await Notifications.scheduleNotificationAsync({
-      content: {
-        title: t('arrival.reminderTitle', { place: p.label }),
-        body: t('arrival.reminderBody'),
-        data: { type: 'ARRIVAL', assignmentId: p.assignmentId },
-      },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when, channelId: ANDROID_CHANNELS.HIGH },
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Ask the OS for background runs every 15 minutes while an early arrival is waiting, and every 30
- * otherwise. Re-registers only when the wanted interval changes.
- */
-export async function ensureSyncInterval(minutes: number): Promise<void> {
+export async function ensureSyncInterval(minutes: number = BACKGROUND_INTERVAL_MINUTES): Promise<void> {
   if (Platform.OS === 'web') return;
   try {
     const current = await readCache<number>(INTERVAL_CACHE);
@@ -308,87 +255,9 @@ export async function ensureSyncInterval(minutes: number): Promise<void> {
   }
 }
 
-/** The soonest opening time among waiting early arrivals, so an open app can try right then. */
-export async function nextPendingOpening(userId: string): Promise<Date | null> {
-  const times = (await readPending(userId))
-    .map((p) => new Date(p.opensAt).getTime())
-    .filter((ms) => Number.isFinite(ms) && ms > Date.now());
-  return times.length ? new Date(Math.min(...times)) : null;
-}
-
-/** The interval the background run should have right now (faster while an arrival is waiting). */
-export async function refreshSyncInterval(): Promise<void> {
-  const rec = await readCache<PendingRecord>(PENDING_CACHE);
-  await ensureSyncInterval(backgroundIntervalMinutes(rec?.items?.length ?? 0, BACKGROUND_INTERVAL_MINUTES));
-}
-
 async function notify(title: string, body: string, assignmentId: string): Promise<void> {
   registerAndroidNotificationChannels();
   await scheduleLocalNotification(title, body, { type: 'ARRIVAL', assignmentId }, 'HIGH');
-}
-
-/**
- * Try every waiting early arrival once. Called from every background wake-up and every time the
- * app comes forward; a no-op (one small file read) when nothing is waiting.
- */
-export async function processPendingArrivals(userId: string): Promise<void> {
-  const items = await readPending(userId);
-  if (items.length === 0) return;
-  const now = new Date();
-  const t = translatorFor(await readStoredLanguage());
-  const jobs = await readCachedJobs(userId);
-  const keep: PendingArrival[] = [];
-  let handled: Record<string, string> | null = null;
-
-  for (const p of items) {
-    const current = jobs?.items.find((j) => j.id === p.assignmentId) ?? null;
-    let decision = decidePending(p, { now, current, fix: null });
-    let fix: Fix | null = null;
-    if (decision.kind === 'need-position') {
-      fix = await onePosition();
-      if (!fix) {
-        keep.push(p); // no position this time; the next wake-up tries again (and the reminder is set)
-        continue;
-      }
-      decision = decidePending(p, { now, current, fix });
-    }
-    log('pending arrival', p.assignmentId, decision);
-
-    if (decision.kind === 'wait' || decision.kind === 'need-position') {
-      keep.push(p);
-      continue;
-    }
-    await cancelReminder(p);
-    const place = p.label;
-
-    if (decision.kind === 'check-in') {
-      // The moment presence was confirmed with a position, not the earlier arrival: that is the
-      // time the phone can truthfully vouch for, and it is after check-in opened.
-      const outcome = await checkIn(p.assignmentId, now.toISOString());
-      if (outcome.kind === 'done') await notify(t('arrival.notifyTitle', { place }), t('arrival.notifyRetryCheckedIn', { place }), p.assignmentId);
-      else if (outcome.kind === 'queued') await notify(t('arrival.notifyTitle', { place }), t('arrival.notifyRetryQueued', { place }), p.assignmentId);
-      else if (outcome.kind === 'no-position') {
-        keep.push({ ...p, reminderId: await scheduleReminder(p, now) });
-        continue;
-      } else {
-        const reason = outcome.kind === 'refused' && outcome.message ? `${outcome.message} ` : '';
-        await notify(t('arrival.reminderTitle', { place }), `${reason}${t('arrival.notifyRetryFailed', { place })}`, p.assignmentId);
-      }
-      continue;
-    }
-
-    // Given up.
-    if (decision.why === 'left' || decision.why === 'outside') {
-      await notify(t('arrival.reminderTitle', { place }), t('arrival.notifyLeftBefore', { place }), p.assignmentId);
-      // Coming back later must count as a new arrival.
-      handled = handled ?? (await readHandled(userId, localDayKey(now) ?? ''));
-      delete handled[p.assignmentId];
-    }
-    // 'day-over' and 'already-checked-in' end quietly: there is nothing for them to do.
-  }
-
-  if (handled) await writeHandled(userId, handled);
-  await writePending(userId, keep);
 }
 
 /** The OS says the phone entered (or left) a watched branch. Runs with or without a screen. */
@@ -399,19 +268,8 @@ export async function handleGeofenceEvent(eventType: number, regionId: string | 
     return;
   }
 
-  if (eventType === Location.GeofencingEventType.Exit) {
-    // Only circles with a waiting early arrival report exits. Record it and resolve now, so they
-    // are told straight away rather than when check-in opens.
-    const items = await readPending(userId);
-    if (!items.some((p) => p.assignmentId === regionId && !p.leftAt)) return;
-    const leftAt = new Date().toISOString();
-    await writeCache(PENDING_CACHE, {
-      ownerId: userId,
-      items: items.map((p) => (p.assignmentId === regionId ? { ...p, leftAt } : p)),
-    } satisfies PendingRecord);
-    await processPendingArrivals(userId);
-    return;
-  }
+  // Circles are registered for entry only; an exit from an older registration means nothing.
+  if (eventType === Location.GeofencingEventType.Exit) return;
 
   const record = await readCache<GeofenceRecord>(GEOFENCE_CACHE);
   if (!record || record.ownerId !== userId) return;
@@ -421,12 +279,9 @@ export async function handleGeofenceEvent(eventType: number, regionId: string | 
   const jobs = await readCachedJobs(userId);
   const current = jobs?.items.find((j) => j.id === regionId) ?? null;
 
-  const decision = decideArrival({ eventType: 'enter', regionId, zones: record.zones, today, now, handled, current });
+  const decision = decideArrival({ eventType: 'enter', regionId, zones: record.zones, today, handled, current });
   log('arrival', regionId, decision.kind, decision.kind === 'ignore' ? decision.why : '');
-  if (decision.kind === 'ignore') {
-    await processPendingArrivals(userId);
-    return;
-  }
+  if (decision.kind === 'ignore') return;
 
   // Marked BEFORE acting: a second event while this one is still working must not file twice.
   await writeHandled(userId, { ...handled, [decision.zone.assignmentId]: today });
@@ -435,22 +290,11 @@ export async function handleGeofenceEvent(eventType: number, regionId: string | 
   const place = decision.zone.label;
   const title = t('arrival.notifyTitle', { place });
 
-  if (decision.kind === 'too-early') {
-    const z = decision.zone;
-    const pending: PendingArrival = {
-      assignmentId: z.assignmentId,
-      label: place,
-      noticedAt: now.toISOString(),
-      opensAt: decision.opensAt,
-      istDay: istDayKey(now),
-      latitude: z.latitude,
-      longitude: z.longitude,
-      radius: z.watchRadius,
-    };
-    pending.reminderId = await scheduleReminder(pending, now);
-    const others = (await readPending(userId)).filter((p) => p.assignmentId !== z.assignmentId);
-    await writePending(userId, [...others, pending]);
-    await notify(title, t('arrival.notifyWillRetry', { when: formatDayTime(decision.opensAt, now, t) }), z.assignmentId);
+  if (decision.kind === 'wrong-day') {
+    // Check-in is open only on the job's own day. Say which day, plainly; nothing is sent. The
+    // server's `opensAt` (the start of that day) is preferred, the planned day otherwise.
+    const day = formatDate(decision.zone.opensAt ?? decision.zone.day, now, t);
+    await notify(title, t('arrival.notifyWrongDay', { day }), decision.zone.assignmentId);
     return;
   }
 
@@ -468,7 +312,6 @@ export async function handleGeofenceEvent(eventType: number, regionId: string | 
     // Let the person try again by hand (and a later event try again automatically).
     await writeHandled(userId, handled);
   }
-  await processPendingArrivals(userId);
 }
 
 // ── Background run ───────────────────────────────────────────────────────────────────────────
@@ -520,7 +363,6 @@ export async function runBackgroundSync(): Promise<boolean> {
       if (plan.replanGeofences) await syncGeofences(userId, jobs);
     });
   }
-  await attempt(() => processPendingArrivals(userId));
   return ok;
 }
 
@@ -539,5 +381,4 @@ export async function handlePushInBackground(raw: unknown): Promise<void> {
   const jobs = await refreshJobs(userId);
   await syncGeofences(userId, jobs);
   await processActionQueue(actionDispatchers);
-  await processPendingArrivals(userId);
 }

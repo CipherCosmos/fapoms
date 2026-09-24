@@ -76,6 +76,19 @@ export class ExpenseEntity extends BaseEntity {
   reviewNotes: string | null;
 
   /**
+   * Set only when a senior approved this claim although the approval rules refused it
+   * (`evaluateExpenseApproval`: assignment cancelled, assayer reassigned away, or the job's pay on
+   * a sent bill) — their written reason. Null on every normal approval, which is what makes a
+   * non-null value mean something. Also written to the EXPENSE_APPROVED audit event.
+   */
+  @Column({ name: 'approval_override_reason', type: 'text', nullable: true })
+  approvalOverrideReason: string | null;
+
+  /** The refusal codes that override set aside (`EXPENSE_APPROVAL_*`), comma-separated; null otherwise. */
+  @Column({ name: 'approval_override_codes', type: 'simple-array', nullable: true })
+  approvalOverrideCodes: string[] | null;
+
+  /**
    * The payable raised when this claim was approved — how the assayer actually gets the money.
    *
    * Approval used to be the end of the road: the claim reached APPROVED and no row anywhere

@@ -6,7 +6,6 @@ import {
   ASSIGNED_ASSIGNMENT_STATUSES,
   BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES,
   COMMITTED_ASSIGNMENT_STATUSES,
-  DAY_EXCLUSIVE_ASSIGNMENT_STATUSES,
   ENGAGED_ASSIGNMENT_STATUSES,
   IN_FLIGHT_ASSIGNMENT_STATUSES,
   TERMINAL_ASSIGNMENT_STATUSES,
@@ -33,10 +32,9 @@ import {
  * These are file reads, not database reads, deliberately: a unit test that needs Postgres does
  * not run in CI (`.db.spec.ts` files are excluded), and this has to fail on the pull request that
  * causes the drift rather than on a deployment afterwards. The live database was verified to
- * match this source at the time of writing:
+ * match this source at the time of writing (the per-assayer-per-day index that used to sit beside
+ * it was dropped on 2026-09-24 — `assignment-double-booking.spec.ts`):
  *
- *   idx_assignments_single_active_assayer_day … WHERE is_active AND scheduled_date IS NOT NULL
- *     AND status = ANY (ARRAY['PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS'])
  *   idx_assignments_single_active_branch      … WHERE is_active AND project_branch_id IS NOT NULL
  *     AND status = ANY (ARRAY['PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS'])
  */
@@ -85,11 +83,6 @@ function migrationIndexStatement(indexName: string): { file: string; sql: string
 
 /** The pairs: one shared constant, one database object that enforces the same rule. */
 const PINNED: Array<{ constant: AssignmentStatus[]; name: string; index: string }> = [
-  {
-    constant: DAY_EXCLUSIVE_ASSIGNMENT_STATUSES,
-    name: 'DAY_EXCLUSIVE_ASSIGNMENT_STATUSES',
-    index: 'idx_assignments_single_active_assayer_day',
-  },
   {
     constant: BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES,
     name: 'BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES',
@@ -177,8 +170,7 @@ describe('the status sets stay distinct, because they answer different questions
     for (const set of [
       COMMITTED_ASSIGNMENT_STATUSES,
       IN_FLIGHT_ASSIGNMENT_STATUSES,
-      DAY_EXCLUSIVE_ASSIGNMENT_STATUSES,
-      BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES,
+          BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES,
       ENGAGED_ASSIGNMENT_STATUSES,
       ASSIGNED_ASSIGNMENT_STATUSES,
     ]) {

@@ -16,10 +16,18 @@ jest.mock('../../hooks/useHrWorkforce', () => ({
   }),
 }));
 
+let mockRoles: string[] = ['ADMIN'];
 jest.mock('../../hooks/useCurrentRoles', () => ({
   ...jest.requireActual('../../hooks/useCurrentRoles'),
-  useCurrentRoles: () => ['ADMIN'],
+  useCurrentRoles: () => mockRoles,
+  useCurrentPermissions: () => [],
   canManageAssayers: () => true,
+}));
+
+/** Decisions waiting on the reader — the Approvals tab's number. `null` for anyone who cannot approve. */
+let mockApprovals: number | null = 2;
+jest.mock('./approvals/approval-queue', () => ({
+  useApprovalCount: () => mockApprovals,
 }));
 
 jest.mock('./useImportIssues', () => ({
@@ -34,6 +42,8 @@ describe('HrLayout navigation and contextual actions', () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    mockRoles = ['ADMIN'];
+    mockApprovals = 2;
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -145,4 +155,39 @@ describe('HrLayout navigation and contextual actions', () => {
     expect(screen.queryByRole('link', { name: /Manage roster/i })).not.toBeInTheDocument();
   });
 
+
+  /**
+   * The approver's list, and its number. For somebody who may approve, a tab carrying the decisions
+   * waiting on THEM; for HR (Operations), nothing — they prepare the file, somebody above decides it,
+   * and a tab they are refused on opening would be a door painted on a wall.
+   */
+  describe('the Approvals tab', () => {
+    const draw = () => render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/hr']}>
+          <Routes>
+            <Route path="/hr/*" element={<HrLayout />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    it('is there for an approver, with the number waiting on them', () => {
+      draw();
+      const tab = screen.getByRole('link', { name: /Approvals/ });
+      expect(tab).toHaveAttribute('href', '/hr/approvals');
+      expect(tab).toHaveTextContent('2');
+      expect(tab).toHaveAttribute('title', '2 joiners are waiting for your approval');
+    });
+
+    it('is not there for HR, who prepare the file rather than decide it', () => {
+      mockRoles = ['OPERATIONS'];
+      mockApprovals = null;
+      draw();
+      expect(screen.queryByRole('link', { name: /Approvals/ })).not.toBeInTheDocument();
+      // Everything else in the section is still theirs.
+      expect(screen.getByRole('link', { name: /Hiring/ })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /People/ })).toBeInTheDocument();
+    });
+  });
 });

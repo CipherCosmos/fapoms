@@ -24,6 +24,7 @@ import { AssayerService } from '../assayer/assayer.service';
 import { LocationTrailService } from '../assayer/location-trail.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { DAY_TRAVEL_QUERY_MARKER, DayTravelService } from './assignment-day-travel';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { OperationsInboxService } from './operations-inbox.service';
@@ -310,7 +311,6 @@ const mockNotificationService = {
   };
 
   const mockConstraintEvaluator = {
-    checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
     checkLeaves: jest.fn().mockReturnValue({ passed: true }),
     checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
     checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
@@ -322,10 +322,14 @@ const mockNotificationService = {
   /** The silent "your jobs changed" push (owner decision 2026-09-24). */
   const mockRefreshPush = { assignmentChanged: jest.fn() };
 
+  /** Travel once per assayer per day, re-decided after a day changes (assignment-day-travel.ts). */
+  const mockDayTravel = { rebalance: jest.fn(), rebalanceMany: jest.fn().mockResolvedValue(undefined) };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         { provide: AssignmentRefreshPushService, useValue: mockRefreshPush },
+        { provide: DayTravelService, useValue: mockDayTravel },
         {
           // Rules are enforced unless an administrator suspends them — see
           // modules/platform/rule-bypass. Nothing is suspended here by default, which is the
@@ -719,6 +723,176 @@ const mockNotificationService = {
     });
   });
 
+  /**
+   * Owner decisions 2026-09-24 — E8 (leave), E9 (no silent move of a live offer), completion
+   * notices, and the E11 date-change key.
+   */
+  describe('owner decisions 2026-09-24', () => {
+    const pendingOn = (day: string, over: any = {}) => ({
+      id: 'asn-1', assignmentNumber: 'ASN-1', status: AssignmentStatus.PENDING, assayerId: 'assayer-1',
+      scheduledDate: day, agreedFee: null,
+      projectBranch: { id: 'pb-1', projectId: 'p-1', status: ProjectBranchStatus.PLANNING, isActive: true, branch: { name: 'Kochi', state: 'KL' } },
+      ...over,
+    });
+    const assayerOnLeave = (from: string, to: string) => ({
+      id: 'assayer-1', displayName: 'Anu', status: AssayerStatus.ACTIVE, isActive: true,
+      leaves: [{ startDate: from, endDate: to }],
+    });
+    const codeOf = (e: any) => e?.getResponse?.()?.code ?? e?.code;
+
+    it('E8: nobody can accept a job dated inside the assayer\'s leave — refused with ASSAYER_ON_LEAVE, nothing written', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(pendingOn('2026-10-05'));
+      mockAssayerRepo.findOne.mockResolvedValue(assayerOnLeave('2026-10-04', '2026-10-06'));
+
+      let thrown: any;
+      try { await service.acceptOffer('asn-1', 'ops-1'); } catch (e) { thrown = e; }
+
+      expect(thrown).toBeInstanceOf(BadRequestException);
+      expect(codeOf(thrown)).toBe('ASSAYER_ON_LEAVE');
+      expect(mockUnitOfWork.run).not.toHaveBeenCalled();
+    });
+
+    it('E8: being on leave today does not stop accepting a job for another day', async () => {
+      const today = businessTodayDateKey();
+      mockAssignmentRepo.findOne.mockResolvedValue(pendingOn('2099-01-10'));
+      mockAssayerRepo.findOne.mockResolvedValue(assayerOnLeave(today, today));
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const result = await service.acceptOffer('asn-1', 'assayer-1');
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+    });
+
+    it('E8: an administrator\'s ASSAYER_LEAVE bypass window lets it through, and is noted', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(pendingOn('2026-10-05'));
+      mockAssayerRepo.findOne.mockResolvedValue(assayerOnLeave('2026-10-04', '2026-10-06'));
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      mockRuleBypass.isBypassed.mockResolvedValueOnce(true);
+
+      const result = await service.acceptOffer('asn-1', 'ops-1');
+      expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+      expect(mockRuleBypass.noteBypass).toHaveBeenCalledWith('ASSAYER_LEAVE', expect.objectContaining({ entityId: 'asn-1' }));
+    });
+
+    it('E8: a date the desk names while accepting is checked for leave too', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(pendingOn('2026-10-01'));
+      mockAssayerRepo.findOne.mockResolvedValue(assayerOnLeave('2026-10-04', '2026-10-06'));
+
+      let thrown: any;
+      try { await service.acceptOffer('asn-1', 'ops-1', undefined, undefined, { scheduledDate: '2026-10-05' }); } catch (e) { thrown = e; }
+      expect(codeOf(thrown)).toBe('ASSAYER_ON_LEAVE');
+    });
+
+    it('E8: a date the desk names while accepting must be workable — refused with ACCEPT_DATE_UNAVAILABLE', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(pendingOn('2026-10-01'));
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'assayer-1', status: AssayerStatus.ACTIVE, isActive: true, leaves: [] });
+      mockConstraintEvaluator.checkDateAvailability.mockResolvedValueOnce({ passed: false, reason: 'Holiday Conflict: 2026-10-02 is Gandhi Jayanti.' });
+
+      let thrown: any;
+      try { await service.acceptOffer('asn-1', 'ops-1', undefined, undefined, { scheduledDate: '2026-10-02' }); } catch (e) { thrown = e; }
+
+      expect(codeOf(thrown)).toBe('ACCEPT_DATE_UNAVAILABLE');
+      expect(thrown.message).toMatch(/Gandhi Jayanti/);
+      expect(mockConstraintEvaluator.checkDateAvailability).toHaveBeenCalledWith(expect.objectContaining({
+        scheduledDate: new Date('2026-10-02'),
+        branchState: 'KL',
+        excludeAssignmentId: 'asn-1',
+      }));
+      expect(mockUnitOfWork.run).not.toHaveBeenCalled();
+    });
+
+    it('E9: create refuses to move a live PENDING offer — BRANCH_HAS_LIVE_OFFER, pointing at Reassign', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', projectId: 'p-1', status: ProjectBranchStatus.PLANNING, branch: { name: 'Kochi', state: 'KL' }, project: {} });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-new', status: AssayerStatus.ACTIVE, isActive: true, skills: [], certifications: [] });
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-live', assignmentNumber: 'ASN-9', status: AssignmentStatus.PENDING, assayerId: 'as-old' });
+
+      let thrown: any;
+      try { await service.create({ projectBranchId: 'pb-1', assayerId: 'as-new', scheduledDate: '2026-10-01' } as any, 'ops-1'); } catch (e) { thrown = e; }
+
+      expect(thrown).toBeInstanceOf(ConflictException);
+      expect(codeOf(thrown)).toBe('BRANCH_HAS_LIVE_OFFER');
+      expect(thrown.message).toMatch(/Reassign/);
+      expect(mockUnitOfWork.run).not.toHaveBeenCalled();
+      expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalled();
+    });
+
+    it('E9: a DECLINED row is still re-offered through create', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', projectId: 'p-1', status: ProjectBranchStatus.CANDIDATE_SEARCH, branch: { name: 'Kochi', state: 'KL' }, project: {} });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-new', status: AssayerStatus.ACTIVE, isActive: true, skills: [], certifications: [] });
+      // The same assayer, offered again after declining — a declined row nobody holds is reused.
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-old', assignmentNumber: 'ASN-9', status: AssignmentStatus.REJECTED, assayerId: 'as-new', entityVersion: 3 });
+
+      const result = await service.create({ projectBranchId: 'pb-1', assayerId: 'as-new', scheduledDate: '2026-10-01' } as any, 'ops-1');
+      expect(result.status).toBe(AssignmentStatus.PENDING);
+    });
+
+    describe('completion notices', () => {
+      const onSite = (over: any = {}) => ({
+        id: 'asn-1', assignmentNumber: 'ASN-1', status: AssignmentStatus.CHECKED_IN, assayerId: 'assayer-1', createdBy: 'ops-creator',
+        checkedInAt: new Date('2026-08-20T04:00:00Z'), checkedOutAt: new Date('2026-08-20T07:00:00Z'), entityVersion: 1,
+        assayer: { displayName: 'Anu Joseph' },
+        projectBranch: { id: 'pb-1', isActive: true, status: ProjectBranchStatus.SCHEDULED, branch: { name: 'Thrissur Main' } },
+        ...over,
+      });
+
+      it('tells the assayer and the job\'s creator, per occurrence, after the commit', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(onSite());
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+        await service.completeAssignment('asn-1', 'ops-1');
+
+        const calls = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0]);
+        const toAssayer = calls.find((c) => c.type === 'ASSIGNMENT_COMPLETED');
+        const toDesk = calls.find((c) => c.type === 'ASSIGNMENT_COMPLETED_DESK');
+        expect(toAssayer).toMatchObject({ assayerId: 'assayer-1', payload: expect.objectContaining({ branchName: 'Thrissur Main' }) });
+        expect(toDesk).toMatchObject({ ownerUserId: 'ops-creator', payload: expect.objectContaining({ branchName: 'Thrissur Main', assayerName: 'Anu Joseph' }) });
+        // The committed version is the occurrence: a reopened job completed again is news again.
+        expect(toAssayer.dedupeKey).toMatch(/^ASSIGNMENT_COMPLETED:asn-1:\d+$/);
+        expect(toDesk.dedupeKey).toMatch(/^ASSIGNMENT_COMPLETED_DESK:asn-1:\d+$/);
+        // The version the completion committed (the harness locks the row at version 1).
+        expect(toAssayer.dedupeKey).toBe('ASSIGNMENT_COMPLETED:asn-1:2');
+      });
+
+      it('tells the assayer even when they are the one whose upload closed the job', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(onSite());
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+        await service.completeAssignment('asn-1', 'assayer-1');
+
+        const types = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
+        expect(types).toContain('ASSIGNMENT_COMPLETED');
+      });
+
+      it('sends nothing when the completion does not commit', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(onSite());
+        mockUnitOfWork.run.mockImplementationOnce(async () => { throw new Error('serialization failure'); });
+
+        await expect(service.completeAssignment('asn-1', 'ops-1')).rejects.toThrow();
+
+        const types = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
+        expect(types).not.toContain('ASSIGNMENT_COMPLETED');
+        expect(types).not.toContain('ASSIGNMENT_COMPLETED_DESK');
+      });
+    });
+
+    it('E11: a date change is keyed per occurrence, so A → B → A → B reaches the assayer every time', async () => {
+      const row: any = pendingOn('2026-10-01', { entityVersion: 4, projectBranch: { projectId: null, branch: { name: 'Kochi', state: 'KL' } } });
+      mockAssignmentRepo.findOne.mockResolvedValue(row);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      await service.update('asn-1', { scheduledDate: '2026-10-02' } as any, 'ops-1');
+      await service.update('asn-1', { scheduledDate: '2026-10-01' } as any, 'ops-1');
+      await service.update('asn-1', { scheduledDate: '2026-10-02' } as any, 'ops-1');
+
+      const keys = mockNotificationDispatch.emitSafe.mock.calls
+        .map((c: any[]) => c[0])
+        .filter((c) => c.type === 'ASSIGNMENT_DATE_CHANGED')
+        .map((c) => c.dedupeKey);
+      expect(keys).toHaveLength(3);
+      expect(new Set(keys).size).toBe(3);
+      expect(keys[0]).toMatch(/^ASSIGNMENT_DATE_CHANGED:asn-1:2026-10-02:\d+$/);
+    });
+  });
+
   describe('rejectOffer', () => {
     it('should reject and mark branch as CANDIDATE_SEARCH', async () => {
       const assignment = {
@@ -844,14 +1018,93 @@ const mockNotificationService = {
       expect(quoteArgs.distanceKm).toBeGreaterThan(0);
     });
 
+    /**
+     * Owner decision 2026-09-24 (E2): the decision is taken INSIDE the transaction, under the
+     * assayer lock — `dayTravelAlreadyCharged` asks whether another of their jobs that day already
+     * carries travel. Both quotes are taken beforehand (the calculator may call out to a router).
+     */
     it('quotes base fee only for a second branch on the same day', async () => {
       setup();
-      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-existing', assayerId: 'as-1' });
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      // Base-only first, full second — the order create() asks in.
+      mockFeePolicyService.quote
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 0, total: 1200 })
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 300, total: 1500, transport: { recommended: { mode: 'BUS' } } });
+      mockUnitOfWork.run.mockImplementationOnce(async (work: any) => {
+        const real = mockUnitOfWork.run.getMockImplementation()!;
+        return real(async (manager: any, emit: any) => {
+          const q = manager.query;
+          manager.query = jest.fn(async (sql: string, params?: any[]) =>
+            (String(sql).includes(DAY_TRAVEL_QUERY_MARKER) ? [{ id: 'asn-morning' }] : q(sql, params)));
+          return work(manager, emit);
+        });
+      });
 
-      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 500, scheduledDate: '2026-08-20' } as any, 'user-1');
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', scheduledDate: '2026-08-20' } as any, 'user-1');
 
-      const quoteArgs = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
-      expect(quoteArgs.distanceKm).toBe(0);
+      const created = mockAssignmentRepo.create.mock.calls.at(-1)?.[0];
+      const saved = lastSavedInTx;
+      // Priced base-only: no travel, no transport mode, and the fee is the base.
+      expect(saved.quotedTravelFee).toBe(0);
+      expect(saved.quotedTransportMode).toBeNull();
+      expect(saved.proposedFee).toBe(1200);
+      expect(saved.agreedFee).toBe(1200);
+      // The distance is a measurement and stays.
+      expect(created.quotedDistanceKm).toBeGreaterThan(0);
+    });
+
+    it('keeps a fee the desk typed on a second branch, and still records no travel quote', async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockFeePolicyService.quote
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 0, total: 1200 })
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 300, total: 1500 });
+      mockUnitOfWork.run.mockImplementationOnce(async (work: any) => {
+        const real = mockUnitOfWork.run.getMockImplementation()!;
+        return real(async (manager: any, emit: any) => {
+          const q = manager.query;
+          manager.query = jest.fn(async (sql: string, params?: any[]) =>
+            (String(sql).includes(DAY_TRAVEL_QUERY_MARKER) ? [{ id: 'asn-morning' }] : q(sql, params)));
+          return work(manager, emit);
+        });
+      });
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 1400, scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      // The desk's number went in at create and was not overwritten under the lock…
+      expect(mockAssignmentRepo.create.mock.calls.at(-1)?.[0].proposedFee).toBe(1400);
+      expect(lastSavedInTx.proposedFee).toBeUndefined();
+      // …while the travel quote on the record is the base-only one.
+      expect(lastSavedInTx.quotedTravelFee).toBe(0);
+    });
+
+    it('charges travel on the first job of the day, asking under the transaction for the same assayer and date', async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockFeePolicyService.quote
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 0, total: 1200 })
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 300, total: 1500 });
+      let asked: any[] | undefined;
+      mockUnitOfWork.run.mockImplementationOnce(async (work: any) => {
+        const real = mockUnitOfWork.run.getMockImplementation()!;
+        return real(async (manager: any, emit: any) => {
+          const q = manager.query;
+          manager.query = jest.fn(async (sql: string, params?: any[]) => {
+            if (String(sql).includes(DAY_TRAVEL_QUERY_MARKER)) { asked = params; return []; }
+            return q(sql, params);
+          });
+          return work(manager, emit);
+        });
+      });
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', scheduledDate: '2026-08-20' } as any, 'user-1');
+
+      expect(asked).toEqual(['as-1', '2026-08-20', null]);
+      const created = mockAssignmentRepo.create.mock.calls.at(-1)?.[0];
+      expect(created.quotedTravelFee).toBe(300);
+      expect(created.proposedFee).toBe(1500);
+      // Nothing re-priced it under the lock.
+      expect(lastSavedInTx.quotedTravelFee).toBeUndefined();
     });
 
     it("hands the branch's place to the quote so transport rates can price the journey", async () => {
@@ -871,7 +1124,13 @@ const mockNotificationService = {
     it('freezes the quoted breakdown on the offer — recommendation stays distinguishable from agreement', async () => {
       setup();
       mockAssignmentRepo.findOne.mockResolvedValue(null);
+      // The base-only quote is taken first, the full one second — see create().
       mockFeePolicyService.quote.mockResolvedValueOnce({
+        baseFee: 1200, branchCount: 1, baseComponent: 1200,
+        distanceKm: 0, chargeableKm: 0, travelFee: 0, total: 1200,
+        usedFallbackBaseFee: false,
+        rates: { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true },
+      }).mockResolvedValueOnce({
         baseFee: 1200, branchCount: 1, baseComponent: 1200,
         distanceKm: 40, chargeableKm: 40, travelFee: 130, total: 1330,
         usedFallbackBaseFee: false,
@@ -1374,6 +1633,61 @@ const mockNotificationService = {
       ...over,
     });
 
+    /**
+     * E12 (owner decision 2026-09-24): the office may still check an assayer in, skipping the day
+     * and distance rules, but only with a written reason — recorded on the job as an office
+     * check-in, and told to the assayer.
+     */
+    describe('checked in by the office', () => {
+      it('refuses an office check-in with no reason, with a stable code, and writes nothing', async () => {
+        const assignment = acceptedAssignment();
+        mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+        mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
+
+        let thrown: any;
+        try {
+          await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'ops-1', undefined, { officeReason: '   ' });
+        } catch (e) { thrown = e; }
+
+        expect(thrown).toBeInstanceOf(BadRequestException);
+        expect(thrown.getResponse?.()?.code ?? thrown.code).toBe('OFFICE_CHECK_IN_REASON_REQUIRED');
+        expect(assignment.status).toBe(AssignmentStatus.ACCEPTED);
+        expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalled();
+      });
+
+      it('records the reason as an office check-in and tells the assayer after the write', async () => {
+        const assignment: any = acceptedAssignment({ assignmentNumber: 'ASN-5', projectBranch: { branch: { name: 'Kochi Main', latitude: '12.9716', longitude: '77.5946' } } });
+        mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+        mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+        // Far from the branch and on no particular day: the office still skips both rules.
+        const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'ops-1', undefined, { officeReason: '  Phone died at the branch.  ' });
+
+        expect(res.success).toBe(true);
+        expect(assignment.checkInOfficeReason).toBe('Phone died at the branch.');
+        expect(assignment.checkInTimeOutcome).toBe('NOT_FROM_ASSAYER');
+        expect(mockNotificationDispatch.emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'ASSIGNMENT_CHECKED_IN_BY_OFFICE',
+          assayerId: 'assayer-1',
+          payload: expect.objectContaining({ branchName: 'Kochi Main', reason: 'Phone died at the branch.' }),
+        }));
+      });
+
+      it('asks nothing of the assayer checking themselves in, and marks nothing as the office', async () => {
+        const assignment: any = acceptedAssignment({ scheduledDate: new Date() });
+        mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+        const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1');
+
+        expect(res.success).toBe(true);
+        expect(assignment.checkInOfficeReason).toBeNull();
+        const types = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
+        expect(types).not.toContain('ASSIGNMENT_CHECKED_IN_BY_OFFICE');
+      });
+    });
+
     it('refuses a check-in from an assayer the assignment does not belong to', async () => {
       // Previously any authenticated assayer could check in on ANY assignment id, recording
       // attendance at a branch they were never assigned.
@@ -1401,7 +1715,7 @@ const mockNotificationService = {
       mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
       mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
 
-      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'ops-1');
+      const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'ops-1', undefined, { officeReason: 'Phone broke on site; branch manager confirmed arrival.' });
 
       expect(res.success).toBe(true);
     });
@@ -1424,7 +1738,7 @@ const mockNotificationService = {
           entityType: 'ASSIGNMENT',
           entityId: 'asn-1',
           ownerUserId: 'ops-1',
-          dedupeKey: 'ASSIGNMENT_CHECKED_IN:asn-1',
+          dedupeKey: expect.stringMatching(/^ASSIGNMENT_CHECKED_IN:asn-1:/),
           payload: expect.objectContaining({
             assignmentId: 'asn-1',
             assayerName: 'Asha Rao',
@@ -1490,7 +1804,7 @@ const mockNotificationService = {
       mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
       mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
 
-      const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'ops-1');
+      const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'ops-1', undefined, { officeReason: 'Correcting a record the phone could not send.' });
 
       expect(res.success).toBe(true);
       expect(assignment.checkInDistanceMeters).toBeGreaterThan(1_000_000);
@@ -1851,7 +2165,7 @@ const mockNotificationService = {
     it('ignores an arrival time sent by staff checking in on the assayer\'s behalf', async () => {
       mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
       mockLocationTrail.fixesBetween.mockResolvedValue([fixAt(minutesAgo(2))]);
-      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'ops-1', 10, { arrivedAt: minutesAgo(3).toISOString() });
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'ops-1', 10, { arrivedAt: minutesAgo(3).toISOString(), officeReason: 'Phone out of battery.' });
       expectServerTime('NOT_FROM_ASSAYER');
     });
 
@@ -1914,10 +2228,12 @@ const mockNotificationService = {
       expect(mockRefreshPush.assignmentChanged).toHaveBeenCalledWith('assayer-1', 'asn-1');
     });
 
-    it('escalating a cancelled job does not tell the assayer', async () => {
+    it('escalating a cancelled job is refused, and tells nobody', async () => {
       mockAssignmentRepo.findOne.mockResolvedValue(offer({ status: AssignmentStatus.CANCELLED, priority: Priority.MEDIUM }));
-      await service.escalate('asn-1', 'ops-1', 'x');
+      const err: any = await service.escalate('asn-1', 'ops-1', 'x').catch((e) => e);
+      expect(err?.getResponse?.()).toMatchObject({ code: 'ASSIGNMENT_CLOSED' });
       expect(emitted('ASSIGNMENT_MARKED_URGENT')).toHaveLength(0);
+      expect(emitted('ASSIGNMENT_ESCALATED')).toHaveLength(0);
     });
 
     it('a desk transition refreshes the assayer\'s phone; the assayer\'s own does not', async () => {
@@ -1929,6 +2245,203 @@ const mockNotificationService = {
       mockAssignmentRepo.findOne.mockResolvedValue(offer({ entityVersion: undefined }));
       await service.rejectOffer('asn-1', 'assayer-1', 'Too far');
       expect(mockRefreshPush.assignmentChanged).not.toHaveBeenCalled();
+    });
+  });
+  /**
+   * Gaps closed 2026-09-24 on top of the owner decisions: the day's travel re-decided after the
+   * day changes (1), Call & Assign on an offer already with that assayer (4), and travel
+   * verification measured from the previous branch of the day (6).
+   */
+  describe('lifecycle gaps 2026-09-24', () => {
+    const codeOf = (e: any) => e?.getResponse?.()?.code ?? e?.code;
+    const job = (over: any = {}) => ({
+      id: 'asn-1', assignmentNumber: 'ASN-1', status: AssignmentStatus.PENDING, assayerId: 'assayer-1',
+      scheduledDate: '2026-10-05', createdBy: 'ops-creator',
+      projectBranch: { id: 'pb-1', projectId: 'p-1', status: ProjectBranchStatus.PLANNING, isActive: true, branch: { name: 'Kochi', state: 'KL' } },
+      ...over,
+    });
+    const pairsOf = (call = 0) => (mockDayTravel.rebalanceMany.mock.calls as any[])[call]?.[0];
+
+    describe('1 — the day\'s travel is re-decided after a committed change', () => {
+      it('a decline re-decides that assayer\'s day, after the transaction', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(job());
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+        const order: string[] = [];
+        mockUnitOfWork.run.mockImplementationOnce(async (work: any) => { const r = await (mockUnitOfWork.run as any).getMockImplementation()!(work); order.push('commit'); return r; });
+        mockDayTravel.rebalanceMany.mockImplementationOnce(async () => { order.push('rebalance'); });
+        await service.rejectOffer('asn-1', 'ops-1', 'Too far');
+        expect(pairsOf()).toEqual([{ assayerId: 'assayer-1', day: '2026-10-05' }]);
+        expect(order).toEqual(['commit', 'rebalance']);
+      });
+
+      it('a cancellation re-decides that assayer\'s day', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(job({ status: AssignmentStatus.ACCEPTED }));
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+        await service.cancelAssignment('asn-1', 'ops-1', 'Client withdrew');
+        expect(pairsOf()).toEqual([{ assayerId: 'assayer-1', day: '2026-10-05' }]);
+      });
+
+      it('an accept that names a new date re-decides both days, the new one with this job arriving', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(job());
+        mockAssayerRepo.findOne.mockResolvedValue({ id: 'assayer-1', status: AssayerStatus.ACTIVE, isActive: true, leaves: [] });
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+        await service.acceptOffer('asn-1', 'ops-1', undefined, undefined, { scheduledDate: '2026-10-07' });
+        expect(pairsOf()).toEqual([
+          { assayerId: 'assayer-1', day: '2026-10-05' },
+          { assayerId: 'assayer-1', day: new Date('2026-10-07'), arrivingAssignmentId: 'asn-1' },
+        ]);
+      });
+
+      it('an accept on the same day re-decides nothing', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(job());
+        mockAssayerRepo.findOne.mockResolvedValue({ id: 'assayer-1', status: AssayerStatus.ACTIVE, isActive: true, leaves: [] });
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+        await service.acceptOffer('asn-1', 'ops-1');
+        expect(mockDayTravel.rebalanceMany).not.toHaveBeenCalled();
+      });
+
+      it('an edit that moves the date re-decides both days; an edit that does not, neither', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(job());
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+        await service.update('asn-1', { scheduledDate: '2026-10-09' }, 'ops-1');
+        expect(pairsOf()).toEqual([
+          { assayerId: 'assayer-1', day: '2026-10-05' },
+          { assayerId: 'assayer-1', day: '2026-10-09', arrivingAssignmentId: 'asn-1' },
+        ]);
+        mockDayTravel.rebalanceMany.mockClear();
+        mockAssignmentRepo.findOne.mockResolvedValue(job());
+        await service.update('asn-1', { remarks: 'bring the seal' }, 'ops-1');
+        expect(mockDayTravel.rebalanceMany).not.toHaveBeenCalled();
+      });
+
+      it('a reschedule re-decides both days', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(job({ status: AssignmentStatus.ACCEPTED }));
+        await service.scheduleAudit('asn-1', 'ops-1', '2026-10-12');
+        expect(pairsOf()).toEqual([
+          { assayerId: 'assayer-1', day: '2026-10-05' },
+          { assayerId: 'assayer-1', day: '2026-10-12', arrivingAssignmentId: 'asn-1' },
+        ]);
+      });
+    });
+
+    describe('4 — Call & Assign on a branch whose offer is already with that assayer', () => {
+      const setup = () => {
+        mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', projectId: 'p-1', status: ProjectBranchStatus.PLANNING, branch: { name: 'Kochi', state: 'KL' }, project: {} });
+        mockAssayerRepo.findOne.mockResolvedValue({ id: 'assayer-1', displayName: 'Anu', status: AssayerStatus.ACTIVE, isActive: true, skills: [], certifications: [], leaves: [] });
+        const offer = job({ id: 'asn-live', assignmentNumber: 'ASN-9', proposedFee: 1500, agreedFee: 1500, quotedBaseFee: 1200, quotedTravelFee: 300, entityVersion: 1 });
+        mockAssignmentRepo.findOne.mockResolvedValue(offer);
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+        return offer;
+      };
+
+      it('without the desk confirming: a clear 409, nothing created or changed', async () => {
+        setup();
+        const err: any = await service.create({ projectBranchId: 'pb-1', assayerId: 'assayer-1', scheduledDate: '2026-10-05' } as any, 'ops-1').catch((e) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect(codeOf(err)).toBe('OFFER_ALREADY_WITH_ASSAYER');
+        expect(err.message).toMatch(/already offered to Anu \(ASN-9\)/);
+        expect(err.message).toMatch(/Call & Assign/);
+        expect(mockUnitOfWork.run).not.toHaveBeenCalled();
+        expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalled();
+      });
+
+      it('with the desk confirming: the accept runs on that offer, at the typed fee, and it is returned', async () => {
+        setup();
+        const result: any = await service.create({
+          projectBranchId: 'pb-1', assayerId: 'assayer-1', scheduledDate: '2026-10-05', proposedFee: 1800, acceptOnBehalf: true,
+        } as any, 'ops-1');
+        expect(result.id).toBe('asn-live');
+        expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+        // The desk's number is the fee, on both columns.
+        expect(result.agreedFee).toBe(1800);
+        expect(result.proposedFee).toBe(1800);
+        // No new offer: no assignment number drawn, no ASSIGNMENT_OFFERED.
+        expect(mockAssignmentRepo.create).not.toHaveBeenCalled();
+        const types = mockNotificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
+        expect(types).toContain('ASSIGNMENT_DESK_CONFIRMED');
+        expect(types).not.toContain('ASSIGNMENT_OFFERED');
+        expect(types).not.toContain('ASSIGNMENT_ACCEPTED');
+      });
+
+      it('with no typed fee, the offer keeps its fee', async () => {
+        setup();
+        const result: any = await service.create({ projectBranchId: 'pb-1', assayerId: 'assayer-1', acceptOnBehalf: true } as any, 'ops-1');
+        expect(result.status).toBe(AssignmentStatus.ACCEPTED);
+        expect(result.agreedFee).toBe(1500);
+      });
+
+      it('a typed fee over twice the offer\'s quote is refused, and nothing is accepted', async () => {
+        setup();
+        await expect(service.create({
+          projectBranchId: 'pb-1', assayerId: 'assayer-1', proposedFee: 3001, acceptOnBehalf: true,
+        } as any, 'ops-1')).rejects.toThrow(/exceeds twice/);
+        expect(mockUnitOfWork.run).not.toHaveBeenCalled();
+      });
+
+      it('another assayer\'s offer is still BRANCH_HAS_LIVE_OFFER, even when the desk confirms', async () => {
+        setup();
+        mockAssignmentRepo.findOne.mockResolvedValue(job({ id: 'asn-live', assayerId: 'someone-else' }));
+        const err: any = await service.create({ projectBranchId: 'pb-1', assayerId: 'assayer-1', acceptOnBehalf: true } as any, 'ops-1').catch((e) => e);
+        expect(codeOf(err)).toBe('BRANCH_HAS_LIVE_OFFER');
+      });
+    });
+
+    describe('6 — travel verification measures a later visit from the previous branch of the day', () => {
+      const checkedIn = (over: any = {}) => job({
+        status: AssignmentStatus.CHECKED_IN,
+        checkedInAt: new Date('2026-10-05T08:00:00Z'),
+        quotedDistanceKm: 42, quotedDistanceSource: 'OSRM',
+        assayer: { id: 'assayer-1', isLiveEnabled: true, homeLatitude: 10.0, homeLongitude: 76.0 },
+        projectBranch: { id: 'pb-1', branch: { name: 'Kochi', latitude: 10.2, longitude: 76.3 } },
+        ...over,
+      });
+      let earlier: any[];
+      beforeEach(() => {
+        earlier = [];
+        (mockAssignmentRepo as any).manager = { query: jest.fn(async () => earlier) };
+      });
+      afterEach(() => { delete (mockAssignmentRepo as any).manager; });
+
+      it('the day\'s first visit: the home baseline the quote priced', async () => {
+        mockAssignmentRepo.findOne.mockResolvedValue(checkedIn());
+        const r = await service.getTravelVerification('asn-1');
+        expect(r).toMatchObject({ expectedBaseline: 'HOME', expectedDistanceKm: 42, expectedDistanceSource: 'OSRM', expectedIsRecomputed: false, previousVisit: null });
+        expect(mockRoutingService.calculateRoute).not.toHaveBeenCalled();
+      });
+
+      it('a second visit: routed previous branch → this branch, and the response says so', async () => {
+        earlier = [{ left_at: '2026-10-05T06:30:00Z', id: 'asn-0', assignment_number: 'ASN-0', latitude: '10.10', longitude: '76.20' }];
+        mockAssignmentRepo.findOne.mockResolvedValue(checkedIn());
+        mockRoutingService.calculateRoute.mockResolvedValueOnce({ distanceKm: 14.5, durationMinutes: 25, source: 'OSRM' });
+        const r = await service.getTravelVerification('asn-1');
+        expect(mockRoutingService.calculateRoute).toHaveBeenCalledWith({ latitude: 10.1, longitude: 76.2 }, { latitude: 10.2, longitude: 76.3 });
+        expect(r).toMatchObject({
+          expectedBaseline: 'PREVIOUS_BRANCH', expectedDistanceKm: 14.5, expectedDistanceSource: 'OSRM', expectedIsRecomputed: true,
+          previousVisit: { assignmentId: 'asn-0', assignmentNumber: 'ASN-0' },
+        });
+        // And the trail is still read from the earlier departure.
+        expect(mockLocationTrail.assessAssignmentTravel).toHaveBeenCalledWith(expect.objectContaining({
+          expectedDistanceKm: 14.5, notBefore: new Date('2026-10-05T06:30:00Z'),
+        }));
+      });
+
+      it('router down: a straight line from the previous branch, labelled ESTIMATE', async () => {
+        earlier = [{ left_at: '2026-10-05T06:30:00Z', id: 'asn-0', assignment_number: 'ASN-0', latitude: 10.1, longitude: 76.2 }];
+        mockAssignmentRepo.findOne.mockResolvedValue(checkedIn());
+        mockRoutingService.calculateRoute.mockRejectedValueOnce(new Error('osrm down'));
+        const r = await service.getTravelVerification('asn-1');
+        expect(r.expectedBaseline).toBe('PREVIOUS_BRANCH');
+        expect(r.expectedDistanceSource).toBe('ESTIMATE');
+        expect(r.expectedDistanceKm).toBeGreaterThan(10);
+        expect(r.expectedDistanceKm).toBeLessThan(20);
+      });
+
+      it('a previous branch with no coordinates falls back to the home baseline', async () => {
+        earlier = [{ left_at: '2026-10-05T06:30:00Z', id: 'asn-0', assignment_number: 'ASN-0', latitude: null, longitude: null }];
+        mockAssignmentRepo.findOne.mockResolvedValue(checkedIn());
+        const r = await service.getTravelVerification('asn-1');
+        expect(r).toMatchObject({ expectedBaseline: 'HOME', expectedDistanceKm: 42, previousVisit: null });
+      });
     });
   });
 });

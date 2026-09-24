@@ -56,7 +56,7 @@ export class OnboardingApprovalService {
   }
 
   /** The approver's queue: everybody with an open round, oldest first. */
-  async queue(): Promise<Array<ApprovalRoundView & { assayerId: string; displayName: string; assayerCode: string | null }>> {
+  async queue(): Promise<Array<ApprovalRoundView & { assayerId: string; displayName: string; assayerCode: string | null; region: string | null }>> {
     const rows = await this.unitOfWork.run((m) => m.getRepository(AssayerOnboardingApprovalEntity)
       .find({ where: OPEN.map((status) => ({ status })), order: { createdAt: 'ASC' } }));
     if (rows.length === 0) return [];
@@ -66,14 +66,18 @@ export class OnboardingApprovalService {
         const w = tenantWhere<AssayerEntity>({ id, isActive: true });
         return Array.isArray(w) ? w : [w];
       }),
-      select: { id: true, displayName: true, assayerCode: true, lifecycleStatus: true },
+      // `region` so the controller can hold a regional approver to their own regions.
+      select: { id: true, displayName: true, assayerCode: true, lifecycleStatus: true, region: true },
     }));
     const byId = new Map(people.map((p) => [p.id, p]));
     const named = await this.withNames(rows.filter((r) => byId.has(r.assayerId)));
     return named.map((v) => {
       const row = rows.find((r) => r.id === v.id)!;
       const person = byId.get(row.assayerId)!;
-      return { ...v, assayerId: row.assayerId, displayName: person.displayName, assayerCode: person.assayerCode ?? null };
+      return {
+        ...v, assayerId: row.assayerId, displayName: person.displayName, assayerCode: person.assayerCode ?? null,
+        region: person.region ?? null,
+      };
     });
   }
 

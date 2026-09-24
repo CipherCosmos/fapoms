@@ -20,8 +20,8 @@ import {
   PUSH_TASK,
   SYNC_TASK,
   handleGeofenceEvent,
+  ensureSyncInterval,
   handlePushInBackground,
-  refreshSyncInterval,
   runBackgroundSync,
   stopBackgroundWatching,
 } from './runtime';
@@ -70,8 +70,8 @@ setIosBackgroundHandler(async (data) => {
  */
 export async function registerBackgroundWork(): Promise<void> {
   if (Platform.OS === 'web') return;
-  // Every 30 minutes, or 15 while an early arrival is waiting to be checked in.
-  await refreshSyncInterval();
+  // Every 30 minutes (BACKGROUND_INTERVAL_MINUTES).
+  await ensureSyncInterval();
   try {
     if (!(await TaskManager.isTaskRegisteredAsync(PUSH_TASK))) await Notifications.registerTaskAsync(PUSH_TASK);
   } catch {

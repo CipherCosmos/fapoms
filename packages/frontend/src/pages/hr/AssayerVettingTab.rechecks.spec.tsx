@@ -117,7 +117,8 @@ describe('re-checks over time on the Background tab', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Record' })[1]);
     const dialog = within(await screen.findByRole('dialog'));
     expect(dialog.getByText('Record a police verification')).toBeInTheDocument();
-    expect(dialog.getByRole('button', { name: 'Police verification', pressed: true })).toBeInTheDocument();
+    // The row decided which check this is; the dialog offers no way to record a different one.
+    expect(dialog.queryByRole('group', { name: 'Which check' })).not.toBeInTheDocument();
     expect(dialog.getByLabelText('Issuing police station')).toHaveValue('Shivajinagar PS');
     expect(dialog.getByText('Uploaded (1 file) — from Shivajinagar PS')).toBeInTheDocument();
     // Risk yes, credit fields no — they belong to the credit check.

@@ -203,6 +203,12 @@ export const queryKeys = {
     interviews: ['hr', 'interviews'] as const,
     /** Working assayers whose re-checks are due, overdue or held — `/hr/rechecks`. */
     rechecks: ['hr', 'rechecks'] as const,
+    /**
+     * Joiners awaiting the approval before training — `/hr/approvals`, and the count beside it in
+     * the sidebar and the HR tab strip. One key, so the page and both counts share one response
+     * and cannot disagree.
+     */
+    approvals: ['hr', 'approvals'] as const,
     /** Prefix: every applications query regardless of status filter. */
     applicationsAll: ['hr', 'applications'] as const,
     /**

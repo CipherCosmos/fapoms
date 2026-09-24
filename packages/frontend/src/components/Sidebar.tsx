@@ -22,6 +22,7 @@ import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { permissionKeysFrom } from '../hooks/useCurrentRoles';
 import { WORK_TABS } from '../pages/work/workTabs';
+import { useApprovalCount } from '../pages/hr/approvals/approval-queue';
 import { BrandLogo } from './BrandLogo';
 
 interface SidebarProps {
@@ -53,8 +54,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
    * across all four, since the visitor never leaves the destination by switching tab.
    */
   const auditWorkTabs = WORK_TABS.filter((tab) => canAccessRoute(userRoles, userPermissions, tab.path));
+  /*
+    Joiners waiting for THIS reader's approval before training. It sits on the Workforce row rather
+    than a row of its own: the HR section's pages were taken out of the sidebar on purpose (several
+    rows for one subject, two of them lighting up at once — see the note on the recruitment routes
+    in App.tsx), and the Approvals tab inside Workforce carries the same number from the same query.
+  */
+  const approvalsWaiting = useApprovalCount();
 
-  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; tooltip: string }[] }[] = [
+  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; tooltip: string; badge?: number | null }[] }[] = [
     {
       category: 'Overview',
       items: [
@@ -140,7 +148,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
           path: '/hr',
           icon: UserCog,
           activePaths: ['/hr', '/hr/roster', '/hr/pay', '/hr/where', '/hr/issues', '/hr/interviews', '/hr/applications', '/hr/onboarding'],
-          tooltip: 'Assayer roster, onboarding, recruitment pipeline, live attendance, and payout ledger',
+          tooltip: approvalsWaiting
+            ? `${approvalsWaiting} ${approvalsWaiting === 1 ? 'joiner is' : 'joiners are'} waiting for your approval — open Workforce, then Approvals`
+            : 'Assayer roster, onboarding, recruitment pipeline, live attendance, and payout ledger',
+          badge: approvalsWaiting,
         },
       ],
     },
@@ -200,10 +211,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
           tooltip: 'Dispatch notifications, SLA breach alerts, and escalation triggers',
         },
         {
-          name: 'Approvals',
+          /*
+            Named for what it is. It was "Approvals", described as "pending management approvals, fee
+            overrides, and exception sign-offs" — none of which it holds. It is the second admin's
+            half of a developer's data-wipe request, and with joiner approvals now a list of their
+            own (Workforce → Approvals), an approver looking for them would have landed here.
+          */
+          name: 'Data-wipe requests',
           path: '/admin/approvals',
           icon: ShieldCheck,
-          tooltip: 'Pending management approvals, fee overrides, and exception sign-offs',
+          tooltip: 'A developer\'s request to wipe data, waiting for a second admin to approve or reject it',
         },
         {
           name: 'Security & Compliance',
@@ -234,7 +251,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
     }))
     .filter((group) => group.items.length > 0);
 
-  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; tooltip: string }) => {
+  const renderNavLink = (item: {
+    name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; tooltip: string;
+    /** Something waiting on this reader there. Shown only when it is a positive number. */
+    badge?: number | null;
+  }) => {
     const Icon = item.icon;
     // `activePaths` exists for merged destinations (Audit Work), whose tabs are each their own
     // URL: without it, switching to a tab other than the one this row links to would un-highlight
@@ -268,6 +289,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       >
         <Icon size={18} style={{ minWidth: '18px', flexShrink: 0 }} />
         {!collapsed && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</span>}
+        {!!item.badge && item.badge > 0 && (
+          <span
+            data-testid={`sidebar-badge-${item.path}`}
+            aria-label={`${item.badge} waiting for you`}
+            style={collapsed
+              // Collapsed, there is no room beside the name: a number on the icon's corner.
+              ? {
+                position: 'absolute', top: '2px', right: '2px', minWidth: '16px', height: '16px', padding: '0 4px',
+                borderRadius: '8px', fontSize: 'var(--text-3xs)', fontWeight: 700, lineHeight: '16px', textAlign: 'center',
+                background: 'var(--danger)', color: '#fff', boxSizing: 'border-box',
+              }
+              : {
+                marginLeft: 'auto', fontSize: 'var(--text-xs)', fontWeight: 700, padding: '1px 7px', borderRadius: '9px',
+                background: 'var(--status-cancelled-bg)', color: 'var(--danger)', flexShrink: 0,
+              }}
+          >
+            {item.badge}
+          </span>
+        )}
         {collapsed && isActive && (
           <div style={{ position: 'absolute', left: 0, top: '6px', bottom: '6px', width: '3px', background: 'var(--accent-primary)', borderRadius: '2px' }} />
         )}

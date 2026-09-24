@@ -495,6 +495,14 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
                 <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — phone accuracy ±{assignment.checkInAccuracyMeters} m</span>
               )}
             </p>
+            {/* The office vouched for this arrival, not the assayer's phone — said in words, with
+                the reason they gave, so it is never read as an ordinary on-site check-in. */}
+            {attendance.officeCheckIn && (
+              <p style={{ fontSize: 'var(--text-2xs)', margin: '1px 0 3px', color: 'var(--warning)', fontWeight: 600 }}>
+                Checked in by the office
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> — reason: “{attendance.officeCheckIn.reason}”</span>
+              </p>
+            )}
             {attendance.departure ? (
               <>
                 <p style={{ fontSize: 'var(--text-xs)', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>

@@ -1,6 +1,7 @@
 import { translatorFor } from './catalogues';
 import {
   calendarDaysFrom,
+  formatDate,
   formatDay,
   formatDayTime,
   formatRupees,
@@ -85,6 +86,13 @@ describe('dates in words', () => {
 
   it('says so when there is no date', () => {
     expect(formatDay(null, now, en)).toBe('Date not known');
+  });
+
+  it('spells the date out even for tomorrow, for sentences that read "on …"', () => {
+    expect(formatDate('2026-09-25', now, en)).toBe('25 September');
+    expect(formatDate('2026-09-24T18:30:00.000Z', new Date('2026-09-24T02:30:00.000Z'), en)).toMatch(/^2[45] September$/);
+    expect(formatDate('2027-01-05', now, en)).toBe('5 January 2027');
+    expect(translatorFor('en')('arrival.notifyWrongDay', { day: formatDate('2026-09-25', now, en) })).toBe('Your job here is on 25 September.');
   });
 
   it('tells the time with the part of the day', () => {

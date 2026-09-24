@@ -80,9 +80,18 @@ export function monthName(t: Translator, monthIndex0: number): string {
 }
 
 /**
- * A day in plain words: "Today", "Tomorrow", "Yesterday", else "24 September" (with the year only
- * when it is not this year). Never "24/09" — day/month order is exactly what gets misread.
+ * A calendar date, always spelled out: "24 September" (with the year only when it is not this
+ * year). For sentences that already read "on …", where "on Tomorrow" would not. Never "24/09" —
+ * day/month order is exactly what gets misread.
  */
+export function formatDate(input: Date | string | null | undefined, now: Date, t: Translator): string {
+  const d = toLocalDate(input);
+  if (!d) return t('date.unknown');
+  const vars = { day: d.getDate(), month: monthName(t, d.getMonth()), year: d.getFullYear() };
+  return d.getFullYear() === now.getFullYear() ? t('date.dayMonth', vars) : t('date.dayMonthYear', vars);
+}
+
+/** A day in plain words: "Today", "Tomorrow", "Yesterday", else as `formatDate`. */
 export function formatDay(input: Date | string | null | undefined, now: Date, t: Translator): string {
   const d = toLocalDate(input);
   if (!d) return t('date.unknown');
@@ -90,8 +99,7 @@ export function formatDay(input: Date | string | null | undefined, now: Date, t:
   if (diff === 0) return t('date.today');
   if (diff === 1) return t('date.tomorrow');
   if (diff === -1) return t('date.yesterday');
-  const vars = { day: d.getDate(), month: monthName(t, d.getMonth()), year: d.getFullYear() };
-  return d.getFullYear() === now.getFullYear() ? t('date.dayMonth', vars) : t('date.dayMonthYear', vars);
+  return formatDate(d, now, t);
 }
 
 /**

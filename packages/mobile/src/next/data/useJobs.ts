@@ -6,8 +6,6 @@ import { processActionQueue } from '../../services/action-queue';
 import { isStampCurrent, stampSession } from '../../services/session-epoch';
 import type { AssayerAssignment } from '../../types/mobile-app';
 import {
-  nextPendingOpening,
-  processPendingArrivals,
   readCachedJobs,
   refreshJobs,
   subscribeJobsChanged,
@@ -54,8 +52,6 @@ export function useJobs(): JobsState {
       setSavedAt(new Date().toISOString());
       setLoaded(true);
       void syncGeofences(userId, items).catch(() => undefined);
-      // An early arrival waiting for check-in to open is tried whenever the app comes forward.
-      void processPendingArrivals(userId).catch(() => undefined);
     } catch {
       if (!isStampCurrent(stamp)) return;
       setStale(true);
@@ -98,22 +94,6 @@ export function useJobs(): JobsState {
       unsubscribe();
     };
   }, [isAuthenticated, userId, refresh]);
-
-  // While the app is open, try a waiting early arrival the moment check-in opens.
-  useEffect(() => {
-    if (!isAuthenticated || !userId) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-    void nextPendingOpening(userId).then((when) => {
-      if (cancelled || !when) return;
-      // setTimeout's ceiling is ~24.8 days; an opening is always within the same day.
-      timer = setTimeout(() => void processPendingArrivals(userId).then(refresh).catch(() => undefined), Math.max(0, when.getTime() - Date.now()) + 5_000);
-    });
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [isAuthenticated, userId, jobs, refresh]);
 
   return { jobs, loading, stale, savedAt, loaded, refresh };
 }

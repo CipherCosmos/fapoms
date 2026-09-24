@@ -17,14 +17,36 @@ export interface PlanOverrideDto {
   lockAssayer?: boolean;
   pinAssignment?: boolean;
   justification: string;
+  /**
+   * A fee the desk typed for this branch. The only fee a deploy sends to `create()`; without one
+   * the job is priced there, by the same calculator and travel-once rule as every other offer.
+   */
+  deskFee?: number | null;
 }
 
 /**
- * One assayer works one audit a day — the same rule `ConstraintEvaluator.checkDoubleBooking`
- * enforces at creation time. Spreading honours it up front so the deploy does not spend a
- * round trip discovering it per branch.
+ * The fee a deploy sends for one branch: the desk's typed number, or nothing.
+ *
+ * The coverage engine's per-branch `fee` is a planning ESTIMATE — `quote({ distanceKm: 0 })`, i.e.
+ * the base fee with no travel at all ("per-branch travel resolved at assign time"). Deploy used to
+ * send it as `proposedFee`, and `create()` records a supplied fee as the desk's number: so every
+ * deployed offer was booked at base-only, the first job of each assayer's day never carried the
+ * journey, and travel-once could not apply because there was no travel to charge once. Omitting it
+ * lets `create()` price the job the normal way — the routed home→branch quote, base-only when the
+ * assayer's day already carries travel.
  */
-const MAX_AUDITS_PER_ASSAYER_PER_DAY = 1;
+export function deployFeeFor(item: { deskFee?: number | null }): number | undefined {
+  const typed = item.deskFee;
+  return typed !== undefined && typed !== null && Number.isFinite(Number(typed)) ? Number(typed) : undefined;
+}
+
+/*
+ * There is no per-assayer-per-day cap. There used to be one (`MAX_AUDITS_PER_ASSAYER_PER_DAY = 1`),
+ * mirroring the one-job-per-day rule; owner decision 2026-09-24 (E2) is that one assayer may take
+ * several branches on the same day with no limit, so a cluster planned as one day's work now
+ * deploys onto one day. Travel on the second and later branches of that day is not charged again —
+ * `AssignmentService.create` decides that (the first job of the day carries the journey).
+ */
 
 /**
  * How many `suggestAuditDate` lookups run at once. A 155-branch plan doing these one at a time
@@ -39,8 +61,7 @@ const MAX_SPREAD_DAYS = 365;
 
 /**
  * How many real `assignmentService.create` attempts one branch may burn retrying past a holiday
- * it collided with. Bounded separately from `MAX_SPREAD_DAYS` — the in-memory capacity hops
- * above are free (a Map lookup), but each retry here is a real write attempt the server rejects,
+ * it collided with. Bounded separately from `MAX_SPREAD_DAYS` — each retry here is a real write attempt the server rejects,
  * and a plan spanning a genuinely unworkable stretch must not turn into hundreds of sequential
  * round trips for one branch. A fortnight of holiday collisions in a row does not happen; this
  * still leaves generous headroom over the worst realistic case (two adjacent state holidays).
@@ -176,6 +197,9 @@ export class OperationsPlanningService {
         if (ba) {
           ba.assayerId = ov.assayerId;
           ba.assayerName = `Override: ${ov.assayerId}`;
+          // Only an explicit, typed number is carried as the desk's fee (see `deployFeeFor`).
+          const typed = ov.deskFee;
+          ba.deskFee = typed !== undefined && typed !== null && Number.isFinite(Number(typed)) ? Number(typed) : null;
         }
         cluster.assignedAssayerId = ov.assayerId;
         cluster.assignedAssayerName = `Override: ${ov.assayerId}`;
@@ -317,31 +341,31 @@ export class OperationsPlanningService {
       branchId: string;
       projectBranchId: string;
       assayerId: string;
-      fee: number;
+      /** The desk's typed fee, or undefined — `create()` then prices the job. */
+      fee: number | undefined;
       earliestOffsetDays: number;
     }> = [];
 
     for (const cluster of clusters) {
       // Prefer the per-branch assignments the engine now records — each branch deploys to its OWN
-      // recommended assayer at its own quoted fee. Older/parallel plans without per-branch data fall
-      // back to the cluster-wide assayer + an even fee split (legacy behaviour).
-      const perBranch: Array<{ branchId: string; assayerId: string | null; fee: number | null }> =
+      // recommended assayer. Older/parallel plans without per-branch data fall back to the
+      // cluster-wide assayer (legacy behaviour). Each branch deploys with the desk's typed fee when the plan carries one, and with NO fee
+      // otherwise — `create()` prices it (see `deployFeeFor`). The engine's own `fee`, and the legacy
+      // even split of `estimatedTotalFee`, are estimates and are never sent.
+      const perBranch: Array<{ branchId: string; assayerId: string | null; deskFee: number | null }> =
         Array.isArray(cluster.branchAssignments) && cluster.branchAssignments.length > 0
-          ? cluster.branchAssignments.map((ba: any) => ({ branchId: ba.branchId, assayerId: ba.assayerId, fee: ba.fee }))
-          : (() => {
-              const branchIds: string[] = cluster.branchIds ?? [];
-              const perBranchFee = cluster.estimatedTotalFee != null && branchIds.length > 0
-                ? Math.round((Number(cluster.estimatedTotalFee) / branchIds.length) * 100) / 100
-                : null;
-              return branchIds.map((branchId) => ({ branchId, assayerId: cluster.assignedAssayerId ?? null, fee: perBranchFee }));
-            })();
+          ? cluster.branchAssignments.map((ba: any) => ({ branchId: ba.branchId, assayerId: ba.assayerId, deskFee: ba.deskFee ?? null }))
+          : (cluster.branchIds ?? []).map((branchId: string) => ({ branchId, assayerId: cluster.assignedAssayerId ?? null, deskFee: null }));
 
-      // A cluster with an `estimatedDurationDays` estimate was planned as multi-day work; its
-      // branches are spaced to occupy that many days rather than being crammed into the first
-      // free ones, so the deployed calendar matches the plan the operator approved.
+      // How many of this cluster's branches go on each day. A cluster with an
+      // `estimatedDurationDays` estimate was planned as that many days of work, so its branches
+      // are shared out over exactly those days — several per day when there are more branches
+      // than days (allowed since 2026-09-24). A cluster with no estimate keeps the old spacing of
+      // one branch per day: nobody planned it as a single day, and a 30-branch cluster must not
+      // land on one date by default.
       const durationDays = Number(cluster.estimatedDurationDays) || 0;
-      const stride = perBranch.length > 1 && durationDays > 1
-        ? Math.max(1, Math.floor(durationDays / perBranch.length))
+      const branchesPerDay = durationDays >= 1 && perBranch.length > 0
+        ? Math.max(1, Math.ceil(perBranch.length / durationDays))
         : 1;
 
       let indexInCluster = 0;
@@ -356,20 +380,15 @@ export class OperationsPlanningService {
           skipped.push({ clusterId: cluster.id, branchId: item.branchId, reason: 'Branch is no longer part of this project.' });
           continue;
         }
-        if (item.fee == null) {
-          skipped.push({ clusterId: cluster.id, branchId: item.branchId, reason: 'Plan carries no quoted fee for this branch.' });
-          continue;
-        }
-
         allocations.push({
           clusterId: cluster.id,
           branchId: item.branchId,
           projectBranchId: projectBranch.id,
           assayerId: item.assayerId,
-          fee: item.fee,
-          // The cluster's own share of the campaign window: branch #3 of a 6-day cluster does
-          // not start on day one.
-          earliestOffsetDays: position * stride,
+          fee: deployFeeFor(item),
+          // The cluster's own share of the campaign window: branch #3 of a 6-branch, 3-day
+          // cluster starts on day two, alongside branch #4.
+          earliestOffsetDays: Math.floor(position / branchesPerDay),
         });
       }
     }
@@ -384,25 +403,24 @@ export class OperationsPlanningService {
      * A deploy that died part-way — a restart, an out-of-memory kill, the old request that the
      * browser abandoned at 30 s while the server carried on — left the plan APPROVED with some of
      * its offers made. Deploying it again walked every branch from the top, and `create` on a branch
-     * with a PENDING offer does not refuse: it reassigns that offer, with a fresh event and a fresh
-     * notification to the assayer. Those branches are now left exactly as the earlier run left
-     * them, reported as deployed, and their day counted against the assayer's capacity so the
-     * remaining branches spread around them rather than into them.
+     * with a PENDING offer used to reassign that offer, with a fresh event and a fresh
+     * notification to the assayer (it now refuses with BRANCH_HAS_LIVE_OFFER). Those branches are
+     * left exactly as the earlier run left them and reported as deployed.
      */
     const requestIdOf = (alloc: { projectBranchId: string }) =>
       deploymentRequestId(plan.id, plan.currentVersion, alloc.projectBranchId);
     const earlierRuns = await this.findEarlierDeployments(allocations.map(requestIdOf));
     let alreadyDeployedCount = 0;
 
-    // Spread: walk allocations in plan order, giving each branch the first date that is
-    // workable FOR THAT BRANCH and on which its assayer still has capacity.
+    // Spread: walk allocations in plan order, giving each branch the first date on or after its
+    // offset that is workable FOR THAT BRANCH. (No per-assayer day capacity any more — see the
+    // note at the top of this file.)
     //
     // `branchDate.blocked` is NOT a complete holiday calendar — it is only the handful of dates
     // `suggestAuditDate` happened to step over on its own one-time search for the branch's
     // EARLIEST workable date, resolved once, up front (see `resolveWorkableDates`). A candidate
-    // this loop pushes past that narrow window — by the campaign's own per-branch offset, or by
-    // colliding with another branch's assayer on the same day, which is the ordinary case for
-    // exactly the multi-branch bundling this executor exists to deploy — can land on a real
+    // this loop pushes past that narrow window — by the campaign's own per-branch offset — can
+    // land on a real
     // holiday or non-working Saturday `blocked` never recorded. `nextWorkableDate` on its own
     // only catches a plain Sunday.
     //
@@ -414,20 +432,10 @@ export class OperationsPlanningService {
     //
     // `assignmentService.create` is the one place that always knows (see `resolveWorkableDates`'
     // own comment) — a "Holiday Conflict:" rejection from it now advances the candidate and
-    // retries, the same way a capacity collision already did, instead of giving up on the branch.
+    // retries instead of giving up on the branch.
     // Any OTHER rejection (fee ceiling, eligibility, ...) is not a date problem and advancing the
     // date cannot fix it, so it still fails the branch immediately, unchanged from before.
-    //
-    // The capacity slot is booked only once `create` actually succeeds — booking it on a merely
-    // locally-computed candidate let one branch's later-rejected attempt silently consume a day
-    // no one else's assignment ever used, which is why the third branch above was pushed two
-    // holidays deep instead of one.
-    const loadByAssayerDate = new Map<string, number>();
-    for (const earlier of earlierRuns.values()) {
-      if (!earlier.assayerId || !earlier.scheduledDate) continue;
-      const key = `${earlier.assayerId}|${earlier.scheduledDate}`;
-      loadByAssayerDate.set(key, (loadByAssayerDate.get(key) ?? 0) + 1);
-    }
+
     let allocationIndex = 0;
     for (const alloc of allocations) {
       await onProgress?.(allocationIndex++, allocations.length, 'Creating offers');
@@ -449,26 +457,21 @@ export class OperationsPlanningService {
       let lastRejection: string | null = null;
       let createAttempts = 0;
       for (let hop = 0; hop < MAX_SPREAD_DAYS; hop++) {
-        const loadKey = `${alloc.assayerId}|${candidate}`;
-        if ((loadByAssayerDate.get(loadKey) ?? 0) >= MAX_AUDITS_PER_ASSAYER_PER_DAY) {
-          candidate = this.nextWorkableDate(addDays(candidate, 1), branchDate?.blocked);
-          continue;
-        }
         if (createAttempts >= MAX_CREATE_ATTEMPTS_PER_BRANCH) break;
         createAttempts++;
         try {
-          // Still an OFFER: `assignmentService.create` writes a PENDING proposal at the fee the
-          // human approved. Nothing here grants an assayer's commitment or a rupee of it.
+          // Still an OFFER: `assignmentService.create` writes a PENDING proposal, priced by the
+          // normal create pricing (quote + travel once a day) unless the desk typed a fee for this
+          // branch. Nothing here grants an assayer's commitment or a rupee of it.
           const assignment = await this.assignmentService.create({
             projectBranchId: alloc.projectBranchId,
             assayerId: alloc.assayerId,
-            proposedFee: alloc.fee,
+            ...(alloc.fee !== undefined ? { proposedFee: alloc.fee } : {}),
             scheduledDate: candidate,
             // The durable per-branch guard — see `deploymentRequestId`. The lookup above spares a
             // re-run the work; this is what still holds if two runs reach one branch at once.
             clientRequestId: requestId,
           }, userId);
-          loadByAssayerDate.set(loadKey, (loadByAssayerDate.get(loadKey) ?? 0) + 1);
           placed = candidate;
           deployed.push({ branchId: alloc.branchId, assignmentId: assignment.id, scheduledDate: placed });
           break;
@@ -495,7 +498,7 @@ export class OperationsPlanningService {
         skipped.push({
           clusterId: alloc.clusterId,
           branchId: alloc.branchId,
-          reason: lastRejection ?? `No workable date within a year — the assigned assayer is already at capacity on every available day.`,
+          reason: lastRejection ?? `No workable date within a year for this branch.`,
         });
       }
     }

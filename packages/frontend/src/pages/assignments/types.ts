@@ -18,6 +18,13 @@ export interface Assignment {
   checkInLongitude?: number | null;
   checkInAccuracyMeters?: number | null;
   checkInDistanceMeters?: number | null;
+  /**
+   * Set when the OFFICE (admin / operations) checked the assayer in rather than the assayer's own
+   * phone, with the reason they wrote. Null for an ordinary check-in. Such a check-in also carries
+   * `checkInTimeOutcome === 'NOT_FROM_ASSAYER'`.
+   */
+  checkInOfficeReason?: string | null;
+  checkInTimeOutcome?: string | null;
   // The departure half. The API has returned these all along; the web app referenced none of
   // them, so a visit that never ended looked exactly like one that did.
   checkedOutAt?: string | null;

@@ -117,6 +117,39 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
   clientRequestId?: string;
 }
 
+/**
+ * `POST /assignments/:id/reassign`. The move, the desk's typed fee, a new date and the desk's
+ * record of the incoming assayer's acceptance are ONE request and one transaction (owner decision
+ * 2026-09-24) — the planning screen used to send three, and a failure after the first left the job
+ * moved at the rate card's price with nobody's acceptance recorded.
+ */
+class ReassignAssignmentRequestDto {
+  @IsString() @IsNotEmpty()
+  newAssayerId: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(2000)
+  reason: string;
+
+  @IsOptional() @IsNumber()
+  expectedVersion?: number;
+
+  @IsOptional() @IsString() @MaxLength(100)
+  clientRequestId?: string;
+
+  /** The fee the desk typed for the incoming assayer; same ceiling as create (twice the quote). */
+  @IsOptional() @IsNumber() @Min(0)
+  proposedFee?: number;
+
+  @IsOptional() @IsDateString()
+  scheduledDate?: string;
+
+  @IsOptional() @IsBoolean()
+  acceptOnBehalf?: boolean;
+
+  @IsOptional() @IsString() @MaxLength(1000)
+  acceptanceReason?: string;
+}
+
 /** Escalation reason is free text and optional; the endpoint applies a default when absent. */
 class EscalateAssignmentRequestDto {
   @IsOptional() @IsString() @MaxLength(1000)
@@ -206,6 +239,15 @@ function ownershipActionFor(targetStatus: string): AssignmentAction {
     return AssignmentAction.CHECK_IN;
   }
   return AssignmentAction.ACCEPT;
+}
+
+/**
+ * The written reason an office check-in must carry (owner decision 2026-09-24, E12). Read from
+ * `officeReason`, else `reason`, else `remarks` — whichever the desk's client sends.
+ */
+function officeReasonFrom(body: any): string | undefined {
+  const raw = body?.officeReason ?? body?.reason ?? body?.remarks;
+  return typeof raw === 'string' ? raw : undefined;
 }
 
 @ApiTags('Assignments')
@@ -320,6 +362,8 @@ export class AssignmentController {
       // Optional, from new app builds: when the phone actually arrived. Whether it is used is the
       // server's decision (`decideCheckInTime`); the geofence above is still asked of THIS fix.
       arrivedAt: body.arrivedAt,
+      // Required when the office checks the assayer in (E12); ignored for the assayer's own.
+      officeReason: officeReasonFrom(body),
     });
     if (!result.success) {
       return {
@@ -777,7 +821,7 @@ export class AssignmentController {
         body.syncToken,
         userId,
         accuracy,
-        { ...cmdOptions, arrivedAt: body.arrivedAt },
+        { ...cmdOptions, arrivedAt: body.arrivedAt, officeReason: officeReasonFrom(body) },
       );
       /**
        * A refused check-in is a failure, on this route too.
@@ -940,8 +984,11 @@ export class AssignmentController {
       .filter(Boolean);
     const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
     if (callerIsAssayer) {
+      // The shared ownership predicate, like every other route here — and with the action the
+      // generic transition route maps IN_PROGRESS to, so `/start` and `/transition IN_PROGRESS`
+      // cannot answer the same assayer differently.
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(ownershipActionFor(AssignmentStatus.IN_PROGRESS), owned, userId).allowed) {
         throw new ForbiddenException('You can only start an assignment that is assigned to you.');
       }
     }
@@ -975,7 +1022,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Domain Command: Reassign assignment to a new assayer with historical lineage' })
   async reassign(
     @Param('id') id: string,
-    @Body() body: { newAssayerId: string; reason: string; expectedVersion?: number; clientRequestId?: string },
+    @Body() body: ReassignAssignmentRequestDto,
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
@@ -995,6 +1042,10 @@ export class AssignmentController {
       {
         expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
         clientRequestId: body.clientRequestId,
+        proposedFee: body.proposedFee != null ? Number(body.proposedFee) : undefined,
+        scheduledDate: body.scheduledDate,
+        acceptOnBehalf: body.acceptOnBehalf === true,
+        acceptanceReason: body.acceptanceReason,
       },
     );
     return assignment;

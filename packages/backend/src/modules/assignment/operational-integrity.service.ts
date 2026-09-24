@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import {
   BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES,
-  DAY_EXCLUSIVE_ASSIGNMENT_STATUSES,
   IN_FLIGHT_ASSIGNMENT_STATUSES,
   sqlStatusList,
 } from './assignment-workload';
@@ -73,28 +72,8 @@ export class OperationalIntegrityService {
       }
     };
 
-    // 1. Multiple active assignments for one assayer on the same day
-    const doubleBookings = await run('MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY', `
-      SELECT assayer_id, scheduled_date::text as scheduled_date, count(*) as count,
-             array_agg(id) as assignment_ids, array_agg(assignment_number) as assignment_numbers
-      FROM assignments
-      WHERE is_active = true
-        AND status IN (${sqlStatusList(DAY_EXCLUSIVE_ASSIGNMENT_STATUSES)})
-        AND scheduled_date IS NOT NULL
-        AND assayer_id IS NOT NULL
-      GROUP BY assayer_id, scheduled_date
-      HAVING count(*) > 1
-    `);
-
-    for (const row of doubleBookings) {
-      violations.push({
-        rule: 'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY',
-        severity: 'P1',
-        entityId: row.assayer_id,
-        details: row,
-        description: `Assayer ${row.assayer_id} has ${row.count} concurrent active assignments on ${row.scheduled_date}: ${row.assignment_numbers?.join(', ')}`,
-      });
-    }
+    // (The old rule 1, MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY, is retired: since 2026-09-24 an
+    // assayer may hold several branches on one day — owner decision E2. Numbering kept below.)
 
     // 2. Multiple active assignments for one branch where prohibited
     const branchSlotViolations = await run('MULTIPLE_ACTIVE_ASSIGNMENTS_PER_BRANCH', `

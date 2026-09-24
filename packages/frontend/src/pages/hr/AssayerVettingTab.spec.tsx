@@ -387,7 +387,39 @@ describe('AssayerVettingTab — background checks', () => {
     await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/document/d-bgv/file/1', { method: 'DELETE' }));
   });
 
-  it('offers somebody who did not pass a way back into background verification', async () => {
+  /**
+   * WHAT A DESK ACTUALLY DID, 24 SEP 2026.
+   *
+   * Passing a candidate through background verification, they opened "Record a check", found a
+   * row of four chips — background, police, credit, identity — and went round all of them,
+   * uploading a report under three. The result and the date stayed filled in as they moved, so it
+   * read as one form. "Record check" then saved only the chip left selected: the identity
+   * re-check, which was refused for not saying what was re-checked. Nothing was recorded, and the
+   * candidate could not leave the stage.
+   *
+   * The button that opens the dialog decides which check it records. There is nothing to switch.
+   */
+  it('records the background verification from "Record a check", with no way to switch to another check', async () => {
+    serve(dossier({ onboarding: [bgvReport(['scans/bgv.pdf'])], bgvReportPending: [pending('scans/bgv.pdf', 0)] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+    fireEvent.click(await screen.findByText('Record a check'));
+    const dialog = within(screen.getByRole('dialog'));
+
+    expect(dialog.getByText('Record the background check')).toBeInTheDocument();
+    expect(dialog.queryByRole('group', { name: 'Which check' })).not.toBeInTheDocument();
+    for (const other of ['Police verification', 'Credit (CIBIL) check', 'Identity documents re-check']) {
+      expect(dialog.queryByRole('button', { name: other })).not.toBeInTheDocument();
+    }
+
+    fireEvent.change(dialog.getAllByRole('combobox')[0], { target: { value: 'CLEAR' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+    await waitFor(() => expect(checkPosts()).toHaveLength(1));
+    expect(JSON.parse(checkPosts()[0][1].body)).toMatchObject({ checkType: 'BGV', verdict: 'CLEAR', checkedByName: 'AuthBridge' });
+  });
+
+    it('offers somebody who did not pass a way back into background verification', async () => {
     const failed = { id: 'c-1', verdict: 'CRIMINAL_CASE', checkedOn: '2026-09-01', reportFiles: [] };
     serve(dossier({ currentCheck: failed, backgroundChecks: [failed] }));
     const reopen = jest.fn();
@@ -429,7 +461,53 @@ describe('AssayerVettingTab — documents', () => {
     ...over,
   });
 
-  it('does not call a spreadsheet tick a scan', async () => {
+  /**
+   * A police certificate and a credit report are the reports behind the periodic re-checks, which
+   * begin once somebody is working. Listing them for every candidate, each with "Upload on the
+   * Background tab", sent the hiring desk looking for a police check that joining has no step for.
+   */
+  describe('the reports behind re-checks', () => {
+    const reports = (files: { police?: string[]; credit?: string[] } = {}) => [
+      paperwork({ id: 'd-bgv', requirement: 'BGV_REPORT', label: 'Background verification report' }),
+      paperwork({ id: 'd-pol', requirement: 'POLICE_CERTIFICATE', label: 'Police verification certificate', filePaths: files.police ?? [] }),
+      paperwork({ id: 'd-cr', requirement: 'CREDIT_REPORT', label: 'Credit (CIBIL) report', filePaths: files.credit ?? [] }),
+    ];
+
+    it('are not listed as joining paperwork for somebody who is not on re-checks yet', async () => {
+      serve(dossier({ onboarding: reports() }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
+
+      // The background verification report IS joining paperwork, and stays.
+      expect(await screen.findByText('Background verification report')).toBeInTheDocument();
+      expect(screen.queryByText('Police verification certificate')).not.toBeInTheDocument();
+      expect(screen.queryByText('Credit (CIBIL) report')).not.toBeInTheDocument();
+      // And the count is of what is listed, not of rows nobody can see.
+      expect(screen.getByText(/0 of 1 have a scan on file/)).toBeInTheDocument();
+    });
+
+    /** Somebody already uploaded one — hiding it would look like it was lost. */
+    it('keeps one that already has a file, and says what it will be used for instead of asking for an upload', async () => {
+      serve(dossier({ onboarding: reports({ police: ['p.jpeg'] }) }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" onGoToChecks={() => undefined} />);
+
+      expect(await screen.findByText('Police verification certificate')).toBeInTheDocument();
+      expect(screen.getByText('Used for their first re-check once they are working')).toBeInTheDocument();
+      expect(screen.queryByText('Credit (CIBIL) report')).not.toBeInTheDocument();
+      // Only the background report still points at the Background tab.
+      expect(screen.getAllByRole('button', { name: 'Upload on the Background tab' })).toHaveLength(1);
+    });
+
+    it('are listed, with the way to upload them, for somebody who is on re-checks', async () => {
+      serve(dossier({ onboarding: reports(), compliance: { rechecked: true, standings: [], hold: null, blockers: [] } }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="documents" onGoToChecks={() => undefined} />);
+
+      expect(await screen.findByText('Police verification certificate')).toBeInTheDocument();
+      expect(screen.getByText('Credit (CIBIL) report')).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Upload on the Background tab' })).toHaveLength(3);
+    });
+  });
+
+    it('does not call a spreadsheet tick a scan', async () => {
     serve(dossier({ onboarding: [paperwork({ softCopyReceived: true })] }));
 
     render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
@@ -687,7 +765,7 @@ describe('AssayerVettingTab — one way to do one thing', () => {
     await waitFor(() => expect(screen.getByText('Old Manager')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Record a check'));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Record a background check');
+    expect(screen.getByRole('dialog')).toHaveTextContent('Record the background check');
 
     fireEvent.click(screen.getByText('Add reference'));
     const dialogs = screen.getAllByRole('dialog');

@@ -70,6 +70,16 @@ describe('decideCheckInTime — owner decision 2026-09-24', () => {
     expect(d.checkedInAt).toEqual(receivedAt);
   });
 
+  it('marks every office check-in as NOT_FROM_ASSAYER, even one that sent no arrival time (E12)', () => {
+    for (const arrivedAt of [undefined, null, '', 'soon']) {
+      const d = decideCheckInTime({ ...base, fromAssignedAssayer: false, arrivedAt });
+      expect(d.outcome).toBe(CheckInArrivalOutcome.NOT_FROM_ASSAYER);
+      expect(d.source).toBe(CheckInTimeSource.SERVER);
+      expect(d.checkedInAt).toEqual(receivedAt);
+      expect(d.claimedArrivalAt).toBeNull();
+    }
+  });
+
   it('falls back when staff sent it on the assayer\'s behalf', () => {
     expect(decideCheckInTime({ ...base, fromAssignedAssayer: false, arrivedAt: at(40).toISOString() }).outcome)
       .toBe(CheckInArrivalOutcome.NOT_FROM_ASSAYER);

@@ -18,6 +18,7 @@ import { AssayerDetailModal } from './planning/AssayerDetailModal';
 import { type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
 import { CoveragePlanModal } from './planning/CoveragePlanModal';
+import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder } from './planning/assign-route';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
 import {
   getProjects,
@@ -153,7 +154,8 @@ export interface Candidate {
   scoreContribution?: Record<string, number>;
   /**
    * Set only when "Ignore date availability" is on and this candidate has a clash on the
-   * planned date ("Already booked that day on ASG-0042.", "On leave 2026-08-10 to 2026-08-14.").
+   * planned date ("On leave 2026-08-10 to 2026-08-14."). Being booked elsewhere that day is no
+   * longer a clash — one assayer may take several branches on one day (2026-09-24).
    * Null means genuinely free. Relaxing the filter reveals the person; it must not conceal the
    * clash, or the operator dispatches into a double-booking believing the list was clean.
    */
@@ -489,6 +491,12 @@ export const PlanningWorkspace: React.FC = () => {
    * operator is answering a question the screen asked rather than decoding a refusal afterwards.
    */
   const [overrideReasonInput, setOverrideReasonInput] = useState('');
+  /**
+   * Why the branch's open offer is moving to the chosen assayer. Asked for only when the branch is
+   * already offered to (or accepted by) somebody else — that is a reassignment, which the server
+   * refuses without a reason and announces to both assayers. See `assignRoute`.
+   */
+  const [reassignReasonInput, setReassignReasonInput] = useState('');
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [selectedCandidateForMap, setSelectedCandidateForMap] = useState<Candidate | null>(null);
   // The server's quote for the currently selected candidate, so every fee figure on this
@@ -1172,39 +1180,42 @@ export const PlanningWorkspace: React.FC = () => {
     const key = `${cluster.clusterId}:${plan.assayerId}`;
     setDayPlanAssigning(key);
 
-    const stops = onlyBranchIds
+    // Route order (`order` is the stop's place in the day), whatever order the list arrived in.
+    const stops = (onlyBranchIds
       ? plan.stops.filter((s) => onlyBranchIds.includes(s.branchId))
-      : plan.stops;
+      : [...plan.stops]
+    ).sort((a, b) => a.order - b.order);
 
-    // Each stop is a distinct branch → distinct assignment record, so these are independent and run
-    // concurrently rather than one serial round-trip per stop (a 10-branch route was 10x slower than
-    // it needed to be). Per-item results are still collected for the retry-failed-only flow below.
-    const results = await Promise.all(
-      stops.map(async (stop) => {
+    // Posted ONE AT A TIME, in route order (`postStopsInOrder`). These used to run concurrently —
+    // each stop is its own assignment, so they looked independent — but the server now charges
+    // travel once per assayer per day: whichever of that day's jobs it records first carries the
+    // travel, the rest are base fee only. In parallel, network timing decided which stop that was,
+    // so the travel landed on a random branch of the route. In order, it is the first stop, every
+    // time. Per-stop results are still collected for the retry-failed-only flow below; a refused
+    // stop (e.g. BRANCH_HAS_LIVE_OFFER — the branch is already offered to someone) is reported
+    // against that stop in the server's words and never moves the existing offer.
+    const outcomes = await postStopsInOrder(
+      stops,
+      async (stop) => {
         const branchMeta = cluster.branches.find((b) => b.branchId === stop.branchId);
-        if (!branchMeta) {
-          return { branchId: stop.branchId, branchName: stop.branchName, ok: false, error: 'Branch missing from cluster data' };
-        }
-        try {
-          await api.request('/assignments', {
-            method: 'POST',
-            body: JSON.stringify({
-              projectBranchId: branchMeta.id,
-              assayerId: plan.assayerId,
-              // The date the plan was actually built for, not the operator's raw request. The
-              // planner moves off weekends and holidays and reports the shift in the banner
-              // above; sending dayPlanTargetDate committed the rejected date instead, so an
-              // audit could be booked onto the very Saturday the planner had just refused.
-              scheduledDate: dayPlanData?.targetDate ?? dayPlanTargetDate,
-              remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
-            }),
-          });
-          return { branchId: stop.branchId, branchName: stop.branchName, ok: true };
-        } catch (err: any) {
-          return { branchId: stop.branchId, branchName: stop.branchName, ok: false, error: err?.message || 'Failed' };
-        }
-      }),
+        if (!branchMeta) throw new Error('Branch missing from cluster data');
+        await api.request('/assignments', {
+          method: 'POST',
+          body: JSON.stringify({
+            projectBranchId: branchMeta.id,
+            assayerId: plan.assayerId,
+            // The date the plan was actually built for, not the operator's raw request. The
+            // planner moves off weekends and holidays and reports the shift in the banner
+            // above; sending dayPlanTargetDate committed the rejected date instead, so an
+            // audit could be booked onto the very Saturday the planner had just refused.
+            scheduledDate: dayPlanData?.targetDate ?? dayPlanTargetDate,
+            remarks: `Assigned via Day Plan ${cluster.clusterId} — ${plan.totalBranches}-branch route with ${plan.assayerName}`,
+          }),
+        });
+      },
+      userMessage,
     );
+    const results = outcomes.map((o) => ({ branchId: o.stop.branchId, branchName: o.stop.branchName, ok: o.ok, error: o.error }));
 
     setDayPlanAssigning(null);
     const failed = results.filter((r) => !r.ok);
@@ -1479,6 +1490,7 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const openAssignment = async (c: Candidate, agreedOnCall: boolean) => {
     setSelectedCandidate(c);
+    setReassignReasonInput('');
     setLoadingCommercial(true);
     // The only thing the two buttons disagree about: whether somebody has already said yes.
     // The money is typed in the same box either way.
@@ -1530,6 +1542,10 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const handleSendToApp = (c: Candidate) => openAssignment(c, false);
 
+  /** What the open assign modal will do — see `assignRoute`. Drives its reason box and its button. */
+  const modalRoute = selectedCandidate && selectedPb ? assignRoute(selectedPb.assignment, selectedCandidate.id) : null;
+  const modalBlocker = modalRoute ? assignBlocker(modalRoute, reassignReasonInput) : null;
+
   const handleConfirmAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBranchId || !selectedCandidate) return;
@@ -1542,6 +1558,46 @@ export const PlanningWorkspace: React.FC = () => {
      * failed. The operator was left on the branch list with an error banner and had to reopen the
      * candidate and re-enter the fee, the date and both checkboxes to correct one field.
      */
+    // A branch already offered to somebody else is a reassignment, not a second offer: the create
+    // route refuses it (BRANCH_HAS_LIVE_OFFER) and used to move it silently. `assignRoute` is the
+    // one place that decides, shared with "Assign anyway" below.
+    const route = assignRoute(selectedPb?.assignment, selectedCandidate.id);
+    const blocker = assignBlocker(route, reassignReasonInput);
+    if (blocker) {
+      setMessage({ type: 'error', text: blocker });
+      return;
+    }
+    if (route.kind === 'reassign') {
+      try {
+        const fee = Number(agreedFeeInput);
+        const moved = await reassignAndApply(api.request.bind(api), {
+          assignmentId: route.assignmentId,
+          newAssayerId: selectedCandidate.id,
+          reason: reassignReasonInput,
+          fee,
+          scheduledDate: scheduledAuditDate || undefined,
+          acceptOnBehalf: assignDirectly,
+        });
+        recordCall(selectedCandidate.id, 'AGREED', fee, 'Agreed during Call & Assign (reassigned)');
+        setShowAssignModal(false);
+        const confirmed = moved.status === 'ACCEPTED';
+        setMessage({
+          type: 'success',
+          text: `Moved this branch from ${route.fromName} to ${selectedCandidate.displayName}. Both have been told. `
+            + (confirmed
+              ? `${selectedCandidate.displayName} is confirmed at ${money(fee)} — no acceptance needed.`
+              : `It stays pending until ${selectedCandidate.displayName} accepts on the mobile app.`),
+        });
+        refreshBranches();
+        refreshCandidates();
+      } catch (err: unknown) {
+        // A failure after the move itself (fee or acceptance) still leaves the branch with the new
+        // assayer, so the list is refreshed to show where it actually stands.
+        setMessage({ type: 'error', text: userMessage(err) });
+        refreshBranches();
+      }
+      return;
+    }
     try {
       const created = await api.request<{ status?: string }>('/assignments', {
         method: 'POST',
@@ -1873,14 +1929,49 @@ export const PlanningWorkspace: React.FC = () => {
       setMessage({ type: 'error', text: 'Select a branch before assigning an excluded candidate.' });
       return;
     }
+    // Same routing as the assign modal: a branch already offered to somebody else is moved with a
+    // reassignment (the override reason doubles as its reason), never re-offered over the top.
+    const route = assignRoute(selectedPb.assignment, candidate.assayerId);
+    const blocker = assignBlocker(route, reason);
+    if (blocker) {
+      setMessage({ type: 'error', text: blocker });
+      // Rethrown like any refusal, so the panel shows it beside the row that was clicked.
+      throw new Error(blocker);
+    }
     setAssigningExcludedId(candidate.assayerId);
+    if (route.kind === 'reassign') {
+      try {
+        await reassignAndApply(api.request.bind(api), {
+          assignmentId: route.assignmentId,
+          newAssayerId: candidate.assayerId,
+          reason: `Filter override — bypassed "${candidate.reason}". Reason: ${reason}`,
+          // No fee on this path: the server's re-price for the new assayer stands, as it does for
+          // an override create. A date the panel asked for (a date-bound exclusion) is applied;
+          // otherwise the job keeps the date it already had.
+          scheduledDate: scheduledDate || undefined,
+          acceptOnBehalf: false,
+        });
+        setMessage({
+          type: 'success',
+          text: `Moved ${selectedPb.branch?.name || 'this branch'} from ${route.fromName} to ${candidate.displayName} (override recorded). Both have been told.`,
+        });
+        refreshBranches();
+        refreshCandidates();
+      } catch (err: unknown) {
+        setMessage({ type: 'error', text: userMessage(err) });
+        throw err;
+      } finally {
+        setAssigningExcludedId(null);
+      }
+      return;
+    }
     try {
       await api.request('/assignments', {
         method: 'POST',
         body: JSON.stringify({
           projectBranchId: selectedPb.id,
           assayerId: candidate.assayerId,
-          // Date-bound exclusions (booked / on leave today) are assigned FOR a chosen date the
+          // Date-bound exclusions (on leave that day) are assigned FOR a chosen date the
           // assayer is free — the whole point of surfacing them instead of hiding them. Every
           // other exclusion kind (POLICY/SKILLS/ROTATION/DISTANCE) leaves the panel's own
           // `scheduledDate` empty, so this used to fall through to `undefined` and let the
@@ -2861,8 +2952,10 @@ export const PlanningWorkspace: React.FC = () => {
           footer={
           <>
             <button type="button" onClick={() => setShowAssignModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {assignDirectly ? <><Check size={14} /> Assign now</> : <><Send size={14} /> Send to app</>}
+            <button type="submit" className="btn btn-primary" disabled={modalBlocker != null} title={modalBlocker ?? undefined} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {modalRoute?.kind === 'reassign'
+                ? <><Users size={14} /> {assignDirectly ? 'Reassign and confirm' : 'Reassign'}</>
+                : assignDirectly ? <><Check size={14} /> Assign now</> : <><Send size={14} /> Send to app</>}
             </button>
           </>
         }>            {/* Assayer Summary */}
@@ -2886,6 +2979,40 @@ export const PlanningWorkspace: React.FC = () => {
                 <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}><Compass size={10} /> {formatRouteDistance(selectedCandidate.distanceKm, selectedCandidate.distanceSource ?? null, { emptyAs: 'Distance n/a' })}</span>
               </div>
             </div>
+
+            {/*
+              The branch is already with somebody. Moving it is a reassignment: the server needs the
+              reason and tells both assayers, so the form says both of those before the button does.
+              Checked in is a dead end on purpose — the visit is theirs; the job is cancelled instead.
+            */}
+            {modalRoute?.kind === 'blocked' && (
+              <div role="alert" style={{ padding: '10px 12px', background: 'var(--status-danger-bg)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--text-primary)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
+                <span>{modalRoute.message}</span>
+              </div>
+            )}
+            {modalRoute?.kind === 'reassign' && (
+              <div style={{ padding: '10px 12px', background: 'rgba(216,174,71,0.06)', border: '1px solid var(--warning)', borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                  <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: '1px', color: 'var(--warning)' }} />
+                  <span>
+                    This branch is {modalRoute.fromStatus === 'ACCEPTED' ? 'already accepted by' : 'already offered to'} <strong>{modalRoute.fromName}</strong>.
+                    Continuing moves it to <strong>{selectedCandidate.displayName}</strong>. Both assayers will be told.
+                  </span>
+                </div>
+                <label htmlFor="reassignReason" style={{ fontSize: 'var(--text-2xs)', color: 'var(--warning)', fontWeight: 700 }}>
+                  Why is it moving? (required)
+                </label>
+                <input
+                  id="reassignReason"
+                  value={reassignReasonInput}
+                  onChange={e => setReassignReasonInput(e.target.value)}
+                  required
+                  placeholder={`e.g. ${modalRoute.fromName} cannot make the date`}
+                  style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--warning)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: 'var(--text-sm)', boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
 
             {/* Branch + Assignment details in 2-col grid */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>

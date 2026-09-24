@@ -110,19 +110,29 @@ describe('AssignmentStateMachine', () => {
       completedWithoutCheckInReason: 'phone had no signal', remarks: 'old remarks',
     } as unknown as AssignmentEntity);
 
-    it('moves COMPLETED back to ACCEPTED and clears completion evidence', () => {
+    it('moves COMPLETED back to CHECKED_IN (the visit still counts) and clears completion evidence', () => {
       const a = completed();
       const event = AssignmentStateMachine.reopen(a, 'admin-1', 'Completion voided — audit was reopened');
 
-      expect(a.status).toBe(AssignmentStatus.ACCEPTED);
+      // E6: reopen is a papers-only redo. The check-in stays, so the status matches it.
+      expect(a.status).toBe(AssignmentStatus.CHECKED_IN);
+      expect(a.checkedInAt).toEqual(new Date('2026-08-01T09:00:00Z'));
       expect(event.previousState).toBe(AssignmentStatus.COMPLETED);
-      expect(event.newState).toBe(AssignmentStatus.ACCEPTED);
+      expect(event.newState).toBe(AssignmentStatus.CHECKED_IN);
       // The mutation this proves: dropping these resets leaves a "reopened" assignment that
       // still LOOKS completed (a completionDate and a without-check-in reason on an ACCEPTED
       // record is an internally contradictory row).
       expect(a.completionDate).toBeNull();
       expect(a.completedWithoutCheckInReason).toBeNull();
-      expect(a.remarks).toBe('Completion voided — audit was reopened');
+    });
+
+    it("keeps the office's note: the reopen reason does not overwrite `remarks`", () => {
+      // `remarks` is the office's note on the job. Reopening used to replace it with the reopen
+      // reason, destroying the note; the reason lives on the ASSIGNMENT_REOPENED audit event and
+      // notification instead (AssignmentService.reopen).
+      const a = completed();
+      AssignmentStateMachine.reopen(a, 'admin-1', 'Completion voided — audit was reopened');
+      expect(a.remarks).toBe('old remarks');
     });
 
     it('does not fabricate check-in evidence — checkedInAt is untouched', () => {
@@ -133,11 +143,11 @@ describe('AssignmentStateMachine', () => {
       expect(a.checkedInAt).toEqual(new Date('2026-08-01T09:00:00Z'));
     });
 
-    // PENDING, ACCEPTED and CHECKED_IN already have their own independent paths to ACCEPTED in
-    // VALID_PATHS (offer acceptance, and a retried check-in respectively) — reopen does not
-    // change that, so they are not exercised here. IN_PROGRESS, REJECTED and CANCELLED have no
-    // path to ACCEPTED at all; only `reopen`'s own COMPLETED entry could make one reachable.
-    it.each([AssignmentStatus.IN_PROGRESS, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED])(
+    // PENDING and ACCEPTED already have their own independent paths to ACCEPTED in VALID_PATHS
+    // (offer acceptance, and the ACCEPTED self-loop) — reopen does not change that, so they are
+    // not exercised here. CHECKED_IN, IN_PROGRESS, REJECTED and CANCELLED have no path to
+    // ACCEPTED at all; only `reopen`'s own COMPLETED entry could make one reachable.
+    it.each([AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED])(
       'refuses to reopen from %s',
       (status) => {
         const a = { ...completed(), status };
@@ -253,3 +263,36 @@ describe('the edges the service used to write by hand', () => {
   });
 });
 
+
+/**
+ * CHECKED_IN -> ACCEPTED is not an edge.
+ *
+ * It was listed in the shared table with nothing legitimate using it: reopen writes ACCEPTED
+ * straight from COMPLETED without consulting the table, and no command "un-arrives" a visit. What
+ * it did do was let the accept route (and the field app's capability list, built from the same
+ * table) re-accept a job the assayer was standing in, rolling the visit back to "not arrived"
+ * while `checkedInAt` stayed set.
+ */
+describe('a checked-in job cannot be accepted again', () => {
+  it('is not in the transition table', () => {
+    expect(AssignmentStateMachine.canTransition(AssignmentStatus.CHECKED_IN, AssignmentStatus.ACCEPTED)).toBe(false);
+  });
+
+  it('acceptOffer refuses it and leaves the status alone', () => {
+    const a = { id: 'asg-9', status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date() } as unknown as AssignmentEntity;
+    expect(() => AssignmentStateMachine.acceptOffer(a, 'u1')).toThrow(BadRequestException);
+    expect(a.status).toBe(AssignmentStatus.CHECKED_IN);
+  });
+
+  it('reopen of a visited job lands on CHECKED_IN, never on ACCEPTED-with-an-arrival (E6)', () => {
+    const a = { id: 'asg-10', status: AssignmentStatus.COMPLETED, checkedInAt: new Date() } as unknown as AssignmentEntity;
+    AssignmentStateMachine.reopen(a, 'admin-1', 'redo');
+    expect(a.status).toBe(AssignmentStatus.CHECKED_IN);
+  });
+
+  it('reopen of a job closed without an arrival lands on ACCEPTED', () => {
+    const a = { id: 'asg-11', status: AssignmentStatus.COMPLETED, checkedInAt: null } as unknown as AssignmentEntity;
+    AssignmentStateMachine.reopen(a, 'admin-1', 'redo');
+    expect(a.status).toBe(AssignmentStatus.ACCEPTED);
+  });
+});

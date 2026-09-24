@@ -11,9 +11,13 @@
 import type { WatchedZone } from './geofence-plan';
 
 export type ArrivalDecision =
-  | { kind: 'ignore'; why: 'exit' | 'unknown-region' | 'not-today' | 'already-handled' | 'already-checked-in' }
-  /** Arrived before check-in opens: tell them when, do not send. */
-  | { kind: 'too-early'; zone: WatchedZone; opensAt: string }
+  | { kind: 'ignore'; why: 'exit' | 'unknown-region' | 'already-handled' | 'already-checked-in' }
+  /**
+   * Reached a watched branch on a day that is not the job's day (tomorrow's job, or a record not yet
+   * re-planned after midnight). Check-in is open only on the job's own day, so nothing is sent; the
+   * person is told plainly which day the job is on.
+   */
+  | { kind: 'wrong-day'; zone: WatchedZone }
   | { kind: 'check-in'; zone: WatchedZone };
 
 export interface ArrivalInputs {
@@ -22,7 +26,6 @@ export interface ArrivalInputs {
   zones: readonly WatchedZone[];
   /** Local `YYYY-MM-DD` now. */
   today: string;
-  now: Date;
   /** assignmentId → local day an arrival was already acted on. */
   handled: Readonly<Record<string, string>>;
   /** What the cached job list says right now (it may be newer than the zone record). */
@@ -33,15 +36,11 @@ export function decideArrival(input: ArrivalInputs): ArrivalDecision {
   if (input.eventType !== 'enter') return { kind: 'ignore', why: 'exit' };
   const zone = input.zones.find((z) => z.assignmentId === input.regionId);
   if (!zone) return { kind: 'ignore', why: 'unknown-region' };
-  if (zone.day !== input.today) return { kind: 'ignore', why: 'not-today' };
   if (input.handled[zone.assignmentId] === input.today) return { kind: 'ignore', why: 'already-handled' };
   if (input.current && (input.current.checkedInAt || (input.current.status && input.current.status !== 'ACCEPTED'))) {
     return { kind: 'ignore', why: 'already-checked-in' };
   }
-  if (zone.opensAt) {
-    const opens = new Date(zone.opensAt).getTime();
-    if (Number.isFinite(opens) && opens > input.now.getTime()) return { kind: 'too-early', zone, opensAt: zone.opensAt };
-  }
+  if (zone.day !== input.today) return { kind: 'wrong-day', zone };
   return { kind: 'check-in', zone };
 }
 

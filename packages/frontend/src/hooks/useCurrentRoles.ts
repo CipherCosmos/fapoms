@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { SystemRole, expandRoles } from '@fapoms/shared';
+import { EXPENSE_APPROVAL_OVERRIDE_ROLES, SystemRole, expandRoles } from '@fapoms/shared';
 
 /**
  * The signed-in user's roles, read from the cache App.tsx already writes on login.
@@ -443,6 +443,16 @@ export function canManageZones(roles: SystemRole[]): boolean {
 /** Deletion is the only zone action reserved to admins — it can strand branches. */
 export function canDeleteZones(roles: SystemRole[]): boolean {
   return hasAnyRole(roles, [SystemRole.ADMIN]);
+}
+
+/**
+ * Approving an expense claim the approval rules refused (cancelled job, assayer reassigned away,
+ * pay on a sent bill) by writing a reason — a senior's call. Name-only and read from the same
+ * shared list the server checks (`EXPENSE_APPROVAL_OVERRIDE_ROLES`), so "Approve anyway" is offered
+ * exactly to the accounts whose reason the server will accept.
+ */
+export function canOverrideExpenseApproval(roles: SystemRole[]): boolean {
+  return hasAnyRole(roles, [...EXPENSE_APPROVAL_OVERRIDE_ROLES]);
 }
 
 /** Suspending operational rules is administrator-only — matches the backend's @Roles gate. */

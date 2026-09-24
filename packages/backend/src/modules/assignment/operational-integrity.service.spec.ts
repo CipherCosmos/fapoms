@@ -41,12 +41,12 @@ describe('OperationalIntegrityService.scan', () => {
   let query: jest.Mock;
 
   /**
-   * Routes each of the ten statements by a fragment unique to it, so a test can answer one rule
-   * and leave the other nine empty. Keyed on the distinguishing clause rather than on call order:
+   * Routes each of the nine statements by a fragment unique to it, so a test can answer one rule
+   * and leave the other eight empty. (There were ten until 2026-09-24: the per-assayer-per-day rule
+   * was retired when the owner allowed several branches per assayer per day.) Keyed on the distinguishing clause rather than on call order:
    * order is an implementation detail, and a test that depends on it breaks when a rule is added.
    */
   const RULE_MATCH: Array<[string, string]> = [
-    ['doubleBooking', 'GROUP BY assayer_id, scheduled_date'],
     ['branchSlot', 'GROUP BY project_branch_id'],
     ['cancelledWithAttendance', "status = 'CANCELLED'"],
     ['completedWithoutAttendance', 'checked_in_at IS NULL'],
@@ -86,16 +86,16 @@ describe('OperationalIntegrityService.scan', () => {
   });
 
   describe('a clean database', () => {
-    it('reports ten rules scanned, no violations, and an empty summary', async () => {
+    it('reports nine rules scanned, no violations, and an empty summary', async () => {
       serve({});
 
       const report = await service.scan();
 
-      expect(report.scannedRules).toBe(10);
+      expect(report.scannedRules).toBe(9);
       expect(report.totalViolations).toBe(0);
       expect(report.violations).toEqual([]);
       expect(report.summary).toEqual({});
-      // The half of "all clear" that used to be missing. Ten rules asked, ten rules answered —
+      // The half of "all clear" that used to be missing. Nine rules asked, nine rules answered —
       // without this, `totalViolations: 0` is only ever a claim about the queries that ran.
       expect(report.failedRules).toEqual([]);
       expect(Date.parse(report.timestamp)).not.toBeNaN();
@@ -106,7 +106,9 @@ describe('OperationalIntegrityService.scan', () => {
 
       await service.scan();
 
-      expect(query).toHaveBeenCalledTimes(10);
+      expect(query).toHaveBeenCalledTimes(9);
+      // The retired rule is not asked any more: several branches per assayer per day are allowed.
+      expect(query.mock.calls.some(([sql]) => String(sql).includes('GROUP BY assayer_id, scheduled_date'))).toBe(false);
       // "Read-only" is in the method's own description and is the reason an AUDITOR may call it.
       // A scanner that repaired what it found would be a scanner nobody could safely run twice.
       const statements = query.mock.calls.map(([sql]) => String(sql).toUpperCase());
@@ -262,9 +264,9 @@ describe('OperationalIntegrityService.scan', () => {
   describe('the summary', () => {
     it('counts violations by rule across several rules at once', async () => {
       serve({
-        doubleBooking: [
-          { assayer_id: 'a-1', scheduled_date: '2026-02-01', count: '2', assignment_numbers: ['ASG-1', 'ASG-2'] },
-          { assayer_id: 'a-2', scheduled_date: '2026-02-01', count: '3', assignment_numbers: ['ASG-3', 'ASG-4', 'ASG-5'] },
+        branchSlot: [
+          { project_branch_id: 'pb-1', count: '2', assignment_numbers: ['ASG-1', 'ASG-2'] },
+          { project_branch_id: 'pb-2', count: '3', assignment_numbers: ['ASG-3', 'ASG-4', 'ASG-5'] },
         ],
         invalidEmploymentDates: [
           { id: 'a-7', assayer_code: 'AS0007', display_name: 'X', joining_date: '2025-01-01', exit_date: '2024-01-01' },
@@ -275,14 +277,14 @@ describe('OperationalIntegrityService.scan', () => {
 
       expect(report.totalViolations).toBe(3);
       expect(report.summary).toEqual({
-        MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY: 2,
+        MULTIPLE_ACTIVE_ASSIGNMENTS_PER_BRANCH: 2,
         INVALID_EMPLOYMENT_DATES: 1,
       });
     });
 
     it('carries the raw row through as details, so a reader is not limited to the sentence', async () => {
-      const row = { assayer_id: 'a-1', scheduled_date: '2026-02-01', count: '2', assignment_ids: ['x', 'y'] };
-      serve({ doubleBooking: [row] });
+      const row = { project_branch_id: 'pb-1', count: '2', assignment_ids: ['x', 'y'] };
+      serve({ branchSlot: [row] });
 
       const report = await service.scan();
 
@@ -325,8 +327,8 @@ describe('OperationalIntegrityService.scan', () => {
 
       const report = await service.scan();
 
-      // Nine, not ten. The number is the honest one: this scan looked at nine of the invariants.
-      expect(report.scannedRules).toBe(9);
+      // Eight, not nine. The number is the honest one: this scan looked at eight of the invariants.
+      expect(report.scannedRules).toBe(8);
       expect(report.failedRules).toEqual([
         {
           rule: 'ASSIGNMENT_LINKED_TO_INELIGIBLE_ASSAYER',
@@ -350,7 +352,7 @@ describe('OperationalIntegrityService.scan', () => {
 
       expect(report.scannedRules).toBe(0);
       expect(report.totalViolations).toBe(0);
-      expect(report.failedRules).toHaveLength(10);
+      expect(report.failedRules).toHaveLength(9);
       expect(report.failedRules.every((f) => f.error === 'connection terminated')).toBe(true);
       // Every rule accounted for by its own id — a call site tagged with the wrong or a duplicated
       // name would leave one of these unnamed, and that rule could then fail without ever being
@@ -363,7 +365,6 @@ describe('OperationalIntegrityService.scan', () => {
         'COMPLETED_ASSIGNMENT_WITHOUT_CHECK_OUT',
         'INVALID_EMPLOYMENT_DATES',
         'INVALID_LIFECYCLE_COMBINATION',
-        'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_ASSAYER_DAY',
         'MULTIPLE_ACTIVE_ASSIGNMENTS_PER_BRANCH',
         'STALE_ORPHAN_WORKFLOW_RECORD',
       ]);

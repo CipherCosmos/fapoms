@@ -90,7 +90,7 @@ const nextOfferableDay = (holidayDates: ReadonlySet<string>) => {
 /**
  * Candidates the engine filtered out — and what can still be done with them.
  *
- * Exclusions are not equally final. A DATE exclusion (booked that day, on leave) is a good
+ * Exclusions are not equally final. A DATE exclusion (on leave that day) is a good
  * candidate for another day, so those rows lead with a green "available another day" badge and
  * assign WITH a date picker (seeded from the day after their leave when known). Structural
  * exclusions (policy, skills) stay visible with their reason, overridable with a recorded

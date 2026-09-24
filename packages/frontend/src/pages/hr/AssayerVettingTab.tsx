@@ -6,7 +6,7 @@ import {
   onboardingNextStep, standingAllowsPlanning, scanMimeType, isDrawableScan, identityDocumentFacts,
   isValidPan, isValidAadhaar, storedScanFileName, referenceEmailProblem, referencePhoneForDisplay,
   EMPANELMENT_STANDING_LABELS,
-  BACKGROUND_CHECK_VERDICT_LABELS, CheckType, CHECK_TYPES, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL,
+  BACKGROUND_CHECK_VERDICT_LABELS, CheckType, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL,
   RECHECK_STATUS_LABELS, CheckReviewDecision, ONBOARDING_DOCUMENT_LABELS as REPORT_LABELS,
   isAdverseVerdict, checkTypeForReport, type RecheckStanding, type ComplianceHold,
   hasPassedFinalApproval, OnboardingDocument,
@@ -1150,7 +1150,21 @@ export const AssayerVettingTab: React.FC<{
   };
 
   const paperwork = useMemo(() => {
-    const rows = data?.onboarding ?? [];
+    /*
+      A POLICE CERTIFICATE AND A CREDIT REPORT ARE NOT JOINING PAPERWORK.
+
+      They are the reports behind the periodic re-checks (2026-09-23), which begin once somebody is
+      working — joining needs the background verification and nothing else of the kind. They were
+      listed for every candidate anyway, each with "Upload on the Background tab", which sent the
+      desk to look for a police check that hiring has no step for. So they are listed only for
+      somebody on re-checks, or when a file is already on one — a report uploaded is never hidden.
+    */
+    const rechecked = !!data?.compliance?.rechecked;
+    const rows = (data?.onboarding ?? []).filter((r) => {
+      const check = checkTypeForReport(r.requirement);
+      if (!check || check === CheckType.BGV) return true;
+      return rechecked || (r.filePaths ?? []).length > 0;
+    });
     // "In hand" means the hard copy is actually in the building. A soft copy is progress, not
     // completion — the file this tracks is a physical one.
     const inHand = rows.filter((r) => r.hardCopyReceived === true).length;
@@ -1277,7 +1291,8 @@ export const AssayerVettingTab: React.FC<{
         title: 'Check recorded',
         message: isAdverseVerdict(draft.verdict) && data?.compliance?.rechecked
           ? 'Recorded. It came back adverse, so they are held from new work until a senior decides.'
-          : 'It is now the operative one, with its report. Earlier checks and their reports are kept below it.',
+          // The identity re-check has no report of its own — see `CHECK_REPORT_DOCUMENT`.
+          : `${CHECK_TYPE_LABELS[draft.checkType]} recorded${CHECK_REPORT_DOCUMENT[draft.checkType] ? ', with its report' : ''}.`,
       });
       closeEditor();
       reload();
@@ -1831,10 +1846,10 @@ export const AssayerVettingTab: React.FC<{
         return (
         <Editor
           error={editorErr}
-          title={isBgv ? 'Record a background check' : `Record a ${CHECK_TYPE_LABELS[type].toLowerCase()}`}
+          title={isBgv ? 'Record the background check' : `Record a ${CHECK_TYPE_LABELS[type].toLowerCase()}`}
           intro={type === CheckType.IDENTITY
             ? 'Record re-checking their identity documents against the originals — and what was found. Each check is kept for good; this one does not replace an earlier one.'
-            : 'Record the result with its report — passed or not, the report is kept with it. This becomes the operative check of its kind; earlier ones and their reports stay below it.'}
+            : `Record what the ${isBgv ? 'agency' : String(issuerLabel ?? 'issuer').toLowerCase()} reported. Passed or not, the report is kept with the result, and earlier checks stay on the record.`}
           onCancel={closeEditor}
           onSave={saveEditor}
           saveLabel="Record check"
@@ -1842,29 +1857,21 @@ export const AssayerVettingTab: React.FC<{
           width={560}
         >
           {/*
-            Which check. Buttons rather than a dropdown — four choices, all visible, and the
-            result below stays the first list in the dialog.
+            ONE CHECK PER DIALOG, CHOSEN BY THE BUTTON THAT OPENED IT.
+
+            This dialog used to open with a row of four chips — background, police, credit,
+            identity — above one shared set of fields. It read as one form in four parts: the result
+            and the date stayed filled in as you moved between chips, each chip offered its own
+            upload, and "Record check" then saved only whichever chip happened to be selected. A
+            desk passing a candidate through background verification went round all four,
+            uploaded three reports, finished on "Identity re-check", and was refused for not
+            describing an identity re-check — with nothing recorded at all.
+
+            Every way in already knows which check it is for: "Record a check" and "Record its
+            result" on the Background check card are the background verification, and each row of
+            "Re-checks over time" is its own check. So there is nothing to choose here, and no way
+            to save a check other than the one the dialog was opened for.
           */}
-          <Field title="Which check" wide>
-            <div role="group" aria-label="Which check" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {CHECK_TYPES.map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  aria-pressed={t === type}
-                  onClick={() => setEditor({ ...editor, checkType: t, checkedByName: reportFor(t)?.issuer ?? '' })}
-                  style={{
-                    padding: '4px 10px', fontSize: 'var(--text-xs)', fontWeight: 600, borderRadius: '999px', cursor: 'pointer',
-                    border: `1px solid ${t === type ? 'var(--accent)' : 'var(--border-color)'}`,
-                    background: t === type ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
-                    color: t === type ? 'var(--accent)' : 'var(--text-secondary)',
-                  }}
-                >
-                  {CHECK_TYPE_LABELS[t]}
-                </button>
-              ))}
-            </div>
-          </Field>
           {/* Who issued it first: the report is not taken without that name. */}
           {issuerLabel && (
             <Field title={issuerLabel}>
@@ -2698,10 +2705,13 @@ export const AssayerVettingTab: React.FC<{
               render: (d: typeof paperwork.joining[number]) => (
                 <RowActions>
                   {checkTypeForReport(d.requirement)
-                    // Uploaded with the agency that produced it, which is asked on the Background tab.
-                    ? (onGoToChecks
-                      ? <LinkButton onClick={onGoToChecks}>Upload on the Background tab</LinkButton>
-                      : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Uploaded on the Background tab</span>)
+                    ? (checkTypeForReport(d.requirement) !== CheckType.BGV && !data?.compliance?.rechecked
+                      // Kept, and used for their first re-check of this kind once they are working.
+                      ? <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Used for their first re-check once they are working</span>
+                      // Uploaded with the agency that produced it, which is asked on the Background tab.
+                      : onGoToChecks
+                        ? <LinkButton onClick={onGoToChecks}>Upload on the Background tab</LinkButton>
+                        : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Uploaded on the Background tab</span>)
                     : <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />}
                   {/* The ID-card photo locks against them once they are approved; only HR reopens it,
                       and not while an earlier request is still waiting on them. */}

@@ -37,7 +37,7 @@ import { ComplianceStandingService } from '../assayer/compliance-standing.servic
 const EXCLUSION_REASONS: Record<string, string> = {
   deployable: 'Onboarding not finished — not yet assignable',
   compliance: 'Held from new work — a re-check is overdue or awaiting a senior\'s decision',
-  availability: 'Unavailable on this date (already booked or on leave)',
+  availability: 'Unavailable on this date (holiday, outside the project dates, or on leave)',
   consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
   clientEligibility: 'Not eligible for this client — planning requires an Active or Recommended empanelment standing',
   ruleEngineEligibility: 'Blocked by a business rule',
@@ -91,7 +91,7 @@ export interface PlanningContext {
   scheduledDate: Date;
   weights: Record<string, number>;
   /**
-   * Treat the date-bound checks (already booked, on leave) as advisory rather than
+   * Treat the date-bound checks (holiday, project dates, on leave) as advisory rather than
    * disqualifying, so the operator sees the whole nearby workforce and decides for themselves.
    *
    * Ops asked for this because the date filter answers a narrower question than the one they
@@ -186,11 +186,6 @@ export interface PlanningContext {
     queryCountByAssayer: Record<string, number>;
     /** Lifetime assignment counts per assayer: everything dispatched, and everything taken. */
     assignmentTotalsByAssayer: Record<string, { total: number; accepted: number }>;
-    /**
-     * Assayers already committed on the scheduled date, mapped to the assignment that holds
-     * them. Double-booking was one findOne per candidate asking the same date question.
-     */
-    doubleBookedByAssayer: Record<string, string>;
     /** Recent completed assignments per assayer, for the delivery-speed score. */
     completedByAssayer: Record<string, Array<{ completionDate: Date | null; createdAt: Date }>>;
     /**
@@ -375,7 +370,7 @@ export class AvailabilityFilter implements CandidateFilter {
      * DeployabilityFilter's; whether they are free on this date is this one's.
      */
 
-    // All four checks below are about one specific day. When the operator has asked to see the
+    // All three checks below are about one specific day. When the operator has asked to see the
     // whole workforce regardless of that day, they stop disqualifying and are reported on the
     // candidate row instead — see PlanningContext.relaxAvailability.
     if (context.relaxAvailability) return true;
@@ -404,17 +399,10 @@ export class AvailabilityFilter implements CandidateFilter {
     // goes through recommend()).
     if (context.branchFacts && !context.branchFacts.timelineResult.passed) return false;
 
-    // 3. Check double booking
-    // Resolved for the whole pool in one query when recommend() supplied the facts; the
-    // per-candidate check remains for standalone use.
-    if (context.branchFacts) {
-      if (context.branchFacts.doubleBookedByAssayer[assayer.id]) return false;
-    } else {
-      const dbResult = await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate);
-      if (!dbResult.passed) return false;
-    }
+    // (No "already booked that day" check: owner decision 2026-09-24 — an assayer may take several
+    // branches on one day. Same-day work now only helps, through the route-grouping score.)
 
-    // 4. Check leaves
+    // 3. Check leaves
     const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
     if (!leaveResult.passed) {
       return false;
@@ -424,7 +412,7 @@ export class AvailabilityFilter implements CandidateFilter {
   }
 
   /**
-   * Which of the four checks above actually failed, for the operator to read.
+   * Which of the three checks above actually failed, for the operator to read.
    *
    * `evaluate()` collapses all four to one boolean, so every exclusion this filter produces was
    * stamped with the same static sentence — "already booked or on leave" — regardless of which
@@ -446,13 +434,6 @@ export class AvailabilityFilter implements CandidateFilter {
 
     if (context.branchFacts && !context.branchFacts.timelineResult.passed) {
       return { reason: "Unavailable on this date — outside the project's engagement window", detail: context.branchFacts.timelineResult.reason };
-    }
-
-    const doubleBooked = context.branchFacts
-      ? context.branchFacts.doubleBookedByAssayer[assayer.id]
-      : !(await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate)).passed;
-    if (doubleBooked) {
-      return { reason: 'Unavailable on this date — already booked' };
     }
 
     const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
@@ -2036,9 +2017,6 @@ export class RecommendationEngine {
    * they are genuinely free that day. Reads only facts already resolved for the whole pool.
    */
   private describeDateConflict(assayer: AssayerEntity, context: PlanningContext): string | null {
-    const booking = context.branchFacts?.doubleBookedByAssayer[assayer.id];
-    if (booking) return `Already booked that day on ${booking}.`;
-
     const dateKey = businessDateKey(context.scheduledDate);
     const leave = ((assayer as any).leaves ?? []).find(
       (l: { startDate?: string; endDate?: string }) =>
@@ -2269,7 +2247,6 @@ export class RecommendationEngine {
       queryRows,
       totalRows,
       acceptedRows,
-      doubleBookedRows,
       completedRows,
       rules,
       priorVisitRows,
@@ -2320,25 +2297,6 @@ export class RecommendationEngine {
             .groupBy('a.assayerId')
             .getRawMany()
             .catch(() => [])
-        : Promise.resolve([]),
-      // Who is already committed on this date. One query answers it for the whole pool; it
-      // was previously a findOne per candidate asking the same date question.
-      assayerIds.length
-        ? this.assignmentRepository.find({
-            where: {
-              assayerId: In(assayerIds),
-              // The column is `date`; comparing it to a full Date-with-time is always false in
-              // Postgres (a mid-afternoon `new Date()` never equals a midnight date), which
-              // silently emptied this set and defeated the double-booking guard. Match on the
-              // date-only business key so it actually fires.
-              scheduledDate: businessDateKey(scheduledDate) as any,
-              // Same set as ConstraintEvaluator.checkDoubleBooking — a day is committed from
-              // acceptance through completion, so a checked-in assayer is not offered again.
-              status: In(COMMITTED_ASSIGNMENT_STATUSES),
-              isActive: true,
-            },
-            select: ['assayerId', 'assignmentNumber'] as any,
-          }).catch(() => [])
         : Promise.resolve([]),
       // Completed history for the delivery-speed score.
       assayerIds.length
@@ -2451,11 +2409,6 @@ export class RecommendationEngine {
       }
     }
 
-    const doubleBookedByAssayer = (doubleBookedRows as any[]).reduce<Record<string, string>>((acc, r) => {
-      acc[r.assayerId] = r.assignmentNumber ?? 'an existing assignment';
-      return acc;
-    }, {});
-
     // Capped at 20 per assayer, matching the `take: 20` the per-candidate query applied.
     const completedByAssayer = (completedRows as any[]).reduce<Record<string, any[]>>((acc, r) => {
       const list = (acc[r.assayerId] ||= []);
@@ -2509,7 +2462,6 @@ export class RecommendationEngine {
       commercialProfilesByAssayer,
       queryCountByAssayer,
       assignmentTotalsByAssayer,
-      doubleBookedByAssayer,
       completedByAssayer,
       rules: rules as BusinessRuleEntity[],
       priorVisitsByAssayer,
@@ -2642,9 +2594,8 @@ export class RecommendationEngine {
           // AXIS" tells the operator exactly which vetting row to change.
           detail = (await this.clientEligibilityFilter.exclusionReason(assayer, context)) ?? undefined;
         } else if (blockedBy === this.availabilityFilter.name) {
-          // Which of holiday / project-timeline / double-booking / leave actually fired — see
-          // exclusionReason's own comment for why the shared "already booked or on leave"
-          // sentence cannot stand in for all four.
+          // Which of holiday / project-timeline / leave actually fired — see exclusionReason's
+          // own comment for why one shared sentence cannot stand in for all three.
           const r = await this.availabilityFilter.exclusionReason(assayer, context);
           if (r) {
             reasonOverride = r.reason;

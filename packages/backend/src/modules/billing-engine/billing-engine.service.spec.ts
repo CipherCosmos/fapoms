@@ -724,7 +724,8 @@ describe('BillingEngineService', () => {
       payableRepo.findOne.mockImplementation(async () =>
         payable({ status: AssayerPayableStatus.APPROVED, assayerInvoiceId: 'ainv-1' }),
       );
-      payableRepo.count.mockImplementation(async () => 0);
+      // No line left unsettled; one PAID line (the one just disbursed).
+      payableRepo.count.mockImplementation(async (opts: any) => (opts?.where?.status === AssayerPayableStatus.PAID ? 1 : 0));
       assayerInvoiceRepo.findOne.mockImplementation(async () => ({
         id: 'ainv-1',
         invoiceNumber: 'AINV-1',

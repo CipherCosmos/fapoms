@@ -198,12 +198,14 @@ export const RecommendationPanel: React.FC<{
                 )}
                 {/* Plain words for what this actually does. "Ignore date availability" read as a
                     switch that discards a rule; it in fact widens the list to people who are
-                    booked or on leave that day, and each clash is still printed on the row. */}
+                    on leave that day, and each clash is still printed on the row. (Being booked
+                    elsewhere that day no longer hides anyone — one assayer may take several
+                    branches on one day, owner decision 2026-09-24.) */}
                 {onToggleIgnoreDateAvailability && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--text-2xs)', color: ignoreDateAvailability ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
-                    title="Ranks everyone nearby even if they are booked or on leave that day. Each clash is still shown on the person's card.">
-                    <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} title="Tick to also list people who are booked or on leave that day" />
-                    Also show people who are busy that day
+                    title="Ranks everyone nearby even if they are on leave that day. Each clash is still shown on the person's card.">
+                    <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} title="Tick to also list people who are on leave that day" />
+                    Also show people on leave that day
                   </label>
                 )}
 
@@ -317,7 +319,7 @@ export const RecommendationPanel: React.FC<{
                         ? <>Someone you expected may be missing because of the <b>independence rule</b>: a person living within <b>{slaRadius} km</b> of a branch may not audit it. That distance comes from the client's contract, not from a setting here.</>
                         : <>The independence rule — which hides people living too close to the branch to audit it independently — is currently switched off, so everyone nearby is listed.</>}
                       <div style={{ marginTop: '6px' }}>
-                        People can also be missing because they are booked or on leave on the audit date (tick “Also show people who are busy that day”), because they are further away than the “Nearby only” limit, or because they lack a skill or certification the project requires — the latter is listed under the candidates.
+                        People can also be missing because they are on leave on the audit date (tick “Also show people on leave that day”), because they are further away than the “Nearby only” limit, or because they lack a skill or certification the project requires — the latter is listed under the candidates.
                       </div>
                       <div style={{ marginTop: '8px' }}>
                         <button

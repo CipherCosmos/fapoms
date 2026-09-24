@@ -65,7 +65,7 @@ export interface CoveragePlanOutput {
      * cluster edge can have a different best assayer than the cluster centre), and deployment
      * honours these rather than stamping one cluster-wide assayer onto every branch.
      */
-    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null }>;
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null }>;
   }>;
 }
 
@@ -153,7 +153,7 @@ export class CoveragePlanningEngine {
     branchIds: string[];
     /** Quoted at plan time through FeePolicyService, so deployment prices what was approved. */
     estimatedTotalFee: number | null;
-    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null }>;
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null }>;
   }> = [];
 
     // Client and assayer roster are identical for every cluster in one project, so they are
@@ -181,7 +181,7 @@ export class CoveragePlanningEngine {
     let branchesScored = 0;
 
     for (const cluster of clusters) {
-      const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null }> = [];
+      const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null }> = [];
       const assayerCountInCluster = new Map<string, number>();
       let clusterFeeSum = 0;
 

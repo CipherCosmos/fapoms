@@ -45,6 +45,22 @@ export class AssignmentStateMachine {
     return { previousState: prev, newState: assignment.status, userId };
   }
 
+  /**
+   * Moving a job to another assayer as a fresh offer — `AssignmentService.reassignAssignment`.
+   *
+   * Through the table like every other move: PENDING -> PENDING (an open offer changes hands),
+   * ACCEPTED -> PENDING (before anyone has checked in), REJECTED -> PENDING (a declined offer goes to
+   * somebody else). CHECKED_IN and IN_PROGRESS have no PENDING edge, so a visit that has started
+   * cannot be reassigned; COMPLETED and CANCELLED have none either. The service refuses those with
+   * their own, more specific codes first; this is the backstop.
+   */
+  static reassign(assignment: AssignmentEntity, userId: string) {
+    AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.PENDING);
+    const prev = assignment.status;
+    assignment.status = AssignmentStatus.PENDING;
+    return { previousState: prev, newState: assignment.status, userId };
+  }
+
   static acceptOffer(assignment: AssignmentEntity, userId: string) {
     AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.ACCEPTED);
     const prev = assignment.status;
@@ -181,7 +197,15 @@ export class AssignmentStateMachine {
       throw new BadRequestException('A reason is required to reopen a completed assignment.');
     }
     const prev = assignment.status;
-    assignment.status = AssignmentStatus.ACCEPTED;
+    /**
+     * Reopen is a redo of the PAPERS, not of the visit (owner decision 2026-09-24, E6). The
+     * check-in and check-out the visit recorded still count and are not cleared, so the job goes
+     * back to the status that matches that evidence: CHECKED_IN when the assayer did arrive,
+     * ACCEPTED when the completion was closed without an arrival. (Reopening to ACCEPTED with
+     * `checkedInAt` still set was the incoherent pair the transition table warns about — a job
+     * "not yet arrived" carrying an arrival.)
+     */
+    assignment.status = assignment.checkedInAt ? AssignmentStatus.CHECKED_IN : AssignmentStatus.ACCEPTED;
     assignment.completionDate = null;
     assignment.completedWithoutCheckInReason = null;
     // Both explanations belong to the completion being undone. Left behind, the next completion
@@ -189,7 +213,12 @@ export class AssignmentStateMachine {
     // exist — and if the assayer does check out this time, the record would say a departure was
     // both present and explained away.
     assignment.completedWithoutCheckOutReason = null;
-    assignment.remarks = stated;
+    // `remarks` is NOT touched. It is the office's note on the job (edited through `update`, which
+    // tells the assayer via ASSIGNMENT_NOTE_CHANGED), and reopening used to overwrite it with the
+    // reopen reason — destroying the original note for good. The reason is recorded where reasons
+    // belong: the ASSIGNMENT_REOPENED audit event and the ASSIGNMENT_REOPENED notification, both
+    // written by `AssignmentService.reopen` from the same stated text. No screen reads a reopen
+    // reason back out of `remarks`.
     return { previousState: prev, newState: assignment.status, userId };
   }
 }

@@ -74,9 +74,11 @@ export class SchedulingService {
       existingSchedule.scheduledDate = scheduledDateObj;
       if (dto.remarks) existingSchedule.remarks = dto.remarks;
       existingSchedule.updatedBy = userId;
+      // Date the assignment FIRST and let a refusal propagate: saving the calendar row and then
+      // swallowing a scheduleAudit failure left the calendar and the job on two different dates.
+      const dated = await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate);
       const updated = await this.scheduleRepository.save(existingSchedule);
-      await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate).catch(() => {});
-      this.emitDispatchNotification(assignment, updated.id, dto.scheduledDate, userId);
+      this.emitDispatchNotification(assignment, updated.id, dto.scheduledDate, userId, dated?.entityVersion);
       return updated;
     }
 
@@ -94,7 +96,7 @@ export class SchedulingService {
     const saved = await this.scheduleRepository.save(schedule);
 
     // Transition parent assignment and branch states via the canonical service
-    await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate);
+    const dated = await this.assignmentService.scheduleAudit(assignment.id, userId, dto.scheduledDate);
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -105,7 +107,7 @@ export class SchedulingService {
       remarks: `Confirmed schedule for assignment ${assignment.assignmentNumber} on ${dto.scheduledDate}.`,
     });
 
-    this.emitDispatchNotification(assignment, saved.id, dto.scheduledDate, userId);
+    this.emitDispatchNotification(assignment, saved.id, dto.scheduledDate, userId, dated?.entityVersion);
 
     try {
       this.eventPublisher.publish('schedule:created', {
@@ -129,17 +131,25 @@ export class SchedulingService {
   /**
    * Tell the assayer their audit is on the calendar. Fire-and-forget by design: the schedule is
    * already saved, and Bull gives delivery its own durability — but a dispatch nobody hears about
-   * is not a dispatch, so this fires on every create/re-date. Dedupe includes the date so moving
-   * the same schedule to a new day notifies again, while retries of one dispatch collapse.
+   * is not a dispatch, so this fires on every create/re-date. Dedupe includes the date AND the
+   * assignment version the dating committed: the date alone swallowed a move back to an earlier
+   * day (A → B → A → B: the second B was "already sent"), while the version is new on every real
+   * write and the same on a replay of one. Falls back to the date alone when no version is known.
    */
-  private emitDispatchNotification(assignment: any, scheduleId: string, scheduledDate: string, userId: string): void {
+  private emitDispatchNotification(
+    assignment: any,
+    scheduleId: string,
+    scheduledDate: string,
+    userId: string,
+    assignmentVersion?: number | null,
+  ): void {
     this.notificationDispatch.emitSafe({
       type: 'SCHEDULE_DISPATCHED',
       entityType: 'SCHEDULE',
       entityId: scheduleId,
       actorUserId: userId,
       assayerId: assignment.assayerId,
-      dedupeKey: `SCHEDULE_DISPATCHED:${scheduleId}:${scheduledDate}`,
+      dedupeKey: `SCHEDULE_DISPATCHED:${scheduleId}:${scheduledDate}${assignmentVersion ? `:${assignmentVersion}` : ''}`,
       payload: {
         assignmentId: assignment.id,
         assignmentNumber: assignment.assignmentNumber,
@@ -233,10 +243,13 @@ export class SchedulingService {
     if (remarks) schedule.remarks = remarks;
     // Captured before the overwrite — the reschedule notification tells the assayer what moved.
     const previousDate = schedule.scheduledDate;
+    // The assignment version the re-dating committed — the reschedule notice's occurrence.
+    let redatedVersion: number | null = null;
     if (newScheduledDate) {
       schedule.scheduledDate = new Date(newScheduledDate);
       if (schedule.assignmentId) {
-        await this.assignmentService.scheduleAudit(schedule.assignmentId, userId, newScheduledDate);
+        const dated = await this.assignmentService.scheduleAudit(schedule.assignmentId, userId, newScheduledDate);
+        redatedVersion = dated?.entityVersion ?? null;
       }
     }
 
@@ -323,7 +336,8 @@ export class SchedulingService {
         entityId: saved.id,
         actorUserId: userId,
         assayerId: saved.assayerId,
-        dedupeKey: `SCHEDULE_RESCHEDULED:${saved.id}:${newScheduledDate}`,
+        // Per occurrence, not per date: A → B → A → B is four moves, and the second B is news.
+        dedupeKey: `SCHEDULE_RESCHEDULED:${saved.id}:${newScheduledDate}${redatedVersion ? `:${redatedVersion}` : ''}`,
         payload: {
           assignmentId: saved.assignmentId,
           branchName,

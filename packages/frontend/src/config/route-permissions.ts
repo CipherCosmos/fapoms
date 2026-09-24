@@ -352,6 +352,21 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [SystemRole.DEVELOPER],
   },
   {
+    /**
+     * The approver's list of joiners awaiting approval before training (`/hr/approvals`).
+     *
+     * ADMIN only, and no permission — for now. The approval itself can be granted to a custom
+     * role (ASSAYER:APPROVE), and the queue endpoint accepts one; but this page sits inside the HR
+     * section, whose layout loads `GET /hr/workforce`, which refuses every custom role (see the
+     * `/hr` entry above). Opening this route to a custom approver would open a page whose data is
+     * refused. When `/hr` gets its permission back, give this entry
+     * ['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION'] in the same change.
+     * OPERATIONS is left out on purpose: HR prepares the file, somebody above HR decides it.
+     */
+    path: '/hr/approvals',
+    allowedRoles: [SystemRole.ADMIN],
+  },
+  {
     // The approve side of the destructive-action two-person rule: a DEVELOPER requests a data
     // wipe in the Danger Zone, an ADMIN decides it here. Listed as ADMIN's page — developers
     // are refused the approve/reject ACTIONS by design, but the route gate cannot express that:

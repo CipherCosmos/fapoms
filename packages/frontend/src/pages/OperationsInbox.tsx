@@ -670,7 +670,7 @@ export const OperationsInbox: React.FC = () => {
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <button onClick={() => openPlanningFor(item)} disabled={busy}
                           className="btn btn-secondary"
-                          title="Open planning workspace to reassign this overdue audit to another assayer"
+                          title="Opens this branch in Planning. Pick another assayer there and write the reason — the job moves to them and both assayers are told."
                           style={{ padding: '5px 12px', fontSize: 'var(--text-2xs)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <UserX size={12} /> Reassign in Planning
                         </button>

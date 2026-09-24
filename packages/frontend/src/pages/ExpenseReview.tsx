@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, X, Receipt, RefreshCw, MapPin, CheckCircle2 } from 'lucide-react';
-import { formatRupees } from '@fapoms/shared';
+import { EXPENSE_APPROVAL_OVERRIDABLE_CODES, EXPENSE_APPROVAL_OVERRIDE_MIN_REASON, formatRupees } from '@fapoms/shared';
 import { DataTable, Column, Modal, Select, useConfirm, useToast } from '../components/ui';
 import {
   getPendingExpenses,
@@ -9,7 +9,8 @@ import {
   ExpenseClaim,
 } from '../services/expenses';
 import { TravelEvidence } from '../components/TravelEvidence';
-import { userMessage } from '../services/errors';
+import { AppError, userMessage } from '../services/errors';
+import { canOverrideExpenseApproval, useCurrentRoles } from '../hooks/useCurrentRoles';
 import { LoadFailure, caughtLoad } from '../components/LoadFailure';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/queryKeys';
@@ -28,6 +29,11 @@ import { safeHttpUrl } from '../utils/url';
  * because the reason belongs to the individual claim and is the only thing the assayer is
  * told; a reason written once and applied to a batch would be a form letter attached to
  * people's own money, and would be worse than the extra clicks it saved.
+ *
+ * Some approvals the server refuses (owner decision 2026-09-24): the job was cancelled, the
+ * claim's assayer was reassigned away, or the job's pay is on a bill already sent. The refusal
+ * opens a dialog saying which; an administrator can approve anyway with a written reason, which
+ * is kept on the claim and in the audit trail. Rejecting is never refused.
  */
 /**
  * The everyday reasons a claim gets rejected, offered as one-click options.
@@ -75,6 +81,15 @@ export const ExpenseReview: React.FC = () => {
   const effectiveRejectReason = isRejectOther ? rejectReason.trim() : rejectPreset;
   // A travel claim whose movement trail the reviewer has opened.
   const [inspecting, setInspecting] = useState<ExpenseClaim | null>(null);
+  /**
+   * A claim the approval rules refused (cancelled job, assayer reassigned away, pay on a sent
+   * bill), with the server's sentence saying which. A senior may approve it anyway with a written
+   * reason; everyone else is told who can, and can still reject it.
+   */
+  const [refused, setRefused] = useState<{ claim: ExpenseClaim; message: string } | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
+  const isSenior = canOverrideExpenseApproval(useCurrentRoles());
+  const closeRefused = () => { setRefused(null); setOverrideReason(''); };
   // Ticked claim ids, and the progress line shown while a batch is being worked through.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
@@ -104,18 +119,27 @@ export const ExpenseReview: React.FC = () => {
     [claims],
   );
 
-  const approve = async (claim: ExpenseClaim) => {
+  const approve = async (claim: ExpenseClaim, override?: string) => {
     setBusyId(claim.id);
     try {
-      await reviewExpense(claim.id, true);
+      if (override) await reviewExpense(claim.id, true, undefined, override);
+      else await reviewExpense(claim.id, true);
       setClaims((prev) => prev.filter((c) => c.id !== claim.id));
       setSelected((s) => { const n = new Set(s); n.delete(claim.id); return n; });
       // Approval books the reimbursement as a payout in the same transaction; the Payouts tab
       // and the overview read it from the server.
       void qc.invalidateQueries({ queryKey: queryKeys.billing.all });
-      toast({ type: 'success', title: 'Claim approved', message: `${formatRupees(Number(claim.amount))} is now a payout due to the assayer.` });
+      if (override) closeRefused();
+      toast({ type: 'success', title: override ? 'Claim approved anyway' : 'Claim approved', message: `${formatRupees(Number(claim.amount))} is now a payout due to the assayer.` });
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not approve', message: `The claim has not been approved. Try again in a moment. ${userMessage(err)}` });
+      // One of the approval rules said no: not a failure to retry, a decision to show — with the
+      // server's own sentence naming which rule, and (for a senior) the way past it.
+      if (!override && err instanceof AppError && err.domainCode && EXPENSE_APPROVAL_OVERRIDABLE_CODES.includes(err.domainCode)) {
+        setRefused({ claim, message: userMessage(err) });
+        setOverrideReason('');
+      } else {
+        toast({ type: 'error', title: 'Could not approve', message: `The claim has not been approved. ${override ? '' : 'Try again in a moment. '}${userMessage(err)}` });
+      }
     } finally {
       setBusyId(null);
     }
@@ -473,6 +497,68 @@ export const ExpenseReview: React.FC = () => {
               border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 'var(--text-sm)',
             }}
           />
+        )}
+      </Modal>
+
+      <Modal
+        open={!!refused}
+        onClose={closeRefused}
+        title="This claim cannot be approved as it stands"
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button type="button" onClick={closeRefused} title="Close without approving this claim" style={btnStyle('var(--text-muted)')}>
+              Cancel
+            </button>
+            {refused && (
+              <button
+                type="button"
+                onClick={() => { const c = refused.claim; closeRefused(); setRejecting(c); setRejectPreset(''); setRejectReason(''); }}
+                title="Reject this claim instead"
+                style={btnStyle('var(--danger, #dc2626)')}
+              >
+                <X size={15} /> Reject instead
+              </button>
+            )}
+            {isSenior && refused && (
+              <button
+                type="button"
+                onClick={() => void approve(refused.claim, overrideReason.trim())}
+                disabled={overrideReason.trim().length < EXPENSE_APPROVAL_OVERRIDE_MIN_REASON || busyId === refused.claim.id}
+                title="Approve this claim anyway, recording the reason above"
+                style={btnStyle('var(--success, #16a34a)')}
+              >
+                <Check size={15} /> Approve anyway
+              </button>
+            )}
+          </div>
+        }
+      >
+        <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
+          {refused ? `${refused.claim.assayer?.displayName ?? 'Assayer'} — ${formatRupees(Number(refused.claim.amount || 0))} on ${refused.claim.assignment?.assignmentNumber ?? 'this assignment'}` : ''}
+        </p>
+        <p role="alert" style={{ margin: '0 0 12px', fontSize: 'var(--text-sm)' }}>{refused?.message}</p>
+        {isSenior ? (
+          <>
+            <label htmlFor="expense-override-reason" style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+              Why approve it anyway? (required, kept on the claim and in the audit trail)
+            </label>
+            <textarea
+              id="expense-override-reason"
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              rows={3}
+              placeholder={`At least ${EXPENSE_APPROVAL_OVERRIDE_MIN_REASON} characters — for example, the visit was carried out before the job was cancelled.`}
+              title="Type why this claim should be approved despite the rule above"
+              style={{
+                width: '100%', marginTop: 6, padding: 10, borderRadius: 8, resize: 'vertical',
+                border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 'var(--text-sm)',
+              }}
+            />
+          </>
+        ) : (
+          <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
+            Only an administrator can approve it anyway, with a written reason. You can reject it, or leave it for them.
+          </p>
         )}
       </Modal>
 

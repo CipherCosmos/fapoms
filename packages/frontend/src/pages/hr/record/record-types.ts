@@ -102,6 +102,12 @@ export interface AssayerDossier {
   empanelments: ClientEmpanelment[];
   backgroundChecks: BackgroundCheck[];
   currentCheck: BackgroundCheck | null;
+  /**
+   * Background verification report files uploaded that no recorded check has been read from yet —
+   * the report for the check about to be recorded. The dossier has always sent it; the vetting tab
+   * reads it, and the joining checklist now does too.
+   */
+  bgvReportPending?: Array<{ documentId: string; versionId: string | null; path: string; uploadedAt: string | null; index?: number }>;
   onboarding: PaperworkDocument[];
   openIssues: any[];
   /**

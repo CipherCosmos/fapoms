@@ -20,18 +20,40 @@ export type TransitionMap<T extends string> = Partial<Record<T, T[]>>;
  * are the ones that sat beside them in the backend.
  */
 export const ASSIGNMENT_TRANSITIONS: Record<AssignmentStatus, AssignmentStatus[]> = {
-  [AssignmentStatus.PENDING]: [AssignmentStatus.ACCEPTED, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED],
+  /**
+   * PENDING -> PENDING is a reassignment of an open offer: the offer moves to another assayer and
+   * stays an offer (`AssignmentStateMachine.reassign`, `POST /assignments/:id/reassign`). No other
+   * writer targets PENDING — the generic transition route has no PENDING branch.
+   */
+  [AssignmentStatus.PENDING]: [
+    AssignmentStatus.PENDING,
+    AssignmentStatus.ACCEPTED,
+    AssignmentStatus.REJECTED,
+    AssignmentStatus.CANCELLED,
+  ],
   // COMPLETED is reachable from ACCEPTED, but only through `completeAudit`, which refuses it
   // without a stated reason — see there. The desk cannot check in for somebody (the check-in
   // is geofenced and lives in the field app), so without this a job whose assayer never
   // opened the app could not be closed at all.
+  //
+  // ACCEPTED -> PENDING is a reassignment before check-in (owner decision 2026-09-24, E9): the
+  // job goes to another assayer as a fresh offer. Once somebody has checked in it cannot be
+  // reassigned — CHECKED_IN and IN_PROGRESS have no PENDING edge; the office cancels instead.
   [AssignmentStatus.ACCEPTED]: [
     AssignmentStatus.ACCEPTED,
+    AssignmentStatus.PENDING,
     AssignmentStatus.CHECKED_IN,
     AssignmentStatus.COMPLETED,
     AssignmentStatus.CANCELLED,
   ],
-  [AssignmentStatus.CHECKED_IN]: [AssignmentStatus.CHECKED_IN, AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
+  /**
+   * No `ACCEPTED` here, deliberately. It used to be listed, and nothing legitimate used it — the
+   * only writer of CHECKED_IN -> ACCEPTED would have been the accept route, so a checked-in job
+   * still advertised ACCEPT in the field app's capability list and a re-accept silently rolled the
+   * visit back to "not arrived" while `checkedInAt` stayed set. Reopening writes ACCEPTED directly
+   * from COMPLETED (`AssignmentStateMachine.reopen`) and never consults this table.
+   */
+  [AssignmentStatus.CHECKED_IN]: [AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
   // CHECKED_IN is reachable from IN_PROGRESS because a field check-in is retried: a flaky
   // mobile connection, a GPS refresh, or a second attempt at the geofence all re-issue it
   // after work has already started. Refusing that would fail a legitimate retry, so it is
@@ -41,7 +63,8 @@ export const ASSIGNMENT_TRANSITIONS: Record<AssignmentStatus, AssignmentStatus[]
   // Reopening is strictly a privileged back-office operational command via AssignmentStateMachine.reopen().
   [AssignmentStatus.COMPLETED]: [],
   // A declined offer goes back on the market: reassigning it to somebody else is the whole
-  // point, and it re-enters as a PENDING offer to that person.
+  // point, and it re-enters as a PENDING offer to that person (reassign, or a new offer through
+  // create, which reuses the declined row).
   [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
   /**
    * Terminal. A cancellation is a decision that this work is not happening.
@@ -58,6 +81,14 @@ export const ASSIGNMENT_TRANSITIONS: Record<AssignmentStatus, AssignmentStatus[]
    */
   [AssignmentStatus.CANCELLED]: [],
 };
+
+/**
+ * The statuses a job may be reassigned from — exactly those with a PENDING edge in the table above
+ * (PENDING, ACCEPTED, REJECTED). Derived, not listed, so the two cannot disagree.
+ */
+export const REASSIGNABLE_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = (
+  Object.keys(ASSIGNMENT_TRANSITIONS) as AssignmentStatus[]
+).filter((from) => ASSIGNMENT_TRANSITIONS[from].includes(AssignmentStatus.PENDING));
 
 /** Whether an assignment may move from one status to the other, per `ASSIGNMENT_TRANSITIONS`. */
 export function canTransitionAssignment(from: AssignmentStatus, to: AssignmentStatus): boolean {
@@ -180,7 +211,12 @@ export const VALIDATION_TRANSITIONS: TransitionMap<ValidationStatus> = {
     ValidationStatus.CORRECTION_REQUIRED,
   ],
   [ValidationStatus.CORRECTION_REQUIRED]: [ValidationStatus.HUMAN_REVIEW],
-  [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED],
+  /**
+   * `APPROVED -> CORRECTION_REQUIRED` (2026-09-24): approval is internal — the report has not gone
+   * to the client until SUBMITTED — so reopening the job to redo its papers (E6) pulls an approved
+   * case back for review of the redone papers. SUBMITTED has no way back: the client holds it.
+   */
+  [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED, ValidationStatus.CORRECTION_REQUIRED],
 };
 
 /**

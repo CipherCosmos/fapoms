@@ -87,55 +87,22 @@ describe('ConstraintEvaluator', () => {
       expect(result.reason).toMatch(/Timeline Conflict/);
     });
 
-    it('does not let an assignment double-book against itself when it is moved', async () => {
-      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-1', assignmentNumber: 'A-1' });
-
-      const clash = await evaluator.checkDateAvailability({
-        assayerId: 'as-1',
-        scheduledDate: AUDIT_DATE,
-      });
-      expect(clash.passed).toBe(false);
-
-      const moving = await evaluator.checkDateAvailability({
-        assayerId: 'as-1',
-        scheduledDate: AUDIT_DATE,
-        excludeAssignmentId: 'asn-1',
-      });
-      expect(moving.passed).toBe(true);
-    });
-  });
-
-  describe('checkDoubleBooking', () => {
     /**
-     * The guard used to look only for ACCEPTED assignments. Checking in moves an assignment to
-     * CHECKED_IN, so the moment an assayer arrived at their first branch they became invisible
-     * to it and could be booked a second branch for the same day — while standing in the first.
+     * Owner decision 2026-09-24 (E2): one assayer may hold several branches on the same day. The
+     * date is available whatever else they are booked for that day — the evaluator does not even
+     * look (leave, holiday and the project dates are still checked, above).
      */
-    it('counts every status that means the day is already committed, not just ACCEPTED', async () => {
-      await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE);
+    it('lets an assayer already booked that day take another branch', async () => {
+      mockAssignmentRepo.findOne.mockClear();
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-other', assignmentNumber: 'A-1', status: 'CHECKED_IN' });
 
-      const where = mockAssignmentRepo.findOne.mock.calls[0][0].where;
-      // `In([...])` keeps the values it was given on `_value`.
-      const statuses = (where.status as any)._value as string[];
-      expect(statuses).toEqual(expect.arrayContaining(['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS']));
-    });
-
-    it('refuses a second booking for an assayer already checked in that day', async () => {
-      mockAssignmentRepo.findOne.mockResolvedValue({
-        id: 'asn-existing',
-        assignmentNumber: 'ASN-001',
-        status: 'CHECKED_IN',
+      const result = await evaluator.checkDateAvailability({
+        assayerId: 'as-1',
+        scheduledDate: AUDIT_DATE,
       });
-
-      const result = await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE);
-      expect(result.passed).toBe(false);
-    });
-
-    it('does not treat the assignment being moved as a conflict with itself', async () => {
-      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-1', assignmentNumber: 'ASN-001', status: 'ACCEPTED' });
-
-      const result = await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE, 'asn-1');
       expect(result.passed).toBe(true);
+      expect(mockAssignmentRepo.findOne).not.toHaveBeenCalled();
+      expect((evaluator as any).checkDoubleBooking).toBeUndefined();
     });
   });
 

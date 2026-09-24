@@ -1,0 +1,160 @@
+import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder, type LiveAssignment } from './assign-route';
+
+/**
+ * Where a planning "assign" goes.
+ *
+ * `POST /assignments` over a branch's open offer used to MOVE the offer to the new assayer without
+ * telling the one who lost it or recording why. The server now refuses that with
+ * `BRANCH_HAS_LIVE_OFFER`; moving an offer is `POST /assignments/:id/reassign`, with a reason, and
+ * both assayers are told. Every planning entry point (the assign modal's Send to app and Call &
+ * Assign, and "Assign anyway") routes through `assignRoute` + `reassignAndApply`, so these tests
+ * are the contract for all of them.
+ */
+
+const offer = (over: Partial<LiveAssignment> = {}): LiveAssignment => ({
+  id: 'asg-1',
+  status: 'PENDING',
+  proposedFee: 3000,
+  scheduledDate: '2026-09-30',
+  assayer: { id: 'old-assayer', displayName: 'Asha Rao' },
+  ...over,
+});
+
+describe('assignRoute', () => {
+  it.each(['PENDING', 'ACCEPTED'])('reassigns a %s job held by somebody else', (status) => {
+    const r = assignRoute(offer({ status }), 'new-assayer');
+    expect(r).toEqual({ kind: 'reassign', assignmentId: 'asg-1', fromName: 'Asha Rao', fromStatus: status });
+  });
+
+  it('creates when the branch has no assignment', () => {
+    expect(assignRoute(null, 'new-assayer')).toEqual({ kind: 'create' });
+    expect(assignRoute(undefined, 'new-assayer')).toEqual({ kind: 'create' });
+  });
+
+  it.each(['REJECTED', 'CANCELLED'])('creates over a %s row, as before', (status) => {
+    expect(assignRoute(offer({ status }), 'new-assayer')).toEqual({ kind: 'create' });
+  });
+
+  it('creates (does not reassign) when it is the same assayer', () => {
+    expect(assignRoute(offer(), 'old-assayer')).toEqual({ kind: 'create' });
+  });
+
+  it.each(['CHECKED_IN', 'IN_PROGRESS'])('refuses to move a %s job — cancel it instead', (status) => {
+    const r = assignRoute(offer({ status }), 'new-assayer');
+    expect(r.kind).toBe('blocked');
+    expect(r.kind === 'blocked' && r.message).toBe(
+      'Asha Rao has already checked in at this branch — cancel the job instead, then plan the branch again.',
+    );
+  });
+});
+
+describe('assignBlocker — the reason is required for a reassignment', () => {
+  const reassign = assignRoute(offer(), 'new-assayer');
+
+  it('blocks the button while the reason is empty or blank', () => {
+    expect(assignBlocker(reassign, '')).toMatch(/why this branch is moving from Asha Rao/);
+    expect(assignBlocker(reassign, '   ')).not.toBeNull();
+  });
+
+  it('lets it through once a reason is written', () => {
+    expect(assignBlocker(reassign, 'Asha is unwell')).toBeNull();
+  });
+
+  it('never asks for a reason on an ordinary create', () => {
+    expect(assignBlocker({ kind: 'create' }, '')).toBeNull();
+  });
+
+  it('always blocks a checked-in job', () => {
+    expect(assignBlocker(assignRoute(offer({ status: 'CHECKED_IN' }), 'x'), 'any reason')).toMatch(/cancel the job instead/);
+  });
+});
+
+describe('reassignAndApply', () => {
+  const call = (request: jest.Mock) => request.mock.calls.map(([url, opts]) => [
+    url, opts?.method, opts?.body ? JSON.parse(opts.body) : undefined,
+  ]);
+
+  it('posts to /reassign with the new assayer and the reason — never to POST /assignments', async () => {
+    const request = jest.fn().mockResolvedValue({ id: 'asg-1', status: 'PENDING', proposedFee: 3200, scheduledDate: '2026-09-30' });
+    await reassignAndApply(request, {
+      assignmentId: 'asg-1', newAssayerId: 'new-assayer', reason: '  Asha is unwell ', fee: 3200,
+      scheduledDate: '2026-09-30', acceptOnBehalf: false,
+    });
+    expect(call(request)).toEqual([
+      ['/assignments/asg-1/reassign', 'POST', { newAssayerId: 'new-assayer', reason: 'Asha is unwell' }],
+    ]);
+    expect(request.mock.calls.some(([url]) => url === '/assignments')).toBe(false);
+  });
+
+  it('refuses to send anything without a reason', async () => {
+    const request = jest.fn();
+    await expect(reassignAndApply(request, {
+      assignmentId: 'asg-1', newAssayerId: 'n', reason: ' ', fee: 1, acceptOnBehalf: false,
+    })).rejects.toThrow(/reason is required/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('applies the typed fee when the re-price differs, then accepts at it for Call & Assign', async () => {
+    const request = jest.fn()
+      .mockResolvedValueOnce({ id: 'asg-1', status: 'PENDING', proposedFee: 2800, scheduledDate: '2026-09-30T00:00:00.000Z' })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ id: 'asg-1', status: 'ACCEPTED' });
+    const out = await reassignAndApply(request, {
+      assignmentId: 'asg-1', newAssayerId: 'new-assayer', reason: 'moved', fee: 3500,
+      scheduledDate: '2026-09-30', acceptOnBehalf: true,
+    });
+    expect(call(request)).toEqual([
+      ['/assignments/asg-1/reassign', 'POST', { newAssayerId: 'new-assayer', reason: 'moved' }],
+      ['/assignments/asg-1', 'PUT', { proposedFee: 3500, agreedFee: 3500 }],
+      ['/assignments/asg-1/accept', 'POST', { fee: 3500, reason: 'Agreed at ₹3,500 during Call & Assign.' }],
+    ]);
+    expect(out.status).toBe('ACCEPTED');
+  });
+
+  it('applies a changed date along with the fee', async () => {
+    const request = jest.fn().mockResolvedValue({ id: 'asg-1', status: 'PENDING', proposedFee: 3000, scheduledDate: '2026-09-30' });
+    await reassignAndApply(request, {
+      assignmentId: 'asg-1', newAssayerId: 'n', reason: 'moved', fee: 3000, scheduledDate: '2026-10-02', acceptOnBehalf: false,
+    });
+    expect(call(request)[1]).toEqual(['/assignments/asg-1', 'PUT', { scheduledDate: '2026-10-02' }]);
+  });
+});
+
+describe('postStopsInOrder — a day plan is posted one stop at a time, in route order', () => {
+  it('starts the second post only after the first has resolved', async () => {
+    const events: string[] = [];
+    const resolvers: Record<string, () => void> = {};
+    const post = jest.fn((stop: string) => {
+      events.push(`start:${stop}`);
+      return new Promise<void>((resolve) => { resolvers[stop] = () => { events.push(`end:${stop}`); resolve(); }; });
+    });
+
+    const run = postStopsInOrder(['A', 'B', 'C'], post, () => 'x');
+    await Promise.resolve();
+    expect(events).toEqual(['start:A']);
+
+    resolvers.A();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(events).toEqual(['start:A', 'end:A', 'start:B']);
+
+    resolvers.B();
+    await new Promise((r) => setTimeout(r, 0));
+    resolvers.C();
+    const results = await run;
+    expect(events).toEqual(['start:A', 'end:A', 'start:B', 'end:B', 'start:C', 'end:C']);
+    expect(results.map((r) => r.ok)).toEqual([true, true, true]);
+  });
+
+  it('reports a refused stop against that stop, in the given words, and carries on', async () => {
+    const post = jest.fn(async (stop: string) => {
+      if (stop === 'B') throw new Error('offered');
+    });
+    const results = await postStopsInOrder(['A', 'B', 'C'], post, () => 'This branch is already offered to an assayer.');
+    expect(results).toEqual([
+      { stop: 'A', ok: true },
+      { stop: 'B', ok: false, error: 'This branch is already offered to an assayer.' },
+      { stop: 'C', ok: true },
+    ]);
+    expect(post).toHaveBeenCalledTimes(3);
+  });
+});

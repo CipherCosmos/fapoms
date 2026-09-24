@@ -6,7 +6,7 @@ import { FileScanInterceptor } from '../../infrastructure/security/file-scan.int
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
 import { Response } from 'express';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { DocumentService } from './document.service';
 import type { DocumentEntity } from './document.entity';
@@ -18,6 +18,7 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, 
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES, isAssignmentTerminal, AssignmentAction } from '@fapoms/shared';
 import { evaluateOwnership, evaluateSubmitReturn } from '../assignment/assignment-capabilities';
+import { IN_FLIGHT_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { withCode } from '../../infrastructure/http/api-error';
 
 import { ValidationService } from '../validation/validation.service';
@@ -984,6 +985,52 @@ export class DocumentController {
    * fires), the schedule, the assessment status, the validation case, the audit trail, the
    * notification and the assayer stats.
    */
+  /**
+   * The assignment a return uploaded against a project branch belongs to — deterministically.
+   *
+   * A branch accumulates assignment rows over its life (a cancelled one, then its replacement; a
+   * declined offer and the one after it), and this was an unordered `findOne` by branch: Postgres
+   * could hand back any of them, so a return could land on — and try to complete — a dead row
+   * while the live job stayed open. Preference, in order:
+   *   1. the live row (PENDING/ACCEPTED/CHECKED_IN/IN_PROGRESS, not deleted) — at most one exists,
+   *      `idx_assignments_single_active_branch` guarantees it; newest first only as a tie-break;
+   *   2. otherwise the most recently created row of any status (id as the final tie-break), which
+   *      is the one whose outcome the return most plausibly describes.
+   */
+  private async assignmentForBranch(projectBranchId: string): Promise<AssignmentEntity | null> {
+    return this.preferredAssignment({ projectBranchId });
+  }
+
+  /**
+   * The same preference, by assessment — the lookup just before the branch fallback. An assessment
+   * belongs to one project branch, so it has the same history of rows and had the same unordered
+   * `findOne` (E11 leftover, 2026-09-24).
+   */
+  private async assignmentForAssessment(assessmentId: string): Promise<AssignmentEntity | null> {
+    return this.preferredAssignment({ assessmentId });
+  }
+
+  /** Live row first, else the newest (id as tie-break) — see `assignmentForBranch`. */
+  private async preferredAssignment(
+    key: { projectBranchId: string } | { assessmentId: string },
+  ): Promise<AssignmentEntity | null> {
+    const live = await this.assignmentRepository
+      .findOne({
+        where: { ...key, isActive: true, status: In(IN_FLIGHT_ASSIGNMENT_STATUSES) },
+        relations: ['projectBranch'],
+        order: { createdAt: 'DESC', id: 'DESC' },
+      })
+      .catch(() => null);
+    if (live) return live;
+    return this.assignmentRepository
+      .findOne({
+        where: { ...key },
+        relations: ['projectBranch'],
+        order: { createdAt: 'DESC', id: 'DESC' },
+      })
+      .catch(() => null);
+  }
+
   private async completeAssignmentForReturn(
     doc: { id: string; assessmentId: string | null },
     assignmentId: string | undefined,
@@ -999,14 +1046,10 @@ export class DocumentController {
         .catch(() => null);
     }
     if (!targetAsn && doc.assessmentId) {
-      targetAsn = await this.assignmentRepository
-        .findOne({ where: { assessmentId: doc.assessmentId }, relations: ['projectBranch'] })
-        .catch(() => null);
+      targetAsn = await this.assignmentForAssessment(doc.assessmentId);
     }
     if (!targetAsn && fallbackTargetId) {
-      targetAsn = await this.assignmentRepository
-        .findOne({ where: { projectBranchId: fallbackTargetId }, relations: ['projectBranch'] })
-        .catch(() => null);
+      targetAsn = await this.assignmentForBranch(fallbackTargetId);
     }
 
     /**

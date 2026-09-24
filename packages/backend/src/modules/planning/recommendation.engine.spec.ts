@@ -336,7 +336,12 @@ describe('RecommendationEngine', () => {
     expect(results).toHaveLength(0);
   });
 
-  it('should filter out double-booked assayers', async () => {
+  /**
+   * Owner decision 2026-09-24 (E2): one assayer may take several branches on the same day. Someone
+   * already committed that day is no longer filtered out — the same-day route grouping score is
+   * the only place their other booking now counts, and it counts in their favour.
+   */
+  it('keeps an assayer who is already booked that day', async () => {
     mockAssayerRepo.find.mockResolvedValue([
       {
         id: 'a-1',
@@ -348,12 +353,6 @@ describe('RecommendationEngine', () => {
       },
     ]);
 
-    /**
-     * Double-booking is now resolved for the whole pool in one query rather than per
-     * candidate, so the fixture answers that query instead of the old per-assayer findOne.
-     * The rule under test is unchanged: an assayer already committed on the scheduled date
-     * must not be offered a second branch that day.
-     */
     mockAssignmentRepo.find.mockImplementation(async (opts: any) => {
       const status = opts?.where?.status;
       const isDoubleBookingProbe = status && JSON.stringify(status).includes('ACCEPTED');
@@ -361,8 +360,6 @@ describe('RecommendationEngine', () => {
         ? [{ assayerId: 'a-1', assignmentNumber: 'ASN-EXISTING' }]
         : [];
     });
-    // Kept so the standalone (non-batched) path is still covered by this fixture.
-    mockAssignmentRepo.findOne.mockResolvedValue({ id: 'existing-assignment' });
 
     const branch = {
       id: 'b-1',
@@ -371,7 +368,9 @@ describe('RecommendationEngine', () => {
     } as any;
 
     const results = await engine.recommend(branch, new Date());
-    expect(results).toHaveLength(0);
+    expect(results).toHaveLength(1);
+    expect(results[0].assayer.id).toBe('a-1');
+    expect((results as any).excluded ?? []).toHaveLength(0);
   });
 
   /**
@@ -669,7 +668,7 @@ describe('RecommendationEngine', () => {
       expect(results[0].assayer.id).toBe('a-1');
     });
 
-    it('still states the clash on the candidate it kept', async () => {
+    it('does not call another booking that day a clash any more (E2)', async () => {
       mockAssayerRepo.find.mockResolvedValue([bookedAssayer]);
       bookAssayerOnTheDay();
 
@@ -677,9 +676,8 @@ describe('RecommendationEngine', () => {
         relaxAvailability: true,
       });
 
-      // Relaxing a filter is a request to see past a constraint, not to be kept from knowing
-      // it exists — without this the operator dispatches into a double-booking.
-      expect(results[0].dateConflict).toContain('ASN-EXISTING');
+      // Several branches per day are allowed, so there is nothing to warn about.
+      expect(results[0].dateConflict).toBeNull();
     });
 
     it('leaves a genuinely free candidate unflagged', async () => {
@@ -707,14 +705,14 @@ describe('RecommendationEngine', () => {
       expect((results as any).excluded[0].kind).toBe('ONBOARDING');
     });
 
-    it('excludes the booked candidate when not relaxed', async () => {
+    it('keeps the booked candidate when not relaxed, too (E2)', async () => {
       mockAssayerRepo.find.mockResolvedValue([bookedAssayer]);
       bookAssayerOnTheDay();
 
       const results = await engine.recommend(branch, new Date());
 
-      expect(results).toHaveLength(0);
-      expect((results as any).excluded[0].kind).toBe('DATE');
+      expect(results).toHaveLength(1);
+      expect(results[0].assayer.id).toBe('a-1');
     });
   });
 
@@ -797,8 +795,8 @@ describe('RecommendationEngine', () => {
 
     // Distinguish the three different findOne() call shapes that share this mock:
     // the new "pending offer on this branch" lookup (has status: PENDING), the
-    // ConsecutiveBranchAuditFilter lookup (no status filter), and checkDoubleBooking
-    // (status: In([ACCEPTED])) — only the first should report a match here.
+    // ConsecutiveBranchAuditFilter lookup (no status filter) — only the first should report a
+    // match here.
     mockAssignmentRepo.findOne.mockImplementation(async (opts: any) => {
       if (opts?.where?.status === AssignmentStatus.PENDING) {
         return { assayerId: 'a-pending', projectBranch: { branchId: 'b-1' } };
@@ -1201,7 +1199,6 @@ describe('AvailabilityFilter', () => {
   const mockConstraintEvaluator = {
     checkHoliday: jest.fn(),
     checkProjectTimeline: jest.fn(),
-    checkDoubleBooking: jest.fn(),
     checkLeaves: jest.fn(),
   } as any;
 
@@ -1209,7 +1206,6 @@ describe('AvailabilityFilter', () => {
     jest.clearAllMocks();
     mockConstraintEvaluator.checkHoliday.mockResolvedValue(passResult);
     mockConstraintEvaluator.checkProjectTimeline.mockReturnValue(passResult);
-    mockConstraintEvaluator.checkDoubleBooking.mockResolvedValue(passResult);
     mockConstraintEvaluator.checkLeaves.mockReturnValue(passResult);
   });
 
@@ -1220,7 +1216,6 @@ describe('AvailabilityFilter', () => {
       branchFacts: {
         holidayResult: failResult,
         timelineResult: passResult,
-        doubleBookedByAssayer: {},
       },
     };
 
@@ -1237,7 +1232,6 @@ describe('AvailabilityFilter', () => {
       branchFacts: {
         holidayResult: passResult,
         timelineResult: failResult,
-        doubleBookedByAssayer: {},
       },
     };
 
@@ -1251,7 +1245,6 @@ describe('AvailabilityFilter', () => {
       branchFacts: {
         holidayResult: passResult,
         timelineResult: passResult,
-        doubleBookedByAssayer: {},
       },
     };
 
@@ -1267,11 +1260,25 @@ describe('AvailabilityFilter', () => {
     expect(mockConstraintEvaluator.checkHoliday).toHaveBeenCalledWith('Maharashtra', scheduledDate, 'client-1');
   });
 
+  /**
+   * Owner decision 2026-09-24 (E2): several branches per assayer per day. Somebody already booked
+   * that day is still available — the filter has no booking check to consult at all.
+   */
+  it('admits a candidate who already holds another branch that day', async () => {
+    const filter = new AvailabilityFilter(mockConstraintEvaluator);
+    const context: any = {
+      branch, client, scheduledDate, weights: {},
+      branchFacts: { holidayResult: passResult, timelineResult: passResult, sameDayBranchPointsByAssayer: { 'assayer-1': [{ latitude: 1, longitude: 1 }] } },
+    };
+    expect(await filter.evaluate(assayer, context)).toBe(true);
+    expect(await filter.exclusionReason(assayer, context)).toBeNull();
+  });
+
   it('relaxAvailability skips every date check, including the two just added', async () => {
     const filter = new AvailabilityFilter(mockConstraintEvaluator);
     const context: any = {
       branch, client, scheduledDate, weights: {}, relaxAvailability: true,
-      branchFacts: { holidayResult: failResult, timelineResult: failResult, doubleBookedByAssayer: { 'assayer-1': 'x' } },
+      branchFacts: { holidayResult: failResult, timelineResult: failResult },
     };
 
     expect(await filter.evaluate(assayer, context)).toBe(true);

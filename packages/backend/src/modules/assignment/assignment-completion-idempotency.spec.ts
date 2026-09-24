@@ -14,9 +14,11 @@ import { AssignmentStateMachine } from './assignment.state-machine';
  * and let a row that had already reached the TARGET status fall straight through to the write.
  *
  * The rule the fix encodes is the state machine's own: a status that does not list itself as a
- * successor cannot be arrived at twice. COMPLETED, CANCELLED, REJECTED and PENDING declare no
+ * successor cannot be arrived at twice. COMPLETED, CANCELLED and REJECTED declare no
  * self-transition. ACCEPTED, CHECKED_IN and IN_PROGRESS declare one deliberately — a field
- * check-in is retried after a flaky connection and has to be able to update the GPS fix.
+ * check-in is retried after a flaky connection and has to be able to update the GPS fix. PENDING
+ * declares one since 2026-09-24 for a different reason: it is the reassignment of an open offer
+ * (E9). No transition command targets PENDING, so the shortcut never meets it.
  */
 describe('assignment completion is idempotent', () => {
   describe('the state machine already answers which commands can repeat', () => {
@@ -24,7 +26,6 @@ describe('assignment completion is idempotent', () => {
       AssignmentStatus.COMPLETED,
       AssignmentStatus.CANCELLED,
       AssignmentStatus.REJECTED,
-      AssignmentStatus.PENDING,
     ])('%s cannot be arrived at twice', (status) => {
       expect(AssignmentStateMachine.canTransition(status, status)).toBe(false);
     });

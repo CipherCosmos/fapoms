@@ -108,6 +108,24 @@ export class RegionGuardService {
   }
 
   /**
+   * `assertRegionAllowed` as a yes/no, for a LIST that has to leave rows out rather than refuse the
+   * whole request.
+   *
+   * Derived from the assertion rather than restating it, so the two cannot drift: a list filtered by
+   * a copy of the rule would offer somebody a row that the record itself then refuses on opening.
+   * Only the refusal becomes `false`; anything else the assertion throws still throws.
+   */
+  isRegionAllowed(region: string | null | undefined, scope?: Partial<GlobalScope>): boolean {
+    try {
+      this.assertRegionAllowed(region, scope);
+      return true;
+    } catch (err) {
+      if (err instanceof ForbiddenException) return false;
+      throw err;
+    }
+  }
+
+  /**
    * The staged version of `assertRegionAllowed`, for a boundary being ADDED where none existed
    * before — documents, billing, expenses, customer master, validation queries, clients. Every
    * other caller of `assertRegionAllowed` above already enforced correctly and stays exactly as

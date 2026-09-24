@@ -25,6 +25,8 @@ import { PlatformModule } from '../platform/platform.module';
 import { BranchModule } from '../branch/branch.module';
 import { GeoModule } from '../geo/geo.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AssayerModule } from '../assayer/assayer.module';
+import { DayTravelModule } from '../assignment/day-travel.module';
 
 @Module({
   imports: [
@@ -51,6 +53,12 @@ import { NotificationsModule } from '../notifications/notifications.module';
     // to the precision worker the moment an import finishes. GeoModule is a leaf — it imports no
     // feature module — so this cannot close a cycle.
     GeoModule,
+    // For switching an assayer's location sharing off when a cancellation ends their last job.
+    // AssayerModule imports neither this module nor anything that does, so this is no cycle.
+    AssayerModule,
+    // Re-deciding an assayer's day after a project closure cancels the job that carried its
+    // travel. A leaf (pricing + notifications only); no cycle.
+    DayTravelModule,
   ],
   controllers: [ProjectController, CallLogController, BranchImportController],
   providers: [ProjectService, ProjectQueryService, CallLogService, ImportJobWorker],

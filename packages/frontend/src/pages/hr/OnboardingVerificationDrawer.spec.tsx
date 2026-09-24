@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
 
-import { OnboardingVerificationDrawer } from './OnboardingVerificationDrawer';
+import { OnboardingVerificationDrawer, planStep } from './OnboardingVerificationDrawer';
 import { api } from '../../services/api';
 
 /**
@@ -214,7 +214,48 @@ describe('Background check step', () => {
     expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
   });
 
-  it('says an adverse result stops them, and offers to stop their joining with a reason', async () => {
+  /**
+   * "Report uploaded" means the report is uploaded.
+   *
+   * It used to be ticked only once a result had been recorded against the report, so a desk that
+   * had just uploaded the agency's report saw the line still unticked and went looking for a
+   * second place to upload it. The stage gate is unchanged — the result still has to be recorded,
+   * clear, against a report — this is only whether the checklist tells the truth on the way.
+   */
+  describe('the report line on the checklist', () => {
+    const reportLine = (d: Record<string, unknown>) => planStep(
+      person({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }) as never,
+      dossier(d) as never,
+    ).items.find((i) => i.label === 'Background verification report uploaded')!;
+    const waiting = [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null, index: 0 }];
+
+    it('is ticked as soon as the report is uploaded, before its result is recorded', () => {
+      expect(reportLine({ currentCheck: null, bgvReportPending: waiting }).done).toBe(true);
+    });
+
+    it('is not ticked with nothing uploaded', () => {
+      expect(reportLine({ currentCheck: null, bgvReportPending: [] }).done).toBe(false);
+    });
+
+    /** Coming back after failing, the report on file is the one that failed them. */
+    it('is not ticked by the report an adverse check was read from — passing needs a new one', () => {
+      const failed = { verdict: 'CRIMINAL_CASE', reportFiles: [{ documentId: 'd-bgv', versionId: 'v-0', path: 'old.pdf', uploadedAt: null }] };
+      expect(reportLine({ currentCheck: failed, bgvReportPending: [] }).done).toBe(false);
+      expect(reportLine({ currentCheck: failed, bgvReportPending: waiting }).done).toBe(true);
+    });
+
+    it('still holds the stage until a clear result is recorded against it', () => {
+      const plan = planStep(
+        person({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }) as never,
+        dossier({ currentCheck: null, bgvReportPending: waiting }) as never,
+      );
+      expect(plan.items.filter((i) => i.blocking && !i.done).map((i) => i.label)).toEqual([
+        'Background check recorded', 'Background check result is clear',
+      ]);
+    });
+  });
+
+    it('says an adverse result stops them, and offers to stop their joining with a reason', async () => {
     current.dossier = dossier({ currentCheck: { verdict: 'CRIMINAL_CASE' } });
     renderDrawer();
 

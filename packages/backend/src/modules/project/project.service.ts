@@ -7,7 +7,7 @@
 import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
 import { Injectable, NotFoundException, BadRequestException, ConflictException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, In, DataSource } from 'typeorm';
+import { Repository, In, DataSource, EntityManager } from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
@@ -43,6 +43,10 @@ import { needsBetterFix, parseLocationInput, PRECISION_METERS } from '../geo/coo
 import { lookupBranchByIfscOrSol, lookupIfsc, inferIfscFromSolId, IfscLookupResult, resolveBankCode } from '../geo/ifsc-lookup.helper';
 import { lookupPincode } from '../geo/pincode-lookup.helper';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
+import { AssayerService } from '../assayer/assayer.service';
+import { cancelOpenAssignmentsForClosure, ClosureCancelledAssignment } from '../assignment/closure-cancellation';
+import { DayTravelService } from '../assignment/assignment-day-travel';
+import { ASSIGNED_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 
@@ -192,6 +196,10 @@ export class ProjectService implements OnModuleInit {
       private readonly dataSource: DataSource,
       /** The silent "your jobs changed" push, for work a project cancellation cancels. */
       @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
+      /** Turning location sharing off for an assayer whose last job a cancellation ended. */
+      @Optional() private readonly assayerService?: AssayerService,
+      /** Re-deciding the day's travel when a cancelled job was the one carrying it (E2). */
+      @Optional() private readonly dayTravel?: DayTravelService,
    ) {}
 
   private async resolveZoneName(stateName: string, clientId?: string): Promise<string> {
@@ -473,6 +481,15 @@ export class ProjectService implements OnModuleInit {
       [userId, id]
     );
 
+    // The (assayer, day) pairs whose live work this removal takes away — read before it goes, so
+    // each day's travel can be re-decided afterwards (travel once per assayer per day, E2).
+    const liveDays: Array<{ assayer_id: string | null; scheduled_date: string | Date | null }> = await this.dataSource.query(
+      `SELECT DISTINCT assayer_id, scheduled_date FROM assignments
+        WHERE project_id = $1 AND is_active = true
+          AND status IN (${sqlStatusList(ASSIGNED_ASSIGNMENT_STATUSES)})`,
+      [id],
+    ).catch(() => []);
+
     // Deactivate associated assignments
     await this.dataSource.query(
       `UPDATE assignments SET is_active = false, updated_by = $1,
@@ -541,6 +558,13 @@ export class ProjectService implements OnModuleInit {
       organizationId: project.organizationId,
       payload: { id, name: project.name, projectNumber: project.projectNumber },
     });
+
+    // The removed jobs may have carried their day's travel; each affected day is re-decided.
+    await this.dayTravel?.rebalanceMany(
+      (Array.isArray(liveDays) ? liveDays : []).map((r) => ({ assayerId: r.assayer_id, day: r.scheduled_date })),
+      userId,
+      `project ${project.name} was removed`,
+    );
   }
 
   async findProjectBranches(
@@ -2330,35 +2354,11 @@ export class ProjectService implements OnModuleInit {
   async cancelProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
 
-    // State-specific assignment integrity checks
-    const assignments: Array<{
-      id: string;
-      assignment_number: string;
-      status: string;
-      project_branch_id: string;
-      assayer_id: string | null;
-      branch_name: string | null;
-    }> = await this.dataSource.query(
-      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id, a.assayer_id, b.name AS branch_name
-       FROM assignments a
-       INNER JOIN project_branches pb ON a.project_branch_id = pb.id
-       LEFT JOIN branches b ON b.id = pb.branch_id
-       WHERE pb.project_id = $1 AND a.is_active = true`,
-      [id],
-    ).catch(() => []);
-
-    const inProgress = assignments.find(
-      (a) => a.status === AssignmentStatus.CHECKED_IN || a.status === AssignmentStatus.IN_PROGRESS,
-    );
-    if (inProgress) {
-      throw new ConflictException(
-        `Cannot cancel project "${project.name}": Assignment ${inProgress.assignment_number} is currently ${inProgress.status}. Field audit is actively in progress on site. Operational intervention required before cancelling this project.`,
-      );
-    }
-
     const prev = project.status;
     const next = ProjectStatus.CANCELLED;
-    return this.workflowEngine.executeCommand(
+    let cancelled: ClosureCancelledAssignment[] = [];
+    let projectEvent: { constructor: { name: string } } | null = null;
+    const result = await this.workflowEngine.executeCommand(
       'project',
       project.id,
       'CancelProjectCommand',
@@ -2367,67 +2367,82 @@ export class ProjectService implements OnModuleInit {
       userId,
       role,
       [SystemRole.ADMIN, SystemRole.OPERATIONS],
-      async () => {
-        // Safely cancel pending or accepted assignments transactionally with outbox/audit events
-        const cancellable = assignments.filter(
-          (a) => a.status === AssignmentStatus.PENDING || a.status === AssignmentStatus.ACCEPTED,
-        );
-        for (const a of cancellable) {
-          await this.dataSource.query(
-            `UPDATE assignments
-             SET status = 'CANCELLED',
-                 cancel_reason = 'Project cancelled by operations',
-                 updated_by = $1,
-                 entity_version = COALESCE(entity_version, 1) + 1,
-                 updated_at = NOW()
-             WHERE id = $2`,
-            [userId, a.id],
-          );
-          await this.auditService.recordEvent({
-            category: EventCategory.WORKFLOW,
-            eventType: 'ASSIGNMENT_CANCELLED',
-            entityType: 'ASSIGNMENT',
-            entityId: a.id,
-            previousState: a.status,
-            newState: AssignmentStatus.CANCELLED,
-            userId,
-            remarks: `Auto-cancelled due to cancellation of project ${project.name}`,
-          });
-          // Owner decision 2026-09-24: the assayer holding this job is told, in words, and their
-          // phone refreshes. This path cancels with a direct UPDATE and used to tell nobody.
-          if (a.assayer_id) {
-            this.notificationDispatch.emitSafe({
-              type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE',
-              entityType: 'ASSIGNMENT',
-              entityId: a.id,
-              actorUserId: userId,
-              assayerId: a.assayer_id,
-              dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}`,
-              payload: {
-                assignmentId: a.id,
-                assignmentNumber: a.assignment_number,
-                branchName: a.branch_name ?? 'the branch',
-                because: 'the office has stopped this audit project',
-              },
-            });
-            this.refreshPush?.assignmentChanged(a.assayer_id, a.id);
-          }
-          this.eventPublisher.publish('assignment:status-changed', {
-            eventType: 'assignment:status-changed',
-            assignmentId: a.id,
-            assignmentNumber: a.assignment_number,
-            previousState: a.status,
-            newState: AssignmentStatus.CANCELLED,
-            userId,
-          });
+      async (manager?: EntityManager) => {
+        if (!manager) {
+          // The engine always supplies its transaction; without one this would be the very
+          // outside-the-transaction write this method was fixed to stop doing.
+          throw new Error('CancelProjectCommand must run on the workflow transaction.');
         }
+        /**
+         * On the command's own transaction — the `manager` the workflow engine hands the action,
+         * which also carries the history and audit rows. This block used to say "transactionally"
+         * while every UPDATE went through `this.dataSource.query`, i.e. a separate connection that
+         * committed row by row whatever happened to the command. The open work is locked, the
+         * on-site refusal decided on the locked rows (it used to be read, unlocked, before the
+         * command started), and only rows still PENDING/ACCEPTED are cancelled, with their
+         * calendar entries retired. See `cancelOpenAssignmentsForClosure`.
+         */
+        cancelled = await cancelOpenAssignmentsForClosure(manager, {
+          scope: { projectId: project.id },
+          userId,
+          cancelReason: 'Project cancelled by operations',
+          auditRemarks: `Auto-cancelled due to cancellation of project ${project.name}`,
+          onSiteRefusal: (a) => new ConflictException(
+            `Cannot cancel project "${project.name}": Assignment ${a.assignmentNumber} is currently ${a.status}. Field audit is actively in progress on site. Operational intervention required before cancelling this project.`,
+          ),
+          auditService: this.auditService,
+        });
 
-        const event = ProjectStateMachine.cancelProject(project, userId);
-        const saved = await this.projectRepository.save(project);
-        this.eventPublisher.publish(event.constructor.name, event);
-        return saved;
+        projectEvent = ProjectStateMachine.cancelProject(project, userId);
+        return manager.getRepository(ProjectEntity).save(project);
       }
     );
+    // Published once the engine's transaction has committed, not from inside it.
+    const committedEvent = projectEvent as { constructor: { name: string } } | null;
+    if (committedEvent) this.eventPublisher.publish(committedEvent.constructor.name, committedEvent as any);
+
+    // Committed. Tell the people whose work this stopped — never about a rolled-back cancel.
+    for (const a of cancelled) {
+      // Owner decision 2026-09-24: the assayer holding this job is told, in words, and their
+      // phone refreshes.
+      if (a.assayerId) {
+        this.notificationDispatch.emitSafe({
+          type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE',
+          entityType: 'ASSIGNMENT',
+          entityId: a.id,
+          actorUserId: userId,
+          assayerId: a.assayerId,
+          dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}:${a.entityVersion}`,
+          payload: {
+            assignmentId: a.id,
+            assignmentNumber: a.assignmentNumber,
+            branchName: a.branchName ?? 'the branch',
+            because: 'the office has stopped this audit project',
+          },
+        });
+        this.refreshPush?.assignmentChanged(a.assayerId, a.id);
+      }
+      this.eventPublisher.publish('assignment:status-changed', {
+        eventType: 'assignment:status-changed',
+        assignmentId: a.id,
+        assignmentNumber: a.assignmentNumber,
+        previousState: a.previousStatus,
+        newState: AssignmentStatus.CANCELLED,
+        userId,
+      });
+    }
+    // Sharing ends with an assayer's last committed job, as it does for a single cancel.
+    for (const assayerId of new Set(cancelled.map((a) => a.assayerId).filter((x): x is string => !!x))) {
+      await this.assayerService?.disableLiveTrackingWhenWorkEnds(assayerId, userId);
+    }
+    // Travel once per assayer per day (E2): a cancelled job may have carried its day's journey;
+    // the next job that assayer has that day (on another project) takes it over. Never throws.
+    await this.dayTravel?.rebalanceMany(
+      cancelled.map((a) => ({ assayerId: a.assayerId, day: a.scheduledDate })),
+      userId,
+      `project ${project.name} was cancelled`,
+    );
+    return result;
   }
 
   async holdProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {

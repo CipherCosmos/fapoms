@@ -111,19 +111,15 @@ describe('ConstraintEvaluator honours the rule bypass', () => {
     });
   });
 
-  describe('double booking', () => {
-    it('blocks a second audit on the same day', async () => {
+  describe('a second branch on the same day (owner decision 2026-09-24)', () => {
+    it('is not a rule any more, so there is nothing to suspend', async () => {
+      // An assayer already booked that day is still available: checkDateAvailability consults no
+      // bookings at all, and the catalogue offers no DOUBLE_BOOKING switch.
+      assignmentRepo.findOne.mockClear();
       assignmentRepo.findOne.mockResolvedValue({ id: 'x', assignmentNumber: 'ASN-1' });
-      await expect(evaluator.checkDoubleBooking('a1', date)).resolves.toMatchObject({ passed: false });
-    });
-
-    it('is suspendable', async () => {
-      assignmentRepo.findOne.mockResolvedValue({ id: 'x', assignmentNumber: 'ASN-1' });
-      suspended.add(BypassableRule.DOUBLE_BOOKING);
-      await expect(evaluator.checkDoubleBooking('a1', date)).resolves.toMatchObject({
-        passed: true,
-        bypassed: BypassableRule.DOUBLE_BOOKING,
-      });
+      await expect(evaluator.checkDateAvailability({ assayerId: 'a1', scheduledDate: date })).resolves.toEqual({ passed: true });
+      expect(assignmentRepo.findOne).not.toHaveBeenCalled();
+      expect(Object.values(BypassableRule)).not.toContain('DOUBLE_BOOKING');
     });
   });
 

@@ -136,11 +136,21 @@ export function planStep(candidate: Assayer, dossier: AssayerDossier | undefined
         next: AssayerLifecycleStatus.FINAL_APPROVAL,
         actionLabel: 'Send for approval',
         items: [
-          // Mandatory, like the check itself: the server will not let them out of this stage without
-          // it — and it asks the CHECK for its own report, not the document, so this does too.
+          /*
+            Mandatory, like the check itself. Done when the report is UPLOADED — which is what the
+            line says — not only once a result has been recorded against it.
+
+            This used to ask the recorded check for its files, which mirrors the server's final
+            gate but not the sentence on screen: a desk that had just uploaded the agency's report
+            saw "report uploaded" still unticked, beside "check recorded" unticked, and went
+            looking for a second place to upload it. A report waiting for its result counts; so
+            does one a clear check was read from. One behind an ADVERSE check does not — that one
+            failed them, and passing needs a new report.
+          */
           {
             label: 'Background verification report uploaded',
-            done: ((dossier?.currentCheck as { reportFiles?: unknown[] } | null | undefined)?.reportFiles?.length ?? 0) > 0,
+            done: (dossier?.bgvReportPending?.length ?? 0) > 0
+              || (verdict === 'CLEAR' && ((dossier?.currentCheck as { reportFiles?: unknown[] } | null | undefined)?.reportFiles?.length ?? 0) > 0),
             blocking: true,
             area: 'background',
           },

@@ -17,6 +17,9 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocomplete.helper';
 import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
+import { AssayerService } from '../assayer/assayer.service';
+import { cancelOpenAssignmentsForClosure, ClosureCancelledAssignment } from '../assignment/closure-cancellation';
+import { DayTravelService } from '../assignment/assignment-day-travel';
 
 /** A header reduced to letters and digits, lower-cased — so "STATE", "State" and "state" are one. */
 const normHeader = (s: unknown): string => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -225,6 +228,10 @@ export class BranchService {
      */
     @Optional() private readonly notificationDispatch?: NotificationDispatchService,
     @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
+    /** Turning location sharing off for an assayer whose last job this closure cancelled. */
+    @Optional() private readonly assayerService?: AssayerService,
+    /** Re-deciding the day's travel when a cancelled job was the one carrying it (E2). */
+    @Optional() private readonly dayTravel?: DayTravelService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -629,127 +636,113 @@ export class BranchService {
   async remove(id: string, userId: string): Promise<void> {
     const branch = await this.loadForWrite(id);
 
-    // State-specific assignment integrity checks
-    const assignments: Array<{
-      id: string;
-      assignment_number: string;
-      status: string;
-      project_branch_id: string;
-      assayer_id: string | null;
-    }> = await this.dataSource.query(
-      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id, a.assayer_id
-       FROM assignments a
-       INNER JOIN project_branches pb ON a.project_branch_id = pb.id
-       WHERE pb.branch_id = $1 AND a.is_active = true`,
-      [id],
-    ).catch(() => []);
-
-    const inProgress = assignments.find(
-      (a) => a.status === AssignmentStatus.CHECKED_IN || a.status === AssignmentStatus.IN_PROGRESS,
-    );
-    if (inProgress) {
-      throw new ConflictException(
-        `Cannot deactivate branch "${branch.name}": Assignment ${inProgress.assignment_number} is currently ${inProgress.status}. Field audit is actively in progress on site. Operational intervention required before deactivating this branch.`,
-      );
-    }
-
-    // Safely cancel pending or accepted assignments transactionally with outbox/audit events
-    const cancellable = assignments.filter(
-      (a) => a.status === AssignmentStatus.PENDING || a.status === AssignmentStatus.ACCEPTED,
-    );
-    for (const a of cancellable) {
-      await this.dataSource.query(
-        `UPDATE assignments
-         SET status = 'CANCELLED',
-             cancel_reason = 'Branch deactivated by operations',
-             updated_by = $1,
-             entity_version = COALESCE(entity_version, 1) + 1,
-             updated_at = NOW()
-         WHERE id = $2`,
-        [userId, a.id],
-      );
-      await this.auditService.recordEvent({
-        category: EventCategory.WORKFLOW,
-        eventType: 'ASSIGNMENT_CANCELLED',
-        entityType: 'ASSIGNMENT',
-        entityId: a.id,
-        previousState: a.status,
-        newState: AssignmentStatus.CANCELLED,
+    /**
+     * One transaction for the whole closure: the open work under the branch is locked, the
+     * on-site refusal is decided on the locked rows, the PENDING/ACCEPTED jobs are cancelled (and
+     * only if they are still PENDING/ACCEPTED) with their calendar entries retired, and the
+     * branch and its dependants are deactivated. A refusal — or any failure — leaves all of it as
+     * it was. See `cancelOpenAssignmentsForClosure` for what used to go wrong.
+     */
+    const cancelled: ClosureCancelledAssignment[] = await this.dataSource.transaction(async (manager) => {
+      const rows = await cancelOpenAssignmentsForClosure(manager, {
+        scope: { branchId: id },
         userId,
-        remarks: `Auto-cancelled due to deactivation of branch ${branch.name}`,
+        cancelReason: 'Branch deactivated by operations',
+        auditRemarks: `Auto-cancelled due to deactivation of branch ${branch.name}`,
+        onSiteRefusal: (a) => new ConflictException(
+          `Cannot deactivate branch "${branch.name}": Assignment ${a.assignmentNumber} is currently ${a.status}. Field audit is actively in progress on site. Operational intervention required before deactivating this branch.`,
+        ),
+        auditService: this.auditService,
       });
+
+      branch.isActive = false;
+      branch.updatedBy = userId;
+      await manager.getRepository(BranchEntity).save(branch);
+
+      // Deactivate associated contacts
+      await manager.query(
+        `UPDATE branch_contacts SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      // Deactivate associated documents
+      await manager.query(
+        `UPDATE branch_documents SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      // Deactivate associated project branches
+      await manager.query(
+        `UPDATE project_branches SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      /**
+       * And the assessments raised against it.
+       *
+       * An assessment is created alongside every project-branch link, so leaving them live is the
+       * same defect the project-branch line above already fixes: the branch disappears from the
+       * branch list while its work item stays in the validation and data-entry queues, pointing at
+       * a record nobody can open.
+       */
+      await manager.query(
+        `UPDATE assessments SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
+        [userId, id],
+      );
+
+      await this.auditService.recordEvent({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'BRANCH_DELETED',
+        entityType: 'BRANCH',
+        entityId: id,
+        userId,
+        remarks: `Soft deleted branch ${branch.name} and cascaded deactivation to contacts, documents, project branches, and assessments`,
+      }, { manager });
+
+      return rows;
+    });
+
+    // Committed. Now tell people — never about a closure that rolled back.
+    for (const a of cancelled) {
       // Owner decision 2026-09-24: the assayer holding this job is told, in words, and their
-      // phone refreshes. This path cancels with a direct UPDATE and used to tell nobody.
-      if (a.assayer_id) {
+      // phone refreshes.
+      if (a.assayerId) {
         this.notificationDispatch?.emitSafe({
           type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE',
           entityType: 'ASSIGNMENT',
           entityId: a.id,
           actorUserId: userId,
-          assayerId: a.assayer_id,
-          dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}`,
+          assayerId: a.assayerId,
+          dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}:${a.entityVersion}`,
           payload: {
             assignmentId: a.id,
-            assignmentNumber: a.assignment_number,
+            assignmentNumber: a.assignmentNumber,
             branchName: branch.name,
             because: 'the office has closed this branch',
           },
         });
-        this.refreshPush?.assignmentChanged(a.assayer_id, a.id);
+        this.refreshPush?.assignmentChanged(a.assayerId, a.id);
       }
       this.eventPublisher.publish('assignment:status-changed', {
         eventType: 'assignment:status-changed',
         assignmentId: a.id,
-        assignmentNumber: a.assignment_number,
-        previousState: a.status,
+        assignmentNumber: a.assignmentNumber,
+        previousState: a.previousStatus,
         newState: AssignmentStatus.CANCELLED,
         userId,
       });
     }
-
-    branch.isActive = false;
-    branch.updatedBy = userId;
-    await this.branchRepository.save(branch);
-
-    // Deactivate associated contacts
-    await this.dataSource.query(
-      `UPDATE branch_contacts SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    // Deactivate associated documents
-    await this.dataSource.query(
-      `UPDATE branch_documents SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    // Deactivate associated project branches
-    await this.dataSource.query(
-      `UPDATE project_branches SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    /**
-     * And the assessments raised against it.
-     *
-     * An assessment is created alongside every project-branch link, so leaving them live is the
-     * same defect the project-branch line above already fixes: the branch disappears from the
-     * branch list while its work item stays in the validation and data-entry queues, pointing at
-     * a record nobody can open.
-     */
-    await this.dataSource.query(
-      `UPDATE assessments SET is_active = false, updated_by = $1 WHERE branch_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'BRANCH_DELETED',
-      entityType: 'BRANCH',
-      entityId: id,
+    // Sharing ends with an assayer's last committed job, as it does for a single cancel.
+    for (const assayerId of new Set(cancelled.map((a) => a.assayerId).filter((x): x is string => !!x))) {
+      await this.assayerService?.disableLiveTrackingWhenWorkEnds(assayerId, userId);
+    }
+    // Travel once per assayer per day (E2): a cancelled job may have carried its day's journey;
+    // the next job that assayer has that day takes it over. After commit; never throws.
+    await this.dayTravel?.rebalanceMany(
+      cancelled.map((a) => ({ assayerId: a.assayerId, day: a.scheduledDate })),
       userId,
-      remarks: `Soft deleted branch ${branch.name} and cascaded deactivation to contacts, documents, project branches, and assessments`,
-    });
+      `branch ${branch.name} was closed`,
+    );
   }
 
   // -----------------------------------------------------------------------

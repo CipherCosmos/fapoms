@@ -156,7 +156,8 @@ describe('completing an assignment without a check-out', () => {
 
       AssignmentStateMachine.reopen(a, 'user-2', 'Wrong branch audited.');
 
-      expect(a.status).toBe(AssignmentStatus.ACCEPTED);
+      // Reopen keeps the arrival (E6), so the job is back on site, not merely accepted.
+      expect(a.status).toBe(a.checkedInAt ? AssignmentStatus.CHECKED_IN : AssignmentStatus.ACCEPTED);
       expect(a.completedWithoutCheckOutReason).toBeNull();
       expect(a.completedWithoutCheckInReason).toBeNull();
       expect(a.completionDate).toBeNull();

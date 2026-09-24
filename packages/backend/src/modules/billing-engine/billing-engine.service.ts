@@ -1304,6 +1304,13 @@ export class BillingEngineService implements OnModuleInit {
         metadata: { payableId: saved.id, payableNumber: saved.payableNumber, assayerId: saved.assayerId, assignmentId: saved.assignmentId },
       }, { manager: m });
 
+      // Still attached only when the invoice was APPROVED (INVITED detached it above, SUBMITTED
+      // refused). Bring that invoice's figures — and, if this was its last unpaid line, its
+      // status — into line with what is actually left to pay.
+      if (saved.assayerInvoiceId) {
+        await this.reconcileApprovedInvoiceAfterVoid(m, emit, saved.assayerInvoiceId, saved.payableNumber, userId);
+      }
+
       // Same transaction, same reason: the client line this payable was booked alongside must
       // not stand alone as the only surviving half of a job that has been un-billed on the
       // assayer side.
@@ -1397,13 +1404,17 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   /**
-   * Re-derive an INVITED invoice's stored figures from its lines, on the caller's transaction.
+   * Re-derive an invoice's stored figures from its lines, on the caller's transaction.
    *
    * The invoice's amounts are nothing but SUMs of stored line amounts — so whenever a line
    * moves (re-priced) or leaves (void/hold detach), the header is recomputed from the rows
    * rather than patched incrementally, and can therefore never drift from its lines. An
    * invoice left with NO lines is auto-cancelled: an invitation to bill nothing is noise, and
    * cancelling it re-opens the one-active-invoice slot so the next invite round works.
+   *
+   * Only LIVE lines count. On an INVITED invoice that changes nothing (a voided line is detached
+   * before this runs); on an APPROVED one a voided line stays attached as history — see
+   * `reconcileApprovedInvoiceAfterVoid` — and must not keep its amount in the invoice's total.
    */
   private async recomputeAssayerInvoiceInTx(
     m: EntityManager,
@@ -1418,8 +1429,8 @@ export class BillingEngineService implements OnModuleInit {
               COALESCE(SUM(travel_amount), 0)      AS travel,
               COALESCE(SUM(tds_amount), 0)         AS tds,
               COALESCE(SUM(total_amount), 0)       AS total
-         FROM assayer_payables
-        WHERE assayer_invoice_id = $1 AND is_active = true`,
+         FROM assayer_payables p
+        WHERE p.assayer_invoice_id = $1 AND p.is_active = true${andLivePayableSql('p')}`,
       [inv.id],
     );
     const r = rows?.[0] ?? {};
@@ -1474,6 +1485,106 @@ export class BillingEngineService implements OnModuleInit {
       reason,
     }, m);
     emit('billing:assayer-invoice-changed', { invoiceId: saved.id, assayerId: saved.assayerId, status: saved.status });
+  }
+
+  /**
+   * An APPROVED invoice lost a line to a void. Keep the line attached — the invoice is a record of
+   * what the assayer confirmed and what was approved, and the voided line with its status says
+   * what happened to it — but re-derive the header from the LIVE lines, so `totalAmount` and
+   * `lineCount` state what will actually be paid. Leaving the header alone (the old behaviour)
+   * meant an invoice that went on to be paid in full read "PAID ₹X" having paid less than X, and
+   * one whose only unpaid line was voided sat APPROVED forever with nothing left to pay.
+   *
+   * The approved figures are not lost: the recompute writes an ASSAYER_INVOICE_RECOMPUTED history
+   * row carrying the before and after values.
+   *
+   * Then, the two ends:
+   *  - every line voided → no live lines, and `recomputeAssayerInvoiceInTx` auto-cancels it
+   *    ("all lines removed"). It must NOT become PAID: nothing was paid against it.
+   *  - the voided line was the last unpaid one and the rest are paid → it is settled now.
+   */
+  private async reconcileApprovedInvoiceAfterVoid(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    invoiceId: string,
+    payableNumber: string,
+    userId: string,
+  ): Promise<void> {
+    const inv = await m.findOne(AssayerInvoiceEntity, {
+      where: { id: invoiceId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!inv || inv.status !== AssayerInvoiceStatus.APPROVED) return;
+    await this.recomputeAssayerInvoiceInTx(m, emit, inv, userId, `Line ${payableNumber} voided on the approved invoice`);
+    await this.settleAssayerInvoiceIfPaid(m, emit, invoiceId, userId);
+  }
+
+  /**
+   * Mark an APPROVED assayer invoice PAID when every line that is still owed has been paid.
+   *
+   * "Settled" means PAID or VOIDED: a voided line will never be paid, by decision, so it cannot be
+   * what holds the invoice open. The old test counted every non-PAID line, so one voided line on
+   * an approved invoice kept it APPROVED — "awaiting payment" — for good, however much was paid.
+   *
+   * But an invoice needs at least one PAID line to be PAID. One whose lines are ALL voided had
+   * nothing paid against it; calling it PAID would put a payment on the record that never
+   * happened (it is auto-cancelled by the recompute instead — see above).
+   */
+  private async settleAssayerInvoiceIfPaid(
+    m: EntityManager,
+    emit: (event: string, payload: Record<string, unknown>) => void,
+    invoiceId: string,
+    userId: string,
+  ): Promise<void> {
+    const remainingUnpaid = await m.count(AssayerPayableEntity, {
+      where: {
+        assayerInvoiceId: invoiceId,
+        isActive: true,
+        status: Not(In([AssayerPayableStatus.PAID, ...DEAD_PAYABLE_STATUSES])),
+      },
+    });
+    if (remainingUnpaid > 0) return;
+    const paidLines = await m.count(AssayerPayableEntity, {
+      where: { assayerInvoiceId: invoiceId, isActive: true, status: AssayerPayableStatus.PAID },
+    });
+    if (paidLines === 0) return;
+
+    const inv = await m.findOne(AssayerInvoiceEntity, {
+      where: { id: invoiceId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!inv || inv.status !== AssayerInvoiceStatus.APPROVED) return;
+
+    const invFromStatus = inv.status;
+    inv.status = AssayerInvoiceStatus.PAID;
+    inv.paidAt = new Date();
+    inv.paidBy = userId;
+    inv.updatedBy = userId;
+    await m.save(inv);
+
+    await this.history(userId, {
+      assayerId: inv.assayerId,
+      entityType: BillingEntityType.ASSAYER_INVOICE,
+      entityId: inv.id,
+      action: 'ASSAYER_INVOICE_PAID',
+      fromState: invFromStatus,
+      toState: AssayerInvoiceStatus.PAID,
+      newValue: { paidAt: inv.paidAt, paidBy: userId, totalAmount: Number(inv.totalAmount) },
+    }, m);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_INVOICE_PAID',
+      entityType: 'ASSAYER_INVOICE',
+      entityId: inv.id,
+      previousState: invFromStatus,
+      newState: AssayerInvoiceStatus.PAID,
+      userId,
+      remarks: `All lines settled (paid, or voided) — assayer invoice ${inv.invoiceNumber} marked PAID`,
+      metadata: { invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, totalAmount: Number(inv.totalAmount) },
+    }, { manager: m });
+
+    emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
   }
 
   /**
@@ -1596,53 +1707,9 @@ export class BillingEngineService implements OnModuleInit {
       payable.updatedBy = userId;
       await m.save(payable);
 
-      // If this payable belongs to an assayer invoice, check if all active lines on that invoice are now PAID
+      // If this payable belongs to an assayer invoice, the invoice may now be fully settled.
       if (fullyPaid && payable.assayerInvoiceId) {
-        const remainingUnpaid = await m.count(AssayerPayableEntity, {
-          where: {
-            assayerInvoiceId: payable.assayerInvoiceId,
-            isActive: true,
-            status: Not(AssayerPayableStatus.PAID),
-          },
-        });
-        if (remainingUnpaid === 0) {
-          const inv = await m.findOne(AssayerInvoiceEntity, {
-            where: { id: payable.assayerInvoiceId },
-            lock: { mode: 'pessimistic_write' },
-          });
-          if (inv && inv.status === AssayerInvoiceStatus.APPROVED) {
-            const invFromStatus = inv.status;
-            inv.status = AssayerInvoiceStatus.PAID;
-            inv.paidAt = new Date();
-            inv.paidBy = userId;
-            inv.updatedBy = userId;
-            await m.save(inv);
-
-            await this.history(userId, {
-              assayerId: inv.assayerId,
-              entityType: BillingEntityType.ASSAYER_INVOICE,
-              entityId: inv.id,
-              action: 'ASSAYER_INVOICE_PAID',
-              fromState: invFromStatus,
-              toState: AssayerInvoiceStatus.PAID,
-              newValue: { paidAt: inv.paidAt, paidBy: userId, totalAmount: Number(inv.totalAmount) },
-            }, m);
-
-            await this.auditService.recordEvent({
-              category: EventCategory.WORKFLOW,
-              eventType: 'ASSAYER_INVOICE_PAID',
-              entityType: 'ASSAYER_INVOICE',
-              entityId: inv.id,
-              previousState: invFromStatus,
-              newState: AssayerInvoiceStatus.PAID,
-              userId,
-              remarks: `All lines paid — assayer invoice ${inv.invoiceNumber} marked PAID`,
-              metadata: { invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, totalAmount: Number(inv.totalAmount) },
-            }, { manager: m });
-
-            emit('billing:assayer-invoice-changed', { invoiceId: inv.id, assayerId: inv.assayerId, status: inv.status });
-          }
-        }
+        await this.settleAssayerInvoiceIfPaid(m, emit, payable.assayerInvoiceId, userId);
       }
 
       // Computed on the transaction's own connection so it sees the `paidAmount` just written.

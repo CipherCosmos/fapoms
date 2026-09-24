@@ -67,6 +67,7 @@ const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({
 const HrIssuesPage = React.lazy(() => import('./pages/hr/HrIssuesPage').then((m) => ({ default: m.HrIssuesPage })));
 const VerifyIdCard = React.lazy(() => import('./pages/VerifyIdCard').then((m) => ({ default: m.VerifyIdCard })));
 const HrRechecksPage = React.lazy(() => import('./pages/hr/HrRechecksPage').then((m) => ({ default: m.HrRechecksPage })));
+const HrApprovalsPage = React.lazy(() => import('./pages/hr/approvals/HrApprovalsPage').then((m) => ({ default: m.HrApprovalsPage })));
 const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
 const HrHiringPage = React.lazy(() => import('./pages/hr/hiring/HrHiringPage').then((m) => ({ default: m.HrHiringPage })));
 /**
@@ -566,6 +567,8 @@ export const App: React.FC = () => {
             <Route path="issues" element={<HrIssuesPage />} />
             {/* Re-checks over time: who is due, overdue, or held (2026-09-23). */}
             <Route path="rechecks" element={<HrRechecksPage />} />
+            {/* Joiners awaiting the approval before training — the approver's list (2026-09-24). */}
+            <Route path="approvals" element={<HrApprovalsPage />} />
             <Route path="where" element={<HrWherePeopleArePage />} />
 
             {/*

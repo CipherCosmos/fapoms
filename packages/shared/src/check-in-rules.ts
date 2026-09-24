@@ -163,14 +163,18 @@ export function decideCheckInTime(input: {
     claimedArrivalAt: claimed,
   });
 
-  if (input.arrivedAt === undefined || input.arrivedAt === null || input.arrivedAt === '') {
-    return server(CheckInArrivalOutcome.NOT_SENT);
-  }
-  const claimed = typeof input.arrivedAt === 'string' || input.arrivedAt instanceof Date
-    ? new Date(input.arrivedAt as string | Date)
-    : new Date(NaN);
-  if (Number.isNaN(claimed.getTime())) return server(CheckInArrivalOutcome.UNREADABLE);
-  if (!input.fromAssignedAssayer) return server(CheckInArrivalOutcome.NOT_FROM_ASSAYER, claimed);
+  const claimed = input.arrivedAt === undefined || input.arrivedAt === null || input.arrivedAt === ''
+    ? null
+    : typeof input.arrivedAt === 'string' || input.arrivedAt instanceof Date
+      ? new Date(input.arrivedAt as string | Date)
+      : new Date(NaN);
+  const readable = claimed && !Number.isNaN(claimed.getTime()) ? claimed : null;
+  // An office check-in is recorded as one whatever was or was not sent with it (owner decision
+  // 2026-09-24, E12): the outcome is what the web record reads to say "checked in by the office",
+  // so it cannot depend on whether the desk's request happened to carry an arrival time.
+  if (!input.fromAssignedAssayer) return server(CheckInArrivalOutcome.NOT_FROM_ASSAYER, readable);
+  if (!claimed) return server(CheckInArrivalOutcome.NOT_SENT);
+  if (!readable) return server(CheckInArrivalOutcome.UNREADABLE);
 
   const now = input.receivedAt.getTime();
   if (claimed.getTime() > now + CHECK_IN_ARRIVAL_CLOCK_SKEW_MS) return server(CheckInArrivalOutcome.IN_FUTURE, claimed);

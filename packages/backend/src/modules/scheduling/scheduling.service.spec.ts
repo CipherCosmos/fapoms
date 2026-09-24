@@ -10,7 +10,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { ConstraintEvaluator } from '../planning/constraint.evaluator';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { ScheduleStatus, AssignmentStatus } from '@fapoms/shared';
+import { ScheduleStatus, AssignmentStatus, ProjectBranchStatus } from '@fapoms/shared';
 
 describe('SchedulingService', () => {
   let service: SchedulingService;
@@ -41,7 +41,6 @@ describe('SchedulingService', () => {
   };
 
   const mockConstraintEvaluator = {
-    checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
     checkLeaves: jest.fn().mockReturnValue({ passed: true }),
     checkProjectTimeline: jest.fn().mockReturnValue({ passed: true }),
     checkHoliday: jest.fn().mockResolvedValue({ passed: true }),
@@ -108,6 +107,17 @@ describe('SchedulingService', () => {
       await expect(
         service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-01' }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rescheduling: a refused job date leaves the calendar row unchanged (no calendar/job date split)', async () => {
+      mockAssignmentService.findOne.mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.ACCEPTED, assayer: { leaves: [] }, projectBranch: { status: ProjectBranchStatus.ASSIGNMENT_CONFIRMED } });
+      mockScheduleRepo.findOne.mockResolvedValue({ id: 'sch-1', assignmentId: 'asn-1', isActive: true, scheduledDate: new Date('2026-08-01') });
+      mockAssignmentService.scheduleAudit.mockRejectedValueOnce(new BadRequestException('Holiday'));
+
+      await expect(
+        service.create({ assignmentId: 'asn-1', scheduledDate: '2026-08-03' }, 'user-1'),
+      ).rejects.toThrow('Holiday');
+      expect(mockScheduleRepo.save).not.toHaveBeenCalled();
     });
 
     it('should throw BadRequestException if assayer is on leave', async () => {
