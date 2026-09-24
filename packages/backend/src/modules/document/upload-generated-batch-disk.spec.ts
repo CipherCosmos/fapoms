@@ -121,6 +121,11 @@ describe('DiskUploadScanInterceptor', () => {
   };
   /** The unlink after the handler is fire-and-forget; give it a moment. */
   const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+  /** Deletion is fire-and-forget; a fixed wait flaked on a loaded CI runner, so wait for the fact. */
+  const gone = async (p: string) => {
+    for (let i = 0; i < 100 && existsSync(p); i++) await new Promise((r) => setTimeout(r, 20));
+    return !existsSync(p);
+  };
 
   it('reads each file from disk to scan it, and refuses the whole batch on an infected one — deleting every file', async () => {
     const clean = diskFile('clean', '%PDF-1.4 fine\n%%EOF');
@@ -130,8 +135,8 @@ describe('DiskUploadScanInterceptor', () => {
     await expect(interceptor().intercept(contextFor([clean, infected]), { handle })).rejects.toThrow(/malware scanning/);
 
     expect(handle).not.toHaveBeenCalled();
-    expect(existsSync(clean.path)).toBe(false);
-    expect(existsSync(infected.path)).toBe(false);
+    expect(await gone(clean.path)).toBe(true);
+    expect(await gone(infected.path)).toBe(true);
   });
 
   it('keeps the files while the handler runs, and deletes them once it has answered', async () => {
@@ -144,7 +149,7 @@ describe('DiskUploadScanInterceptor', () => {
 
     expect(result).toBe('filed');
     expect(presentDuringHandler).toBe(true);
-    expect(existsSync(file.path)).toBe(false);
+    expect(await gone(file.path)).toBe(true);
   });
 
   it('deletes the files when the handler (or a pipe before it) refuses the request', async () => {
@@ -154,7 +159,7 @@ describe('DiskUploadScanInterceptor', () => {
     await expect(lastValueFrom(await interceptor().intercept(contextFor([file]), { handle }))).rejects.toThrow(/auditDate/);
     await settle();
 
-    expect(existsSync(file.path)).toBe(false);
+    expect(await gone(file.path)).toBe(true);
   });
 
   it('refuses a file it can find neither on disk nor in memory, rather than passing it unscanned', async () => {
