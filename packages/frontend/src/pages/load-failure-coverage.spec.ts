@@ -53,6 +53,8 @@ const REPAIRED: Array<[path: string, whatItUsedToSay: string, ownMarker?: string
   ['pages/billing/InvoiceDetailDrawer.tsx', 'a drawer titled "Loading…" that never resolved'],
   ['pages/billing/AssignmentMoneyCard.tsx', '"Loading…", forever, on one assignment\'s money'],
   ['pages/billing/AssayerStatementPage.tsx', 'the raw text of the throw, in red'],
+  ['pages/billing/AssayerStatementSections.tsx', 'a bills section that vanished on a refused load'],
+  ['pages/hr/record/WorkAndPayTab.tsx', '₹0 earned for a person whose pay the viewer may not read'],
   /*
    * Was `pages/billing/OverviewTab.tsx`, which did two jobs at once — tell a clerk what to do,
    * and show a manager where the book is — and was split into the To-do queue and the read-only

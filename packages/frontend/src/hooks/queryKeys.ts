@@ -28,6 +28,11 @@ export const queryKeys = {
     fieldIssues: ['assignments', 'field-issues'] as const,
     detail: (id: string) => ['assignments', 'detail', id] as const,
     timeline: (id: string) => ['assignments', 'timeline', id] as const,
+    /**
+     * One assayer's own work (`GET /assignments/assayer/:id?scope=`) — the record's "Work & pay"
+     * tab. Under the `['assignments']` prefix so the assignment socket events refresh it too.
+     */
+    byAssayer: (assayerId: string, scope: 'active' | 'history') => ['assignments', 'by-assayer', assayerId, scope] as const,
   },
   /**
    * Screens that answer "what needs a decision right now", keyed outside `assignments` because

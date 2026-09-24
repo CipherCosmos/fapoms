@@ -154,3 +154,34 @@ export const INVOICE_STATE_CHIP: Record<InvoiceStatus, string> = {
   [InvoiceStatus.PAID]: 'Paid',
   [InvoiceStatus.CANCELLED]: 'Cancelled',
 };
+
+/**
+ * Which of `PAYOUT_STAGES` one payout is at, read off the row itself.
+ *
+ * The pay screen never needed this — each stage there is its own server query. A screen that
+ * lists one person's payouts next to their work (the assayer record's "Work & pay" tab) gets the
+ * rows back unsorted, and must name the stage in the same words the pay screen's chips use. So
+ * the answer is derived from the SAME `query` each stage runs, not from a second table of rules:
+ * a stage whose query changes moves every screen with it.
+ *
+ * `onBill` is "rides an assayer bill" — on the statement's rows, a non-null `invoiceNumber`.
+ * Returns null for a payout no stage covers (a VOIDED one); say `payableStatusLabel` there.
+ */
+export const payoutStageOf = (p: {
+  status: AssayerPayableStatus | string;
+  onHold: boolean;
+  onBill: boolean;
+}): (typeof PAYOUT_STAGES)[number] | null =>
+  PAYOUT_STAGES.find(({ query: q }) =>
+    (q.status === undefined || q.status === p.status)
+    && (q.onHold === undefined || q.onHold === p.onHold)
+    && (q.onBill === undefined || q.onBill === p.onBill),
+  ) ?? null;
+
+/**
+ * The three money words for one person's pay, wherever it is totalled or itemised.
+ *
+ * "Outstanding" on the statement and "still owed" on the record would be two names for the same
+ * figure on the way from one screen to the other; the plain one wins.
+ */
+export const PAY_WORDS = { earned: 'Earned', paid: 'Paid', owed: 'Still owed' } as const;

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, KeyRound, ShieldCheck, FileCheck, Gauge, Info, Trash2,
-  Wallet,
+  Wallet, Briefcase,
 } from 'lucide-react';
 import { looksMasked,
   nextAssayerLifecycleStates, mayReopenBackgroundVerification, reopenTargetFor, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel,
@@ -62,6 +62,7 @@ import { BankProfileCard } from './record/BankProfileCard';
 import { FrozenPayoutDestinationCard } from './record/FrozenPayoutDestinationCard';
 import { EmpanelmentStandingCard } from './record/EmpanelmentStandingCard';
 import { CurrentAssignmentsCard } from './record/CurrentAssignmentsCard';
+import { WorkAndPayTab } from './record/WorkAndPayTab';
 import { RecentTimelineCard, TimelineRow, type TimelineEvent } from './record/RecentTimelineCard';
 import { DeleteAssayerModal } from './record/DeleteAssayerModal';
 import { IdCardDialog } from './record/AppraiserIdCard';
@@ -110,6 +111,7 @@ const coordinates = (a: Assayer): string | null => {
 
 const TABS = [
   { key: 'summary', label: 'Summary', icon: User },
+  { key: 'work', label: 'Work & pay', icon: Briefcase },
   { key: 'documents', label: 'Documents', icon: FileCheck },
   { key: 'vetting', label: 'Background', icon: ShieldCheck },
   { key: 'commercial', label: 'Pay', icon: Wallet },
@@ -1536,6 +1538,10 @@ export const AssayerRecord: React.FC<{
 
               <FrozenPayoutDestinationCard payables={frozenPayables} />
             </div>
+          )}
+
+          {tab === 'work' && (
+            <WorkAndPayTab assayerId={assayerId} />
           )}
 
           {tab === 'skills' && (
