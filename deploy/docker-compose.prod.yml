@@ -250,9 +250,11 @@ services:
     restart: unless-stopped
     command: ["--config", "/data/config.json"]
     volumes:
-      - ${MAP_DATA_DIR:-${HOME}/fapoms-maps}:/data
-      - ./maps/styles:/data/styles:ro
-      - ./maps/config.json:/data/config.json:ro
+      # `z`: the homeserver runs SELinux enforcing, which refuses a container reads on host paths
+      # that are not labelled for it (the Caddyfile mount below does the same).
+      - ${MAP_DATA_DIR:-${HOME}/fapoms-maps}:/data:z
+      - ./maps/styles:/data/styles:ro,z
+      - ./maps/config.json:/data/config.json:ro,z
     mem_limit: ${MAP_TILES_MEM_LIMIT:-768m}
     stop_grace_period: 10s
     logging:
