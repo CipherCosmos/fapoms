@@ -115,3 +115,7 @@ packages/shared/src/*.d.ts
 # it would both leak that path and go stale the moment anyone builds from a different machine.
 packages/mobile/credentials.json
 .neon
+
+# Ad-hoc data exports at the repo root (e.g. a roster geo-error dump). These hold operational
+# data and this repository is public. Fixtures belong beside the test that reads them.
+/*.csv

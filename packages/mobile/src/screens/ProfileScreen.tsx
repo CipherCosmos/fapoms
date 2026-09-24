@@ -419,7 +419,7 @@ const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void
  * offered, and typing a new value still works.
  */
 /** A suggestion can equal what was typed, so "add what I typed" needs a key no suggestion can have. */
-const ADD_TYPED = ' add-typed';
+const ADD_TYPED = '\u0000add-typed';
 
 const AttributeChipPicker: React.FC<{
   label: string;
