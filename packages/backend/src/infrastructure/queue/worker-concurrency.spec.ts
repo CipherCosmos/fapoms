@@ -7,6 +7,7 @@ import {
   totalWorkerSlots,
   assertConcurrencyWithinPool,
 } from './worker-concurrency';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * The guard that makes `WORKER_CONCURRENCY` trustworthy.
@@ -21,7 +22,7 @@ import {
  * updated to match.
  */
 describe('worker concurrency', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
 
   /** Every .ts file under src, excluding specs and build output. */
   const sourceFiles = (dir: string): string[] =>

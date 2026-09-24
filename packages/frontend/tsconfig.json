@@ -31,6 +31,6 @@
   // because @types/jest happened to be hoisted from the BACKEND's dependencies into the root
   // node_modules. A clean checkout — any CI job, any new machine — has no such accident, and the
   // production image failed to build with "Cannot find name 'expect'" across every spec file.
-  "exclude": ["src/**/*.spec.ts", "src/**/*.spec.tsx", "src/**/*.test.ts", "src/**/*.test.tsx"],
+  "exclude": ["src/**/*.spec.ts", "src/**/*.spec.tsx", "src/**/*.test.ts", "src/**/*.test.tsx", "src/test-support/**"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

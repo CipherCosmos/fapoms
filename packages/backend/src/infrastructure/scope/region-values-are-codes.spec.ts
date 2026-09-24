@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'fs';
 import { join, relative, sep } from 'path';
 import { Region, REGION_LABELS, resolveRegion } from '@fapoms/shared';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * A REGION STORED AS ITS DISPLAY LABEL IS A REGION NOTHING WILL EVER MATCH.
@@ -26,7 +27,7 @@ import { Region, REGION_LABELS, resolveRegion } from '@fapoms/shared';
  * was the one place that assigned the column directly.
  */
 describe('a stored region is always the enum code, never the label', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
   const LABELS = new Set(Object.values(REGION_LABELS));
   const CODES = new Set<string>(Object.values(Region));
 

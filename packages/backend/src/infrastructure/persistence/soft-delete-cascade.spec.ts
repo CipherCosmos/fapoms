@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Soft deletion has to reach the grandchildren, not just the children.
@@ -24,7 +25,7 @@ import * as path from 'path';
  * has been forgotten, which is the mistake that actually gets made.
  */
 
-const SRC = path.join(__dirname, '../..');
+const SRC = backendSrc();
 
 /**
  * What each soft delete must reach.

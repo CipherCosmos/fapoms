@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { frontendSrc } from '../test-support/paths';
 
 /**
  * Every button class the markup asks for has to exist in the stylesheet.
@@ -13,7 +14,7 @@ import { join } from 'path';
  * CSS does not error on an unknown class, so this is the only place that can notice.
  */
 
-const SRC = join(__dirname, '..');
+const SRC = frontendSrc();
 const STYLESHEET = join(SRC, 'index.css');
 
 const walk = (dir: string): string[] =>

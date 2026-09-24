@@ -5,6 +5,7 @@ import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import * as classValidator from 'class-validator';
 import { AssignmentController } from '../../modules/assignment/assignment.controller';
 import { OcrBoundaryController } from '../ocr/ocr-boundary.controller';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Every property a request DTO declares must carry a validator, or the whole endpoint is dead.
@@ -46,7 +47,7 @@ import { OcrBoundaryController } from '../ocr/ocr-boundary.controller';
  * their callers and belongs in its own change, not smuggled into this guard.
  */
 describe('request DTOs and the decorators the global pipe whitelists against', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
 
   /** Comments hold example DTO snippets and `@Body()` prose; strip them before any matching. */
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');

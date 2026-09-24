@@ -17,6 +17,8 @@ export default tseslint.config(
       '**/*.spec.ts',
       '**/*.spec.tsx',
       '**/*.test.*',
+      // Test-only helpers (node fs/path), excluded from the app tsconfig like the specs that use them.
+      'src/test-support/**',
       'vite.config.ts',
       'eslint.config.mjs',
     ],

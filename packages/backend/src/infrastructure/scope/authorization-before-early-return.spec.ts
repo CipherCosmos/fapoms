@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'fs';
 import { join, relative, sep } from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * NOTHING MAY ANSWER A REQUEST BEFORE THE REQUEST HAS BEEN AUTHORIZED.
@@ -37,7 +38,7 @@ import { join, relative, sep } from 'path';
  * Reading the source is what makes "there is no path that returns first" checkable at all.
  */
 
-const SRC = join(__dirname, '..', '..');
+const SRC = backendSrc();
 
 /**
  * Calls whose whole purpose is to decide whether this caller may proceed, plus the two exceptions

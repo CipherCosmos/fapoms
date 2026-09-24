@@ -1,6 +1,7 @@
 import { Project, SyntaxKind, Node, MethodDeclaration, ObjectLiteralExpression } from 'ts-morph';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import { backendRoot } from '../../test-support/paths';
 
 /**
  * Ratchet fitness test for Phase E of the 2026-09-12 remediation plan: 47 controllers hand-built
@@ -27,7 +28,7 @@ import { execSync } from 'child_process';
  * has to keep in sync with the source by re-reading it — the three checks above do that.
  */
 
-const BACKEND_ROOT = path.resolve(__dirname, '../../..');
+const BACKEND_ROOT = backendRoot();
 
 const HTTP_METHOD_DECORATORS = new Set(['Get', 'Post', 'Put', 'Patch', 'Delete']);
 

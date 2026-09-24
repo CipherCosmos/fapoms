@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { repoRoot } from './test-support/paths';
 
 /**
  * Business dates are Asia/Kolkata. The UTC shortcut may not come back.
@@ -32,7 +33,7 @@ import { join } from 'path';
  * file; it is not something a commit can do by accident.
  */
 describe('business dates use the Asia/Kolkata helper, never the UTC slice', () => {
-  const REPO = join(__dirname, '..', '..', '..');
+  const REPO = repoRoot();
 
   /** The two spellings of "take the UTC calendar day", both banned. */
   const BANNED = /\.toISOString\(\)\s*\.\s*(?:split\('T'\)\[0\]|slice\(\s*0\s*,\s*10\s*\))/;

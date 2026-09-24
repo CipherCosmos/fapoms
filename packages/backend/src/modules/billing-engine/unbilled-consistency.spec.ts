@@ -12,6 +12,7 @@ import {
   unbilledRowFilterSql,
   unbilledTaxableSql,
 } from './billing-metrics';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * "Unbilled" must mean one thing across every surface that says the word.
@@ -30,7 +31,7 @@ import {
  *     metric rather than show two numbers under one label.
  */
 
-const BACKEND_SRC = join(__dirname, '..', '..');
+const BACKEND_SRC = backendSrc();
 const read = (rel: string) => readFileSync(join(BACKEND_SRC, rel), 'utf8');
 
 const SURFACES = [

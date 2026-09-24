@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Task 4 of the api/worker split: no queue may keep failed jobs forever.
@@ -12,7 +13,7 @@ import { join } from 'path';
  * `false`, so the fix cannot silently regress and a new call site cannot introduce it either.
  */
 describe('removeOnFail', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
 
   const sourceFiles = (dir: string): string[] =>
     readdirSync(dir).flatMap((entry) => {

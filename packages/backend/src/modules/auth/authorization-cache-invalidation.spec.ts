@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { RBAC_GRANTS_VERSION, rbacPrincipalCacheKey } from './auth.service';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * A REVOKED ROLE MUST STOP WORKING ON THE NEXT REQUEST, NOT WHEN A TTL HAPPENS TO EXPIRE.
@@ -36,7 +37,7 @@ import { RBAC_GRANTS_VERSION, rbacPrincipalCacheKey } from './auth.service';
  * lost to exactly that, with a 403 that named the old state and said nothing about a cache.
  */
 describe('a change to what a principal holds takes effect on the next request', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
   const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8');
 
   /** The body of one method, from its `async name(` to the closing brace at its own depth. */

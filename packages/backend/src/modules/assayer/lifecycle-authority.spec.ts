@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * ONE AUTHORITY FOR `lifecycle_status`, ENFORCED BY THE BUILD.
@@ -39,7 +40,7 @@ import { join } from 'path';
  * here, name it, and write down why it is not simply a transition.
  */
 
-const BACKEND_SRC = join(__dirname, '..', '..');
+const BACKEND_SRC = backendSrc();
 
 /**
  * The permitted writers, by file, with the justification each one has to earn.

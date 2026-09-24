@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { SLA_SCANNER_QUEUE_SETTINGS } from './sla-scanner.constants';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * The SLA scanner's queue is registered once, and a stalled job on it is never re-run (the morning
@@ -15,7 +16,7 @@ describe('sla-scanner queue registration', () => {
       else if (p.endsWith('.ts') && !p.endsWith('.spec.ts')) files.push(p);
     }
   };
-  walk(join(__dirname, '..', '..'));
+  walk(backendSrc());
 
   it('is registered in exactly one place', () => {
     const sites = files.filter((f) => {

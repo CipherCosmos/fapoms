@@ -1,4 +1,5 @@
 import { csvCell, csvRow } from './csv-cell';
+import { backendSrc } from '../../test-support/paths';
 
 describe('csvCell — the one server-side CSV encoder', () => {
   it.each([
@@ -42,7 +43,7 @@ describe('every server-side CSV writer uses the shared encoder', () => {
   it('files that set a text/csv Content-Type import csv-cell', () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
-    const root = path.resolve(__dirname, '../..');
+    const root = backendSrc();
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

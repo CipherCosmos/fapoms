@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, sep } from 'path';
 import * as ts from 'typescript';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * ONE WAY TO SEND AN EMAIL, AND ONE WAY TO SEND A TEXT.
@@ -42,7 +43,7 @@ import * as ts from 'typescript';
  * and strings by hand would be fooled by the first regular-expression literal containing a quote.
  */
 
-const SRC = join(__dirname, '..', '..');
+const SRC = backendSrc();
 
 const MESSAGING_MODULE = [
   join('infrastructure', 'notifications') + sep,

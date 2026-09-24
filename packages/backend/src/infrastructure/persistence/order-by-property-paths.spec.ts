@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * `orderBy` takes a property path, not a column name.
@@ -24,7 +25,7 @@ import { execSync } from 'child_process';
  * a test of behaviour: no ordering term in the backend may name a database column.
  */
 describe('query builder ordering', () => {
-  const ROOT = join(__dirname, '..', '..');
+  const ROOT = backendSrc();
 
   /** Every `.orderBy(...)`/`.addOrderBy(...)` argument in the backend, with where it came from. */
   const orderingTerms = (): { file: string; line: number; term: string }[] => {

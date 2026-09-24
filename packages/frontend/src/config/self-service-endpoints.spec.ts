@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { SystemRole } from '@fapoms/shared';
 import { changeOwnPasswordPath, isAssayerPrincipal } from './self-service-endpoints';
+import { frontendSrc } from '../test-support/paths';
 
 describe('the self-service endpoint a principal\'s own account actions go to', () => {
   it('sends an assayer to the assayer door', () => {
@@ -41,7 +42,7 @@ describe('the self-service endpoint a principal\'s own account actions go to', (
    * about which kind of principal was signed in.
    */
   it('is the only place either self-service screen names a change-password path', () => {
-    const SRC = join(__dirname, '..');
+    const SRC = frontendSrc();
     for (const file of ['pages/ForcePasswordChange.tsx', 'pages/Settings.tsx']) {
       const src = readFileSync(join(SRC, file), 'utf8');
       const stripped = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');

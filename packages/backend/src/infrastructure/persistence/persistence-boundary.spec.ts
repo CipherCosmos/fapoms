@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Keeps the persistence boundary from eroding, and records exactly how far it has eroded.
@@ -23,7 +24,7 @@ import * as path from 'path';
  * of files that were fixed years ago and stop being a truthful account of what is left.
  */
 
-const SRC = path.resolve(__dirname, '../..');
+const SRC = backendSrc();
 
 /**
  * Services that still reach for TypeORM directly. Every entry is a service that knows how its

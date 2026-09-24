@@ -1,13 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { STREET_TILE_URL, STREET_ATTRIBUTION } from './basemap';
+import { frontendSrc } from '../../test-support/paths';
 
 /**
  * Every map draws India from our own India map (see basemap.ts). Three components each had their
  * own OpenStreetMap tile URL; a fourth written the same way would quietly bring the wrong India
  * border back. Tile templates live in basemap.ts and nowhere else.
  */
-const SRC = path.join(__dirname, '..', '..');
+const SRC = frontendSrc();
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of fs.readdirSync(dir)) {

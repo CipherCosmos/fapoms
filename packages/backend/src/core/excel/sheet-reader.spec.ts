@@ -1,5 +1,6 @@
 import * as xlsx from 'xlsx';
 import { parseSheet, rowReader, normaliseHeader, describeMissingColumn, identifyTemplate } from './sheet-reader';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * The bug these prevent, twice over.
@@ -285,7 +286,7 @@ describe('readWorkbook — the ceilings every import is opened under', () => {
   it('is the only way a workbook is opened — no import calls xlsx.read directly', () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
-    const root = path.resolve(__dirname, '../..');
+    const root = backendSrc();
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

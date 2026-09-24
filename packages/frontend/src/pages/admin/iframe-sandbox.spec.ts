@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
+import { frontendSrc } from '../../test-support/paths';
 
 /**
  * Any iframe that renders HTML we hold (`srcDoc` — an email or template preview) must be
@@ -7,7 +8,7 @@ import { join } from 'path';
  * in the app's origin with the viewing admin's session. Scans every component and page, so a new
  * preview is covered without anyone adding it to a list.
  */
-const SRC = join(__dirname, '..', '..');
+const SRC = frontendSrc();
 
 function tsxFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

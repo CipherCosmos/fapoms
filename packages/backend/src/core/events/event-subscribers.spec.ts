@@ -4,6 +4,7 @@ import {
   DomainEventPublisher,
   EVENTS_REQUIRING_A_NAMED_SUBSCRIBER,
 } from './domain-event.publisher';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * AN EVENT NOBODY HANDLES MUST NOT BE RECORDED AS DELIVERED.
@@ -92,7 +93,7 @@ describe('what a published event actually reached', () => {
  * being given up.
  */
 describe('every event declared to need a handler still has one', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
 
   const subscribed = (() => {
     const names = new Set<string>();

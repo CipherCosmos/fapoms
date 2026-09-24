@@ -4,6 +4,7 @@ import { EventCategory } from '@fapoms/shared';
 import { TypeOrmAuditRepository } from './typeorm-audit.repository';
 import { AuditEventEntity } from './audit-event.entity';
 import { AuditEvent } from './audit-event';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Audit rows written inside a business transaction must ride THAT transaction.
@@ -52,7 +53,7 @@ describe('audit write scope', () => {
    * pool deadlock under load.
    */
   it('every audit write inside a transaction passes the transaction manager', () => {
-    const SRC = path.resolve(__dirname, '..', '..');
+    const SRC = backendSrc();
     const files: string[] = [];
     const walk = (dir: string) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -67,6 +68,9 @@ describe('audit write scope', () => {
     };
     walk(path.join(SRC, 'modules'));
     walk(path.join(SRC, 'core'));
+    // A scan that finds nothing passes vacuously. 88 services today; the floor is loose enough for
+    // files being split (which only adds) and catches a rename away from `.service.ts` or a moved root.
+    expect(files.length).toBeGreaterThan(40);
 
     const TX_OPEN = /\b(uow\.run|inTx|dataSource\.transaction|manager\.transaction)\(/;
     const offenders: string[] = [];

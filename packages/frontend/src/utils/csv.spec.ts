@@ -1,4 +1,5 @@
 import { toCsv } from './csv';
+import { frontendSrc } from '../test-support/paths';
 
 describe('toCsv formula-injection guard', () => {
   it.each(['=1+1', '+1', '-1', '@A1', '\t=1+1', '\r=1+1'])('prefixes an apostrophe to %j', (lead) => {
@@ -17,7 +18,7 @@ describe('every browser-side CSV download goes through this encoder', () => {
   it('no other source file builds a text/csv blob', () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
-    const root = path.resolve(__dirname, '..');
+    const root = frontendSrc();
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

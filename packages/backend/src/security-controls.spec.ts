@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { repoRoot } from './test-support/paths';
 
 /**
  * The security controls that must not disappear again.
@@ -26,7 +27,7 @@ import { join } from 'path';
  */
 describe('security controls are still wired', () => {
   const BACKEND = __dirname;
-  const REPO = join(__dirname, '..', '..', '..');
+  const REPO = repoRoot();
 
   interface Control {
     /** Stable id, quoted in failure output. */

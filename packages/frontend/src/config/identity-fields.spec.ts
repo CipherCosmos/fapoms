@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import { identityFormatHint, normaliseIdentityOnBlur, PHONE_FIELD_KEYS } from './identity-fields';
+import { frontendSrc } from '../test-support/paths';
 
 /**
  * Every door onto the roster checks the same identifiers the same way.
@@ -12,7 +13,7 @@ import { identityFormatHint, normaliseIdentityOnBlur, PHONE_FIELD_KEYS } from '.
  * after the whole form was done and the card was back in their pocket.
  */
 
-const SRC = join(__dirname, '..');
+const SRC = frontendSrc();
 
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {

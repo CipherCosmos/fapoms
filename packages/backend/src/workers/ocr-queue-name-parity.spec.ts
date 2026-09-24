@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { backendSrc } from '../test-support/paths';
 
 /**
  * The OCR worker's @Process handler name MUST equal the name the producer enqueues.
@@ -16,7 +17,7 @@ import * as path from 'path';
  * slipped through here. It is deliberately standalone (not folded into worker-concurrency.spec) so
  * it stays green independent of unrelated queue churn.
  */
-const SRC = path.join(__dirname, '..');
+const SRC = backendSrc();
 const stripComments = (s: string) =>
   s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 

@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
+import { frontendSrc } from '../../../test-support/paths';
 
 /**
  * One way onto the roster, and this is what keeps it that way.
@@ -18,7 +19,7 @@ import { join, relative } from 'path';
  * restores a second front door.
  */
 
-const SRC = join(__dirname, '..', '..', '..');
+const SRC = frontendSrc();
 
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {

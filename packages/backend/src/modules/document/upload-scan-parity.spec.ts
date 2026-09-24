@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Every route that accepts file bytes must malware-scan them. The multipart routes do it through
@@ -108,7 +109,7 @@ function interceptorBlocks(src: string): Array<{ args: string; route: string }> 
 }
 
 describe('every file-accepting route in every controller is scanned', () => {
-  const files = controllerFiles(path.join(__dirname, '..', '..'));
+  const files = controllerFiles(backendSrc());
 
   it('finds the upload routes (the scan itself works)', () => {
     const uploads = files.flatMap((f) =>
@@ -124,7 +125,7 @@ describe('every file-accepting route in every controller is scanned', () => {
         if (!/(?:File|Files|FileFields|AnyFiles)Interceptor\(/.test(block.args)) continue;
         if (/\b(?:FileScanInterceptor|DiskUploadScanInterceptor)\b/.test(block.args)) continue;
         if (NOT_A_WHOLE_FILE[block.route]) continue;
-        const rel = path.relative(path.join(__dirname, '..', '..'), file);
+        const rel = path.relative(backendSrc(), file);
         const deferred = DEFERRED_SCAN[`${rel} :: ${block.route}`];
         if (deferred && new RegExp(`\\b${deferred.cleanup}\\b`).test(block.args)) continue;
         unscanned.push(`${rel} → ${block.route || '(route?)'}`);

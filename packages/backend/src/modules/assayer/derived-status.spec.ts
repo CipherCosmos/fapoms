@@ -3,6 +3,7 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerLifecycleStatus, AssayerStatus, operationalStatusFor } from '@fapoms/shared';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * `assayers.status` is a projection of `lifecycle_status`, never a second opinion.
@@ -153,7 +154,7 @@ describe('the operational status projection', () => {
   });
 
   it('has no writer setting lifecycle_status behind the entity', () => {
-    const ROOT = join(__dirname, '..', '..');
+    const ROOT = backendSrc();
     const files = execSync(`git ls-files '*.ts' | grep -v '\\.spec\\.ts$' | grep -v '/migrations/'`, {
       cwd: ROOT, encoding: 'utf8',
     }).trim().split('\n').filter(Boolean)
@@ -162,6 +163,8 @@ describe('the operational status projection', () => {
       .filter((rel) => existsSync(join(ROOT, rel)));
 
     const offenders: string[] = [];
+    // 542 files today. An empty list would pass the assertion below without checking anything.
+    expect(files.length).toBeGreaterThan(200);
     for (const rel of files) {
       const source = readFileSync(join(ROOT, rel), 'utf8');
       for (const pattern of BEHIND_THE_ENTITY) {

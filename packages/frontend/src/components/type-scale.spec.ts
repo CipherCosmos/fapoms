@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
+import { frontendSrc } from '../test-support/paths';
 
 /**
  * Every size in the app comes off the scale.
@@ -17,7 +18,7 @@ import { join, relative } from 'path';
  * threshold ("close enough to the scale") is the same argument that produced 12.5px.
  */
 
-const SRC = join(__dirname, '..');
+const SRC = frontendSrc();
 const STYLESHEET = join(SRC, 'index.css');
 
 /**

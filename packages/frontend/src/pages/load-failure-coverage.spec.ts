@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { frontendSrc } from '../test-support/paths';
 
 /**
  * The screens that were repaired stay repaired.
@@ -26,7 +27,7 @@ import { join } from 'path';
  *    fetching, delete its entry in the same commit that deletes its fetch.
  */
 
-const SRC = join(__dirname, '..');
+const SRC = frontendSrc();
 
 /**
  * Source with comments removed, so a file cannot satisfy this test by talking about the thing it

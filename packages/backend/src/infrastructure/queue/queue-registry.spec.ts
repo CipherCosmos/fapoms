@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { ALL_QUEUE_NAMES } from './worker-concurrency';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * The guard for task 1 of the api/worker split: one queue registry, derived from
@@ -16,7 +17,7 @@ import { ALL_QUEUE_NAMES } from './worker-concurrency';
  * `WORKER_CONCURRENCY` breaks the build instead of silently going unpaused/unmonitored/unlisted.
  */
 describe('queue registry', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
 
   const sourceFiles = (dir: string): string[] =>
     readdirSync(dir).flatMap((entry) => {

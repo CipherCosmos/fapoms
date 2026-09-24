@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * The scale indexes must exist in the ACTIVE migration chain and on the entities.
@@ -23,7 +24,7 @@ import * as path from 'path';
  */
 
 const DB_DIR = __dirname;
-const SRC = path.resolve(__dirname, '../..');
+const SRC = backendSrc();
 const MIGRATIONS_DIR = path.join(DB_DIR, 'migrations');
 
 /** Every index the restore migration must create, by its exact name. */

@@ -7,6 +7,7 @@ import {
   canManageTransportRates, canAdministerPlatformSettings, canManagePlanningRules,
   canReadTravelSettings,
 } from '../hooks/useCurrentRoles';
+import { frontendSrc } from '../test-support/paths';
 
 /**
  * A role appears once in a list, or the list is a rename that went wrong.
@@ -26,7 +27,7 @@ describe('role lists', () => {
    * carried duplicates were not among them, so it certified a tree it had never looked at.
    * Walking the sources removes the possibility.
    */
-  const SRC = join(__dirname, '..');
+  const SRC = frontendSrc();
   const sourceFiles = (): string[] =>
     execSync(`find ${SRC} -name '*.ts' -o -name '*.tsx'`, { encoding: 'utf8' })
       .trim().split('\n')

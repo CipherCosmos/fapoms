@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { AssayerLifecycleStatus, AssayerStatus, BACKGROUND_JOB_STATUSES, EmpanelmentStatus } from '@fapoms/shared';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * A STATUS A REQUEST BODY SENDS MUST BE ONE THE SYSTEM HAS.
@@ -21,7 +22,7 @@ import { AssayerLifecycleStatus, AssayerStatus, BACKGROUND_JOB_STATUSES, Empanel
  * does not exist is the defect. The enums are the vocabulary, and there is no third source.
  */
 describe('every status a database suite sends is a real member of its enum', () => {
-  const SUITES = join(__dirname, '..', '..');
+  const SUITES = backendSrc();
 
   const KNOWN: ReadonlySet<string> = new Set<string>([
     ...Object.values(EmpanelmentStatus),

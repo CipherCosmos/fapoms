@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Every identifier a person quotes has a database constraint behind it.
@@ -17,7 +18,7 @@ import { execSync } from 'child_process';
  * whichever it found. Added scoped per client — a SOL ID says nothing about anybody else's.
  */
 describe('business identifiers', () => {
-  const ROOT = join(__dirname, '..', '..');
+  const ROOT = backendSrc();
   const read = (rel: string) => readFileSync(join(ROOT, rel), 'utf8');
 
   /**

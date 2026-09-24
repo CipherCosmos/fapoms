@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { WORK_TABS, workTabHint, workTabLabel } from './workTabs';
+import { frontendSrc } from '../../test-support/paths';
 
 /**
  * A screen is called one thing.
@@ -15,7 +16,7 @@ import { WORK_TABS, workTabHint, workTabLabel } from './workTabs';
  * "Field work" tab and the "Field Execution Workspace" they landed on are the same thing.
  */
 
-const SRC = join(__dirname, '..', '..');
+const SRC = frontendSrc();
 const read = (p: string) => readFileSync(join(SRC, p), 'utf8');
 
 /** The page that draws each tab's own heading. Planning draws none — the tab strip IS its header. */

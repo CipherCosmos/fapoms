@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * One authoritative answer to "which pages does a role built in Admin → Roles get?"
@@ -33,7 +34,7 @@ import { join } from 'path';
  * Either state is a legitimate answer. A page that opens and cannot fill itself is not.
  */
 
-const SRC = join(__dirname, '..', '..');
+const SRC = backendSrc();
 const FRONTEND_ROUTE_PERMISSIONS = join(
   __dirname, '..', '..', '..', '..', 'frontend', 'src', 'config', 'route-permissions.ts',
 );

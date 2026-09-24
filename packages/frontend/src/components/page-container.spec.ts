@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { frontendSrc } from '../test-support/paths';
 
 /**
  * The shell pads and centres the content. No page does it again.
@@ -15,7 +16,7 @@ import { join } from 'path';
  * `<Page>` decides it now, in one place, and this file keeps it the one place.
  */
 
-const SRC = join(__dirname, '..');
+const SRC = frontendSrc();
 const app = readFileSync(join(SRC, 'App.tsx'), 'utf8');
 
 /**

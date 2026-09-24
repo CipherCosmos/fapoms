@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { NEVER_WIPEABLE_TABLES, NOT_WIPED_TABLES, WIPE_DOMAINS } from './wipe-domains.registry';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * Every table the application defines must be accounted for by the data reset.
@@ -13,7 +14,7 @@ import { NEVER_WIPEABLE_TABLES, NOT_WIPED_TABLES, WIPE_DOMAINS } from './wipe-do
  * somebody decides whether a wipe clears it.
  */
 
-const SRC = join(__dirname, '..', '..');
+const SRC = backendSrc();
 
 function entityTables(dir: string, out: Set<string> = new Set()): Set<string> {
   for (const name of readdirSync(dir)) {

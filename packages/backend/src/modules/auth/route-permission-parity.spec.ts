@@ -4,6 +4,7 @@ import { join } from 'path';
 import { ROLE_PERMISSIONS } from './role-permissions';
 import { STAFF_ROLES } from './staff-roles';
 import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from '../billing-engine/billing-roles';
+import { backendSrc } from '../../test-support/paths';
 
 /**
  * A route must not name a role that cannot call it.
@@ -19,7 +20,7 @@ import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from '../billin
  * "denied because two lists drifted".
  */
 describe('routes and the permissions their roles hold', () => {
-  const SRC = join(__dirname, '..', '..');
+  const SRC = backendSrc();
 
   /** Role-group constants a `@Roles(...)` line may spread. */
   const GROUPS: Record<string, readonly string[]> = {
