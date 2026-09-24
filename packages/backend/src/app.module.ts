@@ -55,6 +55,7 @@ import { RuleBypassModule } from './modules/platform/rule-bypass/rule-bypass.mod
 import { ServiceLogsModule } from './modules/platform/logs/service-logs.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { RetentionModule } from './infrastructure/retention/retention.module';
+import { BackgroundJobsModule } from './infrastructure/background-jobs/background-jobs.module';
 import { HealthController } from './health.controller';
 import { ExpenseModule } from './modules/expense/expense.module';
 import { ReportsModule } from './modules/reports/reports.module';
@@ -250,6 +251,9 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
 
     // Background job queue
     QueueModule,
+    // Uploads and other work that outlives its request: stored, queued, tracked on a row, and
+    // restored by every screen from the server (`/jobs`, the Jobs tray).
+    BackgroundJobsModule,
     SlaScannerModule,
 
     ExpenseModule,

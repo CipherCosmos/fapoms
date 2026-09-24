@@ -14,7 +14,7 @@ import { BillingJobsService } from './billing-jobs.service';
 import { BillingBulkJobsService } from './billing-bulk-jobs.service';
 import { BILLING_BULK_MAX_PAYOUTS } from './billing-bulk-jobs.contract';
 import { jobActorFrom } from '../../infrastructure/queue/job-actor';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback, hasAnyRole } from '../auth/guards';
 import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from './billing-roles';
@@ -286,7 +286,7 @@ export class BillingEngineController {
       validation and the region ceiling above still run in the request, so a batch with one
       out-of-region payable is still refused whole, with nothing queued.
     */
-    return await this.bulkJobs.enqueueApprovePayouts(dto.payableIds, jobActorFrom(req), dto.reason);
+    return await this.bulkJobs.enqueueApprovePayouts(dto.payableIds, jobActorFrom(req), dto.reason, assignedRegions(req.user));
   }
 
   @Post('payouts/pay')
@@ -298,7 +298,7 @@ export class BillingEngineController {
     const { payableIds, ...payment } = dto;
     await this.regionGuard.assertPayablesInScope(payableIds, scope);
     // Accepted, not performed — same reason as `approvePayouts` above, and the same ceiling first.
-    return await this.bulkJobs.enqueuePayPayouts(payableIds, payment, jobActorFrom(req));
+    return await this.bulkJobs.enqueuePayPayouts(payableIds, payment, jobActorFrom(req), assignedRegions(req.user));
   }
 
   /**
@@ -449,7 +449,7 @@ export class BillingEngineController {
   @ApiOperation({ summary: 'Start inviting every assayer with eligible work to submit an invoice; poll bulk-jobs/:jobId' })
   async inviteAllAssayerInvoices(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.assayerInvoices.assertEnabled();
-    return await this.bulkJobs.enqueueInviteAllAssayerInvoices(scope, jobActorFrom(req));
+    return await this.bulkJobs.enqueueInviteAllAssayerInvoices(scope, jobActorFrom(req), assignedRegions(req.user));
   }
 
   @Get('assayer-invoices')
@@ -718,7 +718,9 @@ export class BillingEngineController {
   @ApiOperation({ summary: 'Queue a reconcile: book every completed assignment missing a payout or client line' })
   @HttpCode(HttpStatus.ACCEPTED)
   async reconcile(@Body() dto: ReconcileDto, @Req() req: any) {
-    return await this.jobs.enqueueReconcile(this.userId(req), dto.since || null);
+    // `requestedBy` stays what it always was (`userId(req)`) — it is the dedupe key's owner and the
+    // attribution on every row the reconcile writes.
+    return await this.jobs.enqueueReconcile({ ...jobActorFrom(req), userId: this.userId(req) }, dto.since || null, assignedRegions(req.user));
   }
 
   @Get('jobs/:jobId')

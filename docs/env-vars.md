@@ -145,8 +145,6 @@ registry)"** when this applies; a row with no such note is environment-only — 
 | `GEO_PRECISION_NIGHTLY_LIMIT` | `modules/geo/geo-precision.worker.ts` | `150` | Nightly sweep row cap (rate-limited public geocoder) |
 | `GEO_ADDRESS_ENRICH_LIMIT` | `geo-precision.worker.ts` | `3000` | |
 | `GEO_BACKFILL_CONCURRENCY` | `modules/geo/geo-precision.service.ts` | `6` | |
-| `BRANCH_IMPORT_SYNC_GEOCODE_LIMIT` | `modules/import/import-job.service.ts` | `25` | |
-| `BRANCH_IMPORT_SYNC_ROW_LIMIT` | `import-job.service.ts` | `200` | |
 
 ### In-app calling (LiveKit)
 
@@ -166,6 +164,7 @@ All four below accept `0` to mean "keep indefinitely" (deliberately explicit). T
 | Variable | Read by | Default | Notes |
 |---|---|---|---|
 | `RETENTION_OUTBOX_DAYS` | `infrastructure/retention/retention.service.ts` | `7` | Dispatched outbox rows only |
+| `RETENTION_BACKGROUND_JOB_DAYS` | `infrastructure/background-jobs/background-jobs.retention.ts` (via `retention.service.ts`) | `30` | Finished background jobs (uploads/imports) with their stored input file and report; `0` keeps them. QUEUED/RUNNING rows are never purged |
 | `RETENTION_REFRESH_TOKEN_GRACE_DAYS` | `retention.service.ts` | `2` | Counted past expiry |
 | `RETENTION_READ_NOTIFICATION_DAYS` | `retention.service.ts` | `180` | Read notifications only; unread ones are never purged |
 | `LOCATION_TRAIL_RETENTION_DAYS` | `retention.service.ts`, `modules/assayer/location-trail.service.ts` (+ settings registry `locationTrail.retentionDays`) | `550` (`DEFAULT_LOCATION_PING_DAYS`) when neither Platform Settings nor this env var is set | No statutory floor |

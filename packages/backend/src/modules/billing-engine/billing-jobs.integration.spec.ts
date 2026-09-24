@@ -4,6 +4,8 @@ import { DataSource, FindOperator } from 'typeorm';
 import { BillingEngineService } from './billing-engine.service';
 import { BillingJobsWorker } from './billing-jobs.worker';
 import { BillingJobsService } from './billing-jobs.service';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
 import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
@@ -274,6 +276,10 @@ describe('Phase 0.1 Financial Durability — End-to-End Boundary & Idempotency V
         BillingEngineService,
         BillingJobsWorker,
         BillingJobsService,
+        // Booking is system work and is never tracked; only the user-started reconcile uses these
+        // (covered in billing-bulk-jobs.spec.ts). Present so the DI graph resolves.
+        { provide: BackgroundJobsService, useValue: { enqueueTracked: jest.fn() } },
+        { provide: BackgroundJobTracker, useValue: { run: jest.fn() } },
         {
           provide: 'BullQueue_billing-jobs',
           useValue: mockQueue,

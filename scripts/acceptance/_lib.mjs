@@ -289,8 +289,13 @@ export const JOB_STATUS = {
   planningWrite: (jobId) => `/planning/write-jobs/${encodeURIComponent(jobId)}`,
   /** POST /documents/dispatch-batch (result: `{ dispatched, failed: [{ documentId, reason }] }`) */
   documentDispatch: (jobId) => `/documents/dispatch-batch/${encodeURIComponent(jobId)}`,
-  /** POST /assayers/roster/import, the `dryRun` rehearsal included. Reports Bull's raw state names. */
-  rosterImport: (jobId) => `/assayers/roster/import-jobs/${encodeURIComponent(jobId)}`,
+  /**
+   * Every upload on the background-job foundation — POST /assayers/roster/import (a `dryRun`
+   * rehearsal ends AWAITING_REVIEW, which counts as done here; its `result` is the rehearsal's),
+   * /customer-master/upload, /documents/upload-generated-batch, and anything POSTed to /jobs.
+   * They answer 202 `{ job, deduplicated }`; the job is read back from GET /jobs/:id.
+   */
+  backgroundJob: (jobId) => `/jobs/${encodeURIComponent(jobId)}`,
   /** POST /admin/data-reset/execute. Run in-process, not on a queue: a restart loses it (404). */
   dataReset: (jobId) => `/admin/data-reset/runs/${encodeURIComponent(jobId)}`,
 };
@@ -313,9 +318,22 @@ export class JobError extends Error {
 /** `awaitJob`'s default patience. A run waits behind other runs on its queue (concurrency 1). */
 export const JOB_TIMEOUT_MS = Number(env.AC_JOB_TIMEOUT_MS) > 0 ? Number(env.AC_JOB_TIMEOUT_MS) : 120_000;
 
-/** Both vocabularies: `describeJob`'s four states, and the roster import's raw Bull states. */
+/** `describeJob`'s four states. A background-job row's statuses are mapped onto them first. */
 const JOB_DONE = new Set(['done', 'completed']);
 const JOB_FAILED = new Set(['failed', 'stuck']);
+
+/**
+ * A `GET /jobs/:id` summary (`status`: QUEUED | RUNNING | AWAITING_REVIEW | SUCCEEDED | FAILED |
+ * CANCELLED) read in `describeJob`'s words, so one polling loop serves both. A rehearsal waiting for
+ * review is an answer, so it is done.
+ */
+const fromBackgroundJob = (s) => {
+  if (!s || typeof s !== 'object' || typeof s.state === 'string' || typeof s.status !== 'string') return s;
+  const state = s.status === 'SUCCEEDED' || s.status === 'AWAITING_REVIEW' ? 'done'
+    : s.status === 'FAILED' || s.status === 'CANCELLED' ? 'failed'
+      : s.status === 'RUNNING' ? 'running' : 'queued';
+  return { ...s, jobId: s.id, state, error: s.error ?? (s.status === 'CANCELLED' ? 'cancelled' : undefined) };
+};
 
 /** The `{ success, data }` envelope, removed once — the same unwrap `login()` does inline. */
 const unwrap = (body) => (
@@ -345,7 +363,7 @@ export async function awaitJob(statusPath, {
   let interval = pollMs;
   for (;;) {
     const r = await req(statusPath, { token: tokenOf(token), api, budgetMs: Math.max(1_000, deadline - Date.now()) });
-    const s = unwrap(r.body);
+    const s = fromBackgroundJob(unwrap(r.body));
     if (r.status < 200 || r.status >= 300 || !s || typeof s.state !== 'string') {
       throw new JobError(
         `could not read the job at ${statusPath}: HTTP ${r.status} ${String(r.msg ?? '').slice(0, 160)}`
@@ -395,7 +413,9 @@ export async function postAndAwait(path, body, statusPathFor, { token, send, api
     throttled: r.status === 429 || r.throttled === true,
   };
   if (r.status < 200 || r.status >= 300) return out;
-  const data = unwrap(r.body);
+  const raw = unwrap(r.body);
+  // A background-job route answers `{ job, deduplicated }`; the rest answer `{ jobId, deduplicated }`.
+  const data = raw?.job?.id ? { jobId: raw.job.id, deduplicated: raw.deduplicated } : raw;
   if (r.status !== 202 || data?.jobId === undefined || data?.jobId === null) {
     out.error = new JobError(
       `${path} answered HTTP ${r.status} without a job id — expected 202 { jobId, deduplicated }; `

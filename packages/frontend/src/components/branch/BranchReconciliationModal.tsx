@@ -1,91 +1,73 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   CheckCircle2, AlertTriangle, AlertCircle, Database,
   MapPin, Check, Loader2, Sparkles, Trash2, Zap,
 } from 'lucide-react';
+import {
+  branchGeographyUnresolved,
+  diffBranchDecisions,
+  isBranchRowCommittable,
+  summariseBranchReview,
+  withBranchReviewStatus,
+  type BranchImportDecisions,
+  type BranchReviewReport,
+  type BranchReviewRow,
+} from '@fapoms/shared';
 import { Modal } from '../ui/Modal';
 import { GeoPrecisionBadge } from '../GeoPrecisionBadge';
 import { CoordinatePinModal } from '../geo/CoordinatePinModal';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 
-export interface ClientMismatchWarning {
-  detectedBank?: string;
-  detectedBankCode?: string;
-  expectedBank: string;
-  expectedBankCode?: string;
-  reason: string;
-  otherClientName?: string;
-  otherClientId?: string;
-  severity: 'critical' | 'warning';
-}
+/**
+ * The review of a branch-import rehearsal: every row of the uploaded list, what the server made of
+ * it, and the chance to fix, pin or remove rows before anything is written.
+ *
+ * The rows come from the rehearsal the SERVER stored (`branch-review.json` on the job); what goes
+ * back on Commit is only the person's decisions — removed rows, typed-over fields, hand-placed pins
+ * and the commit mode (`diffBranchDecisions`). The readiness rule is the shared one the commit job
+ * applies, so the counts here are the rows the commit will write.
+ */
 
-export interface BranchReconciliationRow {
-  rowNumber: number;
-  solId: string;
-  name: string;
-  address?: string;
-  district?: string;
-  state?: string;
-  pincode?: string;
-  packetCount?: number;
-  latitude?: number;
-  longitude?: number;
-  geoSource?: string;
-  geoAccuracyMeters?: number;
-  existsInMaster: boolean;
-  masterBranchId?: string;
-  isArchivedInMaster?: boolean;
-  status: 'ready' | 'coarse' | 'needs_details';
-  missingFields: string[];
-  suggestedDetails?: {
-    district?: string;
-    state?: string;
-    address?: string;
-    pincode?: string;
-    phone?: string;
-    bank?: string;
-    branch?: string;
-  };
-  clientMismatch?: ClientMismatchWarning;
-  warnings?: string[];
-}
+/**
+ * How many rows the table draws at once. A 5,000-row list drawn whole is 35,000 live inputs and a
+ * modal that takes seconds to open and lags on every keystroke; a page of 100 is instant. Every row
+ * is still held in state — an edit on page 3 is kept while the person works on page 40, and all of
+ * them go with Commit.
+ */
+export const REVIEW_PAGE_SIZE = 100;
 
-export interface BranchReconciliationReport {
-  summary: {
-    totalRows: number;
-    existingInMaster: number;
-    newBranches: number;
-    readyCount: number;
-    coarseCount: number;
-    needsDetailsCount: number;
-    clientMismatchCount?: number;
-  };
-  rows: BranchReconciliationRow[];
-}
+export type BranchReconciliationRow = BranchReviewRow;
+export type BranchReconciliationReport = BranchReviewReport;
 
 export interface BranchReconciliationModalProps {
   open: boolean;
   onClose: () => void;
-  report: BranchReconciliationReport | null;
-  scope: { kind: 'PROJECT' | 'CLIENT'; id: string };
+  report: BranchReviewReport | null;
   title?: string;
-  onCommitSuccess?: (outcome: { created: number; updated: number; unchanged: number; linked: number; revived: number }) => void;
-  /** If provided in project creation mode, returns edited rows instead of direct HTTP commit */
-  onConfirmRows?: (rows: BranchReconciliationRow[]) => void;
+  /**
+   * Start the commit with these decisions. Resolves true once the server has accepted it (the
+   * writing then happens in the background); false to keep the review open.
+   */
+  onCommit: (decisions: BranchImportDecisions) => Promise<boolean>;
 }
 
 export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps> = ({
   open,
   onClose,
   report,
-  scope,
   title = 'Branch Upload Preflight & Reconciliation',
-  onCommitSuccess,
-  onConfirmRows,
+  onCommit,
 }) => {
-  const [rows, setRows] = useState<BranchReconciliationRow[]>([]);
-  const [activeTab, setActiveTab] = useState<'all' | 'needs_details' | 'ready' | 'mismatch'>('all');
+  const [rows, setRows] = useState<BranchReviewRow[]>([]);
+  const [activeTab, setActiveTabState] = useState<'all' | 'needs_details' | 'ready' | 'mismatch'>('all');
+  const [page, setPage] = useState(0);
+  const tableRef = useRef<HTMLDivElement>(null);
+  /** A new filter starts at its first page. */
+  const setActiveTab = (tab: typeof activeTab) => {
+    setActiveTabState(tab);
+    setPage(0);
+  };
   const [pinModalIndex, setPinModalIndex] = useState<number | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
   const [isBulkResolving, setIsBulkResolving] = useState(false);
@@ -95,14 +77,15 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
   // Sync rows from report on open
   useEffect(() => {
     if (report?.rows) {
-      setRows(JSON.parse(JSON.stringify(report.rows)));
+      setRows(report.rows.map((r) => ({ ...r })));
       const hasMismatches = report.rows.some((r) => !!r.clientMismatch);
       if (hasMismatches) {
-        setActiveTab('mismatch');
+        setActiveTabState('mismatch');
       } else {
         const hasNeedsDetails = report.rows.some((r) => r.status === 'needs_details');
-        setActiveTab(hasNeedsDetails ? 'needs_details' : 'all');
+        setActiveTabState(hasNeedsDetails ? 'needs_details' : 'all');
       }
+      setPage(0);
     } else {
       setRows([]);
     }
@@ -111,25 +94,22 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
 
   // Recalculate summary metrics dynamically as rows get edited or pinned
   const summary = useMemo(() => {
-    const total = rows.length;
-    const existingInMaster = rows.filter((r) => r.existsInMaster).length;
-    const newBranches = total - existingInMaster;
-    const needsDetailsCount = rows.filter((r) => r.status === 'needs_details').length;
-    const readyCount = rows.filter((r) => r.status === 'ready').length;
-    const coarseCount = rows.filter((r) => r.status === 'coarse').length;
-    const clientMismatchCount = rows.filter((r) => !!r.clientMismatch).length;
-    const criticalMismatchCount = rows.filter((r) => r.clientMismatch?.severity === 'critical').length;
+    const s = summariseBranchReview(rows);
     return {
-      total,
-      existingInMaster,
-      newBranches,
-      needsDetailsCount,
-      readyCount,
-      coarseCount,
-      clientMismatchCount,
-      criticalMismatchCount,
+      total: s.totalRows,
+      existingInMaster: s.existingInMaster,
+      newBranches: s.newBranches,
+      needsDetailsCount: s.needsDetailsCount,
+      readyCount: s.readyCount,
+      coarseCount: s.coarseCount,
+      clientMismatchCount: s.clientMismatchCount,
+      criticalMismatchCount: rows.filter((r) => r.clientMismatch?.severity === 'critical').length,
     };
   }, [rows]);
+
+  // Rows are keyed by their spreadsheet row number; a map keeps a 5,000-row table from searching
+  // the whole list for every row it draws.
+  const indexByRowNumber = useMemo(() => new Map(rows.map((r, i) => [r.rowNumber, i])), [rows]);
 
   // Filter rows by tab
   const filteredRows = useMemo(() => {
@@ -145,6 +125,28 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
     }
   }, [rows, activeTab]);
 
+  // The page on show. Removing rows, or fixing the last rows of a "Needs Attention" page, can leave
+  // the page past the end; it then shows the last page there is, rather than an empty table.
+  const pageCount = Math.max(1, Math.ceil(filteredRows.length / REVIEW_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageRows = useMemo(
+    () => filteredRows.slice(currentPage * REVIEW_PAGE_SIZE, (currentPage + 1) * REVIEW_PAGE_SIZE),
+    [filteredRows, currentPage],
+  );
+  const goToPage = (next: number) => {
+    setPage(Math.max(0, Math.min(next, pageCount - 1)));
+    tableRef.current?.scrollTo?.({ top: 0 });
+  };
+
+  /** Replace one row with a changed copy, its readiness recomputed by the shared rule. */
+  const updateRow = (index: number, change: (row: BranchReviewRow) => BranchReviewRow) => {
+    setRows((prev) => {
+      const updated = [...prev];
+      updated[index] = withBranchReviewStatus(change({ ...updated[index] }));
+      return updated;
+    });
+  };
+
   // Remove a single row
   const handleRemoveRow = (originalIndex: number) => {
     setRows((prev) => prev.filter((_, idx) => idx !== originalIndex));
@@ -159,30 +161,8 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
   };
 
   // Update a field on a row
-  const handleRowChange = (index: number, field: keyof BranchReconciliationRow, value: any) => {
-    setRows((prev) => {
-      const updated = [...prev];
-      const row = { ...updated[index], [field]: value };
-
-      const missing: string[] = [];
-      if (!row.solId) missing.push('solId');
-      if (!row.name) missing.push('name');
-      if (!row.state) missing.push('state');
-      if (!row.district) missing.push('district');
-      if (!row.address) missing.push('address');
-      row.missingFields = missing;
-
-      if (!row.solId || !row.name || !row.state) {
-        row.status = 'needs_details';
-      } else if (row.geoSource === 'manual' || (row.geoAccuracyMeters != null && row.geoAccuracyMeters <= 250)) {
-        row.status = 'ready';
-      } else {
-        row.status = 'coarse';
-      }
-
-      updated[index] = row;
-      return updated;
-    });
+  const handleRowChange = (index: number, field: keyof BranchReviewRow, value: any) => {
+    updateRow(index, (row) => ({ ...row, [field]: value }));
   };
 
   // 1-Click Instant IFSC Lookup for a single row (No prompt modal!)
@@ -202,33 +182,13 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
     try {
       const data = await api.get<any>(`/geo/ifsc/${encodeURIComponent(candidateIfsc)}`);
       if (data) {
-        setRows((prev) => {
-          const updated = [...prev];
-          const cur = { ...updated[index] };
-          if (data.state) cur.state = data.state;
-          if (data.district) cur.district = data.district;
-          if (data.address) cur.address = data.address;
-          if (data.pincode) cur.pincode = data.pincode;
-
-          const missing: string[] = [];
-          if (!cur.solId) missing.push('solId');
-          if (!cur.name) missing.push('name');
-          if (!cur.state) missing.push('state');
-          if (!cur.district) missing.push('district');
-          if (!cur.address) missing.push('address');
-          cur.missingFields = missing;
-
-          if (!cur.solId || !cur.name || !cur.state) {
-            cur.status = 'needs_details';
-          } else if (cur.geoSource === 'manual' || (cur.geoAccuracyMeters != null && cur.geoAccuracyMeters <= 250)) {
-            cur.status = 'ready';
-          } else {
-            cur.status = 'coarse';
-          }
-
-          updated[index] = cur;
-          return updated;
-        });
+        updateRow(index, (cur) => ({
+          ...cur,
+          state: data.state || cur.state,
+          district: data.district || cur.district,
+          address: data.address || cur.address,
+          pincode: data.pincode || cur.pincode,
+        }));
         setStatusNotification({ type: 'success', text: `Auto-filled details for IFSC ${candidateIfsc}.` });
       } else {
         setStatusNotification({ type: 'error', text: `No branch found in directory for IFSC ${candidateIfsc}.` });
@@ -257,31 +217,11 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
     try {
       const data = await api.get<any>(`/geo/pincode/${pin}`);
       if (data) {
-        setRows((prev) => {
-          const updated = [...prev];
-          const cur = { ...updated[index] };
-          if (!cur.state && data.state) cur.state = data.state;
-          if (!cur.district && data.district) cur.district = data.district;
-
-          const missing: string[] = [];
-          if (!cur.solId) missing.push('solId');
-          if (!cur.name) missing.push('name');
-          if (!cur.state) missing.push('state');
-          if (!cur.district) missing.push('district');
-          if (!cur.address) missing.push('address');
-          cur.missingFields = missing;
-
-          if (!cur.solId || !cur.name || !cur.state) {
-            cur.status = 'needs_details';
-          } else if (cur.geoSource === 'manual' || (cur.geoAccuracyMeters != null && cur.geoAccuracyMeters <= 250)) {
-            cur.status = 'ready';
-          } else {
-            cur.status = 'coarse';
-          }
-
-          updated[index] = cur;
-          return updated;
-        });
+        updateRow(index, (cur) => ({
+          ...cur,
+          state: cur.state || data.state,
+          district: cur.district || data.district,
+        }));
         setStatusNotification({ type: 'success', text: `Pincode ${pin} resolved to ${data.district || ''}, ${data.state || ''}.` });
       } else {
         setStatusNotification({ type: 'error', text: `No postal records found for pincode ${pin}.` });
@@ -311,26 +251,13 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
           try {
             const data = await api.get<any>(`/geo/ifsc/${candidateIfsc}`);
             if (data) {
-              if (data.state) r.state = data.state;
-              if (data.district) r.district = data.district;
-              if (data.address) r.address = data.address;
-              if (data.pincode && !r.pincode) r.pincode = data.pincode;
-
-              const missing: string[] = [];
-              if (!r.solId) missing.push('solId');
-              if (!r.name) missing.push('name');
-              if (!r.state) missing.push('state');
-              if (!r.district) missing.push('district');
-              if (!r.address) missing.push('address');
-              r.missingFields = missing;
-
-              if (!r.solId || !r.name || !r.state) {
-                r.status = 'needs_details';
-              } else if (r.geoSource === 'manual' || (r.geoAccuracyMeters != null && r.geoAccuracyMeters <= 250)) {
-                r.status = 'ready';
-              } else {
-                r.status = 'coarse';
-              }
+              updatedRows[i] = withBranchReviewStatus({
+                ...r,
+                state: data.state || r.state,
+                district: data.district || r.district,
+                address: data.address || r.address,
+                pincode: r.pincode || data.pincode || undefined,
+              });
               filledCount++;
             }
           } catch {
@@ -353,42 +280,16 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
   // When exact pin is confirmed from modal
   const handlePinConfirmed = (lat: number, lng: number) => {
     if (pinModalIndex === null) return;
-    setRows((prev) => {
-      const updated = [...prev];
-      const cur = { ...updated[pinModalIndex] };
-      cur.latitude = lat;
-      cur.longitude = lng;
-      cur.geoSource = 'manual';
-      cur.geoAccuracyMeters = 5;
-
-      const missing: string[] = [];
-      if (!cur.solId) missing.push('solId');
-      if (!cur.name) missing.push('name');
-      if (!cur.state) missing.push('state');
-      if (!cur.district) missing.push('district');
-      if (!cur.address) missing.push('address');
-      cur.missingFields = missing;
-
-      if (!cur.solId || !cur.name || !cur.state) {
-        cur.status = 'needs_details';
-      } else {
-        cur.status = 'ready';
-      }
-
-      updated[pinModalIndex] = cur;
-      return updated;
-    });
+    updateRow(pinModalIndex, (cur) => ({ ...cur, latitude: lat, longitude: lng, geoSource: 'manual', geoAccuracyMeters: 5 }));
     setPinModalIndex(null);
   };
 
-  // Commit selected branches
+  // Commit: the decisions go to the server, which applies them to the review it stored.
   const handleCommit = async (readyOnly = false) => {
-    const candidateRows = rows.filter((r) => {
-      if (r.clientMismatch && r.clientMismatch.severity === 'critical') return false;
-      return readyOnly ? r.status === 'ready' : r.status !== 'needs_details';
-    });
+    const mode = readyOnly ? 'ready_only' : 'all_valid';
+    const committable = rows.filter((r) => isBranchRowCommittable(r, mode)).length;
 
-    if (candidateRows.length === 0) {
+    if (committable === 0) {
       setStatusNotification({
         type: 'error',
         text: summary.clientMismatchCount > 0
@@ -397,24 +298,13 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
       });
       return;
     }
-
-    if (onConfirmRows) {
-      onConfirmRows(candidateRows);
-      onClose();
-      return;
-    }
+    if (!report) return;
 
     setIsCommitting(true);
     setStatusNotification(null);
-
     try {
-      const url = scope.kind === 'PROJECT'
-        ? `/projects/${scope.id}/branches/commit-reconciled`
-        : `/branches/commit-reconciled/${scope.id}`;
-
-      const res = await api.post<any>(url, { branches: candidateRows });
-      onCommitSuccess?.(res);
-      onClose();
+      const accepted = await onCommit(diffBranchDecisions(report.rows, rows, mode));
+      if (accepted) onClose();
     } catch (err) {
       setStatusNotification({ type: 'error', text: userMessage(err) });
     } finally {
@@ -511,6 +401,23 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
               >
                 ✕
               </button>
+            </div>
+          )}
+
+          {/* What the rehearsal set aside, and columns it could not read — facts about the FILE. */}
+          {report && (report.skipped?.length > 0 || report.notes?.length > 0) && (
+            <div
+              data-testid="review-file-notes"
+              style={{ padding: '8px 12px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', display: 'grid', gap: 4 }}
+            >
+              {report.skipped?.length > 0 && (
+                <div>
+                  <strong>{report.skipped.length} row(s) left out of this review: </strong>
+                  {report.skipped.slice(0, 5).map((r) => `row ${r.row}: ${r.reason}`).join(' · ')}
+                  {report.skipped.length > 5 ? ` · and ${report.skipped.length - 5} more` : ''}
+                </div>
+              )}
+              {report.notes?.map((note) => <div key={note}>{note}</div>)}
             </div>
           )}
 
@@ -630,7 +537,7 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
           </div>
 
           {/* Interactive Fast Editable Table */}
-          <div style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+          <div ref={tableRef} style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-xs)' }}>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-surface-2)', zIndex: 10, borderBottom: '1px solid var(--border-color)' }}>
                 <tr>
@@ -654,9 +561,12 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
                     </td>
                   </tr>
                 ) : (
-                  filteredRows.map((row) => {
-                    const originalIndex = rows.findIndex((r) => r.rowNumber === row.rowNumber);
+                  pageRows.map((row) => {
+                    const originalIndex = indexByRowNumber.get(row.rowNumber) ?? -1;
                     const isMaster = row.existsInMaster;
+                    // The rehearsal could not verify this new branch's state/district; typing over
+                    // either clears it (the commit checks the new pair).
+                    const placeProblem = branchGeographyUnresolved(row) ? row.geographyProblem!.reason : null;
 
                     return (
                       <tr
@@ -780,16 +690,28 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
                             type="text"
                             value={row.state || ''}
                             placeholder="Enter State"
+                            aria-label={`State, row ${row.rowNumber}`}
+                            aria-invalid={!row.state || !!placeProblem}
+                            title={placeProblem ?? undefined}
                             onChange={(e) => handleRowChange(originalIndex, 'state', e.target.value)}
                             style={{
                               width: '100%',
                               padding: '2px 4px',
-                              background: !row.state ? 'rgba(239, 68, 68, 0.08)' : 'transparent',
-                              border: !row.state ? '1px solid var(--danger)' : '1px solid var(--border-color)',
+                              background: !row.state || placeProblem ? 'rgba(239, 68, 68, 0.08)' : 'transparent',
+                              border: !row.state || placeProblem ? '1px solid var(--danger)' : '1px solid var(--border-color)',
                               borderRadius: '3px',
                               fontSize: 'var(--text-xs)',
                             }}
                           />
+                          {placeProblem && (
+                            <div
+                              data-testid={`place-problem-${row.rowNumber}`}
+                              title={placeProblem}
+                              style={{ marginTop: '2px', fontSize: 'var(--text-3xs)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '3px' }}
+                            >
+                              <AlertCircle size={9} style={{ flexShrink: 0 }} /> Place not verified — correct the state or district
+                            </div>
+                          )}
                         </td>
 
                         {/* District */}
@@ -798,12 +720,15 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
                             type="text"
                             value={row.district || ''}
                             placeholder="District"
+                            aria-label={`District, row ${row.rowNumber}`}
+                            aria-invalid={!!placeProblem}
+                            title={placeProblem ?? undefined}
                             onChange={(e) => handleRowChange(originalIndex, 'district', e.target.value)}
                             style={{
                               width: '100%',
                               padding: '2px 4px',
                               background: 'transparent',
-                              border: '1px solid var(--border-color)',
+                              border: placeProblem ? '1px solid var(--danger)' : '1px solid var(--border-color)',
                               borderRadius: '3px',
                               fontSize: 'var(--text-xs)',
                             }}
@@ -927,6 +852,37 @@ export const BranchReconciliationModal: React.FC<BranchReconciliationModalProps>
               </tbody>
             </table>
           </div>
+
+          {filteredRows.length > REVIEW_PAGE_SIZE && (
+            <nav
+              aria-label="Review pages"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}
+            >
+              <span data-testid="review-page-range" aria-live="polite">
+                Rows {(currentPage * REVIEW_PAGE_SIZE + 1).toLocaleString('en-IN')}–
+                {Math.min((currentPage + 1) * REVIEW_PAGE_SIZE, filteredRows.length).toLocaleString('en-IN')} of{' '}
+                {filteredRows.length.toLocaleString('en-IN')} · page {currentPage + 1} of {pageCount}
+              </span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '4px 10px' }}
+                  onClick={() => goToPage(0)} disabled={currentPage === 0} aria-label="First page">
+                  First
+                </button>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '4px 10px' }}
+                  onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 0} aria-label="Previous page">
+                  Previous
+                </button>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '4px 10px' }}
+                  onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= pageCount - 1} aria-label="Next page">
+                  Next
+                </button>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)', padding: '4px 10px' }}
+                  onClick={() => goToPage(pageCount - 1)} disabled={currentPage >= pageCount - 1} aria-label="Last page">
+                  Last
+                </button>
+              </div>
+            </nav>
+          )}
         </div>
       </Modal>
 

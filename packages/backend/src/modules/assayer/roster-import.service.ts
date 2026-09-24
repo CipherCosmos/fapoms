@@ -37,6 +37,24 @@ export interface RosterImportSummary {
   dryRun: boolean;
 }
 
+export interface RosterImportOptions {
+  dryRun?: boolean;
+  sheetName?: string;
+  overwrite?: boolean;
+  fileName?: string;
+  /**
+   * Told where the run has got to: once before the first row, between rows, once after the last,
+   * and at the post-commit lifecycle step. The background job (`roster-import.job.ts`) hands in its
+   * throttled `ctx.progress`, so calling it per row costs a function call.
+   */
+  onProgress?: (processed: number, total: number, stage: string) => Promise<void> | void;
+  /**
+   * Called between rows, inside the import's one transaction. Throwing from it (a cancelled job)
+   * rolls the whole run back — nothing is left half-written.
+   */
+  checkpoint?: () => Promise<void>;
+}
+
 /**
  * The columns that identify a roster sheet, used to pick it out of a multi-sheet workbook.
  *
@@ -263,9 +281,12 @@ export class RosterImportService {
   async importAssayerSheet(
     file: Buffer,
     actorId: string,
-    options: { dryRun?: boolean; sheetName?: string; overwrite?: boolean; fileName?: string } = {},
+    options: RosterImportOptions = {},
   ): Promise<RosterImportSummary> {
     const dryRun = options.dryRun ?? false;
+    const onProgress = options.onProgress;
+    const checkpoint = options.checkpoint;
+    const rowStage = dryRun ? 'Checking rows' : 'Importing rows';
     // Default OFF: a sheet value that disagrees with what is already on file is filed as a
     // review issue rather than applied. See `resolveOverwritableField`.
     const overwrite = options.overwrite ?? false;
@@ -425,7 +446,7 @@ export class RosterImportService {
        * started it.
        *
        * NOT from the ambient request context, and that is the point. A roster import is queued:
-       * `RosterImportWorker` runs it in a Bull job, where there is no request and no principal to
+       * `RosterImportJob` runs it in a background worker, where there is no request and no principal to
        * read a tenant off. `TenantContext` says exactly this — "Background work that touches
        * tenant-owned data must carry the organisation id explicitly in its job payload and pass it
        * down" — and `actorId` is what this job carries, so the organisation is looked up from the
@@ -460,7 +481,17 @@ export class RosterImportService {
         for (const person of found) existingByCode.set(person.assayerCode, person);
       }
 
+      await onProgress?.(0, rows.length, rowStage);
       for (const [index, row] of rows.entries()) {
+        /**
+         * Between rows, inside the transaction — and that is safe here, unlike in most importers:
+         * every write of this run goes through this one transaction, so a stop thrown now rolls
+         * ALL of it back (the same way the rehearsal's `DryRunComplete` does). A cancelled import
+         * leaves the roster exactly as it found it; nothing after the commit (lifecycle moves,
+         * geocoding, the audit row) has happened yet.
+         */
+        if (checkpoint && index > 0) await checkpoint();
+        if (onProgress && index > 0) await onProgress(index, rows.length, rowStage);
         // +2: one for the header, one because a spreadsheet's first data row is row 2 to the
         // person who will go and look at it.
         const sourceRow = index + 2;
@@ -613,6 +644,8 @@ export class RosterImportService {
         if (issues.length) await this.saveIssues(manager, issues, assayerId, code);
       }
 
+      await onProgress?.(rows.length, rows.length, rowStage);
+
       for (const [pair, kinds] of duplicatePairs) {
         summary.notes.push(
           `${pair} share the same ${[...kinds].join(', ')} — likely one person registered under two codes. `
@@ -663,6 +696,7 @@ export class RosterImportService {
      * queued moves were checked for reachability but never actually run.
      */
     if (!dryRun && pendingTransitions.length > 0 && this.assayerService) {
+      await onProgress?.(rows.length, rows.length, 'Applying lifecycle changes the sheet reports');
       const idsByTarget = new Map<AssayerLifecycleStatus, string[]>();
       for (const { id, to } of pendingTransitions) {
         const ids = idsByTarget.get(to) ?? [];

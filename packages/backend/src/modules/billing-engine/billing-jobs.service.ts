@@ -9,13 +9,13 @@ import {
   ReconcileJobData,
 } from './billing-jobs.contract';
 import {
-  IN_FLIGHT_SCAN_LIMIT,
-  QueuedJobEnvelope,
   QueuedJobStatus,
   assertJobVisibleTo,
   dedupeKeyFor,
   describeJob,
 } from '../../infrastructure/queue/queued-job';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+import type { JobActor } from '../../infrastructure/queue/job-actor';
 
 /** What a POST returns: the id to poll, and whether it joined a run already in flight. */
 export interface EnqueueBillingJobResult {
@@ -30,13 +30,18 @@ export interface EnqueueBillingJobResult {
    * Joining the run in flight is how "I pressed Sync twice" stays a non-event.
    */
   deduplicated: boolean;
+  /** The `background_jobs` row tracking the run (Jobs tray, refresh), or null when untracked. */
+  backgroundJobId: string | null;
 }
 
 @Injectable()
 export class BillingJobsService {
   private readonly logger = new Logger(BillingJobsService.name);
 
-  constructor(@InjectQueue(BILLING_QUEUE) private readonly queue: Queue) {}
+  constructor(
+    @InjectQueue(BILLING_QUEUE) private readonly queue: Queue,
+    private readonly jobs: BackgroundJobsService,
+  ) {}
 
   /**
    * Queue a reconcile: book every completed assignment that is missing a payout or a client line.
@@ -44,22 +49,35 @@ export class BillingJobsService {
    * The dedupe fingerprint is the job name, the requesting user and the `since` date, so two
    * presses of the same button join one run.
    */
-  async enqueueReconcile(requestedBy: string, since: string | null): Promise<EnqueueBillingJobResult> {
+  async enqueueReconcile(
+    actor: JobActor,
+    since: string | null,
+    regions: string[] | null = null,
+  ): Promise<EnqueueBillingJobResult> {
+    const requestedBy = actor.userId;
     const data: ReconcileJobData = {
       requestedBy,
       since,
       dedupeKey: dedupeKeyFor(BILLING_JOB.RECONCILE, requestedBy, { since }),
     };
 
-    const inFlight = await this.findInFlight(BILLING_JOB.RECONCILE, data.dedupeKey);
-    if (inFlight) {
-      this.logger.log(`Joining in-flight billing reconcile ${inFlight.id} rather than starting a duplicate.`);
-      return { jobId: String(inFlight.id), deduplicated: true };
-    }
-
-    const job = await this.queue.add(BILLING_JOB.RECONCILE, data, BILLING_JOB_OPTIONS);
-    this.logger.log(`Enqueued billing reconcile ${job.id}.`);
-    return { jobId: String(job.id), deduplicated: false };
+    /*
+      Tracked, so the run is on the person's Jobs tray after a refresh. The duplicate rule is
+      `enqueueTracked`'s, which is this route's old one exactly: same name and `dedupeKey`, among
+      unfinished runs only — matching a completed run would, for the whole retention window, answer
+      every press with the previous run's counts. A failed scan never blocks the enqueue.
+    */
+    return this.jobs.enqueueTracked({
+      kind: 'BILLING_RECONCILE',
+      actor,
+      regions,
+      title: since ? `Book missing money records (completed since ${since})` : 'Book missing money records (whole book)',
+      params: { since },
+      queue: this.queue,
+      jobName: BILLING_JOB.RECONCILE,
+      data,
+      options: BILLING_JOB_OPTIONS,
+    });
   }
 
   /**
@@ -139,30 +157,5 @@ export class BillingJobsService {
     // The summary IS the deliverable here — counts and the error list are what the operator
     // came back for — so it rides the poll response.
     return describeJob(job, { includeResult: true });
-  }
-
-  /**
-   * Finds an identical request that has not finished yet.
-   *
-   * Unfinished states only. Matching a completed job would mean that for the whole retention
-   * window every press of Reconcile returned the previous run's counts, so an operator who had
-   * since completed ten audits would be told there was nothing to book.
-   *
-   * A failure here never blocks the enqueue: the scan is an optimisation whose worst outcome is
-   * one redundant run, while refusing the work because a list read failed would turn a Redis
-   * hiccup into an outage of the endpoint.
-   */
-  private async findInFlight(name: string, dedupeKey: string): Promise<Job | null> {
-    try {
-      const jobs = await this.queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
-      return (
-        jobs.find(
-          (j) => j?.name === name && (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
-        ) ?? null
-      );
-    } catch (err) {
-      this.logger.warn(`Could not scan for an in-flight billing reconcile (${(err as Error).message}); enqueuing anyway.`);
-      return null;
-    }
   }
 }

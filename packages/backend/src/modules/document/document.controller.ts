@@ -24,13 +24,14 @@ import { withCode } from '../../infrastructure/http/api-error';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
-import { assertUploadAllowed, uploadMulterOptions, diskUploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
-import { DiskUploadScanInterceptor } from './disk-upload-scan.interceptor';
+import { assertUploadAllowed, uploadMulterOptions, diskUploadMulterOptions, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES } from './upload-validation';
+import { DiskUploadCleanupInterceptor } from './disk-upload-cleanup.interceptor';
+import { GENERATED_DOCUMENT_BATCH_KIND } from './generated-document-batch.job';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
 import { DocumentDispatchJobsService } from './document-dispatch-jobs.service';
 import { jobActorFrom } from '../../infrastructure/queue/job-actor';
-import { createReadStream } from 'fs';
 import { AssignmentService } from '../assignment/assignment.service';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
@@ -59,8 +60,8 @@ const documentUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_B
  * Disk, not memory, and this is the one route where that is right. A day's batch is up to 100 files
  * of up to 50 MB each, and in memory that was up to 5 GB held at once in an API container capped at
  * 1.5 GB — one large batch could get the API killed for every user. On disk the batch costs one file
- * at a time: `DiskUploadScanInterceptor` reads each back to scan it, and the handler streams each
- * one to storage. See `diskUploadMulterOptions`.
+ * at a time: `BackgroundJobsService.create` streams each one to storage, and the background job
+ * scans each when it files it. See `diskUploadMulterOptions`.
  */
 const documentBatchUploadMulterOptions = diskUploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 100 });
 
@@ -168,6 +169,23 @@ class FinalizeUploadRequestDto {
   customerMasterVersionId?: string;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The job parameters a background upload sends as the multipart `params` field (JSON text — see
+ * `uploadJob` in the web client). Query parameters, the route's older shape, win where both are sent.
+ */
+function jobParamsFromMultipart(req: any): Record<string, unknown> {
+  const raw = req?.body?.params;
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    throw new BadRequestException('params must be a JSON object.');
+  }
+}
+
 @ApiTags('Documents')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -190,6 +208,7 @@ export class DocumentController {
     private readonly fileScanner: FileScanService,
     private readonly regionGuard: RegionGuardService,
     private readonly dispatchJobs: DocumentDispatchJobsService,
+    private readonly backgroundJobs: BackgroundJobsService,
   ) {}
 
   @Post('upload')
@@ -1521,95 +1540,75 @@ export class DocumentController {
   }
 
   @Post('upload-generated-batch')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @RequirePermissions('document:upload:organization')
-  // DiskUploadScanInterceptor, not FileScanInterceptor: the files are on disk, and the shared
-  // interceptor only scans a `buffer` — it would pass every one of them unscanned. This one scans
-  // each file from disk and deletes them all when the request ends, whatever happened.
-  @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), DiskUploadScanInterceptor)
+  // Stored, not scanned, in the request: every file is scanned (malware + content gate) by the
+  // background job before it is filed as a document — `GeneratedDocumentBatchJob.fileOne`, pinned
+  // by upload-scan-parity.spec.ts. This interceptor deletes the temp files however the request ends.
+  @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), DiskUploadCleanupInterceptor)
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
+  @ApiOperation({ summary: "Upload a day's generated audit PDFs together; answers 202 with the background job that matches each file to its branch by filename and files it" })
   async uploadGeneratedBatch(
-    @UploadedFiles() files: any[],
-    @Query('projectId', ParseUUIDPipe) projectId: string,
-    @Query('auditDate') auditDate: string,
+    @UploadedFiles() files: Express.Multer.File[],
     @Req() req: any,
-    @Query('customerMasterVersionId') customerMasterVersionId?: string,
+    // Either as query parameters (the route's original shape) or in the multipart `params` JSON.
+    @Query('projectId') projectIdQuery?: string,
+    @Query('auditDate') auditDateQuery?: string,
+    @Query('customerMasterVersionId') customerMasterVersionIdQuery?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     if (!files?.length) throw new BadRequestException('No files received.');
-    if (!auditDate) throw new BadRequestException('auditDate is required.');
-
-    const { matches, unmatched, branchesWithoutFile } =
-      await this.documentService.matchPdfsToBranches(projectId, auditDate, files.map((f) => f.originalname));
+    const body = jobParamsFromMultipart(req);
+    const projectId = projectIdQuery ?? body.projectId;
+    const auditDate = auditDateQuery ?? body.auditDate;
+    const customerMasterVersionId = customerMasterVersionIdQuery ?? body.customerMasterVersionId ?? null;
+    if (typeof projectId !== 'string' || !UUID_PATTERN.test(projectId)) {
+      throw new BadRequestException('Choose the project these packets belong to.');
+    }
+    if (typeof auditDate !== 'string' || !auditDate) throw new BadRequestException('auditDate is required.');
 
     /**
-     * The region ceiling, per matched branch, before the first file is filed.
+     * The region ceiling, per matched branch, before anything is stored — so an out-of-region
+     * packet in the set is still an immediate 403 for the whole upload, exactly as when the filing
+     * ran here. Matching reads only the file NAMES (one query), so it costs the request nothing
+     * that matters; the worker matches again and re-checks against the regions captured with the
+     * job before it files.
      *
      * `GET /documents/project/:projectId` narrows what a region-scoped desk may READ of a
-     * project's packets, and the three project-branch reads in this file each assert the same
-     * boundary — this route, which CREATES those packets, asserted nothing. Matched branches
-     * rather than the project as a whole (`assertProjectInScope`) because the day's filing is a
-     * per-branch operation: a national project legitimately spans regions, and refusing it
-     * wholesale would stop the in-region filing this route exists to do. Staged, like every other
-     * document boundary — see `region-guard.service.ts` on why these six roll out behind
-     * `security.regionScope.mode`.
+     * project's packets; this route CREATES those packets. Matched branches rather than the
+     * project as a whole (`assertProjectInScope`) because the day's filing is a per-branch
+     * operation: a national project legitimately spans regions. Staged, like every other document
+     * boundary — see `region-guard.service.ts` on `security.regionScope.mode`.
      */
+    const { matches } = await this.documentService.matchPdfsToBranches(projectId, auditDate, files.map((f) => f.originalname));
     for (const m of matches) {
       const region = await this.documentService.resolveProjectBranchRegion(m.projectBranchId);
       await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:uploadGeneratedBatch');
     }
 
-    const byName = new Map(files.map((f) => [f.originalname, f]));
-    const created: Array<{ documentId: string; fileName: string; branchName: string }> = [];
-    const failed: Array<{ fileName: string; reason: string }> = [];
-
-    // Only files that matched exactly one branch are stored. An unmatched file is
-    // returned to the operator rather than filed against a guessed branch — a
-    // misfiled packet sends one branch's customers to another branch's assayer.
-    for (const m of matches) {
-      const file = byName.get(m.fileName);
-      if (!file) continue;
-      try {
-        // The one route in the file that saved straight to storage with no type check at all —
-        // every other upload route calls this (see the identical note on `uploadExcelReport`
-        // just below and `POST /customer-master/upload`). Size is already capped at the multer
-        // layer here (`documentBatchUploadMulterOptions`); this closes the type gap, scoped to
-        // what a generated audit packet can actually be. A rejected file lands in `failed` with
-        // a clear reason, exactly like any other per-file failure in this loop — it does not
-        // abort the rest of the batch.
-        assertUploadAllowed({
-          contentType: file.mimetype,
-          size: file.size,
-          fileName: file.originalname,
-          allowed: SCAN_UPLOAD_TYPES,
-        });
-        // Streamed from the temp file rather than read into memory: the S3 engine encrypts a stream
-        // part by part, so storing a 50 MB packet costs a few MB of buffer, not two copies of it.
-        const savedPath = await this.storage.saveFile(file.originalname, createReadStream(file.path), file.mimetype, file.size);
-        const doc = await this.documentService.create({
-          assessmentId: m.projectBranchId,
-          fileName: file.originalname,
-          filePath: savedPath,
-          fileSize: file.size,
-          mimeType: file.mimetype,
-          type: DocumentType.PRE_FIELD_AUDIT_PDF,
-          customerMasterVersionId,
-        }, req.user.id);
-        created.push({ documentId: doc.id, fileName: file.originalname, branchName: m.branchName });
-      } catch (err) {
-        failed.push({ fileName: file.originalname, reason: (err as Error).message });
-      }
-    }
-
-    return {
-      success: true,
-      data: { created, unmatched, failed, branchesWithoutFile },
-      message:
-        `Filed ${created.length} of ${files.length} packet(s).` +
-        (unmatched.length ? ` ${unmatched.length} could not be matched to a branch.` : '') +
-        (branchesWithoutFile.length ? ` ${branchesWithoutFile.length} scheduled branch(es) still have no packet.` : ''),
-    };
+    /**
+     * Accepted, not done: the set is stored (each file under its own key) and a background job
+     * recorded, and the answer is 202 with that job. Scanning, type-checking and filing each packet
+     * happen in the worker (`GeneratedDocumentBatchJob`), one file at a time with per-file progress;
+     * which packets were filed, which could not be placed and why is the job's result, read back
+     * from `GET /jobs` — so a refresh, or a closed tab, loses nothing.
+     */
+    return this.backgroundJobs.create({
+      kind: GENERATED_DOCUMENT_BATCH_KIND,
+      actor: jobActorFrom(req),
+      regions: assignedRegions(req.user),
+      scope: { type: 'PROJECT', id: projectId },
+      params: { projectId, auditDate, customerMasterVersionId },
+      globalScope: scope,
+      files: files.map((f) => ({
+        path: f.path,
+        buffer: f.path ? undefined : f.buffer,
+        originalName: f.originalname,
+        mimeType: f.mimetype,
+        size: f.size,
+      })),
+    });
   }
 
   /**
@@ -1643,6 +1642,7 @@ export class DocumentController {
     const data = await this.dispatchJobs.enqueueBatch(
       { documentIds: body.documentIds, branchEmail: body.branchEmail },
       jobActorFrom(req),
+      assignedRegions(req.user),
     );
     return {
       success: true,

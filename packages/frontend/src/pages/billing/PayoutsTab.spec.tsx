@@ -28,6 +28,11 @@ jest.mock('../../services/billing', () => {
     billingApi: { ...actual.billingApi, listPayouts: jest.fn(), approvePayouts: jest.fn(), payPayouts: jest.fn() },
   };
 });
+// The tab also asks the Jobs tray for approve/pay runs it did not start (`useBackgroundJob`); no socket here.
+jest.mock('../../services/socket', () => ({
+  connectSocket: () => null,
+  subscribeToConnection: (cb: (live: boolean) => void) => { cb(true); return () => undefined; },
+}));
 // The real poller, with a short interval so a test is not waiting 1.5 s per read.
 jest.mock('../../services/queued-job', () => {
   const actual = jest.requireActual('../../services/queued-job');
@@ -149,6 +154,7 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
   const serveRun = (jobId: string, stage: string, result: unknown) => {
     const run = { finished: false };
     mockRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith('/jobs?')) return { active: [], recent: [] };
       if (path !== `/billing-engine/bulk-jobs/${jobId}`) throw new Error(`unexpected request ${path}`);
       return run.finished
         ? { jobId, state: 'done', progress: { percent: 100, stage: 'Complete' }, result }
@@ -196,8 +202,8 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
 
   beforeEach(() => {
     mockList.mockReset();
-    mockApprove.mockReset().mockResolvedValue({ jobId: '8', deduplicated: false });
-    mockPay.mockReset().mockResolvedValue({ jobId: '9', deduplicated: false });
+    mockApprove.mockReset().mockResolvedValue({ jobId: '8', deduplicated: false, backgroundJobId: 'row-8' });
+    mockPay.mockReset().mockResolvedValue({ jobId: '9', deduplicated: false, backgroundJobId: 'row-9' });
     mockRequest.mockReset();
   });
 
@@ -235,8 +241,33 @@ describe('PayoutsTab — approve and pay follow the run the server accepted', ()
     expect(await screen.findByText('1 payout paid')).toBeInTheDocument();
   });
 
+  /**
+   * A payment pressed, then the page reloaded: the run is still going on the server. The tab must
+   * say so and hold the Pay button — a second press under a new reference is how a batch gets
+   * recorded as paid twice — and read the list again when the run finishes.
+   */
+  it('after a refresh, shows a pay run still going on the server and holds the Pay button', async () => {
+    const running = {
+      id: 'row-7', kind: 'BILLING_PAY_PAYOUTS', status: 'RUNNING', title: 'Pay 12 payouts (ref UTR-7)',
+      progress: { processed: 3, total: 12, percent: 25, stage: 'Paying payouts (3/12)', message: null },
+    };
+    const server = { done: false };
+    mockRequest.mockImplementation(async (path: string) => {
+      if (path.includes('kind=BILLING_PAY_PAYOUTS') && !server.done) return { active: [running], recent: [] };
+      if (path.startsWith('/jobs?')) return { active: [], recent: [] };
+      throw new Error(`unexpected request ${path}`);
+    });
+    await renderTab(payout({ status: AssayerPayableStatus.APPROVED }), 'TO_PAY');
+
+    expect(await screen.findByText(/Pay 12 payouts \(ref UTR-7\) is still running on the server \(Paying payouts \(3\/12\)\)/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Record payment \(1/ })).toBeDisabled();
+    expect(mockPay).not.toHaveBeenCalled();
+  });
+
   it('says a run that failed on the server failed, with the server’s reason', async () => {
-    mockRequest.mockResolvedValue({ jobId: '8', state: 'failed', progress: { percent: 0, stage: 'Failed' }, error: 'The database was unavailable.' });
+    mockRequest.mockImplementation(async (path: string) => (path.startsWith('/jobs?')
+      ? { active: [], recent: [] }
+      : { jobId: '8', state: 'failed', progress: { percent: 0, stage: 'Failed' }, error: 'The database was unavailable.' }));
     await renderTab(payout());
 
     await approveWithoutBill();

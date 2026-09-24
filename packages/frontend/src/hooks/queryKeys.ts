@@ -1,4 +1,15 @@
 export const queryKeys = {
+  /**
+   * Background jobs (`/jobs`) — the header's Jobs tray, and any page watching its own kind of upload
+   * (`useBackgroundJob`). Kept current by `job:updated` pushes patched straight into these lists
+   * (`applyJobUpdate`), not by refetching, so a job writing progress every second costs no requests.
+   */
+  jobs: {
+    all: ['jobs'] as const,
+    tray: ['jobs', 'tray'] as const,
+    forScope: (kind: string, scopeType?: string | null, scopeId?: string | null) =>
+      ['jobs', 'scope', kind, scopeType ?? '', scopeId ?? ''] as const,
+  },
   dashboard: {
     all: ['dashboard'] as const,
     metrics: ['dashboard', 'metrics'] as const,

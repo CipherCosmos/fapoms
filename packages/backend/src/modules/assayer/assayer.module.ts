@@ -28,8 +28,7 @@ import { AssayerApplicationDocumentEntity } from './assayer-application-document
 import { QualificationScoreService } from './qualification-score.service';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
-import { RosterImportWorker } from './roster-import.worker';
-import { ImportModule } from '../import/import.module';
+import { RosterImportJob } from './roster-import.job';
 import { RosterRecordsService } from './roster-records.service';
 import { DataIntegrityService } from './data-integrity.service';
 import { StorageModule } from '../../infrastructure/storage/storage.module';
@@ -54,10 +53,6 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
 
 @Module({
   imports: [
-    // The shared import queue — a leaf module, so this cannot introduce a cycle. Roster imports
-    // are queued for the same reason branch imports are: they are long, and the request path
-    // was being kept open for up to fifteen minutes to hold one.
-    ImportModule,
     // HR and ops learn when someone becomes assignable, and when credentials fall due.
     NotificationsModule,
     StorageModule,
@@ -106,7 +101,10 @@ import { WORKFORCE_BULK_QUEUE } from './workforce-bulk-jobs.contract';
     AssayerInterviewController, PublicRegistrationController, HrApplicationsController, OnboardingApprovalController, ComplianceController, MyIdCardController, PublicIdCardController,
   ],
   providers: [
-    AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker,
+    AssayerService, HrWorkforceService, LocationTrailService, RosterImportService,
+    // The roster import's background job (`ROSTER_IMPORT`): registered at init, run on the shared
+    // tracked-jobs queue — see roster-import.job.ts. BackgroundJobsModule is global.
+    RosterImportJob,
     RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService,
     RegistrationApplicationService, AssayerInterviewService, OnboardingApprovalService, ComplianceStandingService, ComplianceReviewService, IdCardService, WorkforceBulkJobsService, WorkforceBulkJobsWorker,
   ],

@@ -28,6 +28,14 @@ import { ValidationService } from '../validation/validation.service';
 import { EmailService } from '../notifications/email.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { getRequestContext } from '../../core/context/request-context';
+import { randomUUID } from 'crypto';
+import { Logger } from '@nestjs/common';
+import type { BackgroundJobStatus } from '@fapoms/shared';
+import { BackgroundJobEntity } from '../../infrastructure/background-jobs/background-job.entity';
+import { BackgroundJobRegistry } from '../../infrastructure/background-jobs/background-job.registry';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
+import { DOCUMENT_DISPATCH_KIND } from './document-dispatch-jobs.service';
 
 /**
  * A BATCH DISPATCH IS ACCEPTED, THEN SENT ONCE, ONE DOCUMENT AT A TIME, AS THE PERSON WHO PRESSED SEND.
@@ -47,8 +55,12 @@ const IDS = ['doc-c', 'doc-a', 'doc-b'];
 function queueWith(jobs: any[] = []) {
   let n = 0;
   return {
-    add: jest.fn(async (name: string, data: any) => {
-      const job = { id: String(++n), name, data, getState: async () => 'waiting', progress: () => 0, timestamp: Date.now() };
+    name: 'document-dispatch',
+    add: jest.fn(async (name: string, data: any, opts: any = {}) => {
+      const job = {
+        id: String(++n), name, data, opts, attemptsMade: 0,
+        getState: async () => 'waiting', progress: jest.fn(async () => 0), timestamp: Date.now(),
+      };
       jobs.push(job);
       return job;
     }),
@@ -57,14 +69,73 @@ function queueWith(jobs: any[] = []) {
   };
 }
 
+/**
+ * The background-jobs foundation with an in-memory store — the real `BackgroundJobsService` and
+ * `BackgroundJobTracker`, so "the batch is tracked on a row" is the foundation's own behaviour here,
+ * not a mock's. The store keeps the rules that matter: conditional transitions, one row per insert.
+ */
+class FakeJobStore {
+  rows = new Map<string, BackgroundJobEntity>();
+  private clone(r?: BackgroundJobEntity | null) { return r ? ({ ...r, progress: { ...r.progress } } as BackgroundJobEntity) : null; }
+  async findById(id: string) { return this.clone(this.rows.get(id)); }
+  async findOpenByDedupe() { return null; }
+  async insert(values: Partial<BackgroundJobEntity>) {
+    const now = new Date();
+    const row = {
+      id: randomUUID(), attempts: 0, bullJobId: null, cancelRequestedAt: null, result: null, resultObjectKey: null,
+      error: null, startedAt: null, finishedAt: null, createdAt: now, updatedAt: now, inputObjects: null, inputObjectKey: null,
+      ...values,
+    } as BackgroundJobEntity;
+    this.rows.set(row.id, row);
+    return { job: this.clone(row)!, inserted: true };
+  }
+  async setBullJobId(id: string, bullJobId: string) { this.touch(id, { bullJobId }); }
+  async claim(id: string) {
+    const row = this.rows.get(id);
+    if (!row || !['QUEUED', 'RUNNING'].includes(row.status)) return null;
+    this.touch(id, { status: 'RUNNING', attempts: row.attempts + 1, startedAt: new Date() });
+    return this.findById(id);
+  }
+  async transition(id: string, from: BackgroundJobStatus[], patch: Partial<BackgroundJobEntity>) {
+    const row = this.rows.get(id);
+    if (!row || !from.includes(row.status)) return null;
+    this.touch(id, patch);
+    return this.findById(id);
+  }
+  async writeProgress(id: string, progress: any) {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'RUNNING') return false;
+    this.touch(id, { progress });
+    return true;
+  }
+  async patch(id: string, patch: Partial<BackgroundJobEntity>) { this.touch(id, patch); }
+  private touch(id: string, patch: Partial<BackgroundJobEntity>) {
+    const row = this.rows.get(id);
+    if (row) Object.assign(row, patch, { updatedAt: new Date() });
+  }
+}
+
+function foundation() {
+  const store = new FakeJobStore();
+  const storage = { saveFile: jest.fn(async () => 'k'), deleteFile: jest.fn() };
+  const jobs = new BackgroundJobsService(
+    store as any, new BackgroundJobRegistry(), { add: jest.fn() } as any, storage as any, { publish: jest.fn() } as any,
+  );
+  const tracker = new BackgroundJobTracker(store as any, jobs, storage as any);
+  return { store, jobs, tracker };
+}
+
+beforeAll(() => Logger.overrideLogger(false));
+afterAll(() => Logger.overrideLogger(['log', 'error', 'warn', 'debug', 'verbose']));
+
 describe('DocumentDispatchJobsService', () => {
   it('accepts the batch and returns a job id instead of sending anything', async () => {
     const queue = queueWith();
-    const service = new DocumentDispatchJobsService(queue as any);
+    const service = new DocumentDispatchJobsService(queue as any, foundation().jobs);
 
     const result = await service.enqueueBatch({ documentIds: IDS, branchEmail: ' manager@bank.example ' }, ACTOR);
 
-    expect(result).toEqual({ jobId: '1', deduplicated: false });
+    expect(result).toEqual({ jobId: '1', deduplicated: false, backgroundJobId: expect.any(String) });
     expect(queue.add).toHaveBeenCalledWith(
       DOCUMENT_DISPATCH_JOB.DISPATCH_BATCH,
       expect.objectContaining({
@@ -72,26 +143,60 @@ describe('DocumentDispatchJobsService', () => {
         branchEmail: 'manager@bank.example',
         requestedBy: 'desk-1',
         actor: ACTOR,
+        backgroundJobId: result.backgroundJobId,
       }),
       DISPATCH_BATCH_JOB_OPTIONS,
     );
   });
 
+  it('records the batch on a tracked row, so the Jobs tray shows it after a refresh — ids stay off the row', async () => {
+    const queue = queueWith();
+    const { jobs, store } = foundation();
+    const service = new DocumentDispatchJobsService(queue as any, jobs);
+
+    const { jobId, backgroundJobId } = await service.enqueueBatch({ documentIds: IDS, branchEmail: 'manager@bank.example' }, ACTOR, ['WEST']);
+
+    const row = store.rows.get(backgroundJobId!)!;
+    expect(row).toMatchObject({
+      kind: DOCUMENT_DISPATCH_KIND,
+      status: 'QUEUED',
+      requestedBy: 'desk-1',
+      regions: ['WEST'],
+      runnerQueue: 'document-dispatch',
+      bullJobId: jobId,
+      title: 'Send 3 documents to manager@bank.example',
+      params: { documentCount: 3, branchEmail: 'manager@bank.example' },
+    });
+    expect(row.progress.total).toBe(3);
+    expect(JSON.stringify(row.params)).not.toContain('doc-a');
+  });
+
+  it('a repeat press writes no second row', async () => {
+    const queue = queueWith();
+    const { jobs, store } = foundation();
+    const service = new DocumentDispatchJobsService(queue as any, jobs);
+
+    await service.enqueueBatch({ documentIds: IDS }, ACTOR);
+    await service.enqueueBatch({ documentIds: [...IDS].reverse() }, ACTOR);
+
+    expect(store.rows.size).toBe(1);
+  });
+
   it('joins the batch already going when the same person presses Send again — the branch gets one copy', async () => {
     const queue = queueWith();
-    const service = new DocumentDispatchJobsService(queue as any);
+    const service = new DocumentDispatchJobsService(queue as any, foundation().jobs);
 
     const first = await service.enqueueBatch({ documentIds: IDS, branchEmail: 'manager@bank.example' }, ACTOR);
     const again = await service.enqueueBatch({ documentIds: [...IDS].reverse(), branchEmail: 'manager@bank.example' }, ACTOR);
 
-    expect(again).toEqual({ jobId: first.jobId, deduplicated: true });
+    expect(again).toEqual({ jobId: first.jobId, deduplicated: true, backgroundJobId: first.backgroundJobId });
     expect(queue.add).toHaveBeenCalledTimes(1);
   });
 
   /** A batch is readable only by whoever started it, so joining another person's would answer them 404. */
   it("does not fold one person's press into another person's identical batch", async () => {
     const queue = queueWith();
-    const service = new DocumentDispatchJobsService(queue as any);
+    const service = new DocumentDispatchJobsService(queue as any, foundation().jobs);
 
     const mine = await service.enqueueBatch({ documentIds: IDS }, ACTOR);
     const theirs = await service.enqueueBatch({ documentIds: IDS }, { ...ACTOR, userId: 'desk-2' });
@@ -102,7 +207,7 @@ describe('DocumentDispatchJobsService', () => {
 
   it('treats the same documents to a different address as a delivery of its own', async () => {
     const queue = queueWith();
-    const service = new DocumentDispatchJobsService(queue as any);
+    const service = new DocumentDispatchJobsService(queue as any, foundation().jobs);
 
     await service.enqueueBatch({ documentIds: IDS, branchEmail: 'one@bank.example' }, ACTOR);
     const other = await service.enqueueBatch({ documentIds: IDS, branchEmail: 'two@bank.example' }, ACTOR);
@@ -119,7 +224,7 @@ describe('DocumentDispatchJobsService', () => {
 
   it('answers 404 to anybody but the person who started the batch', async () => {
     const queue = queueWith();
-    const service = new DocumentDispatchJobsService(queue as any);
+    const service = new DocumentDispatchJobsService(queue as any, foundation().jobs);
     const { jobId } = await service.enqueueBatch({ documentIds: IDS }, ACTOR);
 
     await expect(service.status(jobId, 'someone-else')).rejects.toBeInstanceOf(NotFoundException);
@@ -131,7 +236,7 @@ describe('DocumentDispatchJobsService', () => {
     const queue = queueWith([
       { id: '7', name: DOCUMENT_DISPATCH_JOB.AUTO_DISPATCH, data: { requestedBy: 'desk-1' } },
     ]);
-    const service = new DocumentDispatchJobsService(queue as any);
+    const service = new DocumentDispatchJobsService(queue as any, foundation().jobs);
 
     await expect(service.status('7', 'desk-1')).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -151,6 +256,7 @@ describe('POST /documents/dispatch-batch', () => {
       null as any, null as any, null as any, null as any, null as any, null as any, null as any, null as any, null as any,
       regionGuard as any,
       dispatchJobs as any,
+      null as any, // backgroundJobs
     );
     return { controller, documentService, regionGuard, dispatchJobs };
   };
@@ -167,6 +273,7 @@ describe('POST /documents/dispatch-batch', () => {
     expect(dispatchJobs.enqueueBatch).toHaveBeenCalledWith(
       { documentIds: IDS, branchEmail: 'manager@bank.example' },
       expect.objectContaining({ userId: 'desk-1' }),
+      null, // the caller's regions (unrestricted here), captured on the tracked row
     );
     expect(documentService.dispatchMany).not.toHaveBeenCalled();
     expect(documentService.dispatchDocument).not.toHaveBeenCalled();
@@ -230,7 +337,12 @@ describe('DocumentDispatchWorker — a batch', () => {
       ],
     }).compile();
     const service = module.get(DocumentService);
-    return { worker: new DocumentDispatchWorker(documentRepo as any, null as any, service, null as any), service };
+    const tracked = foundation();
+    return {
+      worker: new DocumentDispatchWorker(documentRepo as any, null as any, service, null as any, tracked.tracker),
+      service,
+      tracked,
+    };
   };
 
   const batchJob = (documentIds: string[], branchEmail: string | null) => ({
@@ -275,6 +387,25 @@ describe('DocumentDispatchWorker — a batch', () => {
     expect(job.progress).toHaveBeenLastCalledWith({ percent: 100, stage: 'Emailing documents to the branch (2/2)' });
   });
 
+  it('a tracked batch: its row goes RUNNING, carries the progress, and ends SUCCEEDED with a one-line summary', async () => {
+    const { worker, tracked } = await buildWorker();
+    const queue = queueWith();
+    const service = new DocumentDispatchJobsService(queue as any, tracked.jobs);
+    const { jobId, backgroundJobId } = await service.enqueueBatch({ documentIds: ['doc-ok', 'doc-refused'], branchEmail: 'manager@bank.example' }, ACTOR);
+    const bull = (await queue.getJob(jobId))!;
+
+    const result = await worker.run(bull as any);
+
+    // What Bull (and the page's poll) gets is unchanged…
+    expect(result).toEqual({ dispatched: ['doc-ok'], failed: [expect.objectContaining({ documentId: 'doc-refused' })] });
+    expect(bull.progress).toHaveBeenCalled();
+    // …and the row the Jobs tray reads says how it ended.
+    const row = tracked.store.rows.get(backgroundJobId!)!;
+    expect(row.status).toBe('SUCCEEDED');
+    expect(row.result).toEqual({ summary: 'Sent 1 document; 1 did not go.', counts: { dispatched: 1, failed: 1 } });
+    expect(row.progress.percent).toBe(100);
+  });
+
   it("runs the batch as the person who pressed Send, so the audit trail names them", async () => {
     const { worker, service } = await buildWorker();
     let seen: any = null;
@@ -291,7 +422,7 @@ describe('DocumentDispatchWorker — a batch', () => {
   });
 
   it('routes the hourly scan to auto-dispatch, and refuses a job name it does not know', async () => {
-    const worker = new DocumentDispatchWorker(null as any, null as any, null as any, null as any);
+    const worker = new DocumentDispatchWorker(null as any, null as any, null as any, null as any, foundation().tracker);
     const autoDispatch = jest.spyOn(worker, 'autoDispatch').mockResolvedValue({ dispatchedCount: 0, ocrSentCount: 0 });
 
     await worker.run({ id: '1', name: DOCUMENT_DISPATCH_JOB.AUTO_DISPATCH, data: {} } as any);

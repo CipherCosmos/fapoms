@@ -894,10 +894,9 @@ export class BranchService {
   // Excel Import (unchanged pattern)
   // -----------------------------------------------------------------------
   /**
-   * `importExcel` was removed. There is one branch-sheet importer now:
-   * `ProjectService.uploadBranchesFromExcel`, reached through
-   * `project/branch-import.controller.ts` for a client's branch master and through
-   * `POST /projects/:id/branches/upload` for a project.
+   * `importExcel` was removed. There is one branch-sheet importer now: the `BRANCH_IMPORT`
+   * background job (`project/branch-import/`), started from `POST /branches/import/:clientId` for a
+   * client's branch master and from `POST /projects/:id/branches/import` for a project.
    *
    * This one ran a geography check, a `findOne` and a geocode per row inside the HTTP request —
    * thousands of sequential round trips on the real 3,759-row client file, against a 300-second
@@ -1020,13 +1019,13 @@ export class BranchService {
     }
   }
 
-  async registerImportedBranch(dto: Partial<BranchEntity>, userId: string): Promise<BranchEntity> {
-    const branch = this.branchRepository.create({
-      ...dto,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    return this.branchRepository.save(branch);
+  /**
+   * The geography check an edit gets (`update` runs it when the state, district or city changes),
+   * for the branch import, which writes in bulk and asks it once per distinct place rather than
+   * once per row. Throws the same sentence `update` would.
+   */
+  async assertGeographyVerifiable(state: string, district?: string, city?: string): Promise<void> {
+    await this.validateGeography(state, district, city);
   }
 
   async findOrCreateZone(name: string, clientId: string, states: string[]): Promise<ZoneEntity> {

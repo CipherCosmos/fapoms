@@ -31,7 +31,7 @@ import { FileScanInterceptor } from '../../infrastructure/security/file-scan.int
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 // The one place the upload rules live — see modules/document/upload-validation.ts. A second copy
 // here is how four upload paths came to disagree about what they accept.
-import { assertUploadAllowed, uploadMulterOptions, SCAN_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { assertUploadAllowed, uploadMulterOptions, diskUploadMulterOptions, SCAN_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '../document/upload-validation';
 import { CheckType, CHECK_ISSUER_LABEL, checkTypeForReport } from '@fapoms/shared';
 
 /**
@@ -42,6 +42,42 @@ import { CheckType, CHECK_ISSUER_LABEL, checkTypeForReport } from '@fapoms/share
  * for them to tolerate a larger request body than every other upload route in the system does.
  */
 const assayerUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
+
+/** The roster workbook goes to disk (then to object storage as a job's input), never into memory. */
+const rosterImportMulterOptions = diskUploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 1 });
+
+/**
+ * The roster upload's parameters, from wherever this client put them.
+ *
+ * The current web page sends one `params` JSON field (`useBackgroundJob`). A bundle loaded before
+ * that sent `dryRun`/`overwrite` as multipart fields, and one before THAT sent them in the query
+ * string (`?dryRun=true&overwrite=…`) while the route read only the body — so its "rehearsal" was
+ * queued as a REAL import, with no confirmation asked and the overwrite choice dropped. All three
+ * are honoured.
+ *
+ * Multipart and query values are text, so "false" arrives as a non-empty string and would be
+ * truthy — only boolean `true` or the exact word "true" counts. Anything else is a real import that
+ * does not overwrite (fill blanks only, file an issue on a disagreement). Normalised to a fixed
+ * shape because the params are part of the job's dedupe key.
+ */
+export function rosterImportParams(body: any, query: any): RosterImportJobParams {
+  let fromJson: Record<string, unknown> = {};
+  if (typeof body?.params === 'string' && body.params.trim()) {
+    try {
+      const parsed = JSON.parse(body.params);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) fromJson = parsed;
+      else throw new Error('not an object');
+    } catch {
+      throw new BadRequestException('params must be a JSON object.');
+    }
+  }
+  const flag = (name: string): boolean =>
+    [fromJson[name], body?.[name], query?.[name]].some((v) => v === true || String(v ?? '').toLowerCase() === 'true');
+  const sheet = [fromJson.sheetName, body?.sheetName, query?.sheetName]
+    .find((v) => typeof v === 'string' && v.trim().length > 0) as string | undefined;
+  if (sheet && sheet.length > 100) throw new BadRequestException('sheetName is too long.');
+  return { dryRun: flag('dryRun'), overwrite: flag('overwrite'), sheetName: sheet?.trim() || null };
+}
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, IsIn, MinLength, MaxLength, Min, ArrayMinSize, ValidateNested, ArrayMaxSize, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -109,14 +145,15 @@ import {
   idCardFace, type IdCardFace,
 } from './id-card';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
 import type { Response } from 'express';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
-import { RosterImportService } from './roster-import.service';
-import { ImportJobService } from '../import/import-job.service';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+import { DiskUploadScanInterceptor } from '../document/disk-upload-scan.interceptor';
+import { ROSTER_IMPORT_KIND, ROSTER_IMPORT_SCOPE, type RosterImportJobParams } from './roster-import.job';
 import { evaluateSelfFieldChange, selfFieldGates } from './self-record-capabilities';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
@@ -1231,8 +1268,8 @@ class ResetAssayerPasswordRequestDto {
 export class AssayerController {
   constructor(
     private readonly assayerService: AssayerService,
-    private readonly rosterImport: RosterImportService,
-    private readonly importJobService: ImportJobService,
+    /** The roster import's upload (`ROSTER_IMPORT`) — stored and answered 202; see `roster-import.job.ts`. */
+    private readonly backgroundJobs: BackgroundJobsService,
     private readonly rosterRecords: RosterRecordsService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
     private readonly regionGuard: RegionGuardService,
@@ -2295,6 +2332,7 @@ export class AssayerController {
     return this.bulkJobs.enqueueLifecycle(
       { ids: dto.ids, targetStatus: dto.targetStatus, reason: effectiveReason },
       jobActorFrom(req),
+      assignedRegions(req.user),
     );
   }
 
@@ -3085,110 +3123,56 @@ export class AssayerController {
   }
 
   /**
-   * Bring in the full appraiser roster spreadsheet.
+   * Bring in the full appraiser roster spreadsheet — or rehearse it, which is how every import starts.
    *
    * Separate from `/upload`, which takes the template this system publishes. This one reads the
    * roster as it is actually kept — 71 columns of HR, KYC, banking and compliance detail, one
    * of which holds three facts in a single cell — and spreads it across the tables that now
    * hold those things. See `RosterImportService` for the rules it follows.
    *
-   * `dryRun` is the point of the endpoint as much as the import is: it does the entire read and
-   * reports exactly what would happen without writing a row, because nobody should discover
-   * what an import of 1,155 people does by running it. Both are queued and answered with a 202;
-   * the result of either is read from `GET /roster/import-jobs/:jobId`.
+   * Answered 202 with a background job (`ROSTER_IMPORT`, `roster-import.job.ts`) the moment the
+   * workbook is stored — before any row is read. The page and the Jobs tray follow the job from
+   * `GET /jobs`, so a refresh, a hard refresh or a closed laptop loses nothing: a rehearsal still
+   * waiting for its answer is shown again, and committing it (`POST /jobs/:id/commit`) runs the
+   * real import over the same stored file.
+   *
+   * On disk, not in memory, and scanned by `DiskUploadScanInterceptor` — the shared
+   * `FileScanInterceptor` scans `file.buffer`, which a disk-backed upload does not have.
+   *
+   * The wrong file is still an immediate 400: the job's `prepare` runs `inspectSheet` (sheet
+   * resolution, the wrong-file guard, a row count — no transaction, no query) before anything is
+   * stored.
    */
   @Post('/roster/import')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
-  @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Queue an import of the appraiser roster workbook, or a rehearsal of it with dryRun' })
+  @UseInterceptors(FileInterceptor('file', rosterImportMulterOptions), DiskUploadScanInterceptor)
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload the appraiser roster workbook and start its rehearsal (dryRun) or import; answers 202 with the background job' })
   async importRoster(
     @UploadedFile() file: any,
     @Body() body: any,
     @Query() query: any,
     @Req() req: any,
-    @Res({ passthrough: true }) res: Response,
   ) {
-    if (!file?.buffer?.length) {
+    if (!file || !(file.size > 0 || file.buffer?.length)) {
       throw new BadRequestException('No file was uploaded. Choose the roster workbook and try again.');
     }
-    /**
-     * Read from the multipart body OR the query string, and only an explicit "true" counts.
-     *
-     * The web sent its rehearsal as `?dryRun=true&overwrite=…` in the URL while this read only the
-     * body — so the "rehearsal" arrived with `dryRun` absent and was queued as a REAL import, with
-     * no confirmation asked and the operator's overwrite choice dropped. Its 202 carried no
-     * `rowsRead`, so the page then failed reading it: the operator was shown a check that had failed
-     * while the import it was meant to guard ran anyway. A web bundle loaded before this fix still
-     * sends the query form, so both places are honoured.
-     *
-     * Both carry text, so "false" arrives as a non-empty string and would be truthy — which is why
-     * the comparison is to the exact word. Absent or anything else is a real import that does not
-     * overwrite (fill blanks only, file an issue on a disagreement).
-     */
-    const flag = (name: string): boolean =>
-      [body?.[name], query?.[name]].some((v) => String(v ?? '').toLowerCase() === 'true');
-    const dryRun = flag('dryRun');
-    const overwrite = flag('overwrite');
-    const sheetName = body?.sheetName || undefined;
-
-    /**
-     * Inspected before anything is queued — and never rehearsed here.
-     *
-     * A rehearsal is not a cheap parse: it performs the *entire* import inside a transaction and
-     * rolls it back, roughly ten writes per row plus an IFSC cross-check. For the real 1,155-person
-     * roster that is minutes of sequential statements holding one of twenty pool connections and
-     * row locks on `assayers`. It used to run here, in the upload request, against a web timeout of
-     * three minutes; it is now queued on the roster queue, behind any real import, and polled like
-     * one (see `ImportJobService.enqueueRosterImport`).
-     *
-     * `inspectSheet` resolves the sheet, applies the same wrong-file guard and counts the rows,
-     * opening no transaction and issuing no query. So an unreadable workbook — or the branch list
-     * uploaded to the wrong screen — is still an immediate 400 with the same message, rather than a
-     * cheerful 202 and a failure the operator has to go looking for.
-     */
-    const inspection = this.rosterImport.inspectSheet(file.buffer, sheetName);
-
-    const job = await this.importJobService.enqueueRosterImport({
-      actorId: req.user.id,
-      fileBuffer: file.buffer,
-      fileName: file.originalname ?? null,
-      totalRows: inspection.rowsRead,
-      sheetName: sheetName ?? null,
-      overwrite,
-      dryRun,
+    return this.backgroundJobs.create({
+      kind: ROSTER_IMPORT_KIND,
+      actor: jobActorFrom(req),
+      regions: assignedRegions(req.user),
+      scope: { ...ROSTER_IMPORT_SCOPE },
+      params: rosterImportParams(body, query),
+      file: {
+        path: file.path,
+        buffer: file.path ? undefined : file.buffer,
+        originalName: file.originalname ?? 'roster.xlsx',
+        mimeType: file.mimetype ?? null,
+        size: file.size ?? file.buffer?.length ?? 0,
+      },
     });
-
-    // 202: accepted, not done. The body says where to watch.
-    res.status(202);
-    return {
-      ...job,
-      queued: true,
-      dryRun,
-      statusUrl: `/assayers/roster/import-jobs/${job.jobId}`,
-      message: dryRun
-        ? `This roster has ${inspection.rowsRead} row(s). Checking what importing it would do — every ` +
-          `row is tried and then undone, so nothing is saved. A full roster takes a few minutes.`
-        : `This roster has ${inspection.rowsRead} row(s). Each one writes a person along with their ` +
-          `references, checks, documents and empanelments, and their address is looked up — so the ` +
-          `import is running in the background. It does not need this page kept open.`,
-    };
-  }
-
-  /**
-   * State and result of a queued roster import or rehearsal (the result's `dryRun` says which).
-   *
-   * Scoped to the person who started it: the roster is one national list, so there is no project
-   * or client to check a job id against, and Bull's ids are a per-queue counter that would
-   * otherwise be trivially enumerable — over results that name real people, their PANs and their
-   * home addresses.
-   */
-  @Get('/roster/import-jobs/:jobId')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:create:organization')
-  @ApiOperation({ summary: 'State and result of a queued roster import or rehearsal' })
-  async getRosterImportJob(@Param('jobId') jobId: string, @Req() req: any) {
-    return await this.importJobService.getRosterImportStatus(req.user.id, jobId);
   }
 
   /**
@@ -3278,7 +3262,7 @@ export class AssayerController {
       second press rotated them again. The scope check above still happens here, before anything is
       accepted, so a batch with one out-of-region id is still refused whole.
     */
-    const data = await this.bulkJobs.enqueueAppAccess(dto.ids, jobActorFrom(req));
+    const data = await this.bulkJobs.enqueueAppAccess(dto.ids, jobActorFrom(req), assignedRegions(req.user));
     return { success: true, data };
   }
 
@@ -3300,6 +3284,7 @@ export class AssayerController {
     const data = await this.bulkJobs.enqueueNotify(
       { ids: dto.ids, subject: dto.subject, body: dto.body, sendEmail: !!dto.sendEmail },
       jobActorFrom(req),
+      assignedRegions(req.user),
     );
     return { success: true, data };
   }

@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { AssayerEntity } from './assayer.entity';
@@ -156,7 +156,10 @@ describe('the operational status projection', () => {
     const ROOT = join(__dirname, '..', '..');
     const files = execSync(`git ls-files '*.ts' | grep -v '\\.spec\\.ts$' | grep -v '/migrations/'`, {
       cwd: ROOT, encoding: 'utf8',
-    }).trim().split('\n').filter(Boolean);
+    }).trim().split('\n').filter(Boolean)
+      // `git ls-files` also lists a tracked file deleted in the working tree but not yet committed;
+      // a file that is not there sets nothing (same rule as order-by-property-paths.spec.ts).
+      .filter((rel) => existsSync(join(ROOT, rel)));
 
     const offenders: string[] = [];
     for (const rel of files) {

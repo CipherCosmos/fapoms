@@ -59,6 +59,24 @@ const NOT_A_WHOLE_FILE: Record<string, string> = {
   'upload/session/:uploadId/chunk/:index': 'resumable chunk — the assembled file is scanned at complete',
 };
 
+/**
+ * Routes whose files are scanned LATER, by the background job that processes them, instead of in the
+ * request. Keyed `controller file :: route`, so the allowance is exactly one route of one controller.
+ *
+ * `upload-generated-batch` takes a day's packets (up to 100 × 50 MB) and must answer 202 the moment
+ * they are stored; a ClamAV round trip per file in the request is exactly the wait the move to a
+ * background job removed. Its files are not stored as documents until the job has scanned each one
+ * — the pinned test below proves that, and the route must still delete its temp files
+ * (`DiskUploadCleanupInterceptor`). Nothing is lost by the deferral: the job's own copy of an upload
+ * is private input, never served to anyone, and deleted by retention.
+ */
+const DEFERRED_SCAN: Record<string, { cleanup: string; reason: string }> = {
+  'modules/document/document.controller.ts :: upload-generated-batch': {
+    cleanup: 'DiskUploadCleanupInterceptor',
+    reason: 'scanned per file by GeneratedDocumentBatchJob.fileOne before it is filed (pinned below)',
+  },
+};
+
 function controllerFiles(dir: string, out: string[] = []): string[] {
   for (const name of fs.readdirSync(dir)) {
     const full = path.join(dir, name);
@@ -106,7 +124,10 @@ describe('every file-accepting route in every controller is scanned', () => {
         if (!/(?:File|Files|FileFields|AnyFiles)Interceptor\(/.test(block.args)) continue;
         if (/\b(?:FileScanInterceptor|DiskUploadScanInterceptor)\b/.test(block.args)) continue;
         if (NOT_A_WHOLE_FILE[block.route]) continue;
-        unscanned.push(`${path.relative(path.join(__dirname, '..', '..'), file)} → ${block.route || '(route?)'}`);
+        const rel = path.relative(path.join(__dirname, '..', '..'), file);
+        const deferred = DEFERRED_SCAN[`${rel} :: ${block.route}`];
+        if (deferred && new RegExp(`\\b${deferred.cleanup}\\b`).test(block.args)) continue;
+        unscanned.push(`${rel} → ${block.route || '(route?)'}`);
       }
     }
     expect(unscanned).toEqual([]);
@@ -118,5 +139,45 @@ describe('every file-accepting route in every controller is scanned', () => {
       return /Buffer\.from\([^)]*'base64'\)/.test(src) && !src.includes('scanOrThrow');
     });
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The other half of the one deferred-scan allowance above: the background job that files a day's
+ * packets scans EVERY file — malware and the byte-level content gate, both inside
+ * `FileScanService.scanOrThrow` — before the bytes are stored under a document's key or a document
+ * is recorded, and does it for each file it files. Remove the call, move it after the save, or file
+ * a packet by any other path, and this fails. (`generated-document-batch.job.spec.ts` proves the
+ * same behaviourally: an infected packet is refused and never stored.)
+ */
+describe('the deferred scan of the generated-document batch happens before anything is filed', () => {
+  const JOB = path.join(__dirname, 'generated-document-batch.job.ts');
+  const src = fs.readFileSync(JOB, 'utf8');
+
+  it('fileOne scans the bytes with fileScanner.scanOrThrow before saving them or recording the document', () => {
+    const body = handlerBody(src, 'fileOne');
+    expect(body).not.toBe('');
+    const scan = body.indexOf('this.fileScanner.scanOrThrow(bytes');
+    expect(scan).toBeGreaterThan(-1);
+    expect(body.indexOf('storage.saveFile(')).toBeGreaterThan(scan);
+    expect(body.indexOf('documentService.create(')).toBeGreaterThan(scan);
+    // The bytes scanned are the bytes stored.
+    expect(body).toMatch(/const bytes = await file\.read\(\)/);
+    expect(body).toMatch(/storage\.saveFile\(file\.fileName, bytes\b/);
+  });
+
+  it('every packet the run files goes through fileOne, and nothing else in the job stores or records one', () => {
+    const run = handlerBody(src, 'run');
+    expect(run).toContain('this.fileOne(');
+    const clean = stripComments(src);
+    // saveFile and create appear once each in the whole job — inside fileOne.
+    expect(clean.match(/storage\.saveFile\(/g)).toHaveLength(1);
+    expect(clean.match(/documentService\.create\(/g)).toHaveLength(1);
+  });
+
+  it('the allowance names only that route, and the route still cleans up its temp files', () => {
+    expect(Object.keys(DEFERRED_SCAN)).toEqual(['modules/document/document.controller.ts :: upload-generated-batch']);
+    const block = interceptorBlocks(fs.readFileSync(CONTROLLER, 'utf8')).find((b) => b.route === 'upload-generated-batch');
+    expect(block?.args).toMatch(/\bDiskUploadCleanupInterceptor\b/);
   });
 });

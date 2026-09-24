@@ -56,7 +56,8 @@ describe('DocumentController — download-token region scope, and upload multer 
     null as any, // chunkedUploadService
     null as any, // fileScanner
     mockRegionGuard as any,
-    null as any, // dispatchJobs
+    null as any, // dispatchJobs,
+    null as any, // backgroundJobs
   );
 
   const docWithRegion = (region: string | null) => ({
@@ -174,7 +175,8 @@ describe('DocumentController — download-token region scope, and upload multer 
       chunked,        // chunkedUploadService
       scanner,        // fileScanner
       { assertRegionAllowed: jest.fn(), assertRegionAllowedStaged: jest.fn() } as any,
-      null as any,    // dispatchJobs
+      null as any,    // dispatchJobs,
+      null as any, // backgroundJobs
     );
 
     beforeEach(() => {

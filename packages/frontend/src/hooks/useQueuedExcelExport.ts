@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 
@@ -21,18 +21,31 @@ import { userMessage } from '../services/errors';
  *
  *   1. `POST <endpoint>` with the same query params the old GET took — the same filter contract,
  *      because the job handler is a call to the same `ReportsService` method.
- *   2. Poll `GET /reports/jobs/:jobId` (see `useImportJob.ts` for the same poll/backoff shape
- *      used for spreadsheet imports; this is the export-shaped sibling of that pattern — a poll
- *      returns metadata only, never the file bytes, in case a progress bar is being watched).
+ *   2. Poll `GET /reports/jobs/:jobId` with a growing interval — a poll returns metadata only,
+ *      never the file bytes, in case a progress bar is being watched.
  *   3. Once `state === 'done'`, `GET /reports/jobs/:jobId/download` (raw) and save the blob under
  *      the filename the job itself reported, so a queued export produces the exact same
  *      attachment a synchronous one would have.
+ *
+ * ## Refresh and navigation
+ *
+ * Every export is also tracked on the server as a `REPORT_EXPORT` job, so the Jobs tray shows it
+ * — progress, then a Download button while the file lasts (15 minutes) — with nothing here: after
+ * a refresh this hook has forgotten the export, but the tray has not.
+ *
+ * Navigating to another page does not stop the export either: the poll is deliberately NOT tied to
+ * the component's lifetime, so a person who clicks Export and moves on still gets the file (and the
+ * page's error toast, if it fails). There is no cancellation flag for the same reason — the one
+ * this hook used to have was reset by whichever export finished first, which silently dropped the
+ * download of a second export started while the first was running.
  */
 
 /** What `POST /reports/*\/jobs` answers. */
 interface EnqueueResult {
   jobId: string;
   deduplicated: boolean;
+  /** The tracking row the Jobs tray shows; not needed here. */
+  backgroundJobId?: string | null;
 }
 
 /** What `GET /reports/jobs/:jobId` answers — a subset of `ReportJobStatus` on the server. */
@@ -44,12 +57,12 @@ interface ReportJobStatus {
   error?: string;
 }
 
-/** Same cadence as `useImportJob`'s poll — fast enough to feel live, cheap enough to hold open. */
+/** Fast enough to feel live, cheap enough to hold open. */
 const POLL_MS = 2000;
 
 /**
  * Exports finish in seconds to low minutes, not the tens of minutes a spreadsheet import can
- * take, so this ceiling is far tighter than `useImportJob`'s hour — a stuck export should say so
+ * take, so this ceiling is far tighter than an import's hour — a stuck export should say so
  * quickly rather than leave a disabled button for an hour.
  */
 const MAX_POLL_MS = 10 * 60 * 1000;
@@ -70,16 +83,12 @@ export function useQueuedExcelExport(): {
   busy: boolean;
 } {
   const [busy, setBusy] = useState(false);
-  const cancelled = useRef(false);
 
   const poll = useCallback(async (jobId: string, startedAt: number): Promise<void> => {
-    if (cancelled.current) return;
-
     const status = await api.request<ReportJobStatus>(`/reports/jobs/${jobId}`);
 
     if (status.state === 'done' && status.result) {
       const blob = await api.request<Blob>(`/reports/jobs/${jobId}/download`, { raw: true });
-      if (cancelled.current) return;
       saveBlob(blob, status.result.filename);
       return;
     }
@@ -97,7 +106,6 @@ export function useQueuedExcelExport(): {
   }, []);
 
   const download = useCallback(async (jobsEndpoint: string, params?: Record<string, string | undefined>) => {
-    cancelled.current = false;
     setBusy(true);
     try {
       const query = Object.entries(params ?? {})
@@ -113,7 +121,6 @@ export function useQueuedExcelExport(): {
       // get elsewhere in the app, so a call site's existing catch/toast handling needs no change.
       throw new Error(userMessage(err));
     } finally {
-      cancelled.current = true;
       setBusy(false);
     }
   }, [poll]);

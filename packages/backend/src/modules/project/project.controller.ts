@@ -19,26 +19,25 @@ import {
   UseInterceptors,
   UploadedFile,
   Res,
-  BadRequestException,
+  HttpCode,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { uploadMulterOptions, MAX_UPLOAD_BYTES } from '../document/upload-validation';
-
-const projectBranchUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
 
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, IsEnum, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
 import { ASSIGNED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
-import { ImportJobService } from '../import/import-job.service';
-import type { ImportScope } from '../import/import.contract';
+import { BranchImportJob } from './branch-import/branch-import.job';
+import { branchImportUploadOptions, CommitBranchImportDto, incomingFile } from './branch-import.controller';
+import { readerFrom } from '../../infrastructure/background-jobs/background-jobs.controller';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
+import { DiskUploadScanInterceptor } from '../document/disk-upload-scan.interceptor';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, Priority, ProjectStatus } from '@fapoms/shared';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
@@ -148,7 +147,7 @@ class MarkUnableToCoverRequestDto {
 export class ProjectController {
   constructor(
     private readonly projectService: ProjectService,
-    private readonly importJobService: ImportJobService,
+    private readonly branchImport: BranchImportJob,
     // The UserEntity repository that used to be injected here existed only to resolve
     // `negotiatedByName` on the branches queue; it left with in-app fee negotiation.
     private readonly regionGuard: RegionGuardService,
@@ -161,41 +160,6 @@ export class ProjectController {
   async create(@Body() dto: CreateProjectRequestDto, @Req() req: any) {
     const project = await this.projectService.create(dto, req.user.id, req.user.organizationId);
     return project;
-  }
-
-  @Post('create-with-branches')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('project:create:organization')
-  @ApiOperation({ summary: 'Create a project and commit reconciled branches in one step' })
-  async createWithBranches(
-    @Body() body: { project: CreateProjectRequestDto; branches: any[] },
-    @Req() req: any,
-  ) {
-    if (!body?.project) {
-      throw new BadRequestException('Missing project details in body.');
-    }
-    return await this.projectService.createWithBranches(
-      body.project,
-      body.branches || [],
-      req.user.id,
-      req.user.organizationId,
-    );
-  }
-
-  @Post('reconcile-branches')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('project:create:organization')
-  @UseInterceptors(FileInterceptor('file', projectBranchUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Pre-reconcile branches for a client before project creation' })
-  async reconcileBranchesForClient(
-    @Query('clientId') clientIdQuery: string,
-    @UploadedFile() file: any,
-  ) {
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-    const clientId = clientIdQuery || '';
-    return await this.projectService.reconcileBranches({ kind: 'CLIENT', id: clientId }, file.buffer);
   }
 
   // Was @Public(): the entire project portfolio was readable without a token.
@@ -446,194 +410,61 @@ export class ProjectController {
   }
 
   /**
-   * Upload a branch list.
+   * Upload a branch list for this project. Answers 202 with the rehearsal job as soon as the file is
+   * stored; the rows are read, matched and placed in the background and wait for review — nothing is
+   * written until the review is committed (see `branch-import/branch-import.job.ts`).
    *
-   * ## Why one route with a threshold, rather than a second "async" route
-   *
-   * A small file still imports synchronously and returns *exactly* what it always returned — the
-   * branch list in `data`, the counts and the skipped/imprecise rows in `meta`. That path is what
-   * operations uses every day (the largest client on the platform has 72 branches) and it works,
-   * so it is left alone.
-   *
-   * A large file no longer runs in the request. It could not: geocoding is rate-limited to about
-   * one lookup per second, so a 2,000-branch file is 17 minutes at best against a 300-second
-   * `requestTimeout` — the socket died, the operator saw a failure, the server carried on
-   * importing regardless, and the operator's natural response (upload it again) started a second
-   * import of the same file. Adding a separate opt-in route would have left that trap armed for
-   * anyone who did not know to use the new one, which is the wrong default for the case that is
-   * already broken. The threshold is the file's own shape, not a flag the caller has to set.
-   *
-   * The queued response deliberately carries **no `meta`**: the existing web client reads
-   * `meta.created`/`meta.updated`/`meta.linked` and, seeing three zeros, would tell the operator
-   * "nothing was imported — your column headings probably do not match", which would be a lie
-   * about a job that is running perfectly well. With `meta` absent it falls through to its
-   * neutral "Branches uploaded." message instead. The job id is in `data`, for a client that
-   * knows to poll `GET /projects/:id/branches/import-jobs/:jobId`.
+   * Replaces `/branches/upload` (the queued importer, with no review), `/branches/reconcile` and
+   * `/branches/commit-reconciled` (a synchronous preview, then a commit that trusted every row the
+   * browser sent back, and checked a state NAME against a list of region CODES). The region ceiling
+   * is enforced in the job's `prepare` — on the file's states and on the branches it names — and
+   * again per row in the worker.
    */
-  @Post(':id/branches/upload')
+  @Post(':id/branches/import')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
-  @UseInterceptors(FileInterceptor('file', projectBranchUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Upload branches from Excel spreadsheet; large files are queued and return 202 with a job id' })
-  async uploadBranches(
+  @UseInterceptors(FileInterceptor('file', branchImportUploadOptions), DiskUploadScanInterceptor)
+  @ApiOperation({ summary: 'Upload a branch list for a project; answers 202 with the rehearsal job to review' })
+  async importBranches(
     @Param('id', ParseUUIDPipe) id: string,
-    @UploadedFile() file: any,
     @Req() req: any,
-    @Res({ passthrough: true }) res: Response,
-    @GlobalScopeFilter() globalScope?: GlobalScope,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
-    // A submitted form with no file attached reaches here as `undefined`, and reading
-    // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
-    // needs to be told to pick a file, not shown a crash.
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-
-    /**
-     * An upload is a bulk `POST /branches`, so it carries the same ceiling that route now does.
-     *
-     * `POST /branches` refuses a region the caller does not hold; a spreadsheet naming the same
-     * state creates the identical branch. Checked before the queue decision, because the queued
-     * path runs in a worker with no request and therefore nothing left to check against — a file
-     * accepted here is a file that will be written, whichever path it takes.
-     *
-     * Refused whole rather than per row: a partially-imported branch list is a worse outcome for
-     * an operator than a refusal that names the region, and "which rows did it skip and why"
-     * is a question the skipped-row report exists to answer about data faults, not about
-     * permissions.
-     */
-    for (const region of await this.projectService.branchExcelRegions(file.buffer)) {
-      this.regionGuard.assertRegionSettable(region, globalScope);
-    }
-
-    /**
-     * The file is validated in the request either way.
-     *
-     * Enqueuing an unreadable file, or the assayer roster uploaded to the wrong screen, would
-     * turn an immediate and specific 400 into a 202 followed by a failure the operator has to go
-     * looking for. Preflight parses the workbook and applies the same rejections the synchronous
-     * import always did, before any routing decision is made.
-     */
-    const scope: ImportScope = { kind: 'PROJECT', id };
-    const preflight = await this.projectService.preflightBranchExcel(scope, file.buffer);
-
-    if (ImportJobService.shouldQueue(preflight)) {
-      const job = await this.importJobService.enqueueBranchImport({
-        scope,
-        userId: req.user.id,
-        fileBuffer: file.buffer,
-        fileName: file.originalname ?? null,
-        totalRows: preflight.totalRows,
-        rowsNeedingGeocode: preflight.rowsNeedingGeocode,
-      });
-
-      // 202: accepted, not done. The body says where to watch.
-      res.status(202);
-      return {
-        ...job,
-        queued: true,
-        statusUrl: `/projects/${id}/branches/import-jobs/${job.jobId}`,
-        message:
-          `This file has ${preflight.totalRows} row(s), ${preflight.rowsNeedingGeocode} of which need a location ` +
-          `looked up. Address lookups are limited to about one per second by the mapping providers, so this ` +
-          `import is running in the background — it does not need this page kept open. Check its progress at ` +
-          `the status URL.`,
-      };
-    }
-
-    const report = await this.projectService.uploadBranchesFromExcel(scope, file.buffer, req.user.id);
-    /**
-     * What the import did, in `data` — the same shape the client-scoped endpoint returns and the
-     * same shape the completed job's result carries.
-     *
-     * `data` used to be the project's resulting branch list, with the counts hidden in `meta`.
-     * That made the small-file response, the large-file response and the finished-job response
-     * three different shapes for one outcome, so each had to be read differently and the web app
-     * grew a separate reader for each. The branch list is dropped rather than moved: the only
-     * caller refetched `GET /projects/:id/branches` immediately afterwards anyway, and sending
-     * every hydrated row back twice was never doing anything.
-     */
-    return {
-      totalRows: report.totalRows,
-      created: report.created,
-      updated: report.updated,
-      unchanged: report.unchanged,
-      linked: report.linked,
-      skipped: report.skipped,
-      // Rows that imported but landed on a fallback coordinate. Distinct from `skipped` — these
-      // branches exist, they just cannot be planned or checked into until someone corrects
-      // where they are, so the operator has to be told while the import is still in front of them.
-      imprecise: report.imprecise,
-      // Archived branches this file restored — see `BranchImportOutcome.revived`.
-      revived: report.revived,
-      // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
-      // therefore dropped in silence. See `BranchImportOutcome.notes`.
-      notes: report.notes,
-    };
+    return this.branchImport.start({
+      scopeType: 'PROJECT',
+      scopeId: id,
+      actor: jobActorFrom(req),
+      regions: assignedRegions(req.user),
+      file: incomingFile(file),
+    });
   }
 
-  @Post(':id/branches/reconcile')
+  @Post(':id/branches/import/:jobId/commit')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
-  @UseInterceptors(FileInterceptor('file', projectBranchUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Reconcile project branch spreadsheet against master DB and return readiness preview' })
-  async reconcileBranches(
+  @ApiOperation({ summary: "Commit a reviewed branch import into this project; answers 202 with the commit job" })
+  async commitBranchImport(
     @Param('id', ParseUUIDPipe) id: string,
-    @UploadedFile() file: any,
-  ) {
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-    return await this.projectService.reconcileBranches({ kind: 'PROJECT', id }, file.buffer);
-  }
-
-  @Post(':id/branches/commit-reconciled')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('project:create:organization')
-  @ApiOperation({ summary: 'Commit reviewed/reconciled branches to master DB and link to project' })
-  async commitReconciledBranches(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { branches: any[] },
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Body() dto: CommitBranchImportDto,
     @Req() req: any,
-    @GlobalScopeFilter() globalScope?: GlobalScope,
   ) {
-    if (!Array.isArray(body?.branches)) {
-      throw new BadRequestException('Invalid branches payload. Expected an array.');
-    }
-    for (const b of body.branches) {
-      if (b.state) {
-        this.regionGuard.assertRegionSettable(b.state, globalScope);
-      }
-    }
-    return await this.projectService.commitReconciledBranches(
-      { kind: 'PROJECT', id },
-      body.branches,
-      req.user.id,
-    );
+    return this.branchImport.commit(readerFrom(req), jobActorFrom(req), 'PROJECT', id, jobId, dto.decisions);
   }
 
-  /**
-   * Poll a queued branch import.
-   *
-   * Reads Bull directly rather than a table of our own: the queue already records state, progress,
-   * return value and failure reason durably, and a second copy in Postgres would be one more thing
-   * to keep in step with it. Retention is bounded (see `ImportJobService.JOB_OPTIONS`), so this
-   * answers 404 for a job old enough to have been cleared — which the message says explicitly,
-   * because "not found" alone reads as "your import vanished".
-   *
-   * Same roles as the upload itself: whoever may start an import may read what it did.
-   */
-  @Get(':id/branches/import-jobs/:jobId')
+  @Post(':id/branches/import/:jobId/retry')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
-  @ApiOperation({ summary: 'State, progress and result of a queued branch import' })
-  async getBranchImportJob(
+  @ApiOperation({ summary: 'Run a failed or cancelled branch import for this project again' })
+  async retryBranchImport(
     @Param('id', ParseUUIDPipe) id: string,
-    @Param('jobId') jobId: string,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Req() req: any,
   ) {
-    // The scope is passed through and checked against the job's own payload — Bull ids are a
-    // per-queue counter, so without that check they are trivially enumerable across projects.
-    return await this.importJobService.getBranchImportStatus({ kind: 'PROJECT', id }, jobId);
+    return this.branchImport.retry(readerFrom(req), jobActorFrom(req), 'PROJECT', id, jobId);
   }
 
   @Get(':id/branches/template')

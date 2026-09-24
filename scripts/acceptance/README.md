@@ -116,7 +116,7 @@ they used to return is the finished job's `result`, read from a status route:
 | `/billing-engine/payouts/approve`, `/payouts/pay`, `/assayer-invoices/invite-all` | `/billing-engine/bulk-jobs/:jobId` |
 | `/planning/coverage-plans/:planId/execute`, `/planning/bulk-offers/jobs`, `/planning/unable-to-cover/jobs` | `/planning/write-jobs/:jobId` |
 | `/documents/dispatch-batch` | `/documents/dispatch-batch/:jobId` |
-| `/assayers/roster/import` (the `dryRun` rehearsal too) | `/assayers/roster/import-jobs/:jobId` |
+| `/assayers/roster/import` (the `dryRun` rehearsal too), `/customer-master/upload`, `/documents/upload-generated-batch` | `/jobs/:id` — these answer 202 `{ job, deduplicated }` (a background-job row, `JOB_STATUS.backgroundJob`); a rehearsal ends `AWAITING_REVIEW` and is committed with `POST /jobs/:id/commit` |
 | `/admin/data-reset/execute` | `/admin/data-reset/runs/:jobId` |
 
 Probes do not write polling loops. `_lib.mjs` has one:

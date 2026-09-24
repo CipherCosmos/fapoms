@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
-import { AssayerLifecycleStatus, AssayerStatus, EmpanelmentStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AssayerStatus, BACKGROUND_JOB_STATUSES, EmpanelmentStatus } from '@fapoms/shared';
 
 /**
  * A STATUS A REQUEST BODY SENDS MUST BE ONE THE SYSTEM HAS.
@@ -27,6 +27,9 @@ describe('every status a database suite sends is a real member of its enum', () 
     ...Object.values(EmpanelmentStatus),
     ...Object.values(AssayerLifecycleStatus),
     ...Object.values(AssayerStatus),
+    // `background_jobs` rows (background-job.store.db.spec.ts) — a vocabulary of their own, still
+    // one the system defines.
+    ...BACKGROUND_JOB_STATUSES,
   ]);
 
   /** Every `.db.spec.ts` under src, which is where the live-deployment suites live. */

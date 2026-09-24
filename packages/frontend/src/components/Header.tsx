@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Wifi, WifiOff, Settings as SettingsIcon, LogOut, Filter, ChevronDown, Search, X, Check } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { NotificationDropdown } from './NotificationDropdown';
+import { JobsTray } from './jobs/JobsTray';
 import { FeedbackLauncher } from '../pages/feedback/FeedbackLauncher';
 import { MenuToggle } from './ui/MenuToggle';
 import { Select } from './ui/Select';
@@ -538,6 +539,9 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
             support requests" navigates to /feedback, so it follows that route's permission exactly
             rather than carrying a second copy of the role list. */}
         {canAccessRoute((user?.roles ?? []).map((r) => r.name), permissionKeysFrom(user), '/feedback') && <FeedbackLauncher />}
+        {/* Uploads and other work running on the server — restored from the server on every load,
+            so a refresh never hides a job that is still going. Quiet unless something is. */}
+        <JobsTray />
         <NotificationDropdown />
 
         {/* Profile / account menu */}

@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { queryClient } from '../queryClient';
 import { connectSocket } from '../services/socket';
 import { createCoalescer } from './invalidationCoalescer';
+import { BACKGROUND_JOB_EVENT, type BackgroundJobSummary } from '@fapoms/shared';
+import { applyJobUpdate } from '../services/background-jobs';
 import { queryKeys } from './queryKeys';
 
 /**
@@ -235,6 +237,17 @@ export function useSocketInvalidation() {
     socket.on('disconnect', handleDisconnect);
     socket.on('connect', handleReconnect);
 
+    /**
+     * Background jobs are the one event that PATCHES the cache rather than invalidating it.
+     *
+     * The event carries the whole job summary, and a running import sends one about every second.
+     * Invalidating on each would refetch `/jobs` once a second from every open tab for as long as
+     * the import ran; writing the pushed state into the cached lists costs nothing. The server
+     * sends it to the requester's own room only (see the gateway's `job:updated` case).
+     */
+    const handleJobUpdated = (job: BackgroundJobSummary) => applyJobUpdate(queryClient, job);
+    socket.on(BACKGROUND_JOB_EVENT, handleJobUpdated);
+
     return () => {
       live.cancel();
       slow.cancel();
@@ -244,6 +257,7 @@ export function useSocketInvalidation() {
       }
       socket.off('disconnect', handleDisconnect);
       socket.off('connect', handleReconnect);
+      socket.off(BACKGROUND_JOB_EVENT, handleJobUpdated);
     };
   }, []);
 }

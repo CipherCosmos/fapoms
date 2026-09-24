@@ -316,22 +316,33 @@ const EXEMPT: Record<string, Exemption> = {
       'Soft-deletes the project row. ADMIN-only and permission-gated; the project is not region ' +
       'anchored, and its branches keep their own ceiling on every route that reaches them.',
   },
-  'project/project.controller.ts::getBranchImportJob': {
-    kind: 'by-design',
-    reason:
-      'Polls a Bull job by id and answers only state/progress/counts. The job is refused unless ' +
-      'its payload names this project, and the upload that created it is region-checked at the ' +
-      'door (`uploadBranches`), so there is no job here a caller was not allowed to start.',
-  },
   'project/project.controller.ts::downloadTemplate': {
     kind: 'by-design',
     reason: 'Generates an empty spreadsheet template. Contains no branch data of any region.',
   },
-  'project/project.controller.ts::reconcileBranches': {
+  'project/project.controller.ts::importBranches': {
     kind: 'by-design',
     reason:
-      'Dry-run preflight preview that reconciles uploaded branch rows against master database ' +
-      'records and external IFSC directories without writing or mutating any branch or project records.',
+      'The ceiling for a branch upload depends on the ROWS of the file (the states they name, and the '
+      + 'regions of the branches they match), so it cannot be asserted from the route parameters. It '
+      + 'is asserted in `BranchImportJob.prepare` — which the Jobs foundation runs in this request, '
+      + 'before anything is stored, with the caller\'s regions — via `RegionGuardService.assertRegionSettable` '
+      + 'for every region the file touches, and again per row in the worker. Pinned by '
+      + '`branch-import/branch-import.region.spec.ts` (mutation-checked).',
+  },
+  'project/project.controller.ts::commitBranchImport': {
+    kind: 'by-design',
+    reason:
+      'A commit is started through the same `BranchImportJob.prepare`, which re-applies the review decisions '
+      + 'to the stored rehearsal and asserts `assertRegionSettable` for every region the committed rows would '
+      + 'land in or already sit in, before the job is queued; the worker refuses any row outside them again.',
+  },
+  'project/project.controller.ts::retryBranchImport': {
+    kind: 'by-design',
+    reason:
+      'Re-runs a failed import over its own stored file: only a job the caller may see (their own, or an '
+      + 'administrator\'s within their regions) can be retried, and the retry goes through `BranchImportJob.prepare` '
+      + 'and the worker\'s per-row region check exactly as the original did.',
   },
   'reports/reports.controller.ts::queueBilling': {
     kind: 'by-design',

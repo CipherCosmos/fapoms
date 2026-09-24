@@ -7,7 +7,14 @@ import { BillingBulkJobsService } from './billing-bulk-jobs.service';
 import { BillingBulkJobsWorker } from './billing-bulk-jobs.worker';
 import { BILLING_BULK_JOB, BILLING_BULK_JOB_OPTIONS, BILLING_BULK_MAX_PAYOUTS } from './billing-bulk-jobs.contract';
 import { BillingEngineController } from './billing-engine.controller';
-import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
+import { BillingJobsService } from './billing-jobs.service';
+import { BillingJobsWorker } from './billing-jobs.worker';
+import { BILLING_JOB, BILLING_JOB_OPTIONS } from './billing-jobs.contract';
+import { FAILED_JOB_RETENTION, dedupeKeyFor } from '../../infrastructure/queue/queued-job';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
+import { BackgroundJobRegistry } from '../../infrastructure/background-jobs/background-job.registry';
+import type { BackgroundJobEntity } from '../../infrastructure/background-jobs/background-job.entity';
 import { getRequestContext } from '../../core/context/request-context';
 import { tenantFilterId } from '../../infrastructure/tenancy/ambient-tenant-context';
 
@@ -35,8 +42,9 @@ const PAYMENT = { paymentReference: 'UTR-9', method: PaymentMethod.NEFT };
 function queueWith(jobs: any[] = []) {
   let n = 0;
   return {
-    add: jest.fn(async (name: string, data: any) => {
-      const job = { id: String(++n), name, data };
+    name: 'billing-bulk-jobs',
+    add: jest.fn(async (name: string, data: any, opts: any = {}) => {
+      const job = { id: String(++n), name, data, opts, attemptsMade: 0, progress: jest.fn(async () => undefined) };
       jobs.push(job);
       return job;
     }),
@@ -45,14 +53,67 @@ function queueWith(jobs: any[] = []) {
   };
 }
 
+/**
+ * The foundation's own service and tracker over an in-memory `background_jobs` table — the rules
+ * that matter here (a row per real run, conditional transitions) kept, Postgres left out.
+ */
+class FakeJobRows {
+  rows = new Map<string, BackgroundJobEntity>();
+  private seq = 0;
+  private get(id: string) { const r = this.rows.get(id); return r ? ({ ...r } as BackgroundJobEntity) : null; }
+  async insert(values: Partial<BackgroundJobEntity>) {
+    const now = new Date();
+    const row = {
+      id: `row-${++this.seq}`, attempts: 0, bullJobId: null, cancelRequestedAt: null, cancelRequestedBy: null,
+      result: null, resultObjectKey: null, resultFileName: null, resultMimeType: null, error: null,
+      exclusiveKey: null, startedAt: null, finishedAt: null, createdAt: now, updatedAt: now,
+      inputObjects: null, inputObjectKey: null, ...values,
+    } as BackgroundJobEntity;
+    this.rows.set(row.id, row);
+    return { job: this.get(row.id)!, inserted: true };
+  }
+  async findById(id: string) { return this.get(id); }
+  async setBullJobId(id: string, bullJobId: string) { this.touch(id, { bullJobId }); }
+  async claim(id: string) {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'QUEUED') return null;
+    this.touch(id, { status: 'RUNNING', attempts: row.attempts + 1, startedAt: new Date() });
+    return this.get(id);
+  }
+  async transition(id: string, from: string[], patch: Partial<BackgroundJobEntity>) {
+    const row = this.rows.get(id);
+    if (!row || !from.includes(row.status)) return null;
+    this.touch(id, patch);
+    return this.get(id);
+  }
+  async writeProgress(id: string, progress: any) {
+    if (this.rows.get(id)?.status !== 'RUNNING') return false;
+    this.touch(id, { progress });
+    return true;
+  }
+  async patch(id: string, patch: Partial<BackgroundJobEntity>) { this.touch(id, patch); }
+  private touch(id: string, patch: Partial<BackgroundJobEntity>) {
+    const row = this.rows.get(id);
+    if (row) this.rows.set(id, { ...row, ...patch, updatedAt: new Date() } as BackgroundJobEntity);
+  }
+}
+
+function tracking() {
+  const rows = new FakeJobRows();
+  const events = { publish: jest.fn() };
+  const jobs = new BackgroundJobsService(rows as any, new BackgroundJobRegistry(), {} as any, {} as any, events as any);
+  const tracker = new BackgroundJobTracker(rows as any, jobs, {} as any);
+  return { rows, jobs, tracker, events };
+}
+
 describe('BillingBulkJobsService', () => {
   it('accepts an approval run and returns a job id instead of approving anything', async () => {
     const queue = queueWith();
-    const service = new BillingBulkJobsService(queue as any);
+    const service = new BillingBulkJobsService(queue as any, tracking().jobs);
 
     const result = await service.enqueueApprovePayouts([...IDS, IDS[0]], ACTOR);
 
-    expect(result).toEqual({ jobId: '1', deduplicated: false });
+    expect(result).toEqual({ jobId: '1', deduplicated: false, backgroundJobId: expect.any(String) });
     expect(queue.add).toHaveBeenCalledWith(
       BILLING_BULK_JOB.APPROVE_PAYOUTS,
       expect.objectContaining({ payableIds: SORTED, requestedBy: 'fin-1', actor: ACTOR }),
@@ -62,12 +123,12 @@ describe('BillingBulkJobsService', () => {
 
   it('joins the approval run already going when the same person presses again, whatever the order', async () => {
     const queue = queueWith();
-    const service = new BillingBulkJobsService(queue as any);
+    const service = new BillingBulkJobsService(queue as any, tracking().jobs);
 
     const first = await service.enqueueApprovePayouts(IDS, ACTOR);
     const second = await service.enqueueApprovePayouts([...IDS].reverse(), ACTOR);
 
-    expect(second).toEqual({ jobId: first.jobId, deduplicated: true });
+    expect(second).toEqual({ ...first, deduplicated: true });
     expect(queue.add).toHaveBeenCalledTimes(1);
   });
 
@@ -77,7 +138,7 @@ describe('BillingBulkJobsService', () => {
    */
   it("does not fold one person's press into another person's run over the same payouts", async () => {
     const queue = queueWith();
-    const service = new BillingBulkJobsService(queue as any);
+    const service = new BillingBulkJobsService(queue as any, tracking().jobs);
 
     const mine = await service.enqueueApprovePayouts(IDS, ACTOR);
     const theirs = await service.enqueueApprovePayouts(IDS, { ...ACTOR, userId: 'fin-2' });
@@ -89,7 +150,7 @@ describe('BillingBulkJobsService', () => {
 
   it('does not let an approval press join a payment run over the same payouts', async () => {
     const queue = queueWith();
-    const service = new BillingBulkJobsService(queue as any);
+    const service = new BillingBulkJobsService(queue as any, tracking().jobs);
 
     await service.enqueuePayPayouts(IDS, PAYMENT, ACTOR);
     const approve = await service.enqueueApprovePayouts(IDS, ACTOR);
@@ -100,26 +161,26 @@ describe('BillingBulkJobsService', () => {
 
   it('joins a payment run under the same bank reference, but treats a different reference as its own instruction', async () => {
     const queue = queueWith();
-    const service = new BillingBulkJobsService(queue as any);
+    const service = new BillingBulkJobsService(queue as any, tracking().jobs);
 
     const first = await service.enqueuePayPayouts(IDS, PAYMENT, ACTOR);
     const again = await service.enqueuePayPayouts([...IDS].reverse(), { ...PAYMENT }, ACTOR);
     const other = await service.enqueuePayPayouts(IDS, { ...PAYMENT, paymentReference: 'UTR-10' }, ACTOR);
 
-    expect(again).toEqual({ jobId: first.jobId, deduplicated: true });
+    expect(again).toEqual({ ...first, deduplicated: true });
     expect(other.deduplicated).toBe(false);
     expect(queue.add.mock.calls[0][1]).toMatchObject({ payableIds: SORTED, payment: PAYMENT });
   });
 
   it("joins the invite-all round already going for the same person and scope, but not one under a different scope", async () => {
     const queue = queueWith();
-    const service = new BillingBulkJobsService(queue as any);
+    const service = new BillingBulkJobsService(queue as any, tracking().jobs);
 
     const first = await service.enqueueInviteAllAssayerInvoices({ regions: ['NORTH'] } as any, ACTOR);
     const again = await service.enqueueInviteAllAssayerInvoices({ regions: ['NORTH'] } as any, ACTOR);
     const wider = await service.enqueueInviteAllAssayerInvoices(undefined, ACTOR);
 
-    expect(again).toEqual({ jobId: first.jobId, deduplicated: true });
+    expect(again).toEqual({ ...first, deduplicated: true });
     expect(wider.deduplicated).toBe(false);
     // The ceiling resolved in the request travels with the job — the worker narrows the round to it.
     expect(queue.add.mock.calls[0][1]).toMatchObject({ scope: { regions: ['NORTH'] }, requestedBy: 'fin-1' });
@@ -136,7 +197,7 @@ describe('BillingBulkJobsService', () => {
 
   it('answers 404 to anybody but the person who started the run, and the result to them', async () => {
     const queue = queueWith();
-    const service = new BillingBulkJobsService(queue as any);
+    const service = new BillingBulkJobsService(queue as any, tracking().jobs);
     const { jobId } = await service.enqueueApprovePayouts(IDS, ACTOR);
     const job = (await queue.getJob(jobId)) as any;
     Object.assign(job, {
@@ -168,7 +229,7 @@ describe('BillingBulkJobsWorker', () => {
         return { done: ['a'], refused: [] };
       }),
     };
-    const worker = new BillingBulkJobsWorker(billing as any, {} as any);
+    const worker = new BillingBulkJobsWorker(billing as any, {} as any, tracking().tracker);
     const job = jobOf(BILLING_BULK_JOB.APPROVE_PAYOUTS, { payableIds: SORTED, actor: ACTOR });
 
     const result = await worker.run(job);
@@ -184,7 +245,7 @@ describe('BillingBulkJobsWorker', () => {
   /** The queue's other half: what the payload carries, the worker must pass on. */
   it('passes the without-a-bill reason from the job payload to the approval', async () => {
     const billing = { approvePayouts: jest.fn(async () => ({ done: ['a'], refused: [] })) };
-    const worker = new BillingBulkJobsWorker(billing as any, {} as any);
+    const worker = new BillingBulkJobsWorker(billing as any, {} as any, tracking().tracker);
 
     await worker.run(jobOf(BILLING_BULK_JOB.APPROVE_PAYOUTS, {
       payableIds: SORTED, actor: ACTOR, reason: 'Assayer has left; settling final dues',
@@ -198,7 +259,7 @@ describe('BillingBulkJobsWorker', () => {
   it("pays with the payment details from the request, inside the requester's scope", async () => {
     let seen: ReturnType<typeof scopeSeen> | null = null;
     const billing = { payPayouts: jest.fn(async () => { seen = scopeSeen(); return { done: [], refused: [] }; }) };
-    const worker = new BillingBulkJobsWorker(billing as any, {} as any);
+    const worker = new BillingBulkJobsWorker(billing as any, {} as any, tracking().tracker);
 
     await worker.run(jobOf(BILLING_BULK_JOB.PAY_PAYOUTS, { payableIds: SORTED, payment: PAYMENT, actor: ACTOR }));
 
@@ -213,7 +274,7 @@ describe('BillingBulkJobsWorker', () => {
       assertEnabled: jest.fn(async () => { order.push('gate'); }),
       inviteAll: jest.fn(async () => { order.push('round'); seen = scopeSeen(); return { outcomes: [], invited: 0, skipped: 0 }; }),
     };
-    const worker = new BillingBulkJobsWorker({} as any, invoices as any);
+    const worker = new BillingBulkJobsWorker({} as any, invoices as any, tracking().tracker);
 
     await worker.run(jobOf(BILLING_BULK_JOB.INVITE_ALL_ASSAYER_INVOICES, { scope: { regions: ['NORTH'] }, actor: ACTOR }));
 
@@ -228,7 +289,7 @@ describe('BillingBulkJobsWorker', () => {
       assertEnabled: jest.fn(async () => { throw new NotFoundException('Assayer invoicing is not enabled on this deployment.'); }),
       inviteAll: jest.fn(),
     };
-    const worker = new BillingBulkJobsWorker({} as any, invoices as any);
+    const worker = new BillingBulkJobsWorker({} as any, invoices as any, tracking().tracker);
 
     await expect(worker.run(jobOf(BILLING_BULK_JOB.INVITE_ALL_ASSAYER_INVOICES, { scope: null, actor: ACTOR })))
       .rejects.toThrow(/not enabled/);
@@ -243,7 +304,7 @@ describe('BillingBulkJobsWorker', () => {
   it('gives a principal whose ADMIN role is not listed first the same reach it had in the request', async () => {
     let org: string | null | undefined = 'unset';
     const billing = { approvePayouts: jest.fn(async () => { org = tenantFilterId(); return { done: [], refused: [] }; }) };
-    const worker = new BillingBulkJobsWorker(billing as any, {} as any);
+    const worker = new BillingBulkJobsWorker(billing as any, {} as any, tracking().tracker);
 
     await worker.run(jobOf(BILLING_BULK_JOB.APPROVE_PAYOUTS, { payableIds: SORTED, actor: { ...ACTOR, roleNames: ['OPERATIONS', 'ADMIN'] } }));
 
@@ -251,7 +312,7 @@ describe('BillingBulkJobsWorker', () => {
   });
 
   it('refuses a job name it does not know rather than completing it silently', async () => {
-    const worker = new BillingBulkJobsWorker({} as any, {} as any);
+    const worker = new BillingBulkJobsWorker({} as any, {} as any, tracking().tracker);
     await expect(worker.run(jobOf('mystery', {}))).rejects.toThrow(/No handler/);
   });
 });
@@ -312,7 +373,7 @@ describe('the billing bulk routes', () => {
     expect(answer).toEqual({ jobId: '1', deduplicated: false });
     expect(h.service.approvePayouts).not.toHaveBeenCalled();
     expect(h.regionGuard.assertPayablesInScope).toHaveBeenCalledWith(IDS, SCOPE);
-    expect(h.bulkJobs.enqueueApprovePayouts).toHaveBeenCalledWith(IDS, expect.objectContaining({ userId: 'fin-1', roleNames: ['OPERATIONS'] }), undefined);
+    expect(h.bulkJobs.enqueueApprovePayouts).toHaveBeenCalledWith(IDS, expect.objectContaining({ userId: 'fin-1', roleNames: ['OPERATIONS'] }), undefined, null);
   });
 
   /**
@@ -330,7 +391,7 @@ describe('the billing bulk routes', () => {
     );
 
     expect(h.bulkJobs.enqueueApprovePayouts).toHaveBeenCalledWith(
-      IDS, expect.anything(), 'Assayer has no smartphone',
+      IDS, expect.anything(), 'Assayer has no smartphone', null,
     );
   });
 
@@ -340,7 +401,7 @@ describe('the billing bulk routes', () => {
     await h.controller.payPayouts({ payableIds: IDS, ...PAYMENT } as any, REQ, SCOPE);
 
     expect(h.service.payPayouts).not.toHaveBeenCalled();
-    expect(h.bulkJobs.enqueuePayPayouts).toHaveBeenCalledWith(IDS, PAYMENT, expect.objectContaining({ userId: 'fin-1' }));
+    expect(h.bulkJobs.enqueuePayPayouts).toHaveBeenCalledWith(IDS, PAYMENT, expect.objectContaining({ userId: 'fin-1' }), null);
   });
 
   it('still refuses a batch with an out-of-region payout in the request, queueing nothing', async () => {
@@ -361,7 +422,7 @@ describe('the billing bulk routes', () => {
 
     expect(answer).toEqual({ jobId: '3', deduplicated: false });
     expect(h.assayerInvoices.inviteAll).not.toHaveBeenCalled();
-    expect(h.bulkJobs.enqueueInviteAllAssayerInvoices).toHaveBeenCalledWith(SCOPE, expect.objectContaining({ userId: 'fin-1' }));
+    expect(h.bulkJobs.enqueueInviteAllAssayerInvoices).toHaveBeenCalledWith(SCOPE, expect.objectContaining({ userId: 'fin-1' }), null);
   });
 
   it('still answers "not enabled" in the request while the feature is dark, queueing nothing', async () => {
@@ -408,5 +469,263 @@ describe('the billing bulk routes', () => {
       await expect(pipe.transform({ all: true }, { type: 'body', metatype: bodyType('inviteAssayerInvoices') } as never))
         .rejects.toBeInstanceOf(BadRequestException);
     });
+  });
+});
+
+/**
+ * TRACKED: every billing bulk run and every user-started reconcile is on a `background_jobs` row,
+ * so after a refresh the Jobs tray (and the Payouts tab) can still say whether "Pay 12 payouts"
+ * went through — which is what stops the re-press. The queue, the one-at-a-time loop, the options
+ * and the duplicate rule are the feature's own and must not move.
+ */
+describe('billing runs are tracked on the Jobs tray', () => {
+  const NORTH = ['NORTH'];
+  const trackedRows = (t: ReturnType<typeof tracking>) => [...t.rows.rows.values()];
+
+  it('approve: one row with the right kind, title, regions and total — the reason is not a param', async () => {
+    const queue = queueWith();
+    const t = tracking();
+    const service = new BillingBulkJobsService(queue as any, t.jobs);
+
+    const out = await service.enqueueApprovePayouts(IDS, ACTOR, 'Assayer has left; settling final dues', NORTH);
+
+    const [row] = trackedRows(t);
+    expect(out).toEqual({ jobId: '1', deduplicated: false, backgroundJobId: row.id });
+    expect(row).toMatchObject({
+      kind: 'BILLING_APPROVE_PAYOUTS', status: 'QUEUED', title: 'Approve 3 payouts', regions: NORTH,
+      requestedBy: 'fin-1', params: { payouts: 3, withoutBill: true }, bullJobId: '1', runnerQueue: 'billing-bulk-jobs',
+    });
+    expect(row.progress).toMatchObject({ processed: 0, total: 3 });
+    expect(JSON.stringify(row.params)).not.toMatch(/settling/);
+    // Same queue, same options, same fingerprint as before tracking; the row id rides the payload.
+    expect(queue.add).toHaveBeenCalledWith(BILLING_BULK_JOB.APPROVE_PAYOUTS, expect.objectContaining({
+      backgroundJobId: row.id,
+      dedupeKey: dedupeKeyFor(BILLING_BULK_JOB.APPROVE_PAYOUTS, 'fin-1', { payableIds: SORTED }),
+    }), BILLING_BULK_JOB_OPTIONS);
+  });
+
+  it('approve: an identical press while the first is in flight joins it — no second row, whatever the reason says', async () => {
+    const queue = queueWith();
+    const t = tracking();
+    const service = new BillingBulkJobsService(queue as any, t.jobs);
+
+    const first = await service.enqueueApprovePayouts(IDS, ACTOR, 'first note', NORTH);
+    const again = await service.enqueueApprovePayouts([...IDS].reverse(), ACTOR, 'a different note', NORTH);
+
+    expect(again).toEqual({ ...first, deduplicated: true });
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(trackedRows(t)).toHaveLength(1);
+  });
+
+  it('pay: titled with the bank reference, params without payment notes or bank details; a different reference is its own run', async () => {
+    const queue = queueWith();
+    const t = tracking();
+    const service = new BillingBulkJobsService(queue as any, t.jobs);
+    const payment = { ...PAYMENT, paidDate: '2026-09-20', notes: 'A/c 50100012345678 HDFC0001234' };
+
+    const first = await service.enqueuePayPayouts(IDS, payment, ACTOR, NORTH);
+    const again = await service.enqueuePayPayouts(IDS, { ...payment }, ACTOR, NORTH);
+    const other = await service.enqueuePayPayouts(IDS, { ...payment, paymentReference: 'UTR-10' }, ACTOR, NORTH);
+
+    expect(again).toEqual({ ...first, deduplicated: true });
+    expect(other.deduplicated).toBe(false);
+    expect(other.backgroundJobId).not.toBe(first.backgroundJobId);
+    const rows = trackedRows(t);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      kind: 'BILLING_PAY_PAYOUTS', title: 'Pay 3 payouts (ref UTR-9)', regions: NORTH,
+      params: { payouts: 3, method: PaymentMethod.NEFT, paidDate: '2026-09-20' },
+    });
+    expect(rows[1].title).toBe('Pay 3 payouts (ref UTR-10)');
+    for (const row of rows) expect(JSON.stringify([row.title, row.params])).not.toMatch(/50100012345678|HDFC|A\/c/);
+    // The payment details are still in the fingerprint, exactly as before.
+    expect(queue.add.mock.calls[0][1].dedupeKey).toBe(dedupeKeyFor(BILLING_BULK_JOB.PAY_PAYOUTS, 'fin-1', {
+      payableIds: SORTED, paymentReference: 'UTR-9', method: PaymentMethod.NEFT, paidDate: '2026-09-20', notes: payment.notes,
+    }));
+  });
+
+  it('invite-all: one row, no count yet (who is invited is decided when it runs)', async () => {
+    const queue = queueWith();
+    const t = tracking();
+    const service = new BillingBulkJobsService(queue as any, t.jobs);
+
+    await service.enqueueInviteAllAssayerInvoices({ regions: NORTH } as any, ACTOR, NORTH);
+    await service.enqueueInviteAllAssayerInvoices({ regions: NORTH } as any, ACTOR, NORTH);
+
+    const rows = trackedRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'BILLING_INVITE_ALL_INVOICES', regions: NORTH, params: {} });
+    expect(rows[0].progress.total).toBeNull();
+  });
+
+  it('the worker runs through the tracker: the row ends SUCCEEDED with a sentence and counts, the Bull result unchanged', async () => {
+    const queue = queueWith();
+    const t = tracking();
+    const service = new BillingBulkJobsService(queue as any, t.jobs);
+    const outcome = { done: ['a', 'b'], refused: [{ id: 'c', reason: 'On hold' }] };
+    const billing = {
+      approvePayouts: jest.fn(async (_ids: string[], _user: string, onProgress: any) => {
+        expect(trackedRows(t)[0].status).toBe('RUNNING');
+        await onProgress(3, 3, 'Approving payouts');
+        return outcome;
+      }),
+    };
+    const worker = new BillingBulkJobsWorker(billing as any, {} as any, t.tracker);
+
+    const { jobId, backgroundJobId } = await service.enqueueApprovePayouts(IDS, ACTOR, undefined, NORTH);
+    const bull = await queue.getJob(jobId);
+    const result = await worker.run(bull as any);
+
+    expect(result).toBe(outcome);
+    expect(bull!.progress).toHaveBeenCalled(); // the old poll route still sees progress
+    const row = t.rows.rows.get(backgroundJobId!)!;
+    expect(row.status).toBe('SUCCEEDED');
+    expect(row.result).toEqual({ summary: '2 payouts approved; 1 refused.', counts: { approved: 2, refused: 1 } });
+  });
+
+  it('pay: a run that throws ends FAILED with its sentence, and Bull still sees the error', async () => {
+    const queue = queueWith();
+    const t = tracking();
+    const service = new BillingBulkJobsService(queue as any, t.jobs);
+    const billing = { payPayouts: jest.fn(async () => { throw new Error('The bank reference UTR-9 is already recorded.'); }) };
+    const worker = new BillingBulkJobsWorker(billing as any, {} as any, t.tracker);
+
+    const { jobId, backgroundJobId } = await service.enqueuePayPayouts(IDS, PAYMENT, ACTOR, null);
+    await expect(worker.run((await queue.getJob(jobId)) as any)).rejects.toThrow('already recorded');
+
+    const row = t.rows.rows.get(backgroundJobId!)!;
+    expect(row).toMatchObject({ kind: 'BILLING_PAY_PAYOUTS', status: 'FAILED', error: 'The bank reference UTR-9 is already recorded.', regions: null });
+  });
+
+  it('pay and invite-all summaries say what happened in counts, never per-payout lists', async () => {
+    const queue = queueWith();
+    const t = tracking();
+    const service = new BillingBulkJobsService(queue as any, t.jobs);
+    const billing = { payPayouts: jest.fn(async () => ({ done: [{ payableId: 'a', paymentId: 'p' }], refused: [] })) };
+    const invoices = {
+      assertEnabled: jest.fn(async () => undefined),
+      inviteAll: jest.fn(async () => ({
+        outcomes: [
+          { assayerId: 'x', outcome: 'invited' }, { assayerId: 'y', outcome: 'nothing-eligible' },
+          { assayerId: 'z', outcome: 'failed', error: 'timeout' },
+        ],
+        invited: 1, skipped: 2,
+      })),
+    };
+    const worker = new BillingBulkJobsWorker(billing as any, invoices as any, t.tracker);
+
+    const pay = await service.enqueuePayPayouts(IDS, PAYMENT, ACTOR, null);
+    await worker.run((await queue.getJob(pay.jobId)) as any);
+    const round = await service.enqueueInviteAllAssayerInvoices(undefined, ACTOR, null);
+    await worker.run((await queue.getJob(round.jobId)) as any);
+
+    expect(t.rows.rows.get(pay.backgroundJobId!)!.result).toEqual({ summary: '1 payout paid.', counts: { paid: 1, refused: 0 } });
+    expect(t.rows.rows.get(round.backgroundJobId!)!.result).toEqual({
+      summary: '1 assayer invited to submit a bill; 1 skipped; 1 could not be invited (run the round again for them).',
+      counts: { invited: 1, skipped: 1, failed: 1 },
+    });
+  });
+
+  it('the routes hand the requester\'s assigned regions to the tracked row', async () => {
+    const bulkJobs = {
+      enqueueApprovePayouts: jest.fn(async () => ({ jobId: '1', deduplicated: false, backgroundJobId: 'row-1' })),
+      enqueuePayPayouts: jest.fn(async () => ({ jobId: '2', deduplicated: false, backgroundJobId: 'row-2' })),
+      enqueueInviteAllAssayerInvoices: jest.fn(async () => ({ jobId: '3', deduplicated: false, backgroundJobId: 'row-3' })),
+    };
+    const jobs = { enqueueReconcile: jest.fn(async () => ({ jobId: '4', deduplicated: false, backgroundJobId: 'row-4' })) };
+    const controller = new BillingEngineController(
+      {} as any, { assertEnabled: jest.fn(async () => undefined) } as any, jobs as any,
+      { assertPayablesInScope: jest.fn(async () => undefined) } as any, bulkJobs as any,
+    );
+    const req = { user: { id: 'fin-1', roles: [{ name: 'OPERATIONS' }], regions: ['NORTH'] } };
+
+    // The enqueue answer is passed through whole: `{ jobId, deduplicated }` plus the additive row id.
+    await expect(controller.approvePayouts({ payableIds: IDS } as any, req, undefined)).resolves.toEqual({ jobId: '1', deduplicated: false, backgroundJobId: 'row-1' });
+    await controller.payPayouts({ payableIds: IDS, ...PAYMENT } as any, req, undefined);
+    await controller.inviteAllAssayerInvoices(req, undefined);
+    await controller.reconcile({ since: '2026-09-01' } as any, req);
+
+    expect(bulkJobs.enqueueApprovePayouts).toHaveBeenCalledWith(IDS, expect.anything(), undefined, ['NORTH']);
+    expect(bulkJobs.enqueuePayPayouts).toHaveBeenCalledWith(IDS, PAYMENT, expect.anything(), ['NORTH']);
+    expect(bulkJobs.enqueueInviteAllAssayerInvoices).toHaveBeenCalledWith(undefined, expect.anything(), ['NORTH']);
+    expect(jobs.enqueueReconcile).toHaveBeenCalledWith(expect.objectContaining({ userId: 'fin-1' }), '2026-09-01', ['NORTH']);
+  });
+});
+
+describe('the user-started reconcile is tracked; completion booking is not', () => {
+  const reconcileQueue = () => ({ ...queueWith(), name: 'billing-jobs' });
+
+  it('writes one row per real run with the old fingerprint and options; a repeat press joins, another date does not', async () => {
+    const queue = reconcileQueue();
+    const t = tracking();
+    const service = new BillingJobsService(queue as any, t.jobs);
+
+    const first = await service.enqueueReconcile(ACTOR, '2026-09-01', ['EAST']);
+    const again = await service.enqueueReconcile(ACTOR, '2026-09-01', ['EAST']);
+    const whole = await service.enqueueReconcile(ACTOR, null, ['EAST']);
+
+    expect(again).toEqual({ ...first, deduplicated: true });
+    expect(whole.deduplicated).toBe(false);
+    const rows = [...t.rows.rows.values()];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      kind: 'BILLING_RECONCILE', regions: ['EAST'], requestedBy: 'fin-1', params: { since: '2026-09-01' },
+      title: 'Book missing money records (completed since 2026-09-01)',
+    });
+    expect(rows[1].title).toBe('Book missing money records (whole book)');
+    expect(queue.add).toHaveBeenNthCalledWith(1, BILLING_JOB.RECONCILE, expect.objectContaining({
+      requestedBy: 'fin-1', since: '2026-09-01',
+      dedupeKey: dedupeKeyFor(BILLING_JOB.RECONCILE, 'fin-1', { since: '2026-09-01' }),
+    }), BILLING_JOB_OPTIONS);
+  });
+
+  it('the worker: SUCCEEDED with the counts, the Bull result unchanged; a failure is FAILED and rethrown', async () => {
+    const queue = reconcileQueue();
+    const t = tracking();
+    const service = new BillingJobsService(queue as any, t.jobs);
+    const outcome = { scanned: 10, booked: 7, skipped: 2, errors: [{ assignmentId: 'a', reason: 'NO_CLIENT' }] };
+    const billing = {
+      reconcile: jest.fn(async (_user: string, _opts: unknown, onProgress: any) => { await onProgress(10, 10, 'Booking'); return outcome; }),
+    };
+    const worker = new BillingJobsWorker(billing as any, t.tracker);
+
+    const ok = await service.enqueueReconcile(ACTOR, null);
+    await expect(worker.reconcile((await queue.getJob(ok.jobId)) as any)).resolves.toBe(outcome);
+    expect(billing.reconcile).toHaveBeenCalledWith('fin-1', { since: null }, expect.any(Function));
+    expect(t.rows.rows.get(ok.backgroundJobId!)).toMatchObject({
+      status: 'SUCCEEDED',
+      result: { summary: '7 booked, 2 already booked, 1 could not be booked.', counts: { scanned: 10, booked: 7, alreadyBooked: 2, errors: 1 } },
+    });
+
+    billing.reconcile.mockRejectedValueOnce(new Error('Lost the database connection.'));
+    const bad = await service.enqueueReconcile(ACTOR, '2026-01-01');
+    await expect(worker.reconcile((await queue.getJob(bad.jobId)) as any)).rejects.toThrow('Lost the database');
+    expect(t.rows.rows.get(bad.backgroundJobId!)).toMatchObject({ status: 'FAILED', error: 'Lost the database connection.' });
+  });
+
+  it('a retrying option set is passed through unchanged, so a failure Bull will retry puts the row back to QUEUED', async () => {
+    const queue = reconcileQueue();
+    const t = tracking();
+    const billing = { reconcile: jest.fn(async () => { throw new Error('transient'); }) };
+    const worker = new BillingJobsWorker(billing as any, t.tracker);
+    const out = await t.jobs.enqueueTracked({
+      kind: 'BILLING_RECONCILE', actor: ACTOR, regions: null, title: 'x', queue: queue as any,
+      jobName: BILLING_JOB.RECONCILE, data: { requestedBy: 'fin-1', since: null, dedupeKey: 'k' },
+      options: { ...BILLING_JOB_OPTIONS, attempts: 3 },
+    });
+    const bull = (await queue.getJob(out.jobId)) as any;
+    expect(bull.opts.attempts).toBe(3);
+
+    await expect(worker.reconcile(bull)).rejects.toThrow('transient');
+    expect(t.rows.rows.get(out.backgroundJobId!)!.status).toBe('QUEUED');
+  });
+
+  it('booking a completed assignment writes no row', async () => {
+    const queue = { ...reconcileQueue(), getJob: jest.fn(async () => null) };
+    const t = tracking();
+    const service = new BillingJobsService(queue as any, t.jobs);
+    await service.enqueueBookAssignment('asg-1', 'system', 'evt-1');
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(t.rows.rows.size).toBe(0);
   });
 });

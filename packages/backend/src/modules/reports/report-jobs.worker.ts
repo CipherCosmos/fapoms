@@ -15,10 +15,15 @@ import { EXCEL_MIME } from './excel-export';
 import { PDF_MIME } from './pdf-export';
 import { ReportsService } from './reports.service';
 import { ReportFileStore } from './report-file.store';
-import { progressReporter, ProgressCallback } from '../../infrastructure/queue/queued-job';
+import { ProgressCallback } from '../../infrastructure/queue/queued-job';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
 import {
+  REPORT_EXPORT_TITLE,
   REPORT_JOB,
   REPORT_QUEUE,
+  REPORT_RESULT_TTL_SECONDS,
+  ReportJobName,
+  reportDownloadPath,
   ReportJobResult,
   AssignmentsReportJobData,
   AssayerRosterReportJobData,
@@ -44,6 +49,7 @@ export class ReportJobsWorker {
   constructor(
     private readonly reportsService: ReportsService,
     private readonly files: ReportFileStore,
+    private readonly tracker: BackgroundJobTracker,
   ) {}
 
   @Process({ name: REPORT_JOB.ASSIGNMENTS, concurrency: ONE_AT_A_TIME })
@@ -105,10 +111,16 @@ export class ReportJobsWorker {
    * unambiguously when an operator has three of them open, and the job id is the thing that
    * already means exactly that.
    *
+   * Run through the tracker, so the export's `REPORT_EXPORT` row shows progress and ends with a
+   * download link the Jobs tray follows after a refresh. The link is the existing download route
+   * and expires with the file. The bytes are deliberately NOT attached to the row (`attachReport`):
+   * exports carry PAN and bank columns and are kept for `REPORT_RESULT_TTL_SECONDS` only, whereas a
+   * row's result file would live for the jobs' 30-day retention.
+   *
    * Nothing is caught. A failure — including the file being over the size cap, which throws
    * `ReportTooLargeError` with wording aimed at the operator — is recorded by Bull as the job's
-   * `failedReason` and surfaced verbatim by the poll endpoint. Swallowing it here would produce
-   * a job that reports success and a download that 404s.
+   * `failedReason` (and on the row, by the tracker) and surfaced verbatim by the poll endpoint.
+   * Swallowing it here would produce a job that reports success and a download that 404s.
    */
   private async produce(
     job: Job,
@@ -116,12 +128,30 @@ export class ReportJobsWorker {
     build: (onProgress: ProgressCallback) => Promise<Buffer>,
     mimeType: string = EXCEL_MIME,
   ): Promise<ReportJobResult> {
-    this.logger.log(`Export job ${job.id} (${job.name}) starting.`);
-
-    const buffer = await build(progressReporter(job));
-    await this.files.put(String(job.id), buffer);
-
-    this.logger.log(`Export job ${job.id} (${job.name}) produced ${filename} — ${(buffer.length / 1024).toFixed(0)} KB.`);
-    return { filename, mimeType, sizeBytes: buffer.length };
+    return this.tracker.run(
+      job,
+      async (t) => {
+        this.logger.log(`Export job ${job.id} (${job.name}) starting.`);
+        const buffer = await build(t.progress);
+        await this.files.put(String(job.id), buffer);
+        this.logger.log(`Export job ${job.id} (${job.name}) produced ${filename} — ${(buffer.length / 1024).toFixed(0)} KB.`);
+        return { filename, mimeType, sizeBytes: buffer.length };
+      },
+      {
+        describe: (result) => ({
+          summary: `${REPORT_EXPORT_TITLE[job.name as ReportJobName] ?? 'Export'} ready (${formatSize(result.sizeBytes)})`,
+          download: {
+            path: reportDownloadPath(job.id),
+            fileName: result.filename,
+            expiresAt: new Date(Date.now() + REPORT_RESULT_TTL_SECONDS * 1000).toISOString(),
+          },
+        }),
+      },
+    );
   }
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }

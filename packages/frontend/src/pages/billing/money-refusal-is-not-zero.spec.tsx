@@ -31,7 +31,11 @@ import { AppError } from '../../services/errors';
 // `services/api` reads Vite's `import.meta.env`, which ts-jest cannot parse. Every fetch on these
 // screens goes through the hooks below, which are mocked wholesale, so nothing reaches it.
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
-jest.mock('../../services/socket', () => ({ connectSocket: () => null, disconnectSocket: () => null }));
+jest.mock('../../services/socket', () => ({
+  connectSocket: () => null, disconnectSocket: () => null,
+  // PayoutsTab reads the Jobs tray for approve/pay runs started before a refresh (useBackgroundJob).
+  subscribeToConnection: () => () => undefined,
+}));
 
 import { PayoutsTab } from './PayoutsTab';
 import { InvoicesTab } from './InvoicesTab';

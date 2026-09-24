@@ -1,207 +1,128 @@
 /**
- * FAPOMS — importing a client's branch master from a spreadsheet.
+ * FAPOMS — importing a client's branch master from a spreadsheet (the Branches page).
+ *
+ * Three routes, one background flow (`branch-import/branch-import.job.ts`):
+ *
+ *  - `POST /branches/import/:clientId` — upload; answers 202 with the rehearsal job the moment the
+ *    file is stored. Nothing is written to the branch master yet.
+ *  - `POST /branches/import/:clientId/jobs/:jobId/commit` — the person's review decisions; answers
+ *    202 with the commit job.
+ *  - `POST /branches/import/:clientId/jobs/:jobId/retry` — run a failed or cancelled job again.
+ *
+ * Progress, the stored review and the result are read from `/jobs` like every other background job,
+ * so a refreshed page finds all of it again.
  *
  * ## Why these routes are `/branches/…` but live in the project module
  *
- * There is now exactly one branch-sheet importer, and it is
- * `ProjectService.uploadBranchesFromExcel` — the one with prefetch-by-key, per-distinct-value
- * memoisation, per-row skip reasons, published progress and a queue behind it. The Branches page
- * used to call a second one (`BranchService.importExcel`) that did a geography check, a `findOne`
- * and a geocode **per row, inside the HTTP request**; on the real 3,759-row client file that is
- * thousands of sequential round trips against a 300-second socket timeout, which the operator
- * experiences as the page freezing and then as an upload that "failed" and needs redoing — while
- * the first one is still running.
+ * The importer needs the project-side entities (a project import links branches and opens
+ * assessments), and `BranchModule` cannot reach `ProjectModule` — `ProjectModule` imports it. A
+ * controller is not bound to the module whose URL prefix it serves, so this one is registered here.
  *
- * `BranchModule` cannot reach `ProjectService`, because `ProjectModule` imports *it*; that
- * dependency direction is exactly why the duplicate importer grew in the first place. A controller
- * is not bound to the module whose URL prefix it serves, so this one is registered by
- * `ProjectModule`, where both the importer and the queue are already in scope, and serves the
- * `/branches` routes the web app already calls. The queue itself was moved out to a leaf
- * `ImportModule` so nothing has to repeat this dance to enqueue.
- *
- * The remaining structural step — moving the importer out of `ProjectService` into
- * `modules/import/` so this controller can live beside it — is a file move with no behaviour
- * change, and is deliberately not bundled with the behaviour fix above.
+ * The old `reconcile/:clientId` and `commit-reconciled/:clientId` routes are gone: they ran a
+ * 5,000-row file inside one request, and the commit trusted every coordinate, geo source and state
+ * the browser sent back — with no region check at all.
  */
 
 import {
-  BadRequestException,
   Body,
   Controller,
-  Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
   Req,
-  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
-import type { Response } from 'express';
+import { IsObject } from 'class-validator';
 import { SystemRole } from '@fapoms/shared';
 
-import { ProjectService } from './project.service';
-import { ImportJobService } from '../import/import-job.service';
-import type { ImportScope } from '../import/import.contract';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
-import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { assignedRegions } from '../../infrastructure/scope/global-scope';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
+import { readerFrom } from '../../infrastructure/background-jobs/background-jobs.controller';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
-import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { uploadMulterOptions, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { diskUploadMulterOptions, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { DiskUploadScanInterceptor } from '../document/disk-upload-scan.interceptor';
+import { BranchImportJob } from './branch-import/branch-import.job';
 
-const branchUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
+/** One file, on disk, scanned — the upload the Jobs foundation takes everywhere. */
+export const branchImportUploadOptions = diskUploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 1 });
+
+/** The review's decisions. Their contents are checked by `validateDecisions` (and again in the job). */
+export class CommitBranchImportDto {
+  @IsObject()
+  decisions: Record<string, unknown>;
+}
+
+/** An uploaded file, as the Jobs foundation takes it. */
+export function incomingFile(file?: Express.Multer.File) {
+  return file
+    ? {
+        path: file.path,
+        buffer: file.path ? undefined : file.buffer,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+      }
+    : null;
+}
 
 @ApiTags('Branches')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('branches')
 export class BranchImportController {
-  constructor(
-    private readonly projectService: ProjectService,
-    private readonly importJobService: ImportJobService,
-    private readonly regionGuard: RegionGuardService,
-  ) {}
+  constructor(private readonly branchImport: BranchImportJob) {}
 
-  /**
-   * Import or correct a client's branch master from a workbook.
-   *
-   * Identical in every respect to a project upload except that no project link or assessment is
-   * created — see `ImportScope`. Large files are accepted with 202 and a job id rather than held
-   * open; the threshold is the file's own shape, not a flag the caller sets, because the case that
-   * needs queueing is precisely the case whose operator does not know it does.
-   */
   @Post('import/:clientId')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
-  @UseInterceptors(FileInterceptor('file', branchUploadMulterOptions), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', branchImportUploadOptions), DiskUploadScanInterceptor)
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({
-    summary: "Import branches into a client's branch master; large files are queued and return 202 with a job id",
-  })
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+  @ApiOperation({ summary: "Upload a client's branch list; answers 202 with the rehearsal job (nothing is written until it is reviewed and committed)" })
   async importBranches(
     @Param('clientId', ParseUUIDPipe) clientId: string,
-    @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
-    @Res({ passthrough: true }) res: Response,
-    @GlobalScopeFilter() globalScope?: GlobalScope,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
-    // A submitted form with no file attached arrives as `undefined`; reading `.buffer` off it
-    // threw a TypeError the operator saw as "Internal server error".
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-
-    // The same ceiling the project-scoped upload applies, for the same reason — see the note
-    // there. This door creates branches too; it just does not link them to a project.
-    for (const region of await this.projectService.branchExcelRegions(file.buffer)) {
-      this.regionGuard.assertRegionSettable(region, globalScope);
-    }
-
-    // Parsed in the request either way, so an unreadable file — or the assayer roster uploaded to
-    // the wrong screen — is still an immediate, specific 400 rather than a cheerful 202 followed
-    // by a failure the operator has to go looking for.
-    const scope: ImportScope = { kind: 'CLIENT', id: clientId };
-    const preflight = await this.projectService.preflightBranchExcel(scope, file.buffer);
-
-    if (ImportJobService.shouldQueue(preflight)) {
-      const job = await this.importJobService.enqueueBranchImport({
-        scope,
-        userId: req.user.id,
-        fileBuffer: file.buffer,
-        fileName: file.originalname ?? null,
-        totalRows: preflight.totalRows,
-        rowsNeedingGeocode: preflight.rowsNeedingGeocode,
-      });
-
-      // 202: accepted, not done. The body says where to watch.
-      res.status(202);
-      return {
-        ...job,
-        queued: true,
-        statusUrl: `/branches/import/${clientId}/jobs/${job.jobId}`,
-        message:
-          `This file has ${preflight.totalRows} row(s), ${preflight.rowsNeedingGeocode} of which need a location ` +
-          `looked up. Address lookups are limited to about one per second by the mapping providers, so this ` +
-          `import is running in the background — it does not need this page kept open. Check its progress at ` +
-          `the status URL.`,
-      };
-    }
-
-    const report = await this.projectService.uploadBranchesFromExcel(scope, file.buffer, req.user.id);
-    return {
-      totalRows: report.totalRows,
-      created: report.created,
-      updated: report.updated,
-      unchanged: report.unchanged,
-      skipped: report.skipped,
-      imprecise: report.imprecise,
-      // Archived branches this file restored — see `BranchImportOutcome.revived`.
-      revived: report.revived,
-      // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
-      // therefore dropped in silence. See `BranchImportOutcome.notes`.
-      notes: report.notes,
-      /**
-       * Kept because the Branches page has always read it.
-       *
-       * The old importer counted every row it wrote, created or updated alike, and called that
-       * `importedCount`. Reproduced exactly rather than redefined, so the message the operator
-       * reads after an import does not change meaning on the day this endpoint did.
-       */
-      importedCount: report.created + report.updated + report.unchanged,
-    };
+    return this.branchImport.start({
+      scopeType: 'CLIENT',
+      scopeId: clientId,
+      actor: jobActorFrom(req),
+      regions: assignedRegions(req.user),
+      file: incomingFile(file),
+    });
   }
 
-  @Post('reconcile/:clientId')
+  @Post('import/:clientId/jobs/:jobId/commit')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
-  @UseInterceptors(FileInterceptor('file', branchUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Reconcile branches for client master DB' })
-  async reconcileBranches(
+  @ApiOperation({ summary: 'Commit a reviewed branch import: the review decisions are applied to the stored rehearsal in the background' })
+  async commitImport(
     @Param('clientId', ParseUUIDPipe) clientId: string,
-    @UploadedFile() file: Express.Multer.File,
-  ) {
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-    return await this.projectService.reconcileBranches({ kind: 'CLIENT', id: clientId }, file.buffer);
-  }
-
-  @Post('commit-reconciled/:clientId')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('branch:create:organization')
-  @ApiOperation({ summary: 'Commit reconciled branches to client master DB' })
-  async commitReconciledBranches(
-    @Param('clientId', ParseUUIDPipe) clientId: string,
-    @Body() body: { branches: any[] },
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Body() dto: CommitBranchImportDto,
     @Req() req: any,
   ) {
-    if (!Array.isArray(body?.branches)) {
-      throw new BadRequestException('Invalid branches payload. Expected an array.');
-    }
-    return await this.projectService.commitReconciledBranches(
-      { kind: 'CLIENT', id: clientId },
-      body.branches,
-      req.user.id,
-    );
+    return this.branchImport.commit(readerFrom(req), jobActorFrom(req), 'CLIENT', clientId, jobId, dto.decisions);
   }
 
-  /**
-   * State, progress and result of a queued branch-master import.
-   *
-   * The client id is checked against the job's own payload: Bull job ids are a per-queue
-   * incrementing integer, so without that check anyone able to read one client could walk
-   * `1, 2, 3…` and pull back other clients' import results, which name real branches and
-   * addresses.
-   */
-  @Get('import/:clientId/jobs/:jobId')
+  @Post('import/:clientId/jobs/:jobId/retry')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
-  @ApiOperation({ summary: 'State, progress and result of a queued branch-master import' })
-  async getImportJob(@Param('clientId', ParseUUIDPipe) clientId: string, @Param('jobId') jobId: string) {
-    return await this.importJobService.getBranchImportStatus({ kind: 'CLIENT', id: clientId }, jobId);
+  @ApiOperation({ summary: 'Run a failed or cancelled branch import again over the same stored file' })
+  async retryImport(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Req() req: any,
+  ) {
+    return this.branchImport.retry(readerFrom(req), jobActorFrom(req), 'CLIENT', clientId, jobId);
   }
 }

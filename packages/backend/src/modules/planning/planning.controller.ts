@@ -34,7 +34,7 @@ import { CoveragePlanStatus } from './coverage-plan.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 /**
@@ -347,7 +347,7 @@ export class PlanningController {
       projectId,
       (body.overrides ?? []) as unknown as Array<Record<string, unknown>>,
       body.justification,
-      jobActorFrom(req),
+      this.writeRequester(req),
     );
   }
 
@@ -374,9 +374,10 @@ export class PlanningController {
    * A 166-branch plan passes the web client's 30 s budget, so the screen said the deploy failed
    * while the server carried on creating offers, and pressing Deploy again started a second run.
    *
-   * It now answers 202 `{ jobId, deduplicated }`. The job's result, read from
+   * It now answers 202 `{ jobId, deduplicated, backgroundJobId }`. The job's result, read from
    * `GET /planning/write-jobs/:jobId`, is exactly the body this route used to return
    * (`describeDeployment`). A second press by the same account while the run is going joins it.
+   * The run is tracked (`backgroundJobId`), so after a refresh it is still in the Jobs tray.
    *
    * The region check stays here, at the request, where the principal's scope is known.
    */
@@ -394,7 +395,7 @@ export class PlanningController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertCoveragePlanInScope(planId, scope);
-    return await this.planningWriteJobs.enqueueExecutePlan(planId, body?.scheduledDate, jobActorFrom(req));
+    return await this.planningWriteJobs.enqueueExecutePlan(planId, body?.scheduledDate, this.writeRequester(req));
   }
 
   /**
@@ -416,7 +417,7 @@ export class PlanningController {
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return await this.planningWriteJobs.enqueueBulkOffer(body, scope ?? null, jobActorFrom(req));
+    return await this.planningWriteJobs.enqueueBulkOffer(body, scope ?? null, this.writeRequester(req));
   }
 
   /**
@@ -444,7 +445,7 @@ export class PlanningController {
       body.projectBranchIds,
       reason,
       scope ?? null,
-      jobActorFrom(req),
+      this.writeRequester(req),
     );
   }
 
@@ -652,6 +653,14 @@ export class PlanningController {
       Number.isFinite(manualMinDistanceKm) ? manualMinDistanceKm : undefined,
     );
     return plan;
+  }
+
+  /**
+   * Who started a planning write, as its tracked row records it: the principal the worker runs as,
+   * and the regions that decide who else (an administrator) may see the row in the Jobs tray.
+   */
+  private writeRequester(req: any) {
+    return { actor: jobActorFrom(req), regions: assignedRegions(req.user) };
   }
 
   /**

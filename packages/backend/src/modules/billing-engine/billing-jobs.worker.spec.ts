@@ -3,6 +3,8 @@ import { getQueueToken } from '@nestjs/bull';
 import { BillingJobsWorker } from './billing-jobs.worker';
 import { BillingJobsService } from './billing-jobs.service';
 import { BillingEngineService } from './billing-engine.service';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+import { BackgroundJobTracker } from '../../infrastructure/background-jobs/background-job.tracker';
 import {
   BILLING_JOB,
   BILLING_QUEUE,
@@ -30,6 +32,10 @@ describe('BillingJobsWorker & BillingJobsService (Financial Processing Durabilit
       providers: [
         BillingJobsWorker,
         BillingJobsService,
+        // Booking is system work and is never tracked; only the user-started reconcile uses these
+        // (covered in billing-bulk-jobs.spec.ts). Present so the DI graph resolves.
+        { provide: BackgroundJobsService, useValue: { enqueueTracked: jest.fn() } },
+        { provide: BackgroundJobTracker, useValue: { run: jest.fn() } },
         {
           provide: BillingEngineService,
           useValue: billingEngine,

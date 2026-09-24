@@ -1,84 +1,114 @@
 import { BadRequestException } from '@nestjs/common';
-import { AssayerController } from './assayer.controller';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { AssayerController, rosterImportParams } from './assayer.controller';
 
 /**
- * `POST /assayers/roster/import` — the upload that starts a roster import or its rehearsal.
+ * `POST /assayers/roster/import` — the upload that starts a roster rehearsal or import.
  *
- * Two failures pinned here, both of which put a real import in motion that nobody had confirmed:
+ * It answers at once with a background job (`ROSTER_IMPORT`) and does none of the work: the file is
+ * handed to `BackgroundJobsService.create`, which stores it, records the job and queues it. Pinned
+ * here too, because each put a real import in motion that nobody had confirmed:
  *
- *  1. **The rehearsal ran inside the upload request.** A rehearsal is the entire import inside a
- *     transaction that is rolled back — about seven minutes for the real 1,155-person roster,
- *     holding a pool connection and row locks, against a three-minute web timeout. It is now queued
- *     on the roster queue and polled, like the import.
- *  2. **The web's rehearsal was read as a real import.** The page sent `?dryRun=true` in the query
- *     string; this route read only the multipart body, so the "rehearsal" was queued as a real
- *     import with no confirmation and the overwrite choice dropped. A web bundle from before the
- *     fix still sends the query form.
+ *  - **The web's rehearsal was read as a real import.** An old page sent `?dryRun=true` in the query
+ *    string while this route read only the multipart body. The query form, the old multipart
+ *    fields and the new `params` JSON are all honoured, and "false" (a non-empty string) never
+ *    reads as true.
  *
- * The controller is built without Nest's DI on purpose: the route touches two collaborators, and
+ * The controller is built without Nest's DI on purpose: the route touches one collaborator, and
  * this suite should not break each time the controller gains an unrelated constructor dependency.
  */
 describe('AssayerController — roster import route', () => {
-  const upload = { buffer: Buffer.from('xlsx'), originalname: 'roster.xlsx' };
-  const req = { user: { id: 'u-1' } };
+  const upload = { path: '/tmp/fapoms-upload-batches/abc', originalname: 'roster.xlsx', mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 2048 };
+  const req = { user: { id: 'u-1', roles: [{ name: 'OPERATIONS' }], regions: ['NORTH'], organizationId: 'org-1' } };
+  const ACCEPTED = { job: { id: 'job-1', kind: 'ROSTER_IMPORT', status: 'QUEUED' }, deduplicated: false };
 
   const build = () => {
-    const rosterImport = {
-      inspectSheet: jest.fn().mockReturnValue({ sheetName: 'Assayer', rowsRead: 1155, headers: [] }),
-      importAssayerSheet: jest.fn(),
-    };
-    const importJobService = {
-      enqueueRosterImport: jest.fn().mockResolvedValue({ jobId: '7', state: 'waiting', totalRows: 1155 }),
-    };
+    const backgroundJobs = { create: jest.fn().mockResolvedValue(ACCEPTED) };
     const controller: AssayerController = Object.assign(
       Object.create(AssayerController.prototype),
-      { rosterImport, importJobService },
+      { backgroundJobs },
     );
-    const res = { status: jest.fn() };
-    return { controller, rosterImport, importJobService, res };
+    return { controller, backgroundJobs };
   };
 
-  it('queues a rehearsal instead of running the import inside the upload request', async () => {
-    const { controller, rosterImport, importJobService, res } = build();
+  it('answers with the accepted job and hands the file ON DISK to the foundation — no work in the request', async () => {
+    const { controller, backgroundJobs } = build();
 
-    const out: any = await controller.importRoster(upload, { dryRun: 'true' }, {}, req, res as any);
+    const out = await controller.importRoster(upload, { params: JSON.stringify({ dryRun: true, overwrite: false }) }, {}, req);
 
-    expect(rosterImport.importAssayerSheet).not.toHaveBeenCalled();
-    expect(importJobService.enqueueRosterImport).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true, totalRows: 1155 }));
-    expect(res.status).toHaveBeenCalledWith(202);
-    expect(out).toMatchObject({ queued: true, dryRun: true, jobId: '7', statusUrl: '/assayers/roster/import-jobs/7' });
+    expect(out).toBe(ACCEPTED);
+    expect(backgroundJobs.create).toHaveBeenCalledTimes(1);
+    const [request] = backgroundJobs.create.mock.calls[0];
+    expect(request).toMatchObject({
+      kind: 'ROSTER_IMPORT',
+      scope: { type: 'ROSTER', id: null },
+      params: { dryRun: true, overwrite: false, sheetName: null },
+      actor: expect.objectContaining({ userId: 'u-1' }),
+      regions: ['NORTH'],
+      file: { path: upload.path, originalName: 'roster.xlsx', size: 2048 },
+    });
+    // Streamed from its temp file, never read into memory here.
+    expect(request.file.buffer).toBeUndefined();
+  });
+
+  it('is declared 202 and is scanned by the disk-upload interceptor', () => {
+    const source = readFileSync(join(__dirname, 'assayer.controller.ts'), 'utf8');
+    const start = source.indexOf("@Post('/roster/import')");
+    const decorators = source.slice(start, source.indexOf('async importRoster(', start));
+    expect(decorators).toMatch(/@HttpCode\(202\)/);
+    expect(decorators).toMatch(/@Roles\(SystemRole\.ADMIN, SystemRole\.OPERATIONS\)/);
+    expect(decorators).toMatch(/@RequirePermissions\('assayer:create:organization'\)/);
+    expect(decorators).toMatch(/FileInterceptor\('file', rosterImportMulterOptions\), DiskUploadScanInterceptor/);
+    expect(source).toMatch(/rosterImportMulterOptions = diskUploadMulterOptions\(/);
   });
 
   it('treats a rehearsal asked for in the query string as a rehearsal, never as a real import', async () => {
-    const { controller, importJobService, res } = build();
+    const { controller, backgroundJobs } = build();
 
-    await controller.importRoster(upload, {}, { dryRun: 'true', overwrite: 'true' }, req, res as any);
+    await controller.importRoster(upload, {}, { dryRun: 'true', overwrite: 'true' }, req);
 
-    expect(importJobService.enqueueRosterImport).toHaveBeenCalledWith(
-      expect.objectContaining({ dryRun: true, overwrite: true }),
-    );
+    expect(backgroundJobs.create.mock.calls[0][0].params).toEqual({ dryRun: true, overwrite: true, sheetName: null });
+  });
+
+  it('still honours the old multipart fields', async () => {
+    const { controller, backgroundJobs } = build();
+
+    await controller.importRoster(upload, { dryRun: 'true', sheetName: ' Assayer ' }, {}, req);
+
+    expect(backgroundJobs.create.mock.calls[0][0].params).toEqual({ dryRun: true, overwrite: false, sheetName: 'Assayer' });
   });
 
   /** Multipart and query values are text: "false" is a non-empty string and must not read as true. */
-  it('queues a real import that does not overwrite when the flags are absent or say anything but "true"', async () => {
-    const { controller, importJobService, res } = build();
+  it('starts a real import that does not overwrite when the flags are absent or say anything but "true"', async () => {
+    const { controller, backgroundJobs } = build();
 
-    await controller.importRoster(upload, { dryRun: 'false', overwrite: 'yes' }, {}, req, res as any);
+    await controller.importRoster(upload, { dryRun: 'false', overwrite: 'yes' }, {}, req);
 
-    expect(importJobService.enqueueRosterImport).toHaveBeenCalledWith(
-      expect.objectContaining({ dryRun: false, overwrite: false }),
-    );
+    expect(backgroundJobs.create.mock.calls[0][0].params).toEqual({ dryRun: false, overwrite: false, sheetName: null });
   });
 
-  /** Queuing must not cost the immediate 400 a wrong file used to get from the in-request rehearsal. */
-  it('refuses an unreadable workbook before anything is queued', async () => {
-    const { controller, rosterImport, importJobService, res } = build();
-    rosterImport.inspectSheet.mockImplementation(() => {
-      throw new BadRequestException('This does not look like the appraiser roster.');
-    });
+  it('refuses a request with no file before anything is started', async () => {
+    const { controller, backgroundJobs } = build();
 
-    await expect(controller.importRoster(upload, { dryRun: 'true' }, {}, req, res as any))
-      .rejects.toBeInstanceOf(BadRequestException);
-    expect(importJobService.enqueueRosterImport).not.toHaveBeenCalled();
+    await expect(controller.importRoster(undefined, {}, {}, req)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(controller.importRoster({ ...upload, size: 0 }, {}, {}, req)).rejects.toBeInstanceOf(BadRequestException);
+    expect(backgroundJobs.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses params that are not a JSON object', () => {
+    expect(() => rosterImportParams({ params: '[1,2]' }, {})).toThrow(BadRequestException);
+    expect(() => rosterImportParams({ params: '{nope' }, {})).toThrow(BadRequestException);
+  });
+
+  /**
+   * The wrong file is refused by the job's `prepare` inside `create`, before anything is stored —
+   * the route passes that 400 straight through rather than answering 202 over it.
+   */
+  it('passes a wrong-file refusal from the job straight back to the person', async () => {
+    const { controller, backgroundJobs } = build();
+    backgroundJobs.create.mockRejectedValue(new BadRequestException('This does not look like the appraiser roster.'));
+
+    await expect(controller.importRoster(upload, {}, {}, req)).rejects.toThrow('This does not look like the appraiser roster.');
   });
 });

@@ -732,6 +732,19 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         break;
       }
 
+      /**
+       * A background job changed (queued, progressed, finished). Only ever to the person who
+       * started it: the payload names their file and what it did, and nobody else's Jobs tray
+       * should hear about it. An administrator watching everybody's jobs reads them by poll.
+       * Must NOT fall through to `default`, which would broadcast it to the operational rooms.
+       */
+      case 'job:updated': {
+        if (payload?.requestedBy && payload?.job) {
+          this.server.to(`user:${payload.requestedBy}`).emit('job:updated', payload.job);
+        }
+        break;
+      }
+
       default: {
         this.broadcastGenericEvent(eventType, payload);
         break;

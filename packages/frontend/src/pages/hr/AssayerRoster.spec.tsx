@@ -20,6 +20,17 @@ import { downloadCsv } from '../../utils/csv';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../services/socket', () => ({ connectSocket: () => null }));
+// The roster import's background job, as `GET /jobs` would report it. Mutable so the
+// import-finish tests below can move it to a finished real import between renders — the transition
+// is the whole behaviour being checked (roster-import-rehearsal.spec.tsx covers the job itself).
+let mockRosterJob: any = null;
+jest.mock('../../hooks/useBackgroundJob', () => ({
+  useBackgroundJob: () => ({
+    job: mockRosterJob, active: [], recent: mockRosterJob ? [mockRosterJob] : [], isLoading: false, upload: { phase: 'idle' },
+    start: jest.fn(), abortUpload: jest.fn(), cancel: jest.fn(), commit: jest.fn(),
+    downloadResult: jest.fn(), resetUpload: jest.fn(),
+  }),
+}));
 jest.mock('../../hooks/useCurrentRoles', () => ({
   ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
@@ -40,13 +51,6 @@ jest.mock('./ImportIssuesPanel', () => ({ ImportIssuesPanel: () => null }));
 // the queues. Mocking the wizard rather than `AssayerForms` keeps `EDIT_FIELDS` real for the
 // registration module that derives its steps from it.
 jest.mock('./registration/RegistrationWizard', () => ({ RegistrationWizard: () => null }));
-// Mutable so the import-lifecycle tests below can move the job from `idle` to `done` between
-// renders — the transition is the whole behaviour being checked.
-let mockImportJobState: any = { phase: 'idle' };
-jest.mock('../../components/import/useImportJob', () => ({
-  useImportJob: () => ({ state: mockImportJobState, start: jest.fn(), reset: jest.fn() }),
-}));
-jest.mock('../../components/import/ImportProgressPanel', () => ({ ImportProgressPanel: () => null }));
 // Auto-confirms every `confirm(...)` call (bulk transitions, delete) rather than rendering the
 // real dialog and clicking through it — the bulk-reason tests below are about the reason picker
 // and the request body, not the confirmation step itself. `jest.requireActual` keeps every other
@@ -111,7 +115,7 @@ const serve = (rows: ReturnType<typeof person>[]) => {
  * Both halves matter. A fresh element is required because `rerender` on a referentially IDENTICAL
  * element lets React bail out of re-rendering the subtree entirely — which is invisible for a
  * component with no other state, but silently breaks the import-lifecycle tests below: the mocked
- * `useImportJob()` reads a mutable `mockImportJobState` at call time, and a bailed-out render
+ * `useBackgroundJob()` reads a mutable `mockRosterJob` at call time, and a bailed-out render
  * never calls it again, so the component would never see the test's `phase: 'done'` update. The
  * SAME client, meanwhile, is what makes `rerender` mean "the app noticed something changed" rather
  * than "a new tab opened" — a fresh `QueryClient` per call would reset react-query's cache (and
@@ -128,7 +132,7 @@ const renderRoster = () => {
 /** The chip whose label starts with `name`, counted by the number printed inside it. */
 const chip = (name: string) => screen.getByRole('tab', { name: new RegExp(`^${name}`) });
 
-beforeEach(() => { mockRequest.mockReset(); mockImportJobState = { phase: 'idle' }; });
+beforeEach(() => { mockRequest.mockReset(); mockRosterJob = null; });
 
 describe('AssayerRoster — the joining queues', () => {
   const roster = [
@@ -651,6 +655,15 @@ describe('the roster sends registration to its own page', () => {
  */
 describe('AssayerRoster — when a queued import finishes', () => {
   const roster = [person({ id: 'a-1', displayName: 'Already Here' })];
+  /** A real import (not a rehearsal) the server reports finished. */
+  const finishedImport = {
+    id: 'job-i', kind: 'ROSTER_IMPORT', status: 'SUCCEEDED', title: 'Import 2 roster row(s)', parentJobId: 'job-r',
+    progress: { processed: 2, total: 2, percent: 100, stage: 'Done', message: null },
+    result: { summary: 'Roster imported.', details: {
+      rowsRead: 2, created: 2, updated: 0, skipped: 0, references: 0, onboardingDocuments: 0,
+      backgroundChecks: 0, empanelments: 0, issues: 0, notes: [], dryRun: false,
+    } },
+  };
 
   it('re-reads the roster once the job reports done', async () => {
     serve(roster);
@@ -658,20 +671,20 @@ describe('AssayerRoster — when a queued import finishes', () => {
     await screen.findByText('Already Here');
     const beforeImport = mockRequest.mock.calls.length;
 
-    mockImportJobState = { phase: 'done', fileName: 'roster.xlsx', report: { totalRows: 2 } };
+    mockRosterJob = finishedImport;
     view.rerender();
 
     await waitFor(() => expect(mockRequest.mock.calls.length).toBeGreaterThan(beforeImport));
   });
 
   it('re-reads it once, not on every render while the panel sits on its result', async () => {
-    // The state object stays `done` until dismissed, so an effect without the guard would refetch
+    // The job stays SUCCEEDED on every read, so an effect without the guard would refetch
     // on every render and hold the list in a loop.
     serve(roster);
     const view = renderRoster();
     await screen.findByText('Already Here');
 
-    mockImportJobState = { phase: 'done', fileName: 'roster.xlsx', report: { totalRows: 2 } };
+    mockRosterJob = finishedImport;
     view.rerender();
     await waitFor(() => expect(mockRequest.mock.calls.length).toBeGreaterThan(1));
 

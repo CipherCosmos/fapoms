@@ -1,12 +1,13 @@
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProjectStatus, Priority } from '@fapoms/shared';
 import { Projects } from './Projects';
 import { api } from '../services/api';
 
 jest.mock('../services/api', () => ({ api: { request: jest.fn() } }));
-jest.mock('../services/socket', () => ({ connectSocket: () => null }));
+jest.mock('../services/socket', () => ({ connectSocket: () => null, subscribeToConnection: () => () => undefined }));
 jest.mock('../hooks/useWorkforceVocabulary', () => ({
   useWorkforceVocabulary: () => ({ skills: [], certifications: [], languages: [] }),
   asOptions: (v: string[]) => v,
@@ -66,6 +67,8 @@ const serve = (opts: { total: number }) => {
     if (url === '/projects/p-1') return PROJECT;
     if (url === '/projects/p-1/branches') return [];
     if (url === '/clients') return [{ id: 'c-1', name: 'Sumeru Bank', clientCode: 'SB' }];
+    // The project's branch import (a background job) — none running.
+    if (url.startsWith('/jobs')) return { active: [], recent: [] };
     const q = new URLSearchParams(url.split('?')[1]);
     const size = Math.min(Number(q.get('limit')), 200);
     const start = (Number(q.get('page')) - 1) * size + 1;
@@ -75,7 +78,12 @@ const serve = (opts: { total: number }) => {
 
 /** Opens the project the `?id=` parameter names and goes to its branches tab, as a clerk would. */
 const openBranchesTab = async () => {
-  render(<MemoryRouter initialEntries={['/projects?id=p-1']}><Projects /></MemoryRouter>);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/projects?id=p-1']}><Projects /></MemoryRouter>
+    </QueryClientProvider>,
+  );
   fireEvent.click(await screen.findByText(/🏢 Branches/));
   return screen.findByPlaceholderText('Type branch name or code to search...');
 };

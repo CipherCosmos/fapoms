@@ -17,6 +17,7 @@ describe('PATCH /documents/:id/status', () => {
     null as any, null as any, null as any, null as any,
     null as any, null as any, null as any, null as any, null as any,
     null as any, null as any,
+    null as any, // backgroundJobs
   );
   const req = { user: { id: 'u-1' } };
 

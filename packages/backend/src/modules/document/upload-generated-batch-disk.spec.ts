@@ -1,30 +1,28 @@
-import { INTERCEPTORS_METADATA } from '@nestjs/common/constants';
+import { HTTP_CODE_METADATA, INTERCEPTORS_METADATA } from '@nestjs/common/constants';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { Readable } from 'stream';
 import { lastValueFrom, of, throwError } from 'rxjs';
 import { DocumentController } from './document.controller';
 import { DiskUploadScanInterceptor } from './disk-upload-scan.interceptor';
+import { DiskUploadCleanupInterceptor } from './disk-upload-cleanup.interceptor';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
 import { MAX_UPLOAD_BYTES } from './upload-validation';
 
 /**
- * A DAY'S BATCH UPLOAD MUST NOT BE ABLE TO TAKE THE API DOWN.
+ * A DAY'S BATCH UPLOAD MUST NOT BE ABLE TO TAKE THE API DOWN — AND MUST ANSWER AT ONCE.
  *
  * `POST /documents/upload-generated-batch` takes up to 100 files of up to 50 MB. It buffered all of
- * them in API memory (`memoryStorage()`), then scanned and encrypted each with another full-size
- * copy — up to 5 GB against an API container capped at 1.5 GB, so one large batch could get the API
- * killed for every user. The batch now lands on disk, is scanned one file at a time from disk, is
- * streamed to storage, and its temp files are deleted however the request ends.
- *
- * The scan is the part that must not quietly regress: the shared `FileScanInterceptor` scans
- * `file.buffer` and skips a file without one, so a disk-backed route guarded by it would accept
- * every file unscanned while looking guarded.
+ * them in API memory (`memoryStorage()`) — up to 5 GB against an API container capped at 1.5 GB. The
+ * batch lands on disk, is streamed to storage one file at a time, and its temp files are deleted
+ * however the request ends. Since the move to a background job the route only STORES the set and
+ * answers 202 with the job; the scan and the filing happen in the worker
+ * (`generated-document-batch.job.spec.ts`), so the in-request scan was replaced by the cleanup-only
+ * interceptor — `upload-scan-parity.spec.ts` pins that this route alone may do that, and that the
+ * job scans every file.
  */
-
-const EICAR = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 
 const interceptorsOf = (method: string): any[] =>
   Reflect.getMetadata(INTERCEPTORS_METADATA, (DocumentController.prototype as any)[method]) || [];
@@ -39,58 +37,131 @@ describe('the batch upload route', () => {
     expect(multer.limits).toEqual({ fileSize: MAX_UPLOAD_BYTES, files: 100 });
   });
 
-  it('scans with the disk-reading interceptor, not the one that only sees in-memory buffers', () => {
+  it('deletes the temp files with the cleanup interceptor, and never pairs disk files with the buffer-only scan', () => {
     const interceptors = interceptorsOf('uploadGeneratedBatch');
 
-    expect(interceptors[1]).toBe(DiskUploadScanInterceptor);
+    expect(interceptors[1]).toBe(DiskUploadCleanupInterceptor);
     expect(interceptors).not.toContain(FileScanInterceptor);
   });
 
-  it('streams each file from disk to storage instead of reading it into memory', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'batch-spec-'));
-    const path = join(dir, 'upload');
-    writeFileSync(path, '%PDF-1.4 kolhapur');
-    try {
-      let stored: unknown;
-      const storage = {
-        saveFile: jest.fn(async (_name: string, content: unknown) => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of content as Readable) chunks.push(Buffer.from(chunk));
-          stored = Buffer.concat(chunks).toString();
-          return 'key/1';
-        }),
-      };
-      const documentService = {
-        matchPdfsToBranches: jest.fn(async () => ({
-          matches: [{ fileName: 'SOL001.pdf', projectBranchId: 'pb-1', branchName: 'Kolhapur Main' }],
-          unmatched: [],
-          branchesWithoutFile: [],
-        })),
-        resolveProjectBranchRegion: jest.fn(async () => 'WEST'),
-        create: jest.fn(async () => ({ id: 'doc-1' })),
-      };
-      const controller = new DocumentController(
-        documentService as any, storage as any,
-        null as any, null as any, null as any, null as any, null as any, null as any, null as any, null as any,
-        { assertRegionAllowedStaged: jest.fn(async () => undefined) } as any,
-        null as any,
-      );
+  it('answers 202', () => {
+    expect(Reflect.getMetadata(HTTP_CODE_METADATA, DocumentController.prototype.uploadGeneratedBatch)).toBe(202);
+  });
 
-      const res = await controller.uploadGeneratedBatch(
-        [{ originalname: 'SOL001.pdf', mimetype: 'application/pdf', size: 17, path }],
-        'proj-1', '2026-09-18', { user: { id: 'desk-1' } },
-      );
+  const build = () => {
+    const documentService = {
+      matchPdfsToBranches: jest.fn(async () => ({
+        matches: [{ fileName: 'SOL001.pdf', projectBranchId: 'pb-1', branchName: 'Kolhapur Main' }],
+        unmatched: [],
+        branchesWithoutFile: [],
+      })),
+      resolveProjectBranchRegion: jest.fn(async () => 'WEST'),
+      create: jest.fn(async () => ({ id: 'doc-1' })),
+    };
+    const regionGuard = { assertRegionAllowedStaged: jest.fn(async () => undefined) };
+    const backgroundJobs = { create: jest.fn(async () => ({ job: { id: 'job-1' }, deduplicated: false })) };
+    const storage = { saveFile: jest.fn() };
+    const controller = new DocumentController(
+      documentService as any, storage as any,
+      null as any, null as any, null as any, null as any, null as any, null as any, null as any, null as any,
+      regionGuard as any,
+      null as any,
+      backgroundJobs as any,
+    );
+    return { controller, documentService, regionGuard, backgroundJobs, storage };
+  };
+  const PROJECT = '11111111-1111-4111-8111-111111111111';
+  const diskFile = { originalname: 'SOL001.pdf', mimetype: 'application/pdf', size: 17, path: '/tmp/fapoms-upload-batches/abc' } as any;
 
-      expect(res.data.created).toEqual([{ documentId: 'doc-1', fileName: 'SOL001.pdf', branchName: 'Kolhapur Main' }]);
-      const content = storage.saveFile.mock.calls[0][1];
-      expect(Buffer.isBuffer(content)).toBe(false);
-      expect(content).toBeInstanceOf(Readable);
-      expect(stored).toBe('%PDF-1.4 kolhapur');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('stores the set as a job — the files by their temp path, never read into memory — and files nothing itself', async () => {
+    const { controller, documentService, backgroundJobs, storage } = build();
+
+    const res = await controller.uploadGeneratedBatch(
+      [diskFile], { user: { id: 'desk-1', roles: ['DESK'] }, body: {} }, PROJECT, '2026-09-18', undefined, undefined,
+    );
+
+    expect(res).toEqual({ job: { id: 'job-1' }, deduplicated: false });
+    expect(backgroundJobs.create).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'GENERATED_DOCUMENT_BATCH',
+      scope: { type: 'PROJECT', id: PROJECT },
+      params: { projectId: PROJECT, auditDate: '2026-09-18', customerMasterVersionId: null },
+      files: [{ path: diskFile.path, buffer: undefined, originalName: 'SOL001.pdf', mimeType: 'application/pdf', size: 17 }],
+      actor: expect.objectContaining({ userId: 'desk-1' }),
+    }));
+    expect(documentService.create).not.toHaveBeenCalled();
+    expect(storage.saveFile).not.toHaveBeenCalled();
+  });
+
+  it('takes its parameters from the multipart params JSON too (the background-job upload sends them there)', async () => {
+    const { controller, backgroundJobs } = build();
+    const body = { params: JSON.stringify({ projectId: PROJECT, auditDate: '2026-09-18', customerMasterVersionId: '22222222-2222-4222-8222-222222222222' }) };
+
+    await controller.uploadGeneratedBatch([diskFile], { user: { id: 'desk-1' }, body }, undefined, undefined, undefined, undefined);
+
+    expect(backgroundJobs.create).toHaveBeenCalledWith(expect.objectContaining({
+      params: { projectId: PROJECT, auditDate: '2026-09-18', customerMasterVersionId: '22222222-2222-4222-8222-222222222222' },
+    }));
+  });
+
+  it('refuses the whole upload, storing nothing, when a matched branch is outside the caller\'s region', async () => {
+    const { controller, regionGuard, backgroundJobs } = build();
+    regionGuard.assertRegionAllowedStaged.mockRejectedValueOnce(new ForbiddenException('outside your region'));
+
+    await expect(controller.uploadGeneratedBatch([diskFile], { user: { id: 'desk-1' }, body: {} }, PROJECT, '2026-09-18'))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(backgroundJobs.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing date or project before anything is stored', async () => {
+    const { controller, backgroundJobs } = build();
+    await expect(controller.uploadGeneratedBatch([diskFile], { user: { id: 'u' }, body: {} }, PROJECT, undefined))
+      .rejects.toThrow(/auditDate is required/);
+    await expect(controller.uploadGeneratedBatch([diskFile], { user: { id: 'u' }, body: {} }, 'nope', '2026-09-18'))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(controller.uploadGeneratedBatch([], { user: { id: 'u' }, body: {} }, PROJECT, '2026-09-18'))
+      .rejects.toThrow(/No files received/);
+    expect(backgroundJobs.create).not.toHaveBeenCalled();
   });
 });
+
+describe('DiskUploadCleanupInterceptor', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'disk-cleanup-spec-')); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const diskFile = (name: string) => {
+    const path = join(dir, name);
+    writeFileSync(path, '%PDF-1.4 fine\n%%EOF');
+    return { originalname: `${name}.pdf`, path };
+  };
+  const contextFor = (files: unknown[]) => ({ switchToHttp: () => ({ getRequest: () => ({ files }) }) }) as any;
+  const gone = async (p: string) => {
+    for (let i = 0; i < 100 && existsSync(p); i++) await new Promise((r) => setTimeout(r, 20));
+    return !existsSync(p);
+  };
+
+  it('keeps the files while the handler stores them, and deletes them once it has answered', async () => {
+    const file = diskFile('a');
+    let presentDuringHandler = false;
+    const handle = () => { presentDuringHandler = existsSync(file.path); return of('stored'); };
+
+    const result = await lastValueFrom(new DiskUploadCleanupInterceptor().intercept(contextFor([file]), { handle }));
+
+    expect(result).toBe('stored');
+    expect(presentDuringHandler).toBe(true);
+    expect(await gone(file.path)).toBe(true);
+  });
+
+  it('deletes the files when the handler refuses the request', async () => {
+    const file = diskFile('b');
+    const handle = () => throwError(() => new Error('auditDate is required.'));
+
+    await expect(lastValueFrom(new DiskUploadCleanupInterceptor().intercept(contextFor([file]), { handle }))).rejects.toThrow(/auditDate/);
+    expect(await gone(file.path)).toBe(true);
+  });
+});
+
+const EICAR = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 
 describe('DiskUploadScanInterceptor', () => {
   let dir: string;

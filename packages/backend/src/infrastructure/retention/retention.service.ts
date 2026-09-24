@@ -8,6 +8,10 @@ import { MetricsService } from '../observability/metrics.service';
 import { ensureFuturePartitions, dropExpiredPartitions } from './location-ping-partitions';
 import { resolveRetention } from './retention-classes';
 import type { StorageEngine } from '../storage/storage-engine.interface';
+import {
+  DEFAULT_BACKGROUND_JOB_RETENTION_DAYS,
+  purgeExpiredBackgroundJobs,
+} from '../background-jobs/background-jobs.retention';
 
 /**
  * FAPOMS — the only *scheduled* thing in this system that deletes anything.
@@ -186,6 +190,7 @@ export class RetentionService {
       telemetry: 0,
       closedApplications: 0,
       abandonedApplications: 0,
+      backgroundJobs: 0,
       durationMs: 0,
       saturated: [],
       failures: [],
@@ -244,18 +249,21 @@ export class RetentionService {
     */
     await phase('closedApplications', 'assayer_applications', () => this.eraseClosedApplications());
     await phase('abandonedApplications', 'assayer_applications', () => this.eraseAbandonedApplications());
+    // Finished background jobs and the uploads/reports they point at — see `background-jobs.retention.ts`.
+    await phase('backgroundJobs', 'background_jobs', () => this.purgeBackgroundJobs());
 
     report.durationMs = Date.now() - started;
 
     const total =
       report.outboxEvents + report.refreshTokens + report.notifications + report.locationPings +
-      report.sessions + report.telemetry;
+      report.sessions + report.telemetry + report.backgroundJobs;
     if (total > 0) {
       this.logger.log(
         `Retention pass removed ${total} row(s) in ${report.durationMs} ms — ` +
           `outbox ${report.outboxEvents}, refresh tokens ${report.refreshTokens}, ` +
           `notifications ${report.notifications}, location fixes ${report.locationPings}, ` +
-          `sessions ${report.sessions}, telemetry ${report.telemetry}.`,
+          `sessions ${report.sessions}, telemetry ${report.telemetry}, ` +
+          `background jobs ${report.backgroundJobs}.`,
       );
     }
 
@@ -661,6 +669,23 @@ export class RetentionService {
     return { removed, saturated: true };
   }
 
+  /**
+   * Finished background jobs past their window (30 days by default), with their uploaded file and
+   * report. Never a QUEUED or RUNNING one — see `purgeExpiredBackgroundJobs`.
+   */
+  private async purgeBackgroundJobs(): Promise<BatchOutcome> {
+    const days = this.days('RETENTION_BACKGROUND_JOB_DAYS', DEFAULT_BACKGROUND_JOB_RETENTION_DAYS);
+    if (days <= 0) return NOTHING_TO_DO;
+    return purgeExpiredBackgroundJobs(
+      this.dataSource,
+      this.storage,
+      this.cutoff(days),
+      RetentionService.BATCH_SIZE,
+      RetentionService.MAX_BATCHES,
+      (message) => this.logger.warn(message),
+    );
+  }
+
   private async deleteInBatches(sql: string, params: unknown[]): Promise<BatchOutcome> {
     let removed = 0;
     for (let batch = 0; batch < RetentionService.MAX_BATCHES; batch++) {
@@ -713,6 +738,8 @@ export interface RetentionReport {
   closedApplications: number;
   /** Never-submitted forms, long past their link's expiry, erased the same way. */
   abandonedApplications: number;
+  /** Finished background jobs past their window, with their uploaded files and reports. */
+  backgroundJobs: number;
   durationMs: number;
   /**
    * Tables whose purge stopped because it hit the batch ceiling rather than because it ran out of

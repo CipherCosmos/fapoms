@@ -96,7 +96,8 @@ describe('Resumable upload: session ownership and the finished-job rule', () => 
       chunked,
       scanner,
       { assertRegionAllowed: jest.fn(), assertRegionAllowedStaged: jest.fn() } as any,
-      null as any, // dispatchJobs
+      null as any, // dispatchJobs,
+      null as any, // backgroundJobs
     );
   });
 

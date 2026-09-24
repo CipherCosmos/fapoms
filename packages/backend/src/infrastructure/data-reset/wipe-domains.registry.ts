@@ -189,6 +189,11 @@ export const NOT_WIPED_TABLES: Record<string, string> = {
   security_incidents: 'statutory DPDP breach record',
   data_rights_requests: 'statutory DPDP data-principal request record',
   outbound_messages: 'email/SMS delivery record — same reasoning as outbox_events',
+  // Self-expiring: retention removes a finished job (and its uploaded file and report) after 30 days,
+  // and an open one is somebody's upload in progress — deleting its row mid-run would leave a worker
+  // writing progress onto nothing. A wipe does not delete stored files either, so clearing these
+  // rows would only orphan the uploads they point at.
+  background_jobs: 'self-expiring upload/job record (30 days); retention deletes it with its files',
 };
 
 export function findDomain(key: string): WipeDomain | undefined {

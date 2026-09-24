@@ -6,11 +6,12 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions }
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { BILLING_READ_ROLES } from '../billing-engine/billing-roles';
 import { BillingState } from '@fapoms/shared';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { rolesOf } from '../assayer/assayer-visibility';
 import { ReportsService } from './reports.service';
-import { ReportJobsService } from './report-jobs.service';
+import { ReportJobsService, ReportRequester } from './report-jobs.service';
 import { EXCEL_MIME } from './excel-export';
 
 @ApiTags('reports')
@@ -23,6 +24,11 @@ export class ReportsController {
     private readonly reportJobsService: ReportJobsService,
     private readonly regionGuard: RegionGuardService,
   ) {}
+
+  /** Who the export's tracking row belongs to, and the regions it is visible within. */
+  private requester(req: any): ReportRequester {
+    return { actor: jobActorFrom(req), regions: assignedRegions(req.user) };
+  }
 
   private send(res: Response, buffer: Buffer, filename: string, mime: string = EXCEL_MIME): void {
     const encoded = encodeURIComponent(filename);
@@ -201,7 +207,7 @@ export class ReportsController {
     // this the queued export would run unscoped and hand a regional operator the national list.
     const enqueued = await this.reportJobsService.enqueueAssignments(
       { status, projectBranchStatus, priority, scope: scope ?? null },
-      req.user?.id,
+      this.requester(req),
     );
     return enqueued;
   }
@@ -229,7 +235,7 @@ export class ReportsController {
     // a way to obtain the version of it you were refused.
     const enqueued = await this.reportJobsService.enqueueBilling(
       { clientId, projectId, assayerId, state, scope: scope ?? null },
-      req.user?.id,
+      this.requester(req),
     );
     return enqueued;
   }
@@ -240,7 +246,7 @@ export class ReportsController {
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Queue the Command Center territory export; returns a job id to poll' })
   async queueCommandCenter(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
-    const enqueued = await this.reportJobsService.enqueueCommandCenter({ scope: scope ?? null }, req.user?.id);
+    const enqueued = await this.reportJobsService.enqueueCommandCenter({ scope: scope ?? null }, this.requester(req));
     return enqueued;
   }
 
@@ -264,7 +270,7 @@ export class ReportsController {
      */
     const enqueued = await this.reportJobsService.enqueueAssayerRoster(
       { principal: { id: req.user?.id, roles: rolesOf(req.user) }, scope: scope ?? null },
-      req.user?.id,
+      this.requester(req),
     );
     return enqueued;
   }
@@ -281,7 +287,7 @@ export class ReportsController {
   async queueAssayerRosterPdf(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     const enqueued = await this.reportJobsService.enqueueAssayerRosterPdf(
       { principal: { id: req.user?.id, roles: rolesOf(req.user) }, scope: scope ?? null },
-      req.user?.id,
+      this.requester(req),
     );
     return enqueued;
   }

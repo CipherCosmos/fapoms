@@ -58,6 +58,9 @@ export const STORAGE_KEY_SOURCES: readonly StorageKeySource[] = [
   { table: 'assayer_remarks', column: 'attachment_paths', kind: 'jsonb-array', why: 'Evidence attached to a remark about somebody.' },
   { table: 'feedback_messages', column: 'attachments', kind: 'jsonb-objects', keyField: 'storageKey', why: 'Screenshots and files on a feedback thread.' },
   { table: 'validation_query_messages', column: 'attachments', kind: 'jsonb-objects', keyField: 's3Key', why: 'Files exchanged on a validation query.' },
+  { table: 'background_jobs', column: 'input_object_key', kind: 'text', why: 'The file a background job (an import) was uploaded with — kept 30 days, then retention deletes it.' },
+  { table: 'background_jobs', column: 'result_object_key', kind: 'text', why: "A background job's downloadable report — kept 30 days with its job." },
+  { table: 'background_jobs', column: 'input_objects', kind: 'jsonb-objects', keyField: 'key', why: 'The files of a several-file background job (a batch of audit packets) — kept 30 days, then retention deletes them.' },
 ];
 
 /**
@@ -85,6 +88,11 @@ export const NOT_STORAGE_KEYS: ReadonlyArray<{ table: string; column: string; wh
   { table: 'notifications', column: 'dedupe_key', why: 'A de-duplication key for notifications.' },
   { table: 'notifications', column: 'group_key', why: 'A grouping key for notifications.' },
   { table: 'assayer_applications', column: 'extended_profile', why: "The candidate's typed answers; their scans live in assayer_application_documents." },
+  { table: 'background_jobs', column: 'input_file_name', why: 'The name the uploader gave the file.' },
+  { table: 'background_jobs', column: 'input_mime_type', why: 'The declared type of the uploaded file.' },
+  { table: 'background_jobs', column: 'result_file_name', why: 'The name the report is downloaded as.' },
+  { table: 'background_jobs', column: 'result_mime_type', why: 'The type the report is downloaded as.' },
+  { table: 'background_jobs', column: 'runner_queue', why: 'The name of the Bull queue that runs a tracked job.' },
 ];
 
 export interface OrphanReport {

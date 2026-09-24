@@ -20,6 +20,15 @@ import { api } from '../../services/api';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../services/socket', () => ({ connectSocket: () => null }));
+// The roster import's background-job hook reads `GET /jobs`; this suite is not about the import
+// (roster-import-rehearsal.spec.tsx is), so the page sees no roster job.
+jest.mock('../../hooks/useBackgroundJob', () => ({
+  useBackgroundJob: () => ({
+    job: null, active: [], recent: [], isLoading: false, upload: { phase: 'idle' },
+    start: jest.fn(), abortUpload: jest.fn(), cancel: jest.fn(), commit: jest.fn(),
+    downloadResult: jest.fn(), resetUpload: jest.fn(),
+  }),
+}));
 jest.mock('../../hooks/useCurrentRoles', () => ({
   ...jest.requireActual('../../hooks/useCurrentRoles'),
   useCurrentRoles: () => ['ADMIN'],
@@ -30,10 +39,6 @@ jest.mock('../../hooks/useQueuedExcelExport', () => ({ useQueuedExcelExport: () 
 jest.mock('../../hooks/useClients', () => ({ useClientOptions: () => ({ data: [] }) }));
 jest.mock('./ImportIssuesPanel', () => ({ ImportIssuesPanel: () => null }));
 jest.mock('./registration/RegistrationWizard', () => ({ RegistrationWizard: () => null }));
-jest.mock('../../components/import/useImportJob', () => ({
-  useImportJob: () => ({ state: { phase: 'idle' }, start: jest.fn(), reset: jest.fn() }),
-}));
-jest.mock('../../components/import/ImportProgressPanel', () => ({ ImportProgressPanel: () => null }));
 
 const mockRequest = api.request as jest.Mock;
 

@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { UploadCloud, AlertTriangle, CheckCircle2, Clock, Send, ArrowRightCircle } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
-import { UPLOAD_LIMIT_HINT, businessDateKey } from '@fapoms/shared';
-import { useImportJob } from '../../components/import/useImportJob';
+import { UPLOAD_LIMIT_HINT, businessDateKey, isBackgroundJobInFlight, type BackgroundJobScope, type BackgroundJobSummary } from '@fapoms/shared';
+import { useBackgroundJob } from '../../hooks/useBackgroundJob';
+import { BackgroundJobPanel } from '../../components/jobs/BackgroundJobPanel';
 // The day's steps live with every other document word — see documents/vocabulary.ts.
 import { DAILY_RUN_STEP as ACTION_META } from './vocabulary';
 
@@ -36,6 +37,8 @@ export interface DailyRunBranch {
  * ignore before anything is generated.
  */
 interface ReconOutcome {
+  /** The audit date the batch was for — so a result is shown only on its own date's board. */
+  auditDate?: string | null;
   versionNumber: number;
   uniqueAccountsCount: number;
   duplicateAccountsCount: number;
@@ -44,6 +47,47 @@ interface ReconOutcome {
   blockReason: string | null;
   unmatchedCount: number;
   unmatchedAccounts: Array<{ accountNumber: string; solId: string | null; reason: string }>;
+}
+
+/**
+ * What filing a day's packets did, file by file — the result of the GENERATED_DOCUMENT_BATCH job.
+ * Files the server could not place with certainty are listed, never filed against a guess.
+ */
+interface PacketBatchOutcome {
+  auditDate: string;
+  created: Array<{ documentId: string; fileName: string; branchName: string }>;
+  unmatched: Array<{ fileName: string; reason: string }>;
+  failed: Array<{ fileName: string; reason: string }>;
+}
+
+/** A finished job's details, when it is the one this board is showing (same audit date). */
+function finishedDetails<T extends { auditDate?: string | null }>(
+  job: BackgroundJobSummary | null,
+  auditDate: string,
+  dismissed: string | null,
+): T | null {
+  if (!job || job.status !== 'SUCCEEDED' || job.id === dismissed) return null;
+  const details = job.result?.details as T | undefined;
+  if (!details || (details.auditDate ?? null) !== auditDate) return null;
+  return details;
+}
+
+/**
+ * Calls `onSettled` when a job this page has watched while in flight finishes — never for a job
+ * that had already finished when the page loaded (a refresh restores its result silently).
+ */
+function useJobSettled(job: BackgroundJobSummary | null, onSettled: (job: BackgroundJobSummary) => void) {
+  const seen = useRef(new Map<string, BackgroundJobSummary['status']>());
+  const callback = useRef(onSettled);
+  callback.current = onSettled;
+  useEffect(() => {
+    if (!job) return;
+    const previous = seen.current.get(job.id);
+    seen.current.set(job.id, job.status);
+    if (previous && isBackgroundJobInFlight(previous) && !isBackgroundJobInFlight(job.status)) {
+      callback.current(job);
+    }
+  }, [job]);
 }
 
 export interface DailyRun {
@@ -102,10 +146,22 @@ export const DailyRunPanel: React.FC<{
   const [run, setRun] = useState<DailyRun | null>(null);
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState<Set<string>>(new Set());
-  const [unmatched, setUnmatched] = useState<Array<{ fileName: string; reason: string }>>([]);
-  const [recon, setRecon] = useState<ReconOutcome | null>(null);
-  /** The client batch's reconciliation now runs on the server's import queue — see `uploadBatch`. */
-  const batchImport = useImportJob<ReconOutcome>();
+  /**
+   * The client batch's reconciliation, and the day's packets, each run as a background job on the
+   * server (`CUSTOMER_MASTER_IMPORT`, `GENERATED_DOCUMENT_BATCH`). The page reads them back from
+   * `GET /jobs` on mount, so a refresh — or a hard refresh — mid-run shows the progress again, and
+   * a finished run's report again; nothing is kept in the browser.
+   */
+  const jobScope = useMemo<BackgroundJobScope>(() => ({ type: 'PROJECT', id: projectId }), [projectId]);
+  const batchImport = useBackgroundJob('CUSTOMER_MASTER_IMPORT', jobScope, { endpoint: '/customer-master/upload' });
+  const packetBatch = useBackgroundJob('GENERATED_DOCUMENT_BATCH', jobScope, { endpoint: '/documents/upload-generated-batch' });
+  /** The result a person dismissed (by job id), so it stays dismissed while they work. */
+  const [dismissedRecon, setDismissedRecon] = useState<string | null>(null);
+  const [dismissedPackets, setDismissedPackets] = useState<string | null>(null);
+  const recon = finishedDetails<ReconOutcome>(batchImport.job, auditDate, dismissedRecon);
+  const packets = finishedDetails<PacketBatchOutcome>(packetBatch.job, auditDate, dismissedPackets);
+  const importBusy = batchImport.upload.phase === 'uploading' || batchImport.active.length > 0;
+  const packetsBusy = packetBatch.upload.phase === 'uploading' || packetBatch.active.length > 0;
 
   const load = useCallback(async () => {
     if (!projectId || !auditDate) return;
@@ -129,58 +185,35 @@ export const DailyRunPanel: React.FC<{
   };
 
   /**
-   * Send the client batch; the reconciliation happens on the queue.
+   * Send the client batch; the reconciliation happens in the background.
    *
    * Reconciling a daily file walks every row against this client's branches by SOL ID and then
-   * registers a version. That used to run inside this upload request, so the operator watched a
-   * spinner for however long it took — and a socket timeout made a still-running import
-   * indistinguishable from a failed one, which invites uploading the same file twice. The server
-   * now answers 202 as soon as the file is accepted; `useImportJob` (the same hook the roster and
-   * branch imports use) follows the job, and the effect below reports the outcome when it lands.
-   * The page can be left in the meantime.
+   * registers a version. The server answers 202 as soon as the file is stored; the job's progress
+   * shows below and in the Jobs tray, and the page can be left or refreshed in the meantime.
    */
   const uploadBatch = async (file: File) => {
-    await batchImport.start(
-      `/customer-master/upload?projectId=${projectId}&auditDate=${auditDate}`,
-      file,
-    );
+    await batchImport.start(file, { projectId, auditDate });
   };
 
-  /**
-   * Report a queued reconciliation as it moves.
-   *
-   * Keyed on the value just handled, so a re-render cannot toast the same outcome twice. The three
-   * phases carry different values (job id, report object, error string), so one ref covers them all.
-   */
-  const handledImport = useRef<unknown>(null);
-  useEffect(() => {
-    const s = batchImport.state;
-    if (s.phase === 'running' && handledImport.current !== s.jobId) {
-      handledImport.current = s.jobId;
-      onSuccess(s.message || `Client batch "${s.fileName}" received — reconciling in the background.`);
-      return;
-    }
-    if (s.phase === 'done' && handledImport.current !== s.report) {
-      handledImport.current = s.report;
-      const report = s.report;
-      setRecon(report);
-      if (report.accepted) {
+  /** Report a reconciliation this page watched finish — the true outcome, not a flat toast. */
+  useJobSettled(batchImport.job, (job) => {
+    if (job.status === 'SUCCEEDED') {
+      const report = job.result?.details as ReconOutcome | undefined;
+      const fileName = job.inputFileName ?? 'the file';
+      if (report?.accepted) {
         onSuccess(
-          `Client batch "${s.fileName}" accepted — v${report.versionNumber}, ${counted(report.uniqueAccountsCount, 'account')}` +
+          `Client batch "${fileName}" accepted — v${report.versionNumber}, ${counted(report.uniqueAccountsCount, 'account')}` +
           (report.unmatchedCount > 0 ? `, ${counted(report.unmatchedCount, 'row')} matched no branch (see below)` : '') + '.',
         );
-      } else {
+      } else if (report) {
         // A rejection is a failure, and must read as one — not a success toast.
-        onError(`Client batch "${s.fileName}" was rejected. ${report.blockReason ?? ''}`.trim());
+        onError(`Client batch "${fileName}" was rejected. ${report.blockReason ?? ''}`.trim());
       }
-      void load();
-      return;
+    } else if (job.status === 'FAILED') {
+      onError(job.error ?? 'The client batch could not be reconciled.');
     }
-    if (s.phase === 'error' && handledImport.current !== s.error) {
-      handledImport.current = s.error;
-      onError(s.error);
-    }
-  }, [batchImport.state, load, onError, onSuccess]);
+    void load();
+  });
 
   const uploadPacket = async (branch: DailyRunBranch, file: File) => {
     await withActing(branch.projectBranchId, async () => {
@@ -196,31 +229,24 @@ export const DailyRunPanel: React.FC<{
   };
 
   /**
-   * The external application returns the whole day's packets at once, so they are
-   * uploaded together and matched to branches by filename. Files the server could
-   * not place with certainty are reported back rather than filed against a guess.
+   * The external application returns the whole day's packets at once, so they are uploaded together
+   * and matched to branches by filename — in the background: the server stores the set and answers
+   * at once, then scans and files each packet. Files it could not place with certainty are reported
+   * back rather than filed against a guess; they are uploaded one by one on their branch below.
    */
   const uploadGeneratedBatch = async (files: FileList) => {
-    await withActing('bulk', async () => {
-      try {
-        const fd = new FormData();
-        Array.from(files).forEach((f) => fd.append('files', f));
-        const batchParam = run?.batch ? `&customerMasterVersionId=${run.batch.id}` : '';
-        // `withMeta` because this is the one call on the page that needs the envelope itself: the
-        // per-file outcomes are in `data`, the summary sentence the operator reads is the
-        // envelope's own `message`, and unwrapping to `data` would drop the latter.
-        const res = await api.request<{
-          data?: { unmatched?: Array<{ fileName: string; reason: string }> };
-          message?: string;
-        }>(
-          `/documents/upload-generated-batch?projectId=${projectId}&auditDate=${auditDate}${batchParam}`,
-          { method: 'POST', body: fd, withMeta: true },
-        );
-        setUnmatched(res?.data?.unmatched ?? []);
-        onSuccess(res?.message || 'Packets uploaded.');
-      } catch (e) { onError(userMessage(e)); }
+    await packetBatch.start(Array.from(files), {
+      projectId,
+      auditDate,
+      customerMasterVersionId: run?.batch?.id ?? null,
     });
   };
+
+  useJobSettled(packetBatch.job, (job) => {
+    if (job.status === 'SUCCEEDED') onSuccess(job.result?.summary || 'Packets filed.');
+    else if (job.status === 'FAILED') onError(job.error ?? 'The packets could not be filed.');
+    void load();
+  });
 
   const s = run?.summary;
 
@@ -273,9 +299,13 @@ export const DailyRunPanel: React.FC<{
                 Nothing can be generated until the client sends the customer master file for {auditDate}.
               </div>
             </div>
-            <FileUploadButton label="Upload client file" busy={batchImport.state.phase === 'uploading'} onFile={uploadBatch} />
+            <FileUploadButton label="Upload client file" busy={importBusy} onFile={uploadBatch} />
           </div>
         )}
+        {/* The upload, then the reconciliation while it runs — restored after a refresh. */}
+        <div style={{ marginTop: batchImport.upload.phase !== 'idle' || batchImport.active.length > 0 ? 10 : 0 }}>
+          <BackgroundJobPanel handle={batchImport} showFinished={false} />
+        </div>
         {s && s.unexpectedBranchesInBatch > 0 && (
           <div style={{ marginTop: 9, fontSize: 'var(--text-2xs)', color: 'var(--warning)' }}>
             {counted(s.unexpectedBranchesInBatch, 'branch', 'branches')} in the client file are not scheduled for this date.
@@ -321,7 +351,7 @@ export const DailyRunPanel: React.FC<{
               )}
             </>
           )}
-          <button onClick={() => setRecon(null)} title="Dismiss this batch result message" style={{ marginTop: 8, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
+          <button onClick={() => setDismissedRecon(batchImport.job?.id ?? null)} title="Dismiss this batch result message" style={{ marginTop: 8, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
             Dismiss
           </button>
         </div>
@@ -346,31 +376,53 @@ export const DailyRunPanel: React.FC<{
                 padding: '5px 12px', fontSize: 'var(--text-2xs)', fontWeight: 600,
                 background: 'var(--status-pending-bg)', color: 'var(--accent-primary)',
                 border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)',
-                cursor: acting.has('bulk') ? 'wait' : 'pointer',
+                cursor: packetsBusy ? 'wait' : 'pointer',
               }}>
                 <UploadCloud size={12} />
-                {acting.has('bulk') ? 'Filing packets…' : `Upload all ${s.toGenerate} packets together`}
+                {packetsBusy ? 'Filing packets…' : `Upload all ${s.toGenerate} packets together`}
                 {/* Said before the file dialog opens, not after a batch has crawled up and been
                     refused. One oversized packet in a batch fails only that packet. */}
                 <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>· {UPLOAD_LIMIT_HINT}</span>
-                <input type="file" multiple accept=".pdf" style={{ display: 'none' }} disabled={acting.has('bulk')}
+                <input type="file" multiple accept=".pdf" style={{ display: 'none' }} disabled={packetsBusy}
                   onChange={(e) => { const f = e.target.files; if (f?.length) void uploadGeneratedBatch(f); e.target.value = ''; }} />
               </label>
             )}
           </div>
 
-          {unmatched.length > 0 && (
+          {/* The packets' upload, then the filing while it runs — restored after a refresh. */}
+          <div style={{ marginBottom: packetBatch.upload.phase !== 'idle' || packetBatch.active.length > 0 ? 10 : 0 }}>
+            <BackgroundJobPanel handle={packetBatch} showFinished={false} />
+          </div>
+
+          {packets && (packets.unmatched.length > 0 || packets.failed.length > 0) && (
             <div style={{ background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-md)', padding: 12, marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--warning)', fontWeight: 700, fontSize: 'var(--text-xs)', marginBottom: 6 }}>
-                <AlertTriangle size={14} />
-                {unmatched.length} file(s) could not be matched to a branch — upload these individually below
-              </div>
-              {unmatched.map((u) => (
-                <div key={u.fileName} style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', padding: '2px 0' }}>
-                  <strong>{u.fileName}</strong> — {u.reason}
-                </div>
-              ))}
-              <button onClick={() => setUnmatched([])} title="Dismiss the unmatched files list" style={{ marginTop: 6, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
+              {packets.unmatched.length > 0 && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--warning)', fontWeight: 700, fontSize: 'var(--text-xs)', marginBottom: 6 }}>
+                    <AlertTriangle size={14} />
+                    {packets.unmatched.length} file(s) could not be matched to a branch — upload these individually below
+                  </div>
+                  {packets.unmatched.map((u) => (
+                    <div key={u.fileName} style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', padding: '2px 0' }}>
+                      <strong>{u.fileName}</strong> — {u.reason}
+                    </div>
+                  ))}
+                </>
+              )}
+              {packets.failed.length > 0 && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--danger)', fontWeight: 700, fontSize: 'var(--text-xs)', margin: packets.unmatched.length > 0 ? '8px 0 6px' : '0 0 6px' }}>
+                    <AlertTriangle size={14} />
+                    {packets.failed.length} file(s) were not filed
+                  </div>
+                  {packets.failed.map((f) => (
+                    <div key={f.fileName} style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', padding: '2px 0' }}>
+                      <strong>{f.fileName}</strong> — {f.reason}
+                    </div>
+                  ))}
+                </>
+              )}
+              <button onClick={() => setDismissedPackets(packetBatch.job?.id ?? null)} title="Dismiss the unmatched files list" style={{ marginTop: 6, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', cursor: 'pointer', padding: 0 }}>
                 Dismiss
               </button>
             </div>

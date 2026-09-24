@@ -6,19 +6,22 @@
  * every route.
  */
 
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import { Job, Queue } from 'bull';
+import { Queue } from 'bull';
 
 import {
-  IN_FLIGHT_SCAN_LIMIT,
   QueuedJobEnvelope,
   QueuedJobStatus,
   assertJobVisibleTo,
   dedupeKeyFor,
   describeJob,
 } from '../../infrastructure/queue/queued-job';
+import type { JobActor } from '../../infrastructure/queue/job-actor';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
 import {
+  REPORT_EXPORT_SCOPE,
+  REPORT_EXPORT_TITLE,
   REPORT_JOB,
   REPORT_JOB_OPTIONS,
   REPORT_QUEUE,
@@ -31,10 +34,21 @@ import {
 } from './report-jobs.contract';
 import { ReportFileStore } from './report-file.store';
 
+/**
+ * Who asked for an export, as the tracking row records it: the person (whose Jobs tray shows it)
+ * and their assigned regions (null when unrestricted).
+ */
+export interface ReportRequester {
+  actor: JobActor;
+  regions: string[] | null;
+}
+
 export interface EnqueueResult {
   jobId: string;
   /** True when this joined a run already in flight instead of starting a duplicate. */
   deduplicated: boolean;
+  /** The `background_jobs` row that lets the Jobs tray find this export after a refresh. */
+  backgroundJobId: string | null;
 }
 
 /**
@@ -55,47 +69,50 @@ export interface ReportJobStatus extends QueuedJobStatus<ReportJobResult> {
 
 @Injectable()
 export class ReportJobsService {
-  private readonly logger = new Logger(ReportJobsService.name);
-
   constructor(
     @InjectQueue(REPORT_QUEUE) private readonly queue: Queue,
     private readonly files: ReportFileStore,
+    private readonly backgroundJobs: BackgroundJobsService,
   ) {}
 
   async enqueueAssignments(
     params: Omit<AssignmentsReportJobData, keyof QueuedJobEnvelope>,
-    requestedBy: string,
+    requester: ReportRequester,
   ): Promise<EnqueueResult> {
-    return this.add<AssignmentsReportJobData>(REPORT_JOB.ASSIGNMENTS, params, requestedBy);
+    return this.add<AssignmentsReportJobData>(REPORT_JOB.ASSIGNMENTS, params, requester, {
+      status: params.status, projectBranchStatus: params.projectBranchStatus, priority: params.priority,
+    });
   }
 
   async enqueueBilling(
     params: Omit<BillingReportJobData, keyof QueuedJobEnvelope>,
-    requestedBy: string,
+    requester: ReportRequester,
   ): Promise<EnqueueResult> {
-    return this.add<BillingReportJobData>(REPORT_JOB.BILLING, params, requestedBy);
+    return this.add<BillingReportJobData>(REPORT_JOB.BILLING, params, requester, {
+      clientId: params.clientId, projectId: params.projectId, assayerId: params.assayerId, state: params.state,
+    });
   }
 
   async enqueueCommandCenter(
     params: Omit<CommandCenterReportJobData, keyof QueuedJobEnvelope>,
-    requestedBy: string,
+    requester: ReportRequester,
   ): Promise<EnqueueResult> {
-    return this.add<CommandCenterReportJobData>(REPORT_JOB.COMMAND_CENTER, params, requestedBy);
+    return this.add<CommandCenterReportJobData>(REPORT_JOB.COMMAND_CENTER, params, requester);
   }
 
   async enqueueAssayerRoster(
     params: Omit<AssayerRosterReportJobData, keyof QueuedJobEnvelope>,
-    requestedBy: string,
+    requester: ReportRequester,
   ): Promise<EnqueueResult> {
-    return this.add<AssayerRosterReportJobData>(REPORT_JOB.ASSAYER_ROSTER, params, requestedBy);
+    return this.add<AssayerRosterReportJobData>(REPORT_JOB.ASSAYER_ROSTER, params, requester);
   }
 
   /** Same payload as the workbook twin above — only the renderer differs. */
   async enqueueAssayerRosterPdf(
     params: Omit<AssayerRosterReportJobData, keyof QueuedJobEnvelope>,
-    requestedBy: string,
+    requester: ReportRequester,
   ): Promise<EnqueueResult> {
-    return this.add<AssayerRosterReportJobData>(REPORT_JOB.ASSAYER_ROSTER_PDF, params, requestedBy);
+    return this.add<AssayerRosterReportJobData>(REPORT_JOB.ASSAYER_ROSTER_PDF, params, requester);
   }
 
   /**
@@ -145,49 +162,44 @@ export class ReportJobsService {
     return { buffer, meta: status.result };
   }
 
+  /**
+   * Queues the export and records it as a `REPORT_EXPORT` row (`scopeType` = the report), so the
+   * person's Jobs tray shows it — progress, then a download link while the file lasts — even after
+   * a refresh.
+   *
+   * Deduplication is `enqueueTracked`'s, which is the rule this queue always had: an identical
+   * export (same name, requester and filters) that is still waiting or running is joined, never a
+   * finished one — matching a completed one would serve a stale workbook to an operator who
+   * changed a filter and re-ran deliberately. A scan failure never blocks the enqueue.
+   *
+   * `filters` is what the row displays: the report's own small filter values, never the frozen
+   * scope or the principal snapshot the worker needs.
+   */
   private async add<T extends QueuedJobEnvelope>(
     name: ReportJobName,
     params: Omit<T, keyof QueuedJobEnvelope>,
-    requestedBy: string,
+    requester: ReportRequester,
+    filters: Record<string, unknown> = {},
   ): Promise<EnqueueResult> {
+    const requestedBy = requester.actor.userId;
     const data = {
       ...params,
       requestedBy,
       dedupeKey: dedupeKeyFor(name, requestedBy, params),
     } as unknown as T;
 
-    const inFlight = await this.findInFlight(name, data.dedupeKey);
-    if (inFlight) {
-      this.logger.log(`Joining in-flight ${name} export ${inFlight.id} rather than building the same workbook twice.`);
-      return { jobId: String(inFlight.id), deduplicated: true };
-    }
-
-    const job = await this.queue.add(name, data, REPORT_JOB_OPTIONS);
-    this.logger.log(`Enqueued ${name} export job ${job.id}.`);
-    return { jobId: String(job.id), deduplicated: false };
-  }
-
-  /**
-   * Finds an identical export that has not finished yet.
-   *
-   * Unfinished states only — matching a completed one would serve a stale workbook for the whole
-   * retention window to an operator who changed a filter and re-ran deliberately.
-   *
-   * A scan failure never blocks the enqueue: the cost of skipping deduplication is one extra
-   * workbook, whereas failing the request would turn a Redis list read into an outage of the
-   * export endpoint.
-   */
-  private async findInFlight(name: ReportJobName, dedupeKey: string): Promise<Job | null> {
-    try {
-      const jobs = await this.queue.getJobs(['waiting', 'active', 'delayed'], 0, IN_FLIGHT_SCAN_LIMIT);
-      return (
-        jobs.find(
-          (j) => j?.name === name && (j.data as Partial<QueuedJobEnvelope> | undefined)?.dedupeKey === dedupeKey,
-        ) ?? null
-      );
-    } catch (err) {
-      this.logger.warn(`Could not scan for an in-flight ${name} export (${(err as Error).message}); enqueuing anyway.`);
-      return null;
-    }
+    const shown = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== ''));
+    return this.backgroundJobs.enqueueTracked({
+      kind: 'REPORT_EXPORT',
+      actor: requester.actor,
+      regions: requester.regions,
+      scope: { type: REPORT_EXPORT_SCOPE[name], id: null },
+      title: REPORT_EXPORT_TITLE[name],
+      params: shown,
+      queue: this.queue,
+      jobName: name,
+      data,
+      options: REPORT_JOB_OPTIONS,
+    });
   }
 }

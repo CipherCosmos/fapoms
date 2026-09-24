@@ -119,3 +119,12 @@ export * from './check-in-rules';
 // The candidate's road from the registration form to their first job — the one step list, and the
 // words for it, that the web link and the phone app both show after the form is sent.
 export * from './candidate-journey';
+
+// Work the server accepted and is doing in the background (uploads, imports): status, progress,
+// result, and which page owns each kind
+export * from './background-jobs';
+
+// A branch list rehearsed, reviewed and committed as background jobs: which fields a person may
+// edit in the review, what makes a row ready, and how their decisions are applied — one rule
+// for the review screen and the commit job alike.
+export * from './branch-import';

@@ -6,8 +6,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { ProjectService } from './project.service';
-import { ImportJobWorker } from './import-job.worker';
-import { ImportModule } from '../import/import.module';
+import { BranchImportJob } from './branch-import/branch-import.job';
+import { BranchImportStore } from './branch-import/branch-import.store';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectQueryService } from './project-query.service';
 import { ProjectController } from './project.controller';
@@ -30,26 +30,15 @@ import { DayTravelModule } from '../assignment/day-travel.module';
 
 @Module({
   imports: [
-    // `BranchEntity` is registered here as well as in BranchModule because the Excel importer
-    // resolves every branch code in a file with one `In(codes)` query rather than a
-    // `BranchQueryService.findOneByCode` per row, and BranchModule exports its services but not
-    // its repositories. Registering the same entity in two modules is how TypeORM expects a
-    // repository to be shared.
+    // `BranchEntity` is registered here as well as in BranchModule because the branch import
+    // resolves every SOL ID in a file with one `In(codes)` query and writes branches in chunks,
+    // and BranchModule exports its services but not its repositories. Registering the same entity
+    // in two modules is how TypeORM expects a repository to be shared.
     TypeOrmModule.forFeature([ProjectEntity, ProjectBranchEntity, AssessmentEntity, CallLogEntity, ClientEntity, UserEntity, ZoneEntity, BranchEntity]),
-    /**
-     * Spreadsheet imports run here, on a queue of this module's own.
-     *
-     * Not the shared `background-jobs` queue: that one adds named jobs to an unnamed processor,
-     * so nothing added to it is ever picked up. See import-job.constants.ts.
-     */
-    // The queue itself now lives in `ImportModule`, a leaf every feature module can import.
-    // Registering it here made the queue reachable only from code that could already reach
-    // `ProjectService` — which is why the Branches page grew its own inline importer instead.
-    ImportModule,
     PlatformModule,
     BranchModule,
     NotificationsModule,
-    // For `GeoPrecisionService.enqueueBackfill`: the importer hands its coarsely placed branches
+    // For `GeoPrecisionService.enqueueBackfill`: the branch import hands its coarsely placed branches
     // to the precision worker the moment an import finishes. GeoModule is a leaf — it imports no
     // feature module — so this cannot close a cycle.
     GeoModule,
@@ -61,7 +50,8 @@ import { DayTravelModule } from '../assignment/day-travel.module';
     DayTravelModule,
   ],
   controllers: [ProjectController, CallLogController, BranchImportController],
-  providers: [ProjectService, ProjectQueryService, CallLogService, ImportJobWorker],
+  // `BranchImportJob` registers the BRANCH_IMPORT background-job kind (the Jobs foundation is global).
+  providers: [ProjectService, ProjectQueryService, CallLogService, BranchImportStore, BranchImportJob],
   exports: [ProjectService, ProjectQueryService, CallLogService, TypeOrmModule],
 })
 export class ProjectModule {}

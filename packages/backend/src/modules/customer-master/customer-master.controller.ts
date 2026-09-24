@@ -1,19 +1,36 @@
-import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, Res, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, Inject } from '@nestjs/common';
-import type { Response } from 'express';
+import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, HttpCode, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { assertUploadAllowed, uploadMulterOptions, MAX_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES } from '../document/upload-validation';
+import type { BackgroundJobAccepted } from '@fapoms/shared';
+import { diskUploadMulterOptions, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { DiskUploadScanInterceptor } from '../document/disk-upload-scan.interceptor';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScopeFilter, GlobalScope, assignedRegions } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
+import { BackgroundJobsService } from '../../infrastructure/background-jobs/background-jobs.service';
+import { jobActorFrom } from '../../infrastructure/queue/job-actor';
 import { CustomerMasterService } from './customer-master.service';
-import { ImportJobService } from '../import/import-job.service';
-
-const customerMasterUploadMulterOptions = uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES });
-import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+import { CUSTOMER_MASTER_IMPORT_KIND } from './customer-master-import.job';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
+
+/** On disk, like every background upload: the file goes straight to storage, never held in memory. */
+const customerMasterUploadMulterOptions = diskUploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES, maxFiles: 1 });
+
+/**
+ * The job parameters a background upload sends as the multipart `params` field (JSON text — see
+ * `uploadJob` in the web client). Query parameters, the route's older shape, win where both are sent.
+ */
+function multipartParams(req: any): Record<string, unknown> {
+  const raw = req?.body?.params;
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    throw new BadRequestException('params must be a JSON object.');
+  }
+}
 
 @ApiTags('Customer Master')
 @ApiBearerAuth()
@@ -22,16 +39,17 @@ import { SystemRole } from '@fapoms/shared';
 export class CustomerMasterController {
   constructor(
     private readonly customerMasterService: CustomerMasterService,
-    private readonly importJobService: ImportJobService,
-    @Inject('StorageEngine') private readonly storage: StorageEngine,
+    private readonly backgroundJobs: BackgroundJobsService,
   ) {}
 
   @Post('upload')
+  @HttpCode(202)
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
   // The customer master arrives as a spreadsheet, so this is the file-upload permission rather
   // than a project one — the version it registers is approved separately, below.
   @RequirePermissions('document:upload:organization')
-    @UseInterceptors(FileInterceptor('file', customerMasterUploadMulterOptions), FileScanInterceptor)
+  // On disk, and scanned (malware + the byte-level content gate) from disk before the handler runs.
+  @UseInterceptors(FileInterceptor('file', customerMasterUploadMulterOptions), DiskUploadScanInterceptor)
   @ApiConsumes('multipart/form-data')
   // No region ceiling here, deliberately: one file covers every branch the client scheduled for
   // an audit date (see `dailyRun`'s doc comment), so there is no single branchId the caller
@@ -40,80 +58,48 @@ export class CustomerMasterController {
   // upload by design. The records this creates are read back through `findRecords`, which does
   // carry the ceiling; gating the write here would not close a read gap, only add a check with
   // no single id to check it against.
-  @ApiOperation({ summary: 'Upload customer master Excel file, run database branch reconciliation, and register new version' })
+  @ApiOperation({ summary: 'Upload the client customer master file; answers 202 with the background job that reconciles it and registers the version' })
   async upload(
-    @UploadedFile() file: any,
-    @Query('projectId', ParseUUIDPipe) projectId: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Req() req: any,
-    // The audit date this batch covers. The client sends one file the day before
-    // for all branches scheduled that day, so the date is what identifies the run.
-    @Query('auditDate') auditDate?: string,
-    @Res({ passthrough: true }) res?: Response,
-  ) {
-    // Every sibling upload route in document.controller.ts calls this; this one didn't — a
-    // disguised executable (`.exe`, `application/x-msdownload`) was accepted, persisted with its
-    // executable filename intact, and "reconciled" as nonsense rows by the naive XLSX parser.
-    // Narrower than the default allow-list on purpose: this route's whole job is "read an Excel
-    // file", so a PDF or a photo is exactly as wrong here as an executable is.
-    assertUploadAllowed({
-      contentType: file.mimetype,
-      size: file.size,
-      fileName: file.originalname,
-      allowed: SPREADSHEET_UPLOAD_TYPES,
-    });
+    // Either as query parameters (the route's original shape) or in the multipart `params` JSON.
+    // The audit date is what identifies the run: the client sends one file the day before for all
+    // branches scheduled that day.
+    @Query('projectId') projectIdQuery?: string,
+    @Query('auditDate') auditDateQuery?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ): Promise<BackgroundJobAccepted> {
+    const params = multipartParams(req);
+    const projectId = projectIdQuery ?? params.projectId;
+    const auditDate = auditDateQuery ?? params.auditDate ?? null;
 
-    const savedPath = await this.storage.saveFile(
-      file.originalname,
-      file.buffer,
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
     /**
-     * Accepted, not done.
+     * Accepted, not done. The file is stored and a background job recorded; reconciliation runs in
+     * the worker (`CustomerMasterImportJob`) and its report is the job's result, read back from
+     * `GET /jobs` — so a refresh, or a closed tab, loses nothing.
      *
-     * Reconciliation walks every row against the client's branches by SOL ID and then registers a
-     * version. On a real daily file that is thousands of lookups, and it used to happen here, on
-     * the request — the operator watched a spinner, and a socket timeout made a still-running
-     * import indistinguishable from a failed one, which invites uploading the same file twice.
-     *
-     * The parts that must answer immediately still do: the file type and size are validated and
-     * the upload is persisted above, so a wrong or unreadable file is refused right here with a
-     * specific error rather than a cheerful 202 and a failure to go looking for.
+     * What must answer at once still does: the file type (spreadsheet only), size, the malware scan,
+     * the byte-level content gate, the project and the caller's client ceiling are all checked
+     * before anything is stored (the interceptors above and the kind's `prepare`), so a wrong file
+     * is refused right here with a specific error rather than a cheerful 202.
      */
-    const job = await this.importJobService.enqueueCustomerMasterImport({
-      actorId: req.user.id,
-      projectId,
-      fileBuffer: file.buffer,
-      fileName: file.originalname,
-      savedPath,
-      auditDate,
+    return this.backgroundJobs.create({
+      kind: CUSTOMER_MASTER_IMPORT_KIND,
+      actor: jobActorFrom(req),
+      regions: assignedRegions(req.user),
+      scope: { type: 'PROJECT', id: typeof projectId === 'string' ? projectId : null },
+      params: { projectId, auditDate },
+      globalScope: scope,
+      file: file
+        ? {
+            path: file.path,
+            buffer: file.path ? undefined : file.buffer,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+            size: file.size,
+          }
+        : null,
     });
-
-    // 202: accepted, not done. Same body shape every queued import answers with, so the client's
-    // shared `useImportJob` hook follows this one exactly as it follows the roster and branch runs.
-    res?.status(202);
-    return {
-      ...job,
-      queued: true,
-      statusUrl: `/customer-master/import-jobs/${job.jobId}`,
-      message:
-        'Upload received. Reconciling every row against this client\'s branches runs in the '
-        + 'background — it does not need this page kept open; the report appears when it finishes.',
-    };
-  }
-
-  /**
-   * Where a queued customer-master import has reached.
-   *
-   * Owner-checked inside the service: the report names a client's branches and account counts, so
-   * a job id alone must not be enough to read someone else's run.
-   */
-  @Get('import-jobs/:jobId')
-  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
-  @RequirePermissions('document:upload:organization')
-  @ApiOperation({ summary: 'Progress and result of a queued customer master import' })
-  async importJobStatus(@Param('jobId') jobId: string, @Req() req: any) {
-    const status = await this.importJobService.getCustomerMasterImportStatus(req.user.id, jobId);
-    return status;
   }
 
   @Post('versions/:versionId/approve')

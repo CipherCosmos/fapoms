@@ -1,12 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Banknote, FileDown, Hourglass, Landmark, PauseCircle, Percent, PlayCircle, Receipt, RotateCcw, Send } from 'lucide-react';
-import { AssayerPayableStatus, PaymentMethod, paymentMethodLabel, businessTodayDateKey } from '@fapoms/shared';
+import { AssayerPayableStatus, PaymentMethod, paymentMethodLabel, businessTodayDateKey, isBackgroundJobInFlight } from '@fapoms/shared';
 import { Modal, Pagination, Select, StyledInput, useToast } from '../../components/ui';
 import {
   usePayouts, useApprovePayouts, usePayPayouts, useHoldPayout, useReopenAssignment,
   useInviteAssayerInvoice, useAssayerInvoiceLookup, useBillingOverview,
 } from '../../hooks/useBilling';
+import { useBackgroundJob } from '../../hooks/useBackgroundJob';
 import { BILLING_PAGE_SIZE, billingApi, isInvoicingNotEnabled } from '../../services/billing';
 import type { PayoutRow, PayoutActionResult, PayPayoutsResult, AssayerInvoiceInviteAllResult } from '../../services/billing';
 import { userMessage } from '../../services/errors';
@@ -93,12 +94,34 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
    * line ("Approving payouts (7/20)…"); non-null also means "a run is going".
    */
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
-  const bulkBusy = bulkProgress !== null;
+  /**
+   * An approve or pay run this page did NOT start — pressed before a refresh, or in another tab.
+   * The runs are tracked on the server (the Jobs tray), so the tab can still say one is going and
+   * hold the buttons: "did my payment go through?" answered with a second press is how a batch
+   * gets paid under two references. Runs started from this page load are followed above instead.
+   */
+  const approveRuns = useBackgroundJob('BILLING_APPROVE_PAYOUTS');
+  const payRuns = useBackgroundJob('BILLING_PAY_PAYOUTS');
+  const ownRuns = useRef(new Set<string>());
+  const remember = (started: { backgroundJobId?: string | null }) => { if (started.backgroundJobId) ownRuns.current.add(started.backgroundJobId); };
+  const serverRun = [...approveRuns.active, ...payRuns.active]
+    .find((j) => isBackgroundJobInFlight(j.status) && !ownRuns.current.has(j.id)) ?? null;
+  const serverRunLine = serverRun
+    ? `${serverRun.title} is still running on the server (${serverRun.progress.stage})… The list updates when it finishes.`
+    : null;
+  const bulkBusy = bulkProgress !== null || serverRun !== null;
   const followProgress = { onProgress: (p: { stage: string }) => setBulkProgress(`${p.stage}…`) };
   /** A run still going after the give-up time is not a failure — it carries on, and says so. */
   const toastRunError = (title: string, e: unknown) => (e instanceof QueuedJobTimeout
     ? toast({ type: 'info', title: 'Still running on the server', message: e.message })
     : toast({ type: 'error', title, message: userMessage(e) }));
+
+  const serverRunId = serverRun?.id ?? null;
+  const lastServerRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastServerRun.current && !serverRunId) void payouts.refetch();
+    lastServerRun.current = serverRunId;
+  }, [serverRunId]); // eslint-disable-line react-hooks/exhaustive-deps -- refetch on the run finishing only
 
   const rows = useMemo(() => payouts.data?.items ?? [], [payouts.data?.items]);
   const total = payouts.data?.total ?? 0;
@@ -153,6 +176,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
     setBulkProgress(`Approving ${approvable.length} payout${approvable.length === 1 ? '' : 's'}…`);
     try {
       const started = await approve.mutateAsync({ payableIds: approvable.map((p) => p.id), reason });
+      remember(started);
       const r = await billingApi.followBulkJob<PayoutActionResult>(started, followProgress);
       if (r.refused.length) toast({ type: 'warning', title: `${r.done.length} approved, ${r.refused.length} refused`, message: r.refused.map((x) => x.reason).join(' · ') });
       else toast('success', `${r.done.length} payout${r.done.length === 1 ? '' : 's'} approved`);
@@ -268,9 +292,9 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
 
       {/* A queued approve / pay run, in the server's own words. It carries on if this page is
           closed; the lists update as it writes. */}
-      {bulkProgress && (
+      {(bulkProgress ?? serverRunLine) && (
         <div role="status" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '8px 12px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
-          {bulkProgress}
+          {bulkProgress ?? serverRunLine}
         </div>
       )}
 
@@ -434,6 +458,7 @@ export const PayoutsTab: React.FC<{ stage: PayoutStage; onStage: (s: PayoutStage
             setBulkProgress(`Paying ${payable.length} payout${payable.length === 1 ? '' : 's'}…`);
             try {
               const started = await pay.mutateAsync({ payableIds: payable.map((p) => p.id), ...dto });
+              remember(started);
               const r = await billingApi.followBulkJob<PayPayoutsResult>(started, followProgress);
               if (r.refused.length) toast({ type: 'warning', title: `${r.done.length} paid, ${r.refused.length} refused`, message: r.refused.map((x) => x.reason).join(' · ') });
               else toast('success', `${r.done.length} payout${r.done.length === 1 ? '' : 's'} paid`);

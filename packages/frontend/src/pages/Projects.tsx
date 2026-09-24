@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 /** Collapses the table+detail split to a single column on narrow viewports. */
@@ -26,14 +27,14 @@ import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButt
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { localDateKey } from '../utils/statusLabels';
-import { useImportJob } from '../components/import/useImportJob';
-import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
+import { useBranchImport, branchImportBase } from '../hooks/useBranchImport';
+import { BranchImportPanel } from '../components/branch/BranchImportPanel';
+import { uploadJob, applyJobUpdate } from '../services/background-jobs';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 import { fetchWholeBranchDirectory } from '../services/branch-directory';
 import { Page } from '../components/ui/Page';
 import { GeoPrecisionBadge } from '../components/GeoPrecisionBadge';
 import { CoordinatePinModal } from '../components/geo/CoordinatePinModal';
-import { BranchReconciliationModal, BranchReconciliationReport, BranchReconciliationRow } from '../components/branch/BranchReconciliationModal';
 
 interface ClientOption {
   id: string;
@@ -283,22 +284,40 @@ export const Projects: React.FC = () => {
   const [quickForm, setQuickForm] = useState<{ name: string; clientId: string; priority: Priority }>({ name: '', clientId: '', priority: Priority.MEDIUM });
   const [showAdvancedProjectFields, setShowAdvancedProjectFields] = useState(false);
 
-  // Branch preflight reconciliation and pinning
-  const [reconcileReport, setReconcileReport] = useState<BranchReconciliationReport | null>(null);
-  const [showReconcileModal, setShowReconcileModal] = useState(false);
-  const [reconcileScope, setReconcileScope] = useState<{ kind: 'PROJECT' | 'CLIENT'; id: string }>({ kind: 'PROJECT', id: '' });
-  const [reconcileForCreate, setReconcileForCreate] = useState(false);
-  const [attachedBranches, setAttachedBranches] = useState<BranchReconciliationRow[]>([]);
+  /**
+   * A branch list chosen in the create form. It is uploaded AFTER the project is created, as that
+   * project's branch import (a background job): the project exists either way, and an upload that
+   * fails is shown on the project with a retry, never as a failed "create".
+   */
+  const [pendingBranchFile, setPendingBranchFile] = useState<File | null>(null);
   const [pinBranch, setPinBranch] = useState<any | null>(null);
-  const [isPreflighting, setIsPreflighting] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'branches' | 'settings'>('overview');
   const [form, setForm] = useState<FormData>(getInitialProjectForm());
   const [isSaving, setIsSaving] = useState(false);
-  /** The branch import's lifetime — shared with the Branches page. See `useImportJob`. */
-  const branchImport = useImportJob();
+  const queryClient = useQueryClient();
+  /**
+   * The open project's branch import — a background job read back from the server, so a refresh
+   * shows its progress, or its review waiting, again. See `useBranchImport`.
+   */
+  const projectImport = useBranchImport(
+    detail?.id ? { type: 'PROJECT', id: detail.id } : null,
+    {
+      onCommitted: (job) => {
+        if (job.result?.summary) setMessage({ type: 'success', text: job.result.summary });
+        if (detail?.id) void loadDetail(detail.id);
+      },
+    },
+  );
+  const projectImportBusy = projectImport.jobs.upload.phase === 'uploading'
+    || projectImport.jobs.active.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
+  // `?tab=branches` (the Jobs tray's link to an import) opens the project on its Branches tab.
+  const tabParam = searchParams.get('tab');
+  useEffect(() => {
+    if (tabParam === 'branches' || tabParam === 'settings' || tabParam === 'overview') setActiveTab(tabParam);
+  }, [tabParam, projectIdParam]);
 
   const [projectBranches, setProjectBranches] = useState<any[]>([]);
   const [allClientBranches, setAllClientBranches] = useState<any[]>([]);
@@ -593,23 +612,37 @@ export const Projects: React.FC = () => {
         description: form.description || undefined,
       };
 
-      let response: ProjectItem;
-      if (attachedBranches.length > 0) {
-        response = await api.post<ProjectItem>('/projects/create-with-branches', {
-          project: projectData,
-          branches: attachedBranches,
-        });
-        setMessage({
-          type: 'success',
-          text: `Project "${response.name}" (${response.projectNumber}) created with ${attachedBranches.length} branches linked!`,
-        });
-      } else {
-        response = await api.post<ProjectItem>('/projects', projectData);
-        setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
-      }
+      const response = await api.post<ProjectItem>('/projects', projectData);
+      const file = pendingBranchFile;
       setShowCreateModal(false);
       setForm(getInitialProjectForm());
-      setAttachedBranches([]);
+      setPendingBranchFile(null);
+      if (file) {
+        // The project exists now. The branch list becomes its import job: checked in the
+        // background, then reviewed on the project's Branches tab before anything is saved.
+        setSelectedId(response.id);
+        setActiveTab('branches');
+        try {
+          const accepted = await uploadJob({
+            kind: 'BRANCH_IMPORT',
+            scope: { type: 'PROJECT', id: response.id },
+            file,
+            endpoint: branchImportBase({ type: 'PROJECT', id: response.id }),
+          });
+          applyJobUpdate(queryClient, accepted.job);
+          setMessage({
+            type: 'success',
+            text: `Project "${response.name}" (${response.projectNumber}) created. ${file.name} is being checked in the background — its review opens on the project's Branches tab.`,
+          });
+        } catch (uploadErr) {
+          setMessage({
+            type: 'error',
+            text: `Project "${response.name}" (${response.projectNumber}) was created, but ${file.name} could not be uploaded: ${userMessage(uploadErr)} Upload it again from the project's Branches tab.`,
+          });
+        }
+      } else {
+        setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
+      }
       void loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to create project. ${userMessage(err)}` });
@@ -757,61 +790,8 @@ export const Projects: React.FC = () => {
   const handleUploadBranches = async (file: File) => {
     if (!detail) return;
     setMessage(null);
-    setIsPreflighting(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const report = await api.post<BranchReconciliationReport>(
-        `/projects/${detail.id}/branches/reconcile`,
-        formData
-      );
-      setReconcileReport(report);
-      setReconcileScope({ kind: 'PROJECT', id: detail.id });
-      setReconcileForCreate(false);
-      setShowReconcileModal(true);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: `Branch preflight reconciliation failed: ${userMessage(err)}` });
-    } finally {
-      setIsPreflighting(false);
-    }
+    await projectImport.start(file);
   };
-
-  const handleAttachBranchesForCreate = async (file: File) => {
-    if (!form.clientId) {
-      setMessage({ type: 'error', text: 'Please select a client before uploading branches.' });
-      return;
-    }
-    setMessage(null);
-    setIsPreflighting(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const report = await api.post<BranchReconciliationReport>(
-        `/projects/reconcile-branches?clientId=${form.clientId}`,
-        formData
-      );
-      setReconcileReport(report);
-      setReconcileScope({ kind: 'CLIENT', id: form.clientId });
-      setReconcileForCreate(true);
-      setShowReconcileModal(true);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: `Failed to analyze branch file: ${userMessage(err)}` });
-    } finally {
-      setIsPreflighting(false);
-    }
-  };
-
-  /**
-   * Reload the project once an import finishes.
-   *
-   * A queued import completes long after the upload request returned, so refreshing at the end of
-   * the handler — as this page used to — redrew the branch list exactly as it had been before the
-   * file was applied.
-   */
-  useEffect(() => {
-    if (branchImport.state.phase === 'done' && detail?.id) void loadDetail(detail.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branchImport.state.phase, detail?.id]);
 
   const handleDownloadTemplate = async () => {
     if (!detail) return;
@@ -940,57 +920,27 @@ export const Projects: React.FC = () => {
                 <FileSpreadsheet size={15} style={{ color: 'var(--accent-primary)' }} />
                 Audit Branches (Optional)
               </label>
-              {attachedBranches.length > 0 && (
-                <span style={{ fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--success)', background: 'var(--status-active-bg)', padding: '2px 8px', borderRadius: '10px' }}>
-                  {attachedBranches.length} branches attached
-                </span>
-              )}
             </div>
 
             <p style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', margin: 0 }}>
               Upload an Excel file with branch SOL IDs. We'll automatically identify existing master branches and resolve addresses, coordinates, and IFSC details.
             </p>
 
-            {attachedBranches.length > 0 ? (
+            {pendingBranchFile ? (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
                 <div style={{ fontSize: 'var(--text-2xs)' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{attachedBranches.length} branches ready</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{pendingBranchFile.name}</span>
                   <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
-                    ({attachedBranches.filter(r => r.existsInMaster).length} from master DB, {attachedBranches.filter(r => r.status === 'ready').length} exact GPS)
+                    — checked in the background once the project is created; you review it before anything is saved.
                   </span>
                 </div>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const existingCount = attachedBranches.filter(r => r.existsInMaster).length;
-                      setReconcileReport({
-                        summary: {
-                          totalRows: attachedBranches.length,
-                          existingInMaster: existingCount,
-                          newBranches: attachedBranches.length - existingCount,
-                          readyCount: attachedBranches.filter(r => r.status === 'ready').length,
-                          coarseCount: attachedBranches.filter(r => r.status === 'coarse').length,
-                          needsDetailsCount: attachedBranches.filter(r => r.status === 'needs_details').length,
-                        },
-                        rows: attachedBranches,
-                      });
-                      setReconcileScope({ kind: 'CLIENT', id: form.clientId });
-                      setReconcileForCreate(true);
-                      setShowReconcileModal(true);
-                    }}
-                    style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', background: 'var(--accent-primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
-                  >
-                    Review / Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAttachedBranches([])}
-                    style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', background: 'transparent', color: 'var(--danger)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}
-                  >
-                    Remove
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setPendingBranchFile(null)}
+                  style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', background: 'transparent', color: 'var(--danger)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                  Remove
+                </button>
               </div>
             ) : (
               <div>
@@ -998,12 +948,12 @@ export const Projects: React.FC = () => {
                   type="file"
                   id="project-create-branch-file"
                   accept=".xlsx,.xls,.csv"
-                  disabled={!form.clientId || isPreflighting}
+                  disabled={!form.clientId}
                   style={{ display: 'none' }}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = '';
-                    if (file) void handleAttachBranchesForCreate(file);
+                    if (file) setPendingBranchFile(file);
                   }}
                 />
                 <label
@@ -1016,11 +966,10 @@ export const Projects: React.FC = () => {
                     fontSize: 'var(--text-2xs)',
                     fontWeight: 600,
                     borderRadius: '4px',
-                    cursor: form.clientId && !isPreflighting ? 'pointer' : 'not-allowed',
+                    cursor: form.clientId ? 'pointer' : 'not-allowed',
                     background: form.clientId ? 'var(--bg-primary)' : 'var(--bg-surface-2)',
                     border: '1px solid var(--border-color)',
                     color: form.clientId ? 'var(--text-primary)' : 'var(--text-muted)',
-                    opacity: isPreflighting ? 0.7 : 1,
                   }}
                   onClick={() => {
                     if (!form.clientId) {
@@ -1029,7 +978,7 @@ export const Projects: React.FC = () => {
                   }}
                 >
                   <FileSpreadsheet size={13} style={{ color: 'var(--accent-primary)' }} />
-                  {isPreflighting ? 'Analyzing branches…' : 'Attach Excel File (.xlsx)'}
+                  Attach Excel File (.xlsx)
                 </label>
                 {!form.clientId && (
                   <span style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>
@@ -1510,13 +1459,13 @@ export const Projects: React.FC = () => {
                             title={branchesLocked ? lockReason : undefined}
                             style={{ display: 'flex', gap: '8px', opacity: branchesLocked ? 0.45 : 1, pointerEvents: branchesLocked ? 'none' : 'auto' }}
                           >
-                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={isPreflighting || branchImport.busy} busyLabel={isPreflighting ? 'Analyzing branches…' : 'Importing branches…'} />
+                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={projectImportBusy || !!projectImport.reviewJob} busyLabel={projectImport.reviewJob ? 'Review waiting…' : 'Importing branches…'} />
                           </div>
                         </div>
                       </div>
 
                       {/* Progress and result sit where the operator acted, not at the top of the page. */}
-                      <ImportProgressPanel state={branchImport.state} onDismiss={branchImport.reset} />
+                      <BranchImportPanel handle={projectImport} reviewTitle={`Reconcile Branches: ${detail.name}`} />
 
                       {/* Dynamic Branch Search Adder Widget */}
                       {(
@@ -1821,31 +1770,6 @@ export const Projects: React.FC = () => {
           </div>
         )}
       </Modal>
-
-      {showReconcileModal && reconcileReport && (
-        <BranchReconciliationModal
-          open={showReconcileModal}
-          onClose={() => setShowReconcileModal(false)}
-          report={reconcileReport}
-          scope={reconcileScope}
-          title={reconcileForCreate ? `Reconcile Branches for ${clients.find(c => c.id === form.clientId)?.name || 'New Project'}` : `Reconcile Branches: ${detail?.name || ''}`}
-          onCommitSuccess={(outcome) => {
-            setMessage({
-              type: 'success',
-              text: `Branches committed: ${outcome.linked} linked to project (${outcome.created} created in master DB, ${outcome.updated} updated).`,
-            });
-            if (detail?.id) void loadDetail(detail.id);
-          }}
-          onConfirmRows={reconcileForCreate ? (confirmedRows) => {
-            setAttachedBranches(confirmedRows);
-            setShowReconcileModal(false);
-            setMessage({
-              type: 'success',
-              text: `${confirmedRows.length} branches ready and attached to new project form.`,
-            });
-          } : undefined}
-        />
-      )}
 
       {pinBranch && (
         <CoordinatePinModal

@@ -525,7 +525,9 @@ export async function main() {
     req(`/projects/${F.projectId}`, { method: 'PUT', token: ops.token, body: { scope: `${TAG}` } }),
     { expect: 'allowed' });
 
-  // A branch upload is a bulk POST /branches, and it goes through the same ceiling now.
+  // A branch upload is a bulk POST /branches, and it goes through the same ceiling now. It is a
+  // background job: an in-region file is accepted (202, a rehearsal to review — nothing written
+  // yet); an out-of-region one is refused in the request, before anything is stored.
   {
     const { default: XLSX } = await import('xlsx');
     const sheetFor = (state) => {
@@ -542,7 +544,7 @@ export async function main() {
       form.append('file', new Blob([sheetFor(state)], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       }), `${TAG}-${state}.xlsx`);
-      const r = await fetch(`${API}/projects/${F.projectId}/branches/upload`, {
+      const r = await fetch(`${API}/projects/${F.projectId}/branches/import`, {
         method: 'POST', headers: { Authorization: `Bearer ${ops.token}` }, body: form,
       });
       let j = null; try { j = await r.json(); } catch {}
@@ -552,11 +554,11 @@ export async function main() {
     const test = await upload(WEST_STATE);
     const ok = OK(control) && DENIED(test);
     results.push({
-      name: 'POST /projects/:id/branches/upload (bulk branch create)',
+      name: 'POST /projects/:id/branches/import (bulk branch create)',
       verdict: ok ? `DENIED ${classify(test)}` : `LEAK ${classify(test)}`,
       control: classify(control), test: classify(test),
     });
-    t.check('POST /projects/:id/branches/upload refuses a workbook of out-of-region branches',
+    t.check('POST /projects/:id/branches/import refuses a workbook of out-of-region branches',
       ok, `control ${EAST_STATE} ${classify(control)} ${control.msg ?? ''} | test ${WEST_STATE} ${classify(test)} ${test.msg ?? ''}`);
   }
 
