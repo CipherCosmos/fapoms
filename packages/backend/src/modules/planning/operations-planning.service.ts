@@ -10,6 +10,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { PlanningService } from './planning.service';
 import { EventCategory, businessTodayDateKey, localDateKey } from '@fapoms/shared';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
+import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 
 export interface PlanOverrideDto {
   branchId: string;
@@ -22,6 +23,31 @@ export interface PlanOverrideDto {
    * the job is priced there, by the same calculator and travel-once rule as every other offer.
    */
   deskFee?: number | null;
+}
+
+/**
+ * Every status change the transition endpoint may make, and nothing else (F21, 2026-09-25).
+ *
+ * `transitionPlanStatus` checked exactly one edge — APPROVED needs GENERATED or UNDER_REVIEW — and
+ * wrote any other target it was handed. A plan could be set to DEPLOYED without a single offer
+ * being made (the status reporting reads as "this project is staffed"), a DEPLOYED or ARCHIVED plan
+ * could be walked back to APPROVED and deployed a second time, and a LOCKED plan re-opened for
+ * review. DEPLOYED is deliberately absent as a target: only an actual deploy
+ * (`executeApprovedPlan`) produces it. GENERATED is produced by generating a version; the edge back
+ * to it from review is "send back for changes".
+ */
+export const COVERAGE_PLAN_TRANSITIONS: Readonly<Record<CoveragePlanStatus, readonly CoveragePlanStatus[]>> = {
+  [CoveragePlanStatus.DRAFT]: [CoveragePlanStatus.UNDER_REVIEW, CoveragePlanStatus.ARCHIVED],
+  [CoveragePlanStatus.GENERATED]: [CoveragePlanStatus.UNDER_REVIEW, CoveragePlanStatus.APPROVED, CoveragePlanStatus.ARCHIVED],
+  [CoveragePlanStatus.UNDER_REVIEW]: [CoveragePlanStatus.APPROVED, CoveragePlanStatus.GENERATED, CoveragePlanStatus.ARCHIVED],
+  [CoveragePlanStatus.APPROVED]: [CoveragePlanStatus.LOCKED, CoveragePlanStatus.UNDER_REVIEW, CoveragePlanStatus.ARCHIVED],
+  [CoveragePlanStatus.LOCKED]: [CoveragePlanStatus.APPROVED, CoveragePlanStatus.ARCHIVED],
+  [CoveragePlanStatus.DEPLOYED]: [CoveragePlanStatus.ARCHIVED],
+  [CoveragePlanStatus.ARCHIVED]: [],
+};
+
+export function canTransitionCoveragePlan(from: CoveragePlanStatus, to: CoveragePlanStatus): boolean {
+  return (COVERAGE_PLAN_TRANSITIONS[from] ?? []).includes(to);
 }
 
 /**
@@ -129,6 +155,20 @@ export function describeDeployment(result: PlanDeploymentResult) {
   };
 }
 
+/**
+ * Is this `create()` refusal about the date itself — so the next day might be accepted?
+ *
+ * A holiday always was. A recorded LEAVE is now too (F10, 2026-09-25): the deploy spreads branches
+ * over dates the assayer's own leave never entered into, and a branch whose spread date fell inside
+ * that assayer's leave was abandoned as "skipped" even though the day after the leave was free. Both
+ * go through the same bounded retry (MAX_CREATE_ATTEMPTS_PER_BRANCH), so a long leave ends as a
+ * skip naming it, not as an unbounded walk. A timeline refusal is NOT a date to step past — moving
+ * forward cannot bring a date back inside a project that has ended.
+ */
+export function isDateRefusal(message: string): boolean {
+  return message.startsWith('Holiday Conflict:') || message.startsWith('Assayer Unavailable:');
+}
+
 const parseKey = (key: string): Date => new Date(`${key.slice(0, 10)}T00:00:00`);
 
 /**
@@ -171,13 +211,18 @@ export class OperationsPlanningService {
     justification?: string,
     /** The engine's branch-by-branch progress, for the job that runs this. Advisory only. */
     onProgress?: ProgressCallback,
+    /**
+     * The same scope and start date the preview used (F19 / F1): the saved version must be the
+     * plan the operator looked at — the same branches, judged on the same day.
+     */
+    options: { scope?: Partial<GlobalScope>; startDate?: string | null } = {},
   ): Promise<CoveragePlanEntity> {
     let plan = await this.planRepository.findOne({
       where: { projectId },
       relations: ['versions'],
     });
 
-    const calculatedData = await this.planningEngine.generateCoveragePlan(projectId, undefined, onProgress);
+    const calculatedData = await this.planningEngine.generateCoveragePlan(projectId, options.scope, onProgress, options.startDate ?? null);
 
     // Apply manual overrides to the generated plan in memory.
     //
@@ -200,6 +245,15 @@ export class OperationsPlanningService {
           // Only an explicit, typed number is carried as the desk's fee (see `deployFeeFor`).
           const typed = ov.deskFee;
           ba.deskFee = typed !== undefined && typed !== null && Number.isFinite(Number(typed)) ? Number(typed) : null;
+          /**
+           * The override's written justification travels to deploy as the offer's
+           * `overrideReason`: an operator who hand-picked this assayer — say, the branch's last
+           * auditor, against the rotation rule — gave the reason when they picked them, and it is
+           * recorded against the offer (ASSIGNMENT_ELIGIBILITY_OVERRIDDEN) like any other waiver.
+           * Engine-picked branches carry none, so a rule the engine did not already honour is
+           * refused at deploy with the rule named, not waived.
+           */
+          ba.overrideReason = String(ov.justification ?? '').trim() || null;
         }
         cluster.assignedAssayerId = ov.assayerId;
         cluster.assignedAssayerName = `Override: ${ov.assayerId}`;
@@ -261,9 +315,19 @@ export class OperationsPlanningService {
       throw new NotFoundException(`Coverage plan ${planId} not found.`);
     }
 
-    // Rules validation on state transition paths
-    if (targetStatus === CoveragePlanStatus.APPROVED && plan.status !== CoveragePlanStatus.GENERATED && plan.status !== CoveragePlanStatus.UNDER_REVIEW) {
-      throw new BadRequestException('A coverage plan must be generated and reviewed before approval.');
+    // Through the table — see COVERAGE_PLAN_TRANSITIONS.
+    if (!canTransitionCoveragePlan(plan.status, targetStatus)) {
+      if (targetStatus === CoveragePlanStatus.APPROVED) {
+        throw new BadRequestException('A coverage plan must be generated and reviewed before approval.');
+      }
+      if (targetStatus === CoveragePlanStatus.DEPLOYED) {
+        throw new BadRequestException('A plan becomes DEPLOYED only by deploying it — use Deploy on an approved plan.');
+      }
+      const allowed = COVERAGE_PLAN_TRANSITIONS[plan.status] ?? [];
+      throw new BadRequestException(
+        `A ${plan.status} coverage plan cannot move to ${targetStatus}.`
+          + (allowed.length ? ` It can move to: ${allowed.join(', ')}.` : ' It is final.'),
+      );
     }
 
     const previousStatus = plan.status;
@@ -343,6 +407,8 @@ export class OperationsPlanningService {
       assayerId: string;
       /** The desk's typed fee, or undefined — `create()` then prices the job. */
       fee: number | undefined;
+      /** The operator's justification for a hand-picked assayer — see the override loop above. */
+      overrideReason?: string;
       earliestOffsetDays: number;
     }> = [];
 
@@ -352,10 +418,10 @@ export class OperationsPlanningService {
       // cluster-wide assayer (legacy behaviour). Each branch deploys with the desk's typed fee when the plan carries one, and with NO fee
       // otherwise — `create()` prices it (see `deployFeeFor`). The engine's own `fee`, and the legacy
       // even split of `estimatedTotalFee`, are estimates and are never sent.
-      const perBranch: Array<{ branchId: string; assayerId: string | null; deskFee: number | null }> =
+      const perBranch: Array<{ branchId: string; assayerId: string | null; deskFee: number | null; overrideReason: string | null }> =
         Array.isArray(cluster.branchAssignments) && cluster.branchAssignments.length > 0
-          ? cluster.branchAssignments.map((ba: any) => ({ branchId: ba.branchId, assayerId: ba.assayerId, deskFee: ba.deskFee ?? null }))
-          : (cluster.branchIds ?? []).map((branchId: string) => ({ branchId, assayerId: cluster.assignedAssayerId ?? null, deskFee: null }));
+          ? cluster.branchAssignments.map((ba: any) => ({ branchId: ba.branchId, assayerId: ba.assayerId, deskFee: ba.deskFee ?? null, overrideReason: ba.overrideReason ?? null }))
+          : (cluster.branchIds ?? []).map((branchId: string) => ({ branchId, assayerId: cluster.assignedAssayerId ?? null, deskFee: null, overrideReason: null }));
 
       // How many of this cluster's branches go on each day. A cluster with an
       // `estimatedDurationDays` estimate was planned as that many days of work, so its branches
@@ -386,6 +452,7 @@ export class OperationsPlanningService {
           projectBranchId: projectBranch.id,
           assayerId: item.assayerId,
           fee: deployFeeFor(item),
+          overrideReason: item.overrideReason ?? undefined,
           // The cluster's own share of the campaign window: branch #3 of a 6-branch, 3-day
           // cluster starts on day two, alongside branch #4.
           earliestOffsetDays: Math.floor(position / branchesPerDay),
@@ -467,6 +534,7 @@ export class OperationsPlanningService {
             projectBranchId: alloc.projectBranchId,
             assayerId: alloc.assayerId,
             ...(alloc.fee !== undefined ? { proposedFee: alloc.fee } : {}),
+            ...(alloc.overrideReason ? { overrideReason: alloc.overrideReason } : {}),
             scheduledDate: candidate,
             // The durable per-branch guard — see `deploymentRequestId`. The lookup above spares a
             // re-run the work; this is what still holds if two runs reach one branch at once.
@@ -489,7 +557,9 @@ export class OperationsPlanningService {
             }
             break;
           }
-          if (!message.startsWith('Holiday Conflict:')) break;
+          // A refusal about THE DATE moves the date and tries again, bounded by
+          // MAX_CREATE_ATTEMPTS_PER_BRANCH; anything else is not fixed by another day.
+          if (!isDateRefusal(message)) break;
           candidate = this.nextWorkableDate(addDays(candidate, 1), branchDate?.blocked);
         }
       }

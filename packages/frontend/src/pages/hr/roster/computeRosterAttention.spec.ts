@@ -48,7 +48,6 @@ const basePerson = (overrides: Partial<RosterPerson> = {}): RosterPerson => ({
   performanceRating: 4.5,
   leaves: null,
   workingHours: null,
-  maxDailyWorkload: 5,
   maxWeeklyWorkload: 25,
   ...overrides,
 });

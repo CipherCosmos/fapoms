@@ -153,39 +153,41 @@ export class ConstraintEvaluator {
 
   /**
    * Evaluates if the scheduled date lies within the project start and end dates.
+   *
+   * Compared as IST calendar keys, both ends inclusive (F20, 2026-09-25). This compared instants:
+   * `project.startDate` is a date column (midnight), the scheduled date usually carries a time or
+   * an IST-midnight offset, so the last day of an engagement failed as "after the end date" and a
+   * plan run at 09:00 on the first day could read as before it — depending on the server's zone.
    */
   checkProjectTimeline(project: ProjectEntity, scheduledDate: Date): ConstraintResult {
-    // Guarded once at the top rather than at each end of the window — the rule is "the date must
-    // be inside the engagement", and suspending it suspends both bounds.
-    if (this.ruleBypass.isBypassedSync(BypassableRule.PROJECT_TIMELINE)) {
-      const outside =
-        (project.startDate && scheduledDate.getTime() < new Date(project.startDate).getTime()) ||
-        (project.endDate && scheduledDate.getTime() > new Date(project.endDate).getTime());
-      if (outside) {
-        return this.allowBypassed(
-          BypassableRule.PROJECT_TIMELINE,
-          `${businessDateKey(scheduledDate)} is outside ${project.startDate ?? '—'}..${project.endDate ?? '—'}`,
-        );
-      }
+    const dayKey = businessDateKey(scheduledDate);
+    const keyOf = (v: Date | string | null | undefined): string | null => {
+      if (v == null || v === '') return null;
+      return typeof v === 'string' ? v.slice(0, 10) : businessDateKey(v);
+    };
+    const startKey = keyOf(project.startDate as any);
+    const endKey = keyOf(project.endDate as any);
+    const before = !!startKey && dayKey < startKey;
+    const after = !!endKey && dayKey > endKey;
+    // Guarded once rather than at each end of the window — the rule is "the date must be inside
+    // the engagement", and suspending it suspends both bounds.
+    if ((before || after) && this.ruleBypass.isBypassedSync(BypassableRule.PROJECT_TIMELINE)) {
+      return this.allowBypassed(
+        BypassableRule.PROJECT_TIMELINE,
+        `${dayKey} is outside ${startKey ?? '—'}..${endKey ?? '—'}`,
+      );
     }
-    const scheduledTime = scheduledDate.getTime();
-    if (project.startDate) {
-      const projectStart = new Date(project.startDate).getTime();
-      if (scheduledTime < projectStart) {
-        return {
-          passed: false,
-          reason: `Timeline Conflict: Scheduled date is before project start date ${project.startDate}.`,
-        };
-      }
+    if (before) {
+      return {
+        passed: false,
+        reason: `Timeline Conflict: Scheduled date is before project start date ${startKey}.`,
+      };
     }
-    if (project.endDate) {
-      const projectEnd = new Date(project.endDate).getTime();
-      if (scheduledTime > projectEnd) {
-        return {
-          passed: false,
-          reason: `Timeline Conflict: Scheduled date is after project end date ${project.endDate}.`,
-        };
-      }
+    if (after) {
+      return {
+        passed: false,
+        reason: `Timeline Conflict: Scheduled date is after project end date ${endKey}.`,
+      };
     }
     return { passed: true };
   }
@@ -267,10 +269,57 @@ export class ConstraintEvaluator {
     project: ProjectEntity,
     scheduledDate?: Date,
   ): ConstraintResult {
+    return this.checkRequirements(
+      assayerEntity,
+      project.requiredSkills ?? [],
+      project.requiredCertifications ?? [],
+      scheduledDate,
+      '',
+    );
+  }
+
+  /**
+   * The CLIENT's own required skills and certifications (`planningPreferences.requiredSkills` /
+   * `.requiredCertifications`), checked exactly like a project's.
+   *
+   * Owner decision 2026-09-25: these are a hard requirement, not a preference. They used to be read
+   * only by the client-preference SCORER, which dropped a non-matching candidate to 0 on one
+   * dimension — so a person the bank had said must hold a certificate still reached the list (a
+   * little lower down), and the write path never looked at the field. Now the engine excludes on it
+   * and create/reassign refuse on it — both overridable with a written reason, like the project's
+   * own skills (same rule, `SKILLS_AND_CERTIFICATIONS`).
+   *
+   * The preferences arrive from jsonb the API does not type-check, so anything that is not a list
+   * of non-empty strings is ignored rather than trusted.
+   */
+  checkClientRequirements(
+    assayerEntity: AssayerEntity,
+    planningPreferences: Record<string, any> | null | undefined,
+    scheduledDate?: Date,
+  ): ConstraintResult {
+    const list = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : [];
+    return this.checkRequirements(
+      assayerEntity,
+      list(planningPreferences?.requiredSkills),
+      list(planningPreferences?.requiredCertifications),
+      scheduledDate,
+      'The client requires ',
+    );
+  }
+
+  private checkRequirements(
+    assayerEntity: AssayerEntity,
+    requiredSkills: string[],
+    requiredCertifications: string[],
+    scheduledDate: Date | undefined,
+    /** Empty for a project's requirements; names the client for the client's own. */
+    clientPrefix: string,
+  ): ConstraintResult {
     const assayer = assayerEntity as AssayerWithWorkforceAttributes;
-    if (project.requiredSkills && project.requiredSkills.length > 0) {
-      const assayerSkills = (assayer.skills || []).map((s) => s.trim().toLowerCase());
-      const missingSkills = project.requiredSkills.filter(
+    if (requiredSkills.length > 0) {
+      const assayerSkills = (assayer.skills || []).map((s) => String(s).trim().toLowerCase());
+      const missingSkills = requiredSkills.filter(
         (skill) => !assayerSkills.includes(skill.trim().toLowerCase())
       );
       if (missingSkills.length > 0) {
@@ -280,12 +329,14 @@ export class ConstraintEvaluator {
         return {
           passed: false,
           rule: AssignmentRule.SKILLS_AND_CERTIFICATIONS,
-          reason: `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`,
+          reason: clientPrefix
+            ? `${clientPrefix}skills this assayer lacks: ${missingSkills.join(', ')}`
+            : `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`,
         };
       }
     }
 
-    if (project.requiredCertifications && project.requiredCertifications.length > 0) {
+    if (requiredCertifications.length > 0) {
       /**
        * A certification the assayer no longer holds does not qualify them.
        *
@@ -299,8 +350,8 @@ export class ConstraintEvaluator {
       const asOf = scheduledDate ?? new Date();
       const assayerCerts = (assayer.certifications || [])
         .filter((c) => !c.expiryDate || new Date(c.expiryDate) > asOf)
-        .map((c) => c.name.trim().toLowerCase());
-      const missingCerts = project.requiredCertifications.filter(
+        .map((c) => String(c.name ?? '').trim().toLowerCase());
+      const missingCerts = requiredCertifications.filter(
         (cert) => !assayerCerts.includes(cert.trim().toLowerCase())
       );
       if (missingCerts.length > 0) {
@@ -310,7 +361,9 @@ export class ConstraintEvaluator {
         return {
           passed: false,
           rule: AssignmentRule.SKILLS_AND_CERTIFICATIONS,
-          reason: `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,
+          reason: clientPrefix
+            ? `${clientPrefix}a valid certification this assayer lacks (missing or expired): ${missingCerts.join(', ')}`
+            : `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,
         };
       }
     }

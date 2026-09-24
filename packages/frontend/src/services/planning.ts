@@ -232,9 +232,14 @@ export const getRecommendations = <TCandidate = unknown, TExcluded = unknown>(
    * producing a reason. The client's conflict-of-interest minimum is untouched.
    */
   ignoreDistancePolicy?: boolean,
+  /**
+   * The project being planned — a branch can sit in several. Decides whose skills apply and which
+   * cycle is "this one" for the rotation rule (the last auditor comes from an EARLIER project).
+   */
+  projectId?: string | null,
 ) =>
-  api.request<{ data: TCandidate[]; meta?: { excluded?: TExcluded[] } }>(
-    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}${includeUnavailable ? '&includeUnavailable=true' : ''}${radiusKm ? `&radiusKm=${Math.round(radiusKm)}` : ''}${ignoreClientPolicy ? '&ignoreClientPolicy=true' : ''}${ignoreDistancePolicy ? '&ignoreDistancePolicy=true' : ''}`,
+  api.request<{ data: TCandidate[]; meta?: { excluded?: TExcluded[]; candidateTotal?: number; shown?: number } }>(
+    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}${includeUnavailable ? '&includeUnavailable=true' : ''}${radiusKm ? `&radiusKm=${Math.round(radiusKm)}` : ''}${ignoreClientPolicy ? '&ignoreClientPolicy=true' : ''}${ignoreDistancePolicy ? '&ignoreDistancePolicy=true' : ''}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}`,
     // withMeta so the caller receives `meta.excluded` (filtered-out candidates + reasons),
     // not just the unwrapped data array.
     { method: 'GET', withMeta: true, signal },
@@ -315,6 +320,8 @@ export const offerBranchesInBulk = (
     scheduledDate?: string;
     acceptOnBehalf?: boolean;
     acceptanceReason?: string;
+    /** Waives an overridable rule (rotation, skills, service limit) on each branch — recorded. */
+    overrideReason?: string;
   },
   watch?: PlanningJobWatch,
 ) => runPlanningJob<BulkBranchResult>('/planning/bulk-offers/jobs', WRITE_JOB_STATUS, body, watch);
@@ -369,8 +376,9 @@ export interface CoveragePlanExecuteResult {
  * Through the queued twin (`POST …/coverage-plan/jobs`): the preview runs the recommendation engine
  * once per branch, which the synchronous GET did inside the request.
  */
-export const getCoveragePlanPreview = <T = unknown>(projectId: string, watch?: PlanningJobWatch) =>
-  runPlanningJob<T>(`/planning/projects/${projectId}/coverage-plan/jobs`, READ_JOB_STATUS, undefined, watch);
+export const getCoveragePlanPreview = <T = unknown>(projectId: string, watch?: PlanningJobWatch, startDate?: string) =>
+  // The campaign start date the plan's availability is judged on (F1) — the same one Deploy uses.
+  runPlanningJob<T>(`/planning/projects/${projectId}/coverage-plan/jobs`, READ_JOB_STATUS, startDate ? { startDate } : undefined, watch);
 
 /**
  * Create or regenerate a plan version (resolves with the persisted plan, its id and status).
@@ -378,7 +386,7 @@ export const getCoveragePlanPreview = <T = unknown>(projectId: string, watch?: P
  * On the write queue: generating a version runs the same whole-project engine as the preview, then
  * writes the version.
  */
-export const createCoveragePlan = (projectId: string, body: { justification?: string } = {}, watch?: PlanningJobWatch) =>
+export const createCoveragePlan = (projectId: string, body: { justification?: string; startDate?: string } = {}, watch?: PlanningJobWatch) =>
   runPlanningJob<CoveragePlan>(`/planning/projects/${projectId}/coverage-plan/versions/jobs`, WRITE_JOB_STATUS, body, watch);
 
 /** Move a plan through its lifecycle, e.g. DRAFT/GENERATED → APPROVED. */

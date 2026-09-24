@@ -102,7 +102,6 @@ function emptyProfile(seed: { assayerCode?: string; latitude?: number; longitude
     // seven fields the back office counts as critical, and the phone had no idea it existed —
     // so a record the web listed as incomplete could read "complete" here.
     joiningDate: '',
-    maxDailyWorkload: 3,
     maxWeeklyWorkload: 15,
     employmentType: 'INTERNAL',
     performanceRating: 0,
@@ -234,7 +233,6 @@ export function useAssayerProfile(user: {
         averageRating: p.averageRating ?? prev.averageRating,
         performanceRating: p.performanceRating ?? prev.performanceRating,
         employmentType: p.employmentType || prev.employmentType,
-        maxDailyWorkload: p.maxDailyWorkload ?? prev.maxDailyWorkload,
         maxWeeklyWorkload: p.maxWeeklyWorkload ?? prev.maxWeeklyWorkload,
         /**
          * The three fields the user reported: saved fine (see `save`'s own history — the save

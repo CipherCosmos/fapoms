@@ -269,9 +269,11 @@ export class OperationsSnapshotService {
         SELECT
           COUNT(*)::int AS total,
           COUNT(*) FILTER (WHERE open_count = 0)::int AS idle,
-          COALESCE(SUM(max_daily_workload),0)::int AS daily_capacity
+          -- Headcount: one assayer supplies one assayer-day per working day (F11, 2026-09-25;
+          -- the per-assayer "most jobs per day" setting was removed).
+          COUNT(*)::int AS daily_capacity
           FROM (
-            SELECT a.id, a.max_daily_workload,
+            SELECT a.id,
                    (SELECT COUNT(*) FROM assignments asg
                      WHERE asg.assayer_id = a.id AND asg.is_active = true
                        AND asg.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})) AS open_count

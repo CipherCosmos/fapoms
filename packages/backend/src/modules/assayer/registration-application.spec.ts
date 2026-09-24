@@ -2263,11 +2263,11 @@ describe('the desk completes the person as it approves', () => {
     (ctx.assayerService as any).update = jest.fn(async () => ({}));
 
     await ctx.service.approve('app-1', 'hr-1', ['ADMIN'], 'org-1', {
-      terms: { joiningDate: '2026-10-01', maxDailyWorkload: 3 },
+      terms: { joiningDate: '2026-10-01', maxWeeklyWorkload: 12 },
     });
 
     expect((ctx.assayerService as any).update).toHaveBeenCalledWith(
-      'assayer-1', { joiningDate: '2026-10-01', maxDailyWorkload: 3 }, 'hr-1',
+      'assayer-1', { joiningDate: '2026-10-01', maxWeeklyWorkload: 12 }, 'hr-1',
     );
   });
 

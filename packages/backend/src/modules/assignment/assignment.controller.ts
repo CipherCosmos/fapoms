@@ -30,12 +30,12 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
-import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
+import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto, MAX_PLANNED_DAY_LOOP_KM } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
 import { OperationalIntegrityService } from './operational-integrity.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, Max, MaxLength } from 'class-validator';
 
 /**
  * Request bodies for the two assignment-mutating routes.
@@ -115,6 +115,13 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
    */
   @IsOptional() @IsString() @MaxLength(100)
   clientRequestId?: string;
+
+  /** The day plan's loop for its first stop — see `CreateAssignmentDto.plannedDayLoopKm`. */
+  @IsOptional() @IsNumber() @Min(0) @Max(MAX_PLANNED_DAY_LOOP_KM)
+  plannedDayLoopKm?: number;
+
+  @IsOptional() @IsNumber() @Min(0) @Max(24 * 60)
+  plannedDayLoopMinutes?: number;
 }
 
 /**

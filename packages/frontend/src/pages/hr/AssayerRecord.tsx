@@ -1430,7 +1430,6 @@ export const AssayerRecord: React.FC<{
                     )}
 
                     <FactGroup edit={editCtx} anchor="workload" flash={flashGroup} title="How much work they can take" rows={[
-                      ['Most jobs in a day', a.maxDailyWorkload, 'maxDailyWorkload'],
                       ['Most jobs in a week', a.maxWeeklyWorkload, 'maxWeeklyWorkload'],
                       ['Notes', a.notes, 'notes'],
                       ['Works from', (a as any).workingHours?.start ?? null, 'workingHoursStart'],
@@ -1760,7 +1759,7 @@ const SUMMARY_EDIT_KEYS = [
   'employmentType', 'employeeId', 'department', 'joiningDate', 'managerId', 'engagementType', 'unavailableReason', 'hrOwnerName',
   'dateOfBirth', 'qualification', 'aadhaarNumber', 'panNumber', 'vstsCode',
   'bankName', 'bankAccountNumber', 'ifscCode',
-  'maxDailyWorkload', 'maxWeeklyWorkload', 'experienceYears', 'performanceRating',
+  'maxWeeklyWorkload', 'experienceYears', 'performanceRating',
   // Written by the desk wizard and by promotion (the candidate's expertise and availability, which
   // have no columns of their own) — and read, until now, by nothing at all: no fact row, no export
   // column, no field on the phone. A note nobody can see is a note nobody wrote.

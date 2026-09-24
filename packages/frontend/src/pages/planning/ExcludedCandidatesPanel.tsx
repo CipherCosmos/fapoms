@@ -62,6 +62,43 @@ const KIND_BADGE: Record<NonNullable<ExcludedCandidate['kind']>, { label: string
 };
 
 /**
+ * What the kind badge means, in the words a person needs on hover (F18, 2026-09-25).
+ *
+ * Every structural badge used to say "Excluded by <label> rule" — which repeats the badge and
+ * explains nothing. Each kind now says what it is and what fixes it.
+ */
+export const KIND_TOOLTIP: Record<NonNullable<ExcludedCandidate['kind']>, string> = {
+  DATE: 'This person is fine on another day, just not this one — a holiday, outside the project dates, or on leave.',
+  ONBOARDING: 'This person has not finished joining checks yet. Finish onboarding on their record to plan them.',
+  ROTATION: 'They audited this branch in an earlier cycle, and the rotation rule wants a different auditor. Assigning them anyway needs a recorded reason.',
+  DISTANCE: "Outside the client's distance rules for this branch, or their home is not located yet so the rule cannot be checked.",
+  POLICY: "The client's panel, a business rule or a compliance hold keeps them off this branch.",
+  SKILLS: 'Missing a skill or a valid certification that this project or client requires.',
+};
+
+/**
+ * Why "Assign anyway" is not offered on this row, specific to what excluded them (F18).
+ *
+ * The one tooltip here used to be the minimum-distance sentence, shown on every non-overridable row —
+ * including compliance holds, which have nothing to do with distance and are fixed on the person's
+ * record, not in Platform Settings.
+ */
+export function notOverridableTooltip(e: Pick<ExcludedCandidate, 'kind'>): string {
+  switch (e.kind) {
+    case 'DISTANCE':
+      return "The conflict-of-interest rule: they live inside the client's minimum distance from this branch. Enforced regardless of reason. A platform admin can change this client's minimum-distance rule in Platform Settings, for every branch at once.";
+    case 'POLICY':
+      return 'Held from new work on compliance grounds — a re-check is overdue or awaits a senior decision. A reason cannot lift it; record the re-check on their Background tab.';
+    case 'DATE':
+      return 'The date is not workable for them. A reason does not change the calendar — choose another date, or correct their leave if it is wrong.';
+    case 'ONBOARDING':
+      return 'Onboarding is unfinished. Finish it on their record.';
+    default:
+      return 'This rule cannot be waived with a reason on this screen.';
+  }
+}
+
+/**
  * The next day worth proposing: not tomorrow if tomorrow is a Sunday or a public holiday.
  *
  * This used to return tomorrow flat. The offer endpoint enforces the holiday calendar, so on the
@@ -188,7 +225,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-primary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                       {e.displayName}
                       {badge && (
-                        <span title={e.kind === 'DATE' ? 'This person is fine on another day, just not this one' : e.kind === 'ONBOARDING' ? 'This person has not finished joining checks yet' : `Excluded by ${badge.label.toLowerCase()} rule`} style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: badge.bg, color: badge.color, letterSpacing: '0.03em' }}>
+                        <span title={e.kind ? KIND_TOOLTIP[e.kind] : undefined} style={{ fontSize: 'var(--text-3xs)', fontWeight: 800, padding: '1px 7px', borderRadius: '8px', background: badge.bg, color: badge.color, letterSpacing: '0.03em' }}>
                           {badge.label}
                         </span>
                       )}
@@ -230,7 +267,7 @@ export const ExcludedCandidatesPanel: React.FC<{
                       every click with an error the operator had no way to predict. */}
                   {notOverridable && !isOnboarding && (
                     <span
-                      title="Enforced regardless of reason. A platform admin can lift this client's minimum-distance rule in Platform Settings, for every branch at once."
+                      title={notOverridableTooltip(e)}
                       style={{ padding: '3px 8px', fontSize: 'var(--text-3xs)', whiteSpace: 'nowrap', flexShrink: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}
                     >
                       Not overridable here

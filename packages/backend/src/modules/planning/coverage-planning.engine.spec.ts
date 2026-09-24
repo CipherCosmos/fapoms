@@ -210,4 +210,38 @@ describe('CoveragePlanningEngine', () => {
       await expect(engine.generateCoveragePlan('p-1')).resolves.toBeDefined();
     });
   });
+
+  /**
+   * F1 / F13 (2026-09-25): the plan is judged on the campaign's START DATE, and each branch is
+   * scored as the whole branch row (state, city, risk) — not `{ id, name, lat, lng }` on "now".
+   */
+  describe('audit 2026-09-25', () => {
+    beforeEach(() => {
+      mockProjectQueryService.findProjectBranches.mockResolvedValue([
+        { branchId: 'b-1', status: 'IMPORTED', branch: { id: 'b-1', name: 'Branch 1', latitude: 19.0, longitude: 72.0, state: 'Maharashtra', city: 'Pune City', riskScore: 9 } },
+      ]);
+    });
+
+    it('F1: availability and every branch are judged on the start date given, as an IST calendar day', async () => {
+      const plan = await engine.generateCoveragePlan('p-1', undefined, undefined, '2026-10-05');
+      const day = mockRecommendationEngine.recommend.mock.calls[0][1] as Date;
+      expect(day.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })).toBe('2026-10-05');
+      const rosterDay = mockAssayerProvider.getAvailableAssayers.mock.calls[0][0] as Date;
+      expect(rosterDay.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })).toBe('2026-10-05');
+      expect(plan.startDate).toBe('2026-10-05');
+    });
+
+    it('F13: the engine sees the full branch — state, city and risk — and the project being planned', async () => {
+      await engine.generateCoveragePlan('p-1', undefined, undefined, '2026-10-05');
+      const [branch, , , , options] = mockRecommendationEngine.recommend.mock.calls[0];
+      expect(branch).toMatchObject({ id: 'b-1', state: 'Maharashtra', city: 'Pune City', riskScore: 9, clientId: 'c-1' });
+      expect(options).toEqual({ projectId: 'p-1' });
+    });
+
+    it('reads the branch rows under the caller\'s scope, like the branch list', async () => {
+      const scope = { regions: ['WEST'] } as any;
+      await engine.generateCoveragePlan('p-1', scope, undefined, '2026-10-05');
+      expect(mockProjectQueryService.findProjectBranches).toHaveBeenCalledWith('p-1', scope);
+    });
+  });
 });

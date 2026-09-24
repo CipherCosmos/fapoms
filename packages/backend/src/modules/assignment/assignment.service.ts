@@ -44,6 +44,7 @@ import {
 import { ProjectEntity } from '../project/project.entity';
 import { ENGAGED_ASSIGNMENT_STATUSES } from './assignment-workload';
 import { dayTravelAlreadyCharged, DayTravelService } from './assignment-day-travel';
+import { findLastBranchAuditor, rotationBars, rotationBarredReason } from './branch-rotation';
 import { throwMappedUniqueViolation, throwIfRetryable } from './assignment-constraint-errors';
 import { attendanceDeadline, offerResponseDeadline } from './assignment-sla';
 import { assignmentOccurrenceKey, checkInOccurrenceKey } from './assignment-notification-keys';
@@ -176,7 +177,26 @@ export interface CreateAssignmentDto {
   overrideReason?: string;
   /** Durable idempotency key — survives DB-commit / HTTP-loss retries. */
   clientRequestId?: string;
+  /**
+   * The day plan's whole loop, for the FIRST stop of a committed day plan (F6/Q10, 2026-09-25).
+   *
+   * A day plan is one physical journey — home → stop 1 → … → stop N → home — and the plan screen
+   * shows the day's travel priced on that loop. Posted stop by stop, the first stop used to be
+   * quoted home → branch → home (the direct journey), so the booked total never matched the figure
+   * the desk had just approved. When this is sent, the stop's travel is quoted on the loop instead
+   * (round trip, the loop's minutes for the transport modes), through the same calculator — so it is
+   * still a SYSTEM-quoted fee, never a desk-typed one, and travel-once-a-day still governs it: if
+   * another job that day already carries the journey this stop is priced base-only, and
+   * `DayTravelService.rebalance` can still move or drop it later. Every later stop is posted
+   * without it and prices base-only because the first stop now carries the day's journey.
+   */
+  plannedDayLoopKm?: number;
+  /** The loop's driving minutes, alongside `plannedDayLoopKm`. */
+  plannedDayLoopMinutes?: number;
 }
+
+/** The longest day-plan loop `create()` will price from — a plausibility bound, not a policy. */
+export const MAX_PLANNED_DAY_LOOP_KM = 3000;
 
 export interface UpdateAssignmentDetailsDto {
   proposedFee?: number;
@@ -484,6 +504,68 @@ export class AssignmentService {
     ), ASSIGNMENT_ERROR_CODES.RESCHEDULE_NOT_ALLOWED);
   }
 
+  /**
+   * The two placement rules decided the same way on every door that puts an assayer on a branch —
+   * `create()` (which Send to app, Call & Assign, bulk offer, the day-plan commit and plan deploy
+   * all go through) and `reassignAssignment()`. Each refusal goes to `refuse`, which either waives
+   * it against the caller's written reason (recorded as ASSIGNMENT_ELIGIBILITY_OVERRIDDEN with the
+   * rule named) or throws OVERRIDE_REASON_REQUIRED.
+   *
+   *  - The CLIENT's required skills and certifications (`planningPreferences.requiredSkills` /
+   *    `.requiredCertifications`) — owner decision 2026-09-25, enforced like the project's own.
+   *  - The ROTATION rule: the branch's last auditor from an earlier project may not take it again
+   *    without a reason (assignment/branch-rotation.ts — the same helper the engine excludes with).
+   *    An administrator's REPEAT_AUDITOR_ROTATION bypass window lets it through, noted, as the
+   *    engine already honoured.
+   */
+  private async applyPlacementRules(
+    assayer: { id: string; displayName?: string | null; assayerCode?: string | null } & Record<string, any>,
+    target: { branchId: string | null | undefined; projectId: string | null | undefined; planningPreferences: Record<string, any> | null | undefined; onDate?: Date },
+    refuse: (rule: AssignmentRule, barredReason: string) => void,
+  ): Promise<void> {
+    const client = this.constraintEvaluator.checkClientRequirements(assayer as any, target.planningPreferences, target.onDate);
+    if (!client.passed) {
+      refuse(client.rule ?? AssignmentRule.SKILLS_AND_CERTIFICATIONS, client.reason ?? 'Missing a skill or certification this client requires.');
+    }
+
+    const last = await findLastBranchAuditor(this.assignmentRepository.manager, target.branchId, target.projectId);
+    if (rotationBars(last, assayer.id)) {
+      if (this.ruleBypass.isBypassedSync(BypassableRule.REPEAT_AUDITOR_ROTATION)) {
+        this.ruleBypass.noteBypass(BypassableRule.REPEAT_AUDITOR_ROTATION, {
+          entityType: 'BRANCH', entityId: target.branchId ?? undefined,
+          detail: `${assayer.displayName ?? assayer.id} audited this branch most recently`,
+        });
+      } else {
+        refuse(AssignmentRule.REPEAT_AUDITOR_ROTATION, rotationBarredReason(last!, assayer.displayName ?? assayer.assayerCode ?? 'This assayer'));
+      }
+    }
+  }
+
+  /**
+   * Validate a day plan's loop before it prices anything (see `CreateAssignmentDto.plannedDayLoopKm`).
+   * Null when none was sent. A loop that starts and ends at home and passes this branch cannot be
+   * shorter than the one-way distance to it, nor longer than a plausibility bound — either means
+   * the figure is not the loop it claims to be, and it is refused rather than priced.
+   */
+  static resolvePlannedDayLoop(
+    loopKm: number | null | undefined,
+    loopMinutes: number | null | undefined,
+    oneWayKm: number,
+  ): { km: number; minutes: number } | null {
+    if (loopKm === undefined || loopKm === null) return null;
+    const km = Number(loopKm);
+    if (!Number.isFinite(km) || km <= 0 || km > MAX_PLANNED_DAY_LOOP_KM) {
+      throw new BadRequestException(`The day plan's route (${loopKm} km) is not a distance that can be priced.`);
+    }
+    if (oneWayKm > 0 && km + 0.5 < oneWayKm) {
+      throw new BadRequestException(
+        `The day plan's route (${km.toFixed(1)} km) is shorter than the one-way distance to this branch (${oneWayKm.toFixed(1)} km). Re-run the day plan.`,
+      );
+    }
+    const minutes = Number(loopMinutes);
+    return { km, minutes: Number.isFinite(minutes) && minutes > 0 ? minutes : 0 };
+  }
+
   static applyOverridePolicy(
     rule: AssignmentRule,
     barredReason: string,
@@ -595,6 +677,17 @@ export class AssignmentService {
         );
       }
     }
+
+    await this.applyPlacementRules(
+      assayer,
+      {
+        branchId: projectBranch.branchId,
+        projectId: projectBranch.projectId,
+        planningPreferences: projectBranch.project?.client?.planningPreferences,
+        onDate: dto.scheduledDate ? new Date(dto.scheduledDate) : undefined,
+      },
+      refuseUnlessOverridden,
+    );
 
     // Check for any active or existing assignment for this branch
     const existingAssignment = await this.assignmentRepository.findOne({
@@ -722,6 +815,9 @@ export class AssignmentService {
      */
     const quotedDistanceSource: 'OSRM' | 'ESTIMATE' | null = route ? (route.source ?? 'ESTIMATE') : null;
 
+    // The day plan's loop, when this is its first stop — see `plannedDayLoopKm`.
+    const plannedLoop = AssignmentService.resolvePlannedDayLoop(dto.plannedDayLoopKm, dto.plannedDayLoopMinutes, distanceKm);
+
     // The client's own territorial rules, enforced on the write path rather than merely
     // influencing a score. Without this an operator could assign an assayer living beside the
     // branch they are auditing — exactly what the minimum-distance rule exists to prevent —
@@ -824,7 +920,7 @@ export class AssignmentService {
     };
     // Base fee only — the price of this job when the day's journey is already paid for. Taken
     // first so that `quote` below is the calculator's last answer, as it always was.
-    const baseOnlyQuote = distanceKm > 0
+    const baseOnlyQuote = distanceKm > 0 || plannedLoop
       ? await this.feePolicyService.quote({ ...quoteInput, distanceKm: 0, road: null })
       : null;
 
@@ -832,7 +928,18 @@ export class AssignmentService {
     // the client's contract, not from a constant in this file. The branch's place lets the
     // transport rate card ground the travel component in what the journey actually costs —
     // by bus, own vehicle, whatever the desk has configured for that state — when rates exist.
-    const quote = await this.feePolicyService.quote({
+    const quote = plannedLoop
+      // The day plan's loop, priced exactly as the day planner priced it: the whole closed route,
+      // once, as a round trip.
+      ? await this.feePolicyService.quote({
+          ...quoteInput,
+          distanceKm: plannedLoop.km,
+          distanceIsRoundTrip: true,
+          road: plannedLoop.minutes > 0
+            ? { distanceKm: plannedLoop.km, durationMinutes: plannedLoop.minutes, source: route?.source ?? 'ESTIMATE' }
+            : null,
+        })
+      : await this.feePolicyService.quote({
       ...quoteInput,
       distanceKm,
       // The routed leg, so the rate card times road modes by the real drive — the same input
@@ -1186,6 +1293,8 @@ export class AssignmentService {
           newAssayerId: createdAssayerId,
           entityVersion: createdVersion,
           viaCommand: isReassignment ? 'CREATE_REASSIGN' : 'CREATE',
+          // The day plan's loop this stop was priced on, when it was (F6).
+          ...(plannedLoop ? { plannedDayLoopKm: plannedLoop.km, plannedDayLoopMinutes: plannedLoop.minutes } : {}),
         },
       }, { manager });
 
@@ -3050,6 +3159,22 @@ export class AssignmentService {
           statedReason,
         ));
       }
+    }
+    // The client's own requirements and the rotation rule, as `create()` applies them — waived by
+    // the reassignment's written reason and recorded on the audit row like the rules above.
+    if (forPricing?.projectBranch) {
+      await this.applyPlacementRules(
+        newAssayer,
+        {
+          branchId: forPricing.projectBranch.branchId,
+          projectId: forPricing.projectBranch.projectId ?? forPricing.projectId ?? null,
+          planningPreferences: (reassignProject as any)?.client?.planningPreferences,
+          onDate: jobDay ? new Date(jobDay) : undefined,
+        },
+        (rule, barredReason) => {
+          reassignOverrides.push(AssignmentService.applyOverridePolicy(rule, barredReason, statedReason));
+        },
+      );
     }
     if (jobDay && forPricing) {
       const project = forPricing.projectBranch?.project ?? null;

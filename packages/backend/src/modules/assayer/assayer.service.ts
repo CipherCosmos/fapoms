@@ -501,7 +501,6 @@ export interface CreateAssayerDto {
   performanceRating?: number;
   leaves?: { startDate: string; endDate: string }[];
   workingHours?: { start: string; end: string };
-  maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   /**
    * How offers reach this person — see the column comment on `AssayerEntity`.
@@ -615,7 +614,6 @@ export interface UpdateAssayerDto {
   performanceRating?: number;
   leaves?: { startDate: string; endDate: string }[];
   workingHours?: { start: string; end: string };
-  maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   /** See `CreateAssayerDto.preferredContactChannel` — why the column needed a way in. */
   preferredContactChannel?: 'AUTO' | 'APP' | 'PHONE';

@@ -613,9 +613,6 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   workingHours?: WorkingHoursDto;
 
   @IsOptional() @IsInt()
-  maxDailyWorkload?: number;
-
-  @IsOptional() @IsInt()
   maxWeeklyWorkload?: number;
 
   /**
@@ -799,9 +796,6 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
 
   @IsOptional() @ValidateNested() @Type(() => WorkingHoursDto)
   workingHours?: WorkingHoursDto;
-
-  @IsOptional() @IsInt()
-  maxDailyWorkload?: number;
 
   @IsOptional() @IsInt()
   maxWeeklyWorkload?: number;

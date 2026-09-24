@@ -93,12 +93,19 @@ describe('PlanningJobsWorker', () => {
         'p-1',
         scope,
         expect.any(Function),
+        null,
       );
     });
 
     it('turns a null scope into undefined so the engine sees "unscoped", not "scope {}"', async () => {
       await worker.coveragePlan(jobStub({ projectId: 'p-1', scope: null }));
-      expect(coveragePlanningEngine.generateCoveragePlan).toHaveBeenCalledWith('p-1', undefined, expect.any(Function));
+      expect(coveragePlanningEngine.generateCoveragePlan).toHaveBeenCalledWith('p-1', undefined, expect.any(Function), null);
+    });
+
+    /** F1: the plan is judged on the campaign's start date the modal collected, not "now". */
+    it('passes the campaign start date through to the engine', async () => {
+      await worker.coveragePlan(jobStub({ projectId: 'p-1', scope: null, startDate: '2026-10-05' }));
+      expect(coveragePlanningEngine.generateCoveragePlan).toHaveBeenCalledWith('p-1', undefined, expect.any(Function), '2026-10-05');
     });
 
     it('writes an opening stage before the first query', async () => {
@@ -145,6 +152,7 @@ describe('PlanningJobsWorker', () => {
         'p-2',
         scope,
         expect.any(Function),
+        null,
       );
     });
   });

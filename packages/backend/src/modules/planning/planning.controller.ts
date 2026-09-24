@@ -137,6 +137,20 @@ class CreateCoveragePlanRequestDto {
 
   @IsOptional() @IsString() @MaxLength(2000)
   justification?: string;
+
+  /** The campaign start date the plan is judged on (F1) — the date the modal deploys from. */
+  @IsOptional() @IsDateString()
+  startDate?: string;
+}
+
+/** A `YYYY-MM-DD` start date from a query or body, or null. */
+const validDateKey = (v?: string | null): string | null =>
+  v && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+
+/** The coverage-plan preview's body: only the start date it is judged on (F1). */
+class CoveragePlanPreviewRequestDto {
+  @IsOptional() @IsDateString()
+  startDate?: string;
 }
 
 /**
@@ -171,6 +185,14 @@ export class BulkOfferRequestDto {
 
   @IsOptional() @IsString() @MaxLength(1000)
   acceptanceReason?: string;
+
+  /**
+   * Waives an overridable rule (rotation, required skills, the service ceiling) on each branch,
+   * recorded against every offer it is used on — the same `overrideReason` `POST /assignments`
+   * takes, applied per branch by the same `create()`.
+   */
+  @IsOptional() @IsString() @MaxLength(1000)
+  overrideReason?: string;
 }
 
 /** "Mark unable to cover" over a selection, as one request. */
@@ -266,8 +288,10 @@ export class PlanningController {
   async getProjectCoveragePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @GlobalScopeFilter() scope?: GlobalScope,
+    @Query('startDate') startDate?: string,
   ) {
-    const plan = await this.coveragePlanningEngine.generateCoveragePlan(projectId, scope);
+    const day = startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : null;
+    const plan = await this.coveragePlanningEngine.generateCoveragePlan(projectId, scope, undefined, day);
     return plan;
   }
 
@@ -298,12 +322,13 @@ export class PlanningController {
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
+    @Body() body?: CoveragePlanPreviewRequestDto,
   ) {
     // The scope resolved here — region already intersected against `users.regions` and refused
     // if not held — is frozen into the job payload. The worker has no request and so no
     // principal of its own; without this the queued run would be unscoped and would hand a
     // regional operator the national plan.
-    const enqueued = await this.planningJobsService.enqueueCoveragePlan(projectId, scope ?? null, req.user?.id);
+    const enqueued = await this.planningJobsService.enqueueCoveragePlan(projectId, scope ?? null, req.user?.id, body?.startDate?.slice(0, 10) ?? null);
     return enqueued;
   }
 
@@ -318,7 +343,11 @@ export class PlanningController {
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     await this.regionGuard.assertProjectInScope(projectId, scope);
-    const plan = await this.operationsPlanningService.createOrRegeneratePlan(projectId, body.overrides || [], req.user.id, body.justification);
+    // The caller's scope and start date — the same the preview used (F19 / F1).
+    const plan = await this.operationsPlanningService.createOrRegeneratePlan(
+      projectId, body.overrides || [], req.user.id, body.justification, undefined,
+      { scope: scope ?? undefined, startDate: body.startDate?.slice(0, 10) ?? null },
+    );
     return plan;
   }
 
@@ -348,6 +377,8 @@ export class PlanningController {
       (body.overrides ?? []) as unknown as Array<Record<string, unknown>>,
       body.justification,
       this.writeRequester(req),
+      // The same scope and start date the preview used (F19 / F1).
+      { scope: scope ?? null, startDate: body.startDate?.slice(0, 10) ?? null },
     );
   }
 
@@ -459,8 +490,9 @@ export class PlanningController {
   async getProjectCandidates(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @GlobalScopeFilter() scope?: GlobalScope,
+    @Query('startDate') startDate?: string,
   ) {
-    const report = await this.projectPlanningService.getProjectPlanningCandidates(projectId, scope);
+    const report = await this.projectPlanningService.getProjectPlanningCandidates(projectId, scope, undefined, validDateKey(startDate));
     return report;
   }
 
@@ -480,8 +512,9 @@ export class PlanningController {
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
+    @Body() body?: CoveragePlanPreviewRequestDto,
   ) {
-    const enqueued = await this.planningJobsService.enqueueProjectCandidates(projectId, scope ?? null, req.user?.id);
+    const enqueued = await this.planningJobsService.enqueueProjectCandidates(projectId, scope ?? null, req.user?.id, validDateKey(body?.startDate));
     return enqueued;
   }
 
@@ -495,9 +528,10 @@ export class PlanningController {
   async optimizeProjectDeployment(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @GlobalScopeFilter() scope?: GlobalScope,
+    @Query('startDate') startDate?: string,
   ) {
     await this.regionGuard.assertProjectInScope(projectId, scope);
-    const plan = await this.optimizationEngine.generateProjectDeploymentPlan(projectId);
+    const plan = await this.optimizationEngine.generateProjectDeploymentPlan(projectId, {}, validDateKey(startDate));
     return plan;
   }
 
@@ -600,6 +634,8 @@ export class PlanningController {
      */
     @Query('ignoreDistancePolicy') ignoreDistancePolicy?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
+    /** The project being planned — whose skills apply, and "this cycle" for the rotation rule. */
+    @Query('projectId') projectId?: string,
   ) {
     // Ranked candidate assayers for an arbitrary branch id — the same data the scoped
     // candidates report returns, so it takes the same ceiling.
@@ -610,13 +646,19 @@ export class PlanningController {
       searchRadiusKm: Number.isFinite(parsedRadius) && parsedRadius > 0 ? parsedRadius : undefined,
       relaxClientEligibility: ignoreClientPolicy === 'true' || ignoreClientPolicy === '1',
       relaxDistancePrefilter: ignoreDistancePolicy === 'true' || ignoreDistancePolicy === '1',
+      projectId: projectId && /^[0-9a-f-]{36}$/i.test(projectId) ? projectId : null,
     });
     return {
       success: true,
       data: recommendations,
       // Candidates the filters removed, with the reason. Ops needs this to distinguish
       // "nobody is suitable" from "everyone was blocked by one misconfigured rule".
-      meta: { excluded: (recommendations as any).excluded || [] },
+      meta: {
+        excluded: (recommendations as any).excluded || [],
+        // "Showing the top N of M" — the list is capped (F9); the count of everyone ranked is not.
+        candidateTotal: (recommendations as any).candidateTotal ?? recommendations.length,
+        shown: recommendations.length,
+      },
     };
   }
 

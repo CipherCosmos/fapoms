@@ -954,14 +954,6 @@ export const ApplicationDetailDrawer: React.FC<{
                       <option value="CONTRACT">Contract</option>
                     </select>
                   </Field>
-                  <Field title="Most jobs in a day">
-                    <input
-                      type="number" min={0} max={20}
-                      value={terms.maxDailyWorkload ?? ''}
-                      onChange={(e) => setTerm('maxDailyWorkload', e.target.value)}
-                      style={TERM_INPUT}
-                    />
-                  </Field>
                   <Field title="Most jobs in a week">
                     <input
                       type="number" min={0} max={100}

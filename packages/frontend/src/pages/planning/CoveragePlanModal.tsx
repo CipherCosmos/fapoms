@@ -99,10 +99,12 @@ export const CoveragePlanModal: React.FC<{
     setPreviewError(null);
     setProgress(null);
     try {
+      // Judged on the campaign's start date (F1): who is on leave, what is a holiday, whether the
+      // project window is open — on the day the work starts, not the day the plan was opened.
       const loaded = await getCoveragePlanPreview<CoveragePreview>(projectId, {
         signal: watch,
         onProgress: (p) => setProgress(p.stage),
-      });
+      }, scheduledDate);
       if (!watch.cancelled) setPreview(loaded);
     } catch (e: any) {
       if (!watch.cancelled) setPreviewError(e?.message || 'Could not load the coverage plan.');
@@ -112,7 +114,7 @@ export const CoveragePlanModal: React.FC<{
         setProgress(null);
       }
     }
-  }, [projectId]);
+  }, [projectId, scheduledDate]);
 
   useEffect(() => { void loadPreview(); }, [loadPreview]);
 
@@ -148,7 +150,8 @@ export const CoveragePlanModal: React.FC<{
     }
   };
 
-  const doGenerate = () => run('generate', async () => { setPlan(await createCoveragePlan(projectId, {}, follow())); });
+  // The version is generated for the same start date the preview was judged on (F1).
+  const doGenerate = () => run('generate', async () => { setPlan(await createCoveragePlan(projectId, { startDate: scheduledDate }, follow())); });
   const doApprove = () => run('approve', async () => {
     if (!plan) return;
     setPlan(await transitionCoveragePlan(plan.id, 'APPROVED'));
@@ -193,6 +196,15 @@ export const CoveragePlanModal: React.FC<{
         </div>
 
         {/* Preview */}
+        {!plan && (
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            Campaign starts
+            <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)}
+              aria-label="Campaign start date — availability (leave, holidays, project dates) is judged on this day"
+              title="Who is on leave, which days are holidays and whether the project is open are judged on this day. Deploy starts from it."
+              style={{ fontSize: 'var(--text-2xs)', padding: '3px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
+          </label>
+        )}
         {loadingPreview ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', padding: '20px', justifyContent: 'center' }}>
             <Loader2 size={16} className="spin" /> Analysing coverage…
@@ -350,7 +362,7 @@ export const CoveragePlanModal: React.FC<{
                 </label>
                 <div style={{ flexBasis: '100%', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', order: 9 }}>
                   Each branch is booked on its <b>own</b> workable date on or after this one — Sundays,
-                  holidays and each assayer's daily capacity are applied per branch, so the work spreads
+                  holidays and each assayer's recorded leave are applied per branch, so the work spreads
                   over a range instead of stacking on one day. Deploying creates <b>pending offers</b> at the
                   approved fees; every assayer still has to accept.
                 </div>

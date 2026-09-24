@@ -60,7 +60,7 @@ export class PlanningJobsWorker {
    */
   @Process({ name: PLANNING_JOB.COVERAGE_PLAN, concurrency: ONE_AT_A_TIME })
   async coveragePlan(job: Job<CoveragePlanJobData>): Promise<CoveragePlanOutput> {
-    const { projectId, scope } = job.data;
+    const { projectId, scope, startDate } = job.data;
     const onProgress = progressReporter(job);
 
     // Written before the first query. The engine loads the project, its branches and the whole
@@ -69,7 +69,7 @@ export class PlanningJobsWorker {
     await onProgress(0, 1, 'Loading project and workforce');
 
     this.logger.log(`Coverage plan job ${job.id} starting for project ${projectId}.`);
-    const plan = await this.coveragePlanningEngine.generateCoveragePlan(projectId, scope ?? undefined, onProgress);
+    const plan = await this.coveragePlanningEngine.generateCoveragePlan(projectId, scope ?? undefined, onProgress, startDate ?? null);
     this.logger.log(
       `Coverage plan job ${job.id} finished: ${plan.coveragePercentage}% coverage over ${plan.clusters.length} cluster(s).`,
     );
@@ -79,7 +79,7 @@ export class PlanningJobsWorker {
   /** Measured at 12.2 s for a 200-branch project — the slowest of the three. */
   @Process({ name: PLANNING_JOB.PROJECT_CANDIDATES, concurrency: ONE_AT_A_TIME })
   async projectCandidates(job: Job<ProjectCandidatesJobData>): Promise<ProjectPlanningReport> {
-    const { projectId, scope } = job.data;
+    const { projectId, scope, startDate } = job.data;
     const onProgress = progressReporter(job);
     await onProgress(0, 1, 'Loading project branches');
 
@@ -88,6 +88,7 @@ export class PlanningJobsWorker {
       projectId,
       scope ?? undefined,
       onProgress,
+      startDate ?? null,
     );
     this.logger.log(`Candidates job ${job.id} finished: ${report.branches.length} branch(es) ranked.`);
     return report;

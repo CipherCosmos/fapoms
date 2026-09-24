@@ -78,6 +78,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
           icon: Map,
           tooltip: 'Geographic visualization of client coverage, branch audits, and field density',
         },
+        {
+          // Everyone's: report a problem and follow your requests. It sat under Administration,
+          // where only the desk could see it. The desk gets the queue on the same page.
+          name: 'Support',
+          path: '/feedback',
+          icon: MessageSquare,
+          tooltip: 'Report a problem, suggest an idea or ask a question, and follow your requests',
+        },
       ],
     },
     {
@@ -233,12 +241,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
           path: '/admin/rule-bypass',
           icon: ShieldOff,
           tooltip: 'Temporary rule exemptions, emergency overrides, and bypassed constraints',
-        },
-        {
-          name: 'Support',
-          path: '/feedback',
-          icon: MessageSquare,
-          tooltip: 'Operator support tickets, platform bug reports, and feature feedback',
         },
       ],
     },

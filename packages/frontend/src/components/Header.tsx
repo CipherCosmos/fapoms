@@ -11,8 +11,6 @@ import { Select } from './ui/Select';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useScope } from '../context/ScopeContext';
 import { GlobalSearch } from './GlobalSearch';
-import { canAccessRoute } from '../config/route-permissions';
-import { permissionKeysFrom } from '../hooks/useCurrentRoles';
 
 interface HeaderProps {
   user?: { displayName: string; email: string; roles?: { name: SystemRole }[] };
@@ -533,12 +531,10 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
           {live ? <Wifi size={12} /> : <WifiOff size={12} />}
           {live ? 'Live' : 'Offline'}
         </div>
-        {/* The support entry point, on every page — for whoever may open /feedback. It used to
-            be unconditional ("any user, any page"); the platform owner asked for the channel to be
-            visible to the super administrator and nobody else, and the launcher's own "View my
-            support requests" navigates to /feedback, so it follows that route's permission exactly
-            rather than carrying a second copy of the role list. */}
-        {canAccessRoute((user?.roles ?? []).map((r) => r.name), permissionKeysFrom(user), '/feedback') && <FeedbackLauncher />}
+        {/* The support entry point, on every page, for everyone — reporting a problem is not a
+            desk privilege. (It was gated on the desk's permission to open /feedback, which hid it
+            from every normal user; the desk-only part lives inside the page.) */}
+        <FeedbackLauncher />
         {/* Uploads and other work running on the server — restored from the server on every load,
             so a refresh never hides a job that is still going. Quiet unless something is. */}
         <JobsTray />

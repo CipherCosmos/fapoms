@@ -323,6 +323,41 @@ describe('PlanningWriteJobsWorker', () => {
     });
   });
 
+  /**
+   * Owner decision 2026-09-25: a rule the bulk offer would be refused on (rotation, the client's
+   * required skills) is waived by a reason typed ONCE for the batch, recorded per offer by create().
+   * Without one, nothing is waived.
+   */
+  it('hands the bulk override reason to every offer, and only when one was given', async () => {
+    const { worker, assignments } = build();
+    assignments.create.mockResolvedValue({ id: 'asg', status: 'PENDING' });
+    await worker.run(job(PLANNING_WRITE_JOB.BULK_OFFER, {
+      projectBranchIds: ['pb-a', 'pb-b'], assayerId: 'as-1', acceptOnBehalf: false,
+      overrideReason: 'Only certified assayer in the district', scope: null, actor: ACTOR,
+    }));
+    expect(assignments.create.mock.calls.map((c: any[]) => c[0].overrideReason)).toEqual([
+      'Only certified assayer in the district', 'Only certified assayer in the district',
+    ]);
+
+    assignments.create.mockClear();
+    await worker.run(job(PLANNING_WRITE_JOB.BULK_OFFER, {
+      projectBranchIds: ['pb-a'], assayerId: 'as-1', acceptOnBehalf: false, scope: null, actor: ACTOR,
+    }));
+    expect(assignments.create.mock.calls[0][0]).not.toHaveProperty('overrideReason');
+  });
+
+  /** F19 / F1: the version is generated under the scope and start date frozen at the request. */
+  it('generates a version with the requester\'s scope and start date', async () => {
+    const { worker, operations } = build();
+    const scope = { regions: ['WEST'] };
+    await worker.run(job(PLANNING_WRITE_JOB.GENERATE_VERSION, {
+      projectId: 'proj-1', overrides: [], justification: 'x', scope, startDate: '2026-10-05', actor: ACTOR,
+    }));
+    expect(operations.createOrRegeneratePlan).toHaveBeenCalledWith(
+      'proj-1', [], 'ops-1', 'x', expect.any(Function), { scope, startDate: '2026-10-05' },
+    );
+  });
+
   it('refuses a job name it does not know rather than completing it with no result', async () => {
     const { worker } = build();
     await expect(worker.run(job('mystery', { actor: ACTOR }))).rejects.toThrow(/No handler/);

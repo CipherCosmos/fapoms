@@ -17,9 +17,12 @@ import { ConstraintEvaluator } from './constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { generateExplanation, ExplanationReason } from './explainability.mapper';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory, calculateHaversineDistance } from '@fapoms/shared';
+import { EventCategory, calculateHaversineDistance, businessNoonOf, businessTodayDateKey, addDaysToDateKey, weekdayOfDateKey } from '@fapoms/shared';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import type { RemarkSummary } from '../assayer-remarks/assayer-remark.contract';
+
+/** The most ranked candidates one branch-level call returns (F9). The total is always reported. */
+export const MAX_CANDIDATES_RETURNED = Math.max(1, Number(process.env.PLANNING_MAX_CANDIDATES) || 100);
 
 export interface AssayerRecommendation {
   id: string;
@@ -45,6 +48,18 @@ export interface AssayerRecommendation {
   durationMinutes?: number | null;
   /** 'OSRM' when measured by road, 'ESTIMATE' when straight-line fell back in — never silent. */
   distanceSource?: 'OSRM' | 'ESTIMATE' | null;
+  /**
+   * Road km from the assayer's HOME (F2, 2026-09-25) — what the job is priced from, what the
+   * client's service-limit warning measures, and what the assign form's quote must use.
+   * `distanceKm` above is a RANKING figure: for an assayer sharing a live location it is where they
+   * are now ("currently 6 km away"), not where the travel allowance is paid from. Equal to
+   * `distanceKm` for everyone else; null when home is not located.
+   */
+  homeDistanceKm?: number | null;
+  homeDurationMinutes?: number | null;
+  homeDistanceSource?: 'OSRM' | 'ESTIMATE' | null;
+  /** True when `distanceKm` (and the ranking) came from a live GPS fix rather than home. */
+  rankedFromLive?: boolean;
   score?: number;
   latitude?: number | null;
   longitude?: number | null;
@@ -146,32 +161,30 @@ export class PlanningService {
     }
 
     const skipped: Array<{ date: string; reason: string }> = [];
-    const candidate = new Date();
-    candidate.setDate(candidate.getDate() + 1);
-    const key = (d: Date) => {
-      // Local calendar date, not UTC — an IST evening must not roll the date back a day.
-      const y = d.getFullYear(); const m = String(d.getMonth() + 1).padStart(2, '0'); const day = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
-
+    /**
+     * Stepped on the IST calendar key (F20, 2026-09-25). This stepped a server-local Date with
+     * `setDate` and read its server-local `getDay()`, while "tomorrow" and the holiday check are
+     * questions about the Indian working day — on a UTC server before 05:30 IST "tomorrow" was
+     * today, and the Sunday it skipped was not the Sunday it reported.
+     */
+    const tomorrow = addDaysToDateKey(businessTodayDateKey(), 1);
+    let key = tomorrow;
     for (let attempt = 0; attempt < 30; attempt++) {
-      if (candidate.getDay() === 0) {
-        skipped.push({ date: key(candidate), reason: 'Sunday' });
+      if (weekdayOfDateKey(key) === 0) {
+        skipped.push({ date: key, reason: 'Sunday' });
       } else {
-        const holiday = await this.constraintEvaluator.checkHoliday(branch.state || '', candidate, branch.clientId ?? undefined);
+        const holiday = await this.constraintEvaluator.checkHoliday(branch.state || '', businessNoonOf(key), branch.clientId ?? undefined);
         if (holiday.passed) {
-          return { date: key(candidate), skipped };
+          return { date: key, skipped };
         }
-        skipped.push({ date: key(candidate), reason: holiday.reason || 'Holiday' });
+        skipped.push({ date: key, reason: holiday.reason || 'Holiday' });
       }
-      candidate.setDate(candidate.getDate() + 1);
+      key = addDaysToDateKey(key, 1);
     }
 
     // Nothing workable within a month — hand back tomorrow rather than inventing a date,
     // and let the skipped list tell ops the calendar itself is the problem.
-    const fallback = new Date();
-    fallback.setDate(fallback.getDate() + 1);
-    return { date: key(fallback), skipped };
+    return { date: tomorrow, skipped };
   }
 
   async getRecommendedCandidates(
@@ -191,6 +204,8 @@ export class PlanningService {
       relaxClientEligibility?: boolean;
       /** Search the whole workforce instead of a disc around the branch. */
       relaxDistancePrefilter?: boolean;
+      /** The project being planned — see `PlanningContext.projectId`. */
+      projectId?: string | null;
     },
   ): Promise<AssayerRecommendation[]> {
     const branch = await this.branchQueryService.findOne(branchId);
@@ -207,13 +222,22 @@ export class PlanningService {
     // some other day entirely — people free tomorrow showed as unavailable, and people busy
     // tomorrow showed as free. The UI passes its date picker; absent, today is kept for
     // backward-compatible callers.
-    const scheduledDate = forDate ? new Date(`${forDate.slice(0, 10)}T00:00:00`) : new Date();
+    // Noon IST of the requested calendar day (F20): whatever zone formats it, it is that day.
+    const scheduledDate = forDate ? businessNoonOf(forDate.slice(0, 10)) : new Date();
     if (Number.isNaN(scheduledDate.getTime())) {
       throw new BadRequestException(`Invalid date '${forDate}'. Use YYYY-MM-DD.`);
     }
     // `weights` lets the scenario sandbox pass its overrides all the way into scoring; empty by
     // default, in which case `recommend` resolves the client's own configured weights as before.
-    const results = await this.recommendationEngine.recommend(branch, scheduledDate, weights, undefined, options);
+    const ranked = await this.recommendationEngine.recommend(branch, scheduledDate, weights, undefined, options);
+    /**
+     * The top N, not the whole ranked pool (F9, 2026-09-25). With the distance pre-filter off the
+     * engine ranks the national workforce, and this method then built readable reasons and a fee
+     * for every one of them — hundreds of rows nobody reads past the first screen. The API says
+     * how many were ranked (`candidateTotal`), so "showing the top 100 of 412" is stated, never
+     * implied to be everyone.
+     */
+    const results = ranked.slice(0, MAX_CANDIDATES_RETURNED);
     const rates = await this.feePolicyService.getRates(branch.clientId ?? null);
 
     // One query for every ranked candidate's contracted rate, instead of one per candidate.
@@ -290,6 +314,11 @@ export class PlanningService {
         // differently, so both travel together.
         durationMinutes: route?.durationMinutes ?? null,
         distanceSource: route?.source ?? null,
+        // From HOME — the figures the fee and the service-limit warning use (F2).
+        homeDistanceKm: (r as any).homeRoute?.distanceKm ?? null,
+        homeDurationMinutes: (r as any).homeRoute?.durationMinutes ?? null,
+        homeDistanceSource: (r as any).homeRoute?.source ?? null,
+        rankedFromLive: (r as any).rankedFromLive === true,
         score: r.score,
         latitude: r.assayer.effectiveLatitude,
         longitude: r.assayer.effectiveLongitude,
@@ -314,7 +343,9 @@ export class PlanningService {
     // Carried through so the UI can answer "why isn't <assayer> on this list?" — previously
     // excluded candidates just vanished, which hid real data problems (expired certification,
     // full diary) behind an apparently-normal shorter list.
-    (recommendations as any).excluded = (results as any).excluded || [];
+    (recommendations as any).excluded = (ranked as any).excluded || [];
+    // How many the engine ranked, before the top-N cut above.
+    (recommendations as any).candidateTotal = ranked.length;
     return recommendations;
   }
 

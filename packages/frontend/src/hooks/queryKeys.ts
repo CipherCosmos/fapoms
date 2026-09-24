@@ -139,9 +139,11 @@ export const queryKeys = {
       // re-sliced under a different policy would show an empanelment-relaxed answer as if it
       // were the strict one, which is the opposite of what the toggle promises.
       ignoreClientPolicy = false, ignoreDistancePolicy = false,
+      // The project decides which project's skills apply and which cycle counts for rotation.
+      projectId: string | null = null,
     ) =>
       ['planning', 'recommendations', branchId, date, includeUnavailable, Math.round(radiusKm),
-        ignoreClientPolicy, ignoreDistancePolicy] as const,
+        ignoreClientPolicy, ignoreDistancePolicy, projectId] as const,
     /** Prefix: "have we already phoned this person about this branch?", for any branch. */
     lastContactAll: ['planning', 'last-contact'] as const,
     lastContact: (projectBranchId: string) => ['planning', 'last-contact', projectBranchId] as const,

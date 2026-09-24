@@ -65,19 +65,20 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
   },
   {
     /**
-     * The support desk — the people who ANSWER the tickets, not the business owner. Since the
-     * DEVELOPER split (2026-09-05) that is DEVELOPER and PRODUCT_SUPPORT, and ADMIN loses the
-     * page: running the business does not include working the product-support queue. (A
-     * developer also reaches it through implication — DEVELOPER ⇒ PRODUCT_SUPPORT — but is
-     * named anyway so this table reads as the complete answer.) The header launcher is gated
-     * on this same entry (Header.tsx); sending feedback stays open to everyone — only browsing
-     * the channel is restricted. Mirrors FEEDBACK_TEAM_ROLES on the backend.
+     * Support has two sides on one page (FeedbackPage.tsx). The REPORTING side — send a bug, idea
+     * or question and follow your own requests — is for every signed-in person, and the backend
+     * already served it to them (`@AnyAuthenticated` on create/mine/thread/messages). The
+     * RESOLUTION side — the queue, triage, resolve, internal notes — is the desk's alone:
+     * FEEDBACK_TEAM_ROLES (DEVELOPER, PRODUCT_SUPPORT) on the backend, and the page switches views
+     * on the same list.
      *
-     * No permission: the backend gates the triage queue on FEEDBACK_TEAM_ROLES by name and
-     * declares nothing a role could be granted, so there is nothing here to honour yet.
+     * 2026-09-25, owner: "normal people don't able to use the support at all". This entry used to
+     * admit only the desk, and the header button, the sidebar entry and the page all read it —
+     * so gating the desk here hid the reporting side from everybody else as well.
      */
     path: '/feedback',
-    allowedRoles: [SystemRole.DEVELOPER, SystemRole.PRODUCT_SUPPORT],
+    allowedRoles: [],
+    anyAuthenticated: true,
   },
   {
     // The command centre this page draws asks for planning:view:organization.
@@ -557,6 +558,10 @@ const HOME_BY_ROLE: [SystemRole, string][] = [
   [SystemRole.OPERATIONS, '/executive-map'], // live pipeline overview
   [SystemRole.DESK, '/documents'],           // packets out, packets back
   [SystemRole.DESK_OPERATOR, '/data-entry'], // their share of the desk's queue
+  // The support desk is PRODUCT_SUPPORT's job itself. A home here rather than a place in
+  // LANDING_ORDER, because /feedback is open to everyone (the reporting side) and would otherwise
+  // become the landing page of any role without an operational page.
+  [SystemRole.PRODUCT_SUPPORT, '/feedback'],
 ];
 
 /**
@@ -587,10 +592,6 @@ const LANDING_ORDER: string[] = [
   '/zones',
   '/users',
   '/admin/settings',
-  // The support desk: for PRODUCT_SUPPORT this is the job itself, and before this entry the
-  // role fell through to its own notification inbox — a page about the work instead of the work.
-  // Placed after the operational pages so no role that can open one of those lands here instead.
-  '/feedback',
   '/notifications',
   '/settings',
 ];

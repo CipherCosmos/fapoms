@@ -49,3 +49,43 @@ export const TRAVEL_ALREADY_PAID_NOTE = 'Travel already paid on another job this
 export function dayTravelNote(quote: { travelAlreadyCharged?: boolean } | null | undefined): string | null {
   return quote?.travelAlreadyCharged ? TRAVEL_ALREADY_PAID_NOTE : null;
 }
+
+/** The route fields a candidate row carries, ranked and home. */
+export interface CandidateRoutes {
+  distanceKm?: number | null;
+  durationMinutes?: number | null;
+  distanceSource?: 'OSRM' | 'ESTIMATE' | string | null;
+  homeDistanceKm?: number | null;
+  homeDurationMinutes?: number | null;
+  homeDistanceSource?: 'OSRM' | 'ESTIMATE' | string | null;
+  rankedFromLive?: boolean;
+}
+
+/**
+ * The route the job is PRICED from: the assayer's home (F2, 2026-09-25).
+ *
+ * Live location is a ranking signal only. The assign form's quote, the service-limit warning and the
+ * independence chip used the ranked distance — for an assayer sharing a live fix that is where
+ * their phone is now, so the form quoted travel from "6 km away" and the server then booked it from
+ * a home 140 km off. A payload from before the home figures existed falls back to the ranked one
+ * unless it says the ranking was live, in which case the home distance is honestly unknown.
+ */
+export function homeRouteOf(c: CandidateRoutes): { distanceKm: number | null; durationMinutes: number | null; distanceSource: string | null } {
+  if (c.homeDistanceKm !== undefined) {
+    return { distanceKm: c.homeDistanceKm ?? null, durationMinutes: c.homeDurationMinutes ?? null, distanceSource: c.homeDistanceSource ?? null };
+  }
+  if (c.rankedFromLive) return { distanceKm: null, durationMinutes: null, distanceSource: null };
+  return { distanceKm: c.distanceKm ?? null, durationMinutes: c.durationMinutes ?? null, distanceSource: c.distanceSource ?? null };
+}
+
+/** "currently 6 km away" — only when the ranking used a live fix, so it is never read as the priced distance. */
+export function liveDistanceNote(c: CandidateRoutes, format: (km: number, source: string | null) => string): string | null {
+  if (!c.rankedFromLive || c.distanceKm == null) return null;
+  return `currently ${format(c.distanceKm, c.distanceSource ?? null)} away`;
+}
+
+/** "Showing the top 100 of 412 ranked candidates" — the list is capped, and says so (F9). */
+export function cappedCandidatesNote(shown: number, total: number): string | null {
+  if (!(total > shown)) return null;
+  return `Showing the top ${shown} of ${total} ranked candidates — narrow the radius or filters to see others.`;
+}

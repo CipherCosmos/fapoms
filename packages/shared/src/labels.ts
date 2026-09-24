@@ -455,6 +455,30 @@ export function businessTodayDateKey(timeZone: string = BUSINESS_TIME_ZONE): str
 }
 
 /**
+ * Day of the week of a `YYYY-MM-DD` key, independent of the process's timezone (F20, 2026-09-25).
+ *
+ * Planning asked `getDay()` for the weekday — SERVER-local — of a date it then formatted in IST, two
+ * clocks in one loop: on a UTC server between 00:00 and 05:30 IST the "Sunday" it skipped and the
+ * day it suggested were different calendar days. A key has no time of day, so the weekday is read
+ * at UTC midnight of that key, where no zone can move it. Pairs with `addDaysToDateKey`
+ * (periodic-checks.ts). 0 = Sunday … 6 = Saturday; NaN for an unparseable key.
+ */
+export function weekdayOfDateKey(key: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(key ?? '').trim());
+  if (!m) return NaN;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay();
+}
+
+/**
+ * The instant to hand a date-based check for a `YYYY-MM-DD` key: noon IST of that day. Whatever
+ * zone later formats it — `businessDateKey` (IST) or a server-local `getDate()` on a UTC or IST box
+ * — reads back the same calendar day, which midnight does not guarantee.
+ */
+export function businessNoonOf(key: string): Date {
+  return new Date(`${String(key).slice(0, 10)}T12:00:00+05:30`);
+}
+
+/**
  * The same "today", for SQL.
  *
  * `CURRENT_DATE` is the *database session's* date, and the database runs UTC — so between

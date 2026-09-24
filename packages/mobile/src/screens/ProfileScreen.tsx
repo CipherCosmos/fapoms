@@ -111,7 +111,6 @@ export function lockReasonFor(key: string): TranslationKey | undefined {
  * import, before any language has been chosen.
  */
 const HR_LOCK_REASONS: Record<string, TranslationKey> = {
-  maxDailyWorkload: 'profile.lockReasons.maxDailyWorkload',
   maxWeeklyWorkload: 'profile.lockReasons.maxWeeklyWorkload',
   panNumber: 'profile.lockReasons.panNumber',
   bankAccountNumber: 'profile.lockReasons.bankAccountNumber',
@@ -156,7 +155,6 @@ export interface ProfileDataState {
   ifscCode: string;
   /** HR-maintained, read-only here. Present so the completeness banner can count it. */
   joiningDate: string;
-  maxDailyWorkload: number;
   maxWeeklyWorkload: number;
   employmentType: string;
   performanceRating: number | string;
@@ -1480,10 +1478,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
+            {/* "Max per day" was removed (owner decision 2026-09-25): an assayer may take several
+                branches in a day with no cap, so there is no daily figure to show. */}
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
-              <View style={{ flex: 1 }}>
-                <Input label={tr('profile.fields.maxPerDay')} value={String(profile.maxDailyWorkload ?? '')} onChangeText={() => {}} lockedReason={lockedReasonText('maxDailyWorkload')} />
-              </View>
               <View style={{ flex: 1 }}>
                 <Input label={tr('profile.fields.maxPerWeek')} value={String(profile.maxWeeklyWorkload ?? '')} onChangeText={() => {}} lockedReason={lockedReasonText('maxWeeklyWorkload')} />
               </View>

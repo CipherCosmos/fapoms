@@ -28,6 +28,10 @@ import {
   RemarksScoreCalculator,
   FairnessScoreCalculator,
   getCityTierMultiplier,
+  acceptanceRateScore,
+  deliveryDays,
+  deliverySpeedScore,
+  ANSWERED_OFFER_STATUSES,
 } from './recommendation.engine';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -108,6 +112,12 @@ describe('RecommendationEngine', () => {
     findOne: jest.fn(),
     count: jest.fn(),
     find: jest.fn(),
+    /**
+     * Raw reads the engine makes for the whole pool: the rotation rule's last auditor
+     * (assignment/branch-rotation.ts) and the per-assayer delivery history (20 each, cut in SQL).
+     * Empty means "never audited, no history" — what these fixtures already assumed.
+     */
+    query: jest.fn().mockResolvedValue([]),
     /**
      * recommend() now resolves committed workload for the whole candidate pool in one grouped
      * count instead of one count per assayer. Returning an empty set here means "nobody has
@@ -950,6 +960,172 @@ describe('RecommendationEngine', () => {
       expect(results[1].breakdown.fairness).toBe(100);
     });
   });
+
+  /** The 2026-09-25 recommendations audit, pinned against the real engine. */
+  describe('audit 2026-09-25', () => {
+    const branch = { id: 'b-1', latitude: 18.52, longitude: 73.85, state: 'Maharashtra', clientId: 'c-1' } as any;
+    const active = (over: Record<string, unknown>) => ({
+      status: 'ACTIVE', lifecycleStatus: AssayerLifecycleStatus.ACTIVE, isActive: true, skills: [], certifications: [], ...over,
+    });
+    beforeEach(() => {
+      // Empanelment standings are read through the repository's manager; nobody has one here and
+      // the no-row policy is ALLOW (see mockPlatformSettings).
+      (mockAssignmentRepo as any).manager = { query: jest.fn().mockResolvedValue([]) };
+      mockAssignmentRepo.query.mockResolvedValue([]);
+      mockClientRepo.findOne.mockResolvedValue(null);
+    });
+    afterEach(() => { delete (mockAssignmentRepo as any).manager; });
+
+    /** A router that answers straight-line km, so where a point is decides its figure. */
+    const straightRouter = () => {
+      mockRoutingService.calculateRoute.mockImplementation(async (o: any, d: any) => {
+        const km = Math.hypot(o.latitude - d.latitude, o.longitude - d.longitude) * 111;
+        return { distanceKm: Math.round(km * 10) / 10, durationMinutes: Math.round(km), source: 'OSRM' };
+      });
+    };
+
+    /**
+     * F7: on the BATCH path (coverage plan, day planner) nobody in range is an empty list — never
+     * the national pool, which let a plan deploy somebody 1,500 km away with no exclusion recorded.
+     */
+    it('F7: the batch path returns nobody when nobody is in range', async () => {
+      mockAssayerRepo.query.mockResolvedValue([]);
+      const far = Object.assign(new AssayerEntity(), active({ id: 'a-far', displayName: 'Far', latitude: 28.6, longitude: 77.2 }));
+      const results = await engine.recommend(branch, new Date(), {}, { client: null, assayers: [far] });
+      expect(results).toHaveLength(0);
+    });
+
+    it('F7: the interactive path still widens an empty in-range answer to the full pool', async () => {
+      mockAssayerRepo.query.mockResolvedValue([]);
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'One', latitude: 18.6, longitude: 73.9 })]);
+      const results = await engine.recommend(branch, new Date());
+      expect(results.map((r) => r.assayer.id)).toEqual(['a-1']);
+    });
+
+    /**
+     * F2: live location ranks, home prices. The ceiling warning and the home route are measured
+     * from HOME even when the ranking used where the phone is now.
+     */
+    it('F2: a live-ranked candidate carries the home route, and the service-limit warning is measured from home', async () => {
+      straightRouter();
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-live' }]);
+      mockClientRepo.findOne.mockResolvedValue({ id: 'c-1', planningPreferences: { maxDistanceKm: 50 } });
+      mockAssayerRepo.find.mockResolvedValue([active({
+        id: 'a-live', displayName: 'Live Lata',
+        latitude: 19.9, longitude: 73.85, // home ~153 km north
+        isLiveEnabled: true, liveLatitude: 18.55, liveLongitude: 73.85, // phone ~3 km away
+      })]);
+
+      const [c] = await engine.recommend(branch, new Date()) as any[];
+      expect(c.rankedFromLive).toBe(true);
+      expect(c.route.distanceKm).toBeLessThan(10);
+      expect(c.homeRoute.distanceKm).toBeGreaterThan(140);
+      // The client's 50 km limit is exceeded from home, however close the phone is.
+      expect(c.exceedsClientRange).toBe(50);
+    });
+
+    it('F2: for somebody ranked from home, the home route IS the route', async () => {
+      straightRouter();
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-home' }]);
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-home', displayName: 'Home', latitude: 18.6, longitude: 73.85 })]);
+      const [c] = await engine.recommend(branch, new Date()) as any[];
+      expect(c.rankedFromLive).toBe(false);
+      expect(c.homeRoute).toEqual(c.route);
+    });
+
+    /** F12: relaxed dates still say WHICH date check the candidate is on the list in spite of. */
+    it('F12: with dates relaxed, an out-of-window date is reported on the row, not only leave', async () => {
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-1' }]);
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'One', latitude: 18.6, longitude: 73.9 })]);
+      mockProjectBranchRepo.findOne.mockResolvedValue({ projectId: 'p-1', project: { startDate: '2030-01-01', endDate: '2030-12-31' } });
+      const [c] = await engine.recommend(branch, new Date('2026-10-05T06:30:00Z'), {}, undefined, { relaxAvailability: true });
+      expect(c.dateConflict).toMatch(/Timeline Conflict: .*before project start date 2030-01-01/);
+    });
+
+    /** Owner decision 2026-09-25: the client's required certifications EXCLUDE, with the reason named. */
+    it('client requirements: a certification the client requires excludes, as SKILLS, naming it', async () => {
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-1' }]);
+      mockClientRepo.findOne.mockResolvedValue({ id: 'c-1', planningPreferences: { requiredCertifications: ['XRF'] } });
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'One', latitude: 18.6, longitude: 73.9 })]);
+      const results = await engine.recommend(branch, new Date());
+      expect(results).toHaveLength(0);
+      const e = (results as any).excluded.find((x: any) => x.assayerId === 'a-1');
+      expect(e).toMatchObject({ kind: 'SKILLS' });
+      expect(e.detail).toMatch(/client requires.*XRF/);
+    });
+
+    it('client requirements: somebody holding a valid one passes', async () => {
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-1' }]);
+      mockClientRepo.findOne.mockResolvedValue({ id: 'c-1', planningPreferences: { requiredCertifications: ['XRF'] } });
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'One', latitude: 18.6, longitude: 73.9, certifications: [{ name: 'xrf', expiryDate: '2099-01-01' }] })]);
+      expect((await engine.recommend(branch, new Date())).map((r) => r.assayer.id)).toEqual(['a-1']);
+    });
+
+    /** The rotation rule, from the shared helper, excludes with the audit named. */
+    it('rotation: the last auditor from an earlier project is excluded as ROTATION, with the audit named', async () => {
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-1' }]);
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'Ravi', latitude: 18.6, longitude: 73.9 })]);
+      mockAssignmentRepo.query.mockImplementation(async (sql: string) =>
+        (sql.includes('branch-rotation:last-auditor')
+          ? [{ id: 'asn-old', assayer_id: 'a-1', project_id: 'p-before', status: 'COMPLETED', audit_date: '2026-03-10' }]
+          : []));
+      const results = await engine.recommend(branch, new Date(), {}, undefined, { projectId: 'p-now' });
+      const e = (results as any).excluded.find((x: any) => x.assayerId === 'a-1');
+      expect(e).toMatchObject({ kind: 'ROTATION' });
+      expect(e.detail).toMatch(/Ravi audited this branch last \(2026-03-10\)/);
+      const call = mockAssignmentRepo.query.mock.calls.find((c: any[]) => String(c[0]).includes('branch-rotation:last-auditor'));
+      expect(call[1]).toEqual(['b-1', 'p-now']);
+    });
+
+    /** F9: delivery history is cut to 20 per assayer IN SQL, not loaded whole and trimmed. */
+    it('F9: asks for at most 20 completed jobs per assayer with a window function', async () => {
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-1' }]);
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'One', latitude: 18.6, longitude: 73.9 })]);
+      await engine.recommend(branch, new Date());
+      const call = mockAssignmentRepo.query.mock.calls.find((c: any[]) => String(c[0]).includes('engine:delivery-history'));
+      expect(call[0]).toMatch(/ROW_NUMBER\(\) OVER \(\s*PARTITION BY a\.assayer_id/);
+      expect(call[0]).toMatch(/rn <= \$2/);
+      expect(call[1]).toEqual([['a-1'], 20]);
+    });
+
+    /** F15: the delivery clock starts at the scheduled date (or check-in), not when the offer was made. */
+    it('F15: a job completed on its scheduled day scores as same-day, however early it was offered', async () => {
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-1' }]);
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'One', latitude: 18.6, longitude: 73.9 })]);
+      mockAssignmentRepo.query.mockImplementation(async (sql: string) =>
+        (sql.includes('engine:delivery-history')
+          ? [{ assayer_id: 'a-1', completion_date: '2026-09-20', scheduled_date: '2026-09-20', checked_in_at: null }]
+          : []));
+      const [c] = await engine.recommend(branch, new Date());
+      expect(c.breakdown.deliverySpeed).toBe(100);
+    });
+
+    /**
+     * F16: the same-day grouping bonus counts only ASSIGNED work (never a declined or cancelled
+     * row), and F14: acceptance divides by ANSWERED offers only.
+     */
+    it('F14/F16: the grouped reads ask for the right statuses', async () => {
+      const calls: Array<[string, any]> = [];
+      mockAssignmentRepo.createQueryBuilder.mockImplementation(() => {
+        const b: any = groupedCountBuilder();
+        b.andWhere = jest.fn((sql: string, params?: any) => { calls.push([sql, params]); return b; });
+        return b;
+      });
+      mockAssayerRepo.query.mockResolvedValue([{ id: 'a-1' }]);
+      mockAssayerRepo.find.mockResolvedValue([active({ id: 'a-1', displayName: 'One', latitude: 18.6, longitude: 73.9 })]);
+      await engine.recommend(branch, new Date());
+
+      const sameDay = calls.find(([, p]) => p?.sameDayStatuses)?.[1].sameDayStatuses;
+      expect(sameDay).toEqual(expect.arrayContaining(['PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED']));
+      expect(sameDay).not.toContain('REJECTED');
+      expect(sameDay).not.toContain('CANCELLED');
+
+      const answered = calls.find(([, p]) => p?.answered)?.[1].answered;
+      expect(answered).toEqual(expect.arrayContaining(['ACCEPTED', 'REJECTED', 'COMPLETED']));
+      expect(answered).not.toContain('PENDING');
+      expect(answered).not.toContain('CANCELLED');
+    });
+  });
 });
 
 describe('BranchFamiliarityScoreCalculator', () => {
@@ -1002,9 +1178,13 @@ describe('BranchFamiliarityScoreCalculator', () => {
 });
 
 describe('ConsecutiveBranchAuditFilter', () => {
-  const mockAssignmentRepo = {
-    findOne: jest.fn(),
-  };
+  /**
+   * The rule reads the branch's last auditor through `findLastBranchAuditor` — the same helper the
+   * assignment write path enforces with. The query itself only returns an ACCEPTED/CHECKED_IN/
+   * IN_PROGRESS/COMPLETED row from a DIFFERENT project; these tests pin both what the SQL asks and
+   * what the filter does with the answer.
+   */
+  const mockAssignmentRepo = { query: jest.fn() };
 
   // Rules are enforced unless an administrator has suspended them — see
   // modules/platform/rule-bypass. Nothing is suspended in these tests, which is the state
@@ -1013,41 +1193,51 @@ describe('ConsecutiveBranchAuditFilter', () => {
   const filter = new ConsecutiveBranchAuditFilter(mockAssignmentRepo as any, noBypass);
 
   const branch = { id: 'branch-1' } as any;
-  const assayer = { id: 'assayer-1' } as any;
-  const context = { branch, client: null, scheduledDate: new Date(), weights: {} };
+  const assayer = { id: 'assayer-1', displayName: 'Ravi' } as any;
+  const context: any = { branch, client: null, scheduledDate: new Date(), weights: {}, projectId: 'project-now' };
+  const row = (assayerId: string, status: AssignmentStatus) => [{ id: 'asn-old', assayer_id: assayerId, project_id: 'project-before', status, audit_date: '2026-03-10' }];
 
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('allows the candidate through when there is no prior assignment on this branch', async () => {
-    mockAssignmentRepo.findOne.mockResolvedValue(null);
+  it('allows the candidate through when nobody has audited this branch before', async () => {
+    mockAssignmentRepo.query.mockResolvedValue([]);
     await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
   });
 
-  it('does NOT exclude the assayer whose offer on this branch is still PENDING', async () => {
-    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.PENDING });
+  it('asks only for engaged audits (never pending, declined or cancelled) from an EARLIER project', async () => {
+    mockAssignmentRepo.query.mockResolvedValue([]);
+    await filter.evaluate(assayer, context);
+    const [sql, params] = mockAssignmentRepo.query.mock.calls[0];
+    for (const s of ['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED']) expect(sql).toContain(`'${s}'`);
+    for (const s of ['PENDING', 'REJECTED', 'CANCELLED']) expect(sql).not.toContain(`'${s}'`);
+    expect(sql).toMatch(/project_id IS DISTINCT FROM \$2/);
+    expect(params).toEqual(['branch-1', 'project-now']);
+  });
+
+  it.each([AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED])(
+    'excludes the last auditor whose earlier audit is %s',
+    async (status) => {
+      mockAssignmentRepo.query.mockResolvedValue(row('assayer-1', status));
+      await expect(filter.evaluate(assayer, context)).resolves.toBe(false);
+    },
+  );
+
+  it('does not exclude a different assayer', async () => {
+    mockAssignmentRepo.query.mockResolvedValue(row('someone-else', AssignmentStatus.COMPLETED));
     await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
   });
 
-  it('excludes the assayer once their assignment on this branch is ACCEPTED', async () => {
-    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.ACCEPTED });
-    await expect(filter.evaluate(assayer, context)).resolves.toBe(false);
+  it('names the audit that made them the last auditor', async () => {
+    mockAssignmentRepo.query.mockResolvedValue(row('assayer-1', AssignmentStatus.COMPLETED));
+    await expect(filter.explain(assayer, context)).resolves.toMatch(/Ravi audited this branch last \(2026-03-10\)/);
   });
 
-  it('excludes the assayer who already COMPLETED the last audit of this branch', async () => {
-    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.COMPLETED });
-    await expect(filter.evaluate(assayer, context)).resolves.toBe(false);
-  });
-
-  it('does not exclude a different assayer even if the last assignment was ACCEPTED', async () => {
-    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'someone-else', status: AssignmentStatus.ACCEPTED });
-    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
-  });
-
-  it('does not exclude the assayer whose prior offer on this branch was REJECTED', async () => {
-    mockAssignmentRepo.findOne.mockResolvedValue({ assayerId: 'assayer-1', status: AssignmentStatus.REJECTED });
-    await expect(filter.evaluate(assayer, context)).resolves.toBe(true);
+  it('uses the pool-wide answer recommend() resolved, without querying again', async () => {
+    const withFacts = { ...context, branchFacts: { lastAuditor: { assayerId: 'assayer-1', status: AssignmentStatus.COMPLETED, assignmentId: 'x', projectId: 'p', auditDate: null } } };
+    await expect(filter.evaluate(assayer, withFacts)).resolves.toBe(false);
+    expect(mockAssignmentRepo.query).not.toHaveBeenCalled();
   });
 });
 
@@ -1282,5 +1472,47 @@ describe('AvailabilityFilter', () => {
     };
 
     expect(await filter.evaluate(assayer, context)).toBe(true);
+  });
+});
+
+/** F14: accepted ÷ ANSWERED — a pending or desk-cancelled offer is not a "no". */
+describe('acceptanceRateScore', () => {
+  it('is 85 for somebody who has answered nothing yet', () => {
+    expect(acceptanceRateScore(0, 0)).toBe(85);
+  });
+  it('divides accepted by answered', () => {
+    expect(acceptanceRateScore(4, 3)).toBe(75);
+  });
+  it('the answered set is yes-or-no only', () => {
+    expect(ANSWERED_OFFER_STATUSES).not.toContain(AssignmentStatus.PENDING);
+    expect(ANSWERED_OFFER_STATUSES).not.toContain(AssignmentStatus.CANCELLED);
+    expect(ANSWERED_OFFER_STATUSES).toContain(AssignmentStatus.REJECTED);
+  });
+});
+
+/** F15: delivery measured from when the work could start (check-in, else the scheduled day). */
+describe('deliveryDays / deliverySpeedScore', () => {
+  it('counts calendar days from the scheduled date to completion', () => {
+    expect(deliveryDays({ completionDate: '2026-09-22', scheduledDate: '2026-09-20' })).toBe(2);
+  });
+  it('prefers the check-in day when there is one', () => {
+    expect(deliveryDays({ completionDate: '2026-09-22', scheduledDate: '2026-09-10', checkedInAt: '2026-09-22T04:00:00Z' })).toBe(0);
+  });
+  it('a check-in alone is enough to start the clock', () => {
+    expect(deliveryDays({ completionDate: '2026-09-23', scheduledDate: null, checkedInAt: '2026-09-22T04:00:00Z' })).toBe(1);
+  });
+  it('is unmeasurable without a start or an end', () => {
+
+    expect(deliveryDays({ completionDate: null, scheduledDate: '2026-09-10' })).toBeNull();
+    expect(deliveryDays({ completionDate: '2026-09-10', scheduledDate: null })).toBeNull();
+  });
+  it('scores same day 100, next day 80, two days 60, later 40, unmeasurable 75', () => {
+    const r = (c: string, s: string | null) => ({ completionDate: c, scheduledDate: s });
+    expect(deliverySpeedScore([r('2026-09-10', '2026-09-10')])).toBe(100);
+    expect(deliverySpeedScore([r('2026-09-11', '2026-09-10')])).toBe(80);
+    expect(deliverySpeedScore([r('2026-09-12', '2026-09-10')])).toBe(60);
+    expect(deliverySpeedScore([r('2026-09-20', '2026-09-10')])).toBe(40);
+    expect(deliverySpeedScore([r('2026-09-20', null)])).toBe(75);
+    expect(deliverySpeedScore([])).toBe(80);
   });
 });

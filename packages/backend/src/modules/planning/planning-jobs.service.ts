@@ -48,8 +48,9 @@ export class PlanningJobsService {
 
   constructor(@InjectQueue(PLANNING_QUEUE) private readonly queue: Queue) {}
 
-  async enqueueCoveragePlan(projectId: string, scope: ScopeSnapshot, requestedBy: string): Promise<EnqueueResult> {
-    const params = { projectId, scope: scope ?? null };
+  async enqueueCoveragePlan(projectId: string, scope: ScopeSnapshot, requestedBy: string, startDate?: string | null): Promise<EnqueueResult> {
+    // The start date is part of the fingerprint: a plan for another start day is another run.
+    const params = { projectId, scope: scope ?? null, ...(startDate ? { startDate } : {}) };
     return this.add<CoveragePlanJobData>(PLANNING_JOB.COVERAGE_PLAN, {
       ...params,
       requestedBy,
@@ -57,8 +58,8 @@ export class PlanningJobsService {
     });
   }
 
-  async enqueueProjectCandidates(projectId: string, scope: ScopeSnapshot, requestedBy: string): Promise<EnqueueResult> {
-    const params = { projectId, scope: scope ?? null };
+  async enqueueProjectCandidates(projectId: string, scope: ScopeSnapshot, requestedBy: string, startDate?: string | null): Promise<EnqueueResult> {
+    const params = { projectId, scope: scope ?? null, ...(startDate ? { startDate } : {}) };
     return this.add<ProjectCandidatesJobData>(PLANNING_JOB.PROJECT_CANDIDATES, {
       ...params,
       requestedBy,

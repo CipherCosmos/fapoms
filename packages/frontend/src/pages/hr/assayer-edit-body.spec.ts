@@ -41,7 +41,7 @@ describe('the assayer edit body', () => {
       expect(body).toHaveProperty('certifications', []);
     });
 
-    it.each(['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload'])(
+    it.each(['experienceYears', 'performanceRating', 'maxWeeklyWorkload'])(
       'leaves %s alone, because the column is NOT NULL and has no empty',
       (key) => {
         const body = build([{ key, type: 'number' }], { [key]: '' });

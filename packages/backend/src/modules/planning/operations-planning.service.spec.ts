@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { OperationsPlanningService, deploymentRequestId, deployFeeFor } from './operations-planning.service';
+import { OperationsPlanningService, deploymentRequestId, deployFeeFor, COVERAGE_PLAN_TRANSITIONS, canTransitionCoveragePlan, isDateRefusal } from './operations-planning.service';
 import { CoveragePlanningEngine } from './coverage-planning.engine';
 import { AssignmentService } from '../assignment/assignment.service';
 import { ProjectQueryService } from '../project/project-query.service';
@@ -539,6 +539,91 @@ describe('OperationsPlanningService', () => {
 
       expect(onProgress).toHaveBeenCalledWith(0, 2, 'Creating offers');
       expect(onProgress).toHaveBeenCalledWith(1, 2, 'Creating offers');
+    });
+  });
+
+  /** The 2026-09-25 planning audit. */
+  describe('audit 2026-09-25', () => {
+    const approvedPlan = (clusters: any[]) => ({
+      id: 'cp-1', projectId: 'p-1', status: CoveragePlanStatus.APPROVED, currentVersion: 1,
+      versions: [{ versionNumber: 1, planData: { clusters } }],
+    });
+
+    /** F21: status changes go through a table; DEPLOYED is reached only by deploying. */
+    it('F21: refuses an edge the table does not hold, and never sets DEPLOYED by hand', async () => {
+      mockPlanRepository.findOne.mockResolvedValue({ id: 'cp-1', projectId: 'p-1', status: CoveragePlanStatus.GENERATED, currentVersion: 1 });
+      await expect(service.transitionPlanStatus('cp-1', CoveragePlanStatus.DEPLOYED, 'u-1')).rejects.toThrow(/only by deploying/);
+      mockPlanRepository.findOne.mockResolvedValue({ id: 'cp-1', projectId: 'p-1', status: CoveragePlanStatus.DEPLOYED, currentVersion: 1 });
+      await expect(service.transitionPlanStatus('cp-1', CoveragePlanStatus.APPROVED, 'u-1')).rejects.toThrow(BadRequestException);
+      mockPlanRepository.findOne.mockResolvedValue({ id: 'cp-1', projectId: 'p-1', status: CoveragePlanStatus.ARCHIVED, currentVersion: 1 });
+      await expect(service.transitionPlanStatus('cp-1', CoveragePlanStatus.UNDER_REVIEW, 'u-1')).rejects.toThrow(/final/);
+      expect(mockPlanRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('F21: allows the edges the lifecycle uses', async () => {
+      mockPlanRepository.findOne.mockResolvedValue({ id: 'cp-1', projectId: 'p-1', status: CoveragePlanStatus.GENERATED, currentVersion: 1 });
+      await expect(service.transitionPlanStatus('cp-1', CoveragePlanStatus.APPROVED, 'u-1')).resolves.toMatchObject({ status: CoveragePlanStatus.APPROVED });
+      expect(canTransitionCoveragePlan(CoveragePlanStatus.APPROVED, CoveragePlanStatus.LOCKED)).toBe(true);
+      expect(canTransitionCoveragePlan(CoveragePlanStatus.DEPLOYED, CoveragePlanStatus.ARCHIVED)).toBe(true);
+      // Nothing can move TO deployed through the table.
+      for (const from of Object.keys(COVERAGE_PLAN_TRANSITIONS) as CoveragePlanStatus[]) {
+        expect(canTransitionCoveragePlan(from, CoveragePlanStatus.DEPLOYED)).toBe(false);
+      }
+    });
+
+    /** F10: a leave refusal moves the date on, bounded like a holiday; a timeline refusal does not. */
+    it('F10: a branch refused for the assayer\'s leave is retried on the next workable day', async () => {
+      mockPlanRepository.findOne.mockResolvedValue(approvedPlan([{ id: 'c-1', assignedAssayerId: 'as-1', branchIds: ['b-1'], branchCount: 1 }]));
+      mockProjectQueryService.findProjectBranches.mockResolvedValue([{ id: 'pb-1', branchId: 'b-1' }]);
+      mockAssignmentService.create
+        .mockRejectedValueOnce(new Error('Assayer Unavailable: Assayer is on leave on 2026-01-05.'))
+        .mockResolvedValueOnce({ id: 'asg-1' });
+      const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+      expect(result.deployed).toEqual([expect.objectContaining({ branchId: 'b-1', scheduledDate: '2026-01-06' })]);
+      expect(isDateRefusal('Timeline Conflict: Scheduled date is after project end date 2026-01-01.')).toBe(false);
+      expect(isDateRefusal('Holiday Conflict: Target date is a holiday in MH.')).toBe(true);
+    });
+
+    it('F10: a long leave still ends as a skip naming it — bounded, not an unbounded walk', async () => {
+      mockPlanRepository.findOne.mockResolvedValue(approvedPlan([{ id: 'c-1', assignedAssayerId: 'as-1', branchIds: ['b-1'], branchCount: 1 }]));
+      mockProjectQueryService.findProjectBranches.mockResolvedValue([{ id: 'pb-1', branchId: 'b-1' }]);
+      mockAssignmentService.create.mockRejectedValue(new Error('Assayer Unavailable: Assayer is on leave.'));
+      const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+      expect(mockAssignmentService.create).toHaveBeenCalledTimes(10);
+      expect(result.skipped[0].reason).toMatch(/on leave/);
+      mockAssignmentService.create.mockReset();
+    });
+
+    /** Rotation at deploy: a hand-picked assayer's written justification is the offer's override reason. */
+    it('rotation: a manual override\'s justification reaches create() as the override reason; engine picks carry none', async () => {
+      const created: any[] = [];
+      mockVersionRepository.create.mockImplementationOnce((x: any) => { created.push(x); return x; });
+      mockPlanningEngine.generateCoveragePlan.mockResolvedValueOnce({
+        clusters: [{ id: 'c-1', branchIds: ['b-1', 'b-2'], branchAssignments: [
+          { branchId: 'b-1', assayerId: 'as-engine' }, { branchId: 'b-2', assayerId: 'as-engine' },
+        ] }],
+      });
+      mockPlanRepository.findOne.mockResolvedValue(null);
+      await service.createOrRegeneratePlan('p-1', [{ branchId: 'b-2', assayerId: 'as-last', justification: 'Only one who knows the vault' }], 'u-1');
+      const clusters = created[0].planData.clusters;
+
+      mockPlanRepository.findOne.mockResolvedValue(approvedPlan(clusters));
+      mockProjectQueryService.findProjectBranches.mockResolvedValue([{ id: 'pb-1', branchId: 'b-1' }, { id: 'pb-2', branchId: 'b-2' }]);
+      mockAssignmentService.create.mockResolvedValue({ id: 'asg' });
+      await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+      const byBranch = Object.fromEntries(mockAssignmentService.create.mock.calls.map((c: any[]) => [c[0].projectBranchId, c[0]]));
+      expect(byBranch['pb-2']).toMatchObject({ assayerId: 'as-last', overrideReason: 'Only one who knows the vault' });
+      expect(byBranch['pb-1']).not.toHaveProperty('overrideReason');
+      mockAssignmentService.create.mockReset();
+    });
+
+    /** F19 / F1: the saved version is generated for the scope and start date the preview used. */
+    it('F19/F1: generates the version with the caller\'s scope and start date', async () => {
+      mockPlanRepository.findOne.mockResolvedValue(null);
+      mockVersionRepository.create.mockImplementationOnce((x: any) => x);
+      const scope = { regions: ['WEST'] } as any;
+      await service.createOrRegeneratePlan('p-1', [], 'u-1', undefined, undefined, { scope, startDate: '2026-10-05' });
+      expect(mockPlanningEngine.generateCoveragePlan).toHaveBeenCalledWith('p-1', scope, undefined, '2026-10-05');
     });
   });
 });

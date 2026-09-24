@@ -58,7 +58,6 @@ export interface Assayer {
   performanceRating: number;
   leaves: { startDate: string; endDate: string }[] | null;
   workingHours: { start: string; end: string } | null;
-  maxDailyWorkload: number;
   maxWeeklyWorkload: number;
 
   /**
@@ -360,7 +359,7 @@ const TEL_FIELDS = new Set(['phone', 'alternatePhone', 'emergencyContactPhone'])
  * them is a constraint violation, which surfaces as a bare 500. A blank box means "leave it
  * alone", which is the only honest reading available.
  */
-const NO_EMPTY_VALUE = new Set(['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload']);
+const NO_EMPTY_VALUE = new Set(['experienceYears', 'performanceRating', 'maxWeeklyWorkload']);
 
 export const parseListValue = (raw?: string): string[] => {
   if (!raw) return [];

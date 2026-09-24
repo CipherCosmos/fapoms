@@ -370,6 +370,7 @@ describe('Phase 2 — Concurrency, State Integrity & Failure Tolerance Test Suit
           useValue: {
             evaluateConstraints: jest.fn().mockResolvedValue({ eligible: true }),
             checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
+            checkClientRequirements: jest.fn().mockReturnValue({ passed: true }),
             checkDistancePolicy: jest.fn().mockReturnValue({ passed: true }),
             checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
           },

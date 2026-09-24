@@ -24,7 +24,7 @@ const IST_END_OF = (day: string) => new Date(`${day}T23:59:59+05:30`);
 
 function transitionHarness(row: any, opts: { schedule?: any } = {}) {
   const svc: any = Object.create(AssignmentService.prototype);
-  svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
+  svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkClientRequirements: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
   const initialStatus = row.status;
   const saved: any[] = [];
   const scheduleRepo = {
@@ -52,7 +52,7 @@ function transitionHarness(row: any, opts: { schedule?: any } = {}) {
     scheduleStatsRefresh: jest.fn(),
   };
   svc.uow = { run: jest.fn(async (work: any) => work(manager, jest.fn())) };
-  svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
+  svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkClientRequirements: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
   svc.auditService = { recordEventSafe: jest.fn(async () => undefined), recordEvent: jest.fn(async () => ({ id: 'ev' })) };
   svc.notificationDispatch = { emitSafe: jest.fn() };
   svc.operationsInbox = { resolveChannels: jest.fn(async () => new Map()) };
@@ -304,7 +304,7 @@ describe('reassignment — fresh clock, clean hand-over, notices after commit', 
       }),
     };
     const svc: any = Object.create(AssignmentService.prototype);
-    svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
+    svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkClientRequirements: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
     svc.uow = {
       run: jest.fn(async (work: any) => {
         const out = await work(manager, jest.fn());
@@ -430,7 +430,7 @@ describe('E17(e) — reopen keeps the office note and puts the reason on the rec
       getRepository: jest.fn(() => ({ findOne: jest.fn(async () => null), save: jest.fn(async (x: any) => x) })),
     };
     const svc: any = Object.create(AssignmentService.prototype);
-    svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
+    svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })), checkSkillsAndCertifications: jest.fn(() => ({ passed: true })), checkClientRequirements: jest.fn(() => ({ passed: true })), checkDistancePolicy: jest.fn(() => ({ passed: true })) };
     svc.assignmentRepository = { manager: { query: jest.fn(async () => []) } };
     svc.uow = { run: jest.fn(async (work: any) => work(manager, jest.fn())) };
     svc.auditService = { recordEventSafe: jest.fn() };

@@ -61,8 +61,13 @@ export enum AssignmentRule {
  * Each is a decision an operator can legitimately make and be held to afterwards: this person is
  * not on the bank's panel but the desk has cleared it; the certification lapsed last week and the
  * renewal is in hand; they are further out than usual because nobody nearer is free; they audited
- * this branch last time and the rotation is worth breaking for continuity; they are on leave and
- * have agreed to come in.
+ * this branch last time and the rotation is worth breaking for continuity.
+ *
+ * DATE_AVAILABILITY is deliberately NOT here (F17, 2026-09-25). It sat on this list while every
+ * write path refused a holiday, an out-of-window date or a recorded leave day outright — so the
+ * panel offered "Assign anyway" on a leave exclusion, the operator typed a reason, and the server
+ * refused anyway. The owner's leave-day decision is that a date clash is resolved by moving the
+ * date or recording the leave change, not by a reason typed on the planning screen.
  *
  * Every one is audited against the assignment with the reason attached — see
  * `ASSIGNMENT_ELIGIBILITY_OVERRIDDEN`.
@@ -72,7 +77,6 @@ export const OVERRIDABLE_WITH_A_REASON: readonly AssignmentRule[] = [
   AssignmentRule.SKILLS_AND_CERTIFICATIONS,
   AssignmentRule.DISTANCE_CEILING,
   AssignmentRule.REPEAT_AUDITOR_ROTATION,
-  AssignmentRule.DATE_AVAILABILITY,
 ];
 
 /**
@@ -91,6 +95,10 @@ export const NOT_OVERRIDABLE_BECAUSE: Partial<Record<AssignmentRule, string>> = 
     'This branch already has a live assignment. Cancel or reassign the existing one first.',
   [AssignmentRule.BRANCH_NOT_OPEN]:
     'This branch is closed or cancelled, so there is no work to assign.',
+  [AssignmentRule.DATE_AVAILABILITY]:
+    'The date itself is not workable for this person — a holiday, outside the project\'s dates, or '
+    + 'recorded leave. A reason does not change the calendar: pick another date, or correct the leave '
+    + 'on their record if it is wrong.',
   [AssignmentRule.PROFILE_NOT_DEPLOYABLE]:
     'Their profile is not deployable — onboarding is unfinished or the record is deleted. Finish '
     + 'onboarding on their record; dispatching somebody who has not cleared document and '

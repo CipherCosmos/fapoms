@@ -7,7 +7,7 @@ import { ClusterManager } from './cluster.manager';
 import { PlanningBranchProvider, AssayerAvailabilityProvider, WorkloadProvider } from './planning-providers.interface';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
-import { calculateHaversineDistance } from '@fapoms/shared';
+import { calculateHaversineDistance, businessNoonOf, businessTodayDateKey } from '@fapoms/shared';
 // Type-only, so nothing about queues is linked into this engine at runtime. The engine reports
 // "branch N of M" and stays ignorant of what, if anything, is watching.
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
@@ -35,6 +35,8 @@ export interface AssayerCapacityMetrics {
 export interface CoveragePlanOutput {
   projectId: string;
   projectName: string;
+  /** The day availability was judged on (`YYYY-MM-DD`) — see `generateCoveragePlan`'s startDate. */
+  startDate?: string;
   coveragePercentage: number;
   estimatedDurationDays: number;
   estimatedOperationalCost: number;
@@ -65,7 +67,7 @@ export interface CoveragePlanOutput {
      * cluster edge can have a different best assayer than the cluster centre), and deployment
      * honours these rather than stamping one cluster-wide assayer onto every branch.
      */
-    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null }>;
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null; overrideReason?: string | null }>;
   }>;
 }
 
@@ -96,9 +98,31 @@ export class CoveragePlanningEngine {
     projectId: string,
     scope?: Partial<GlobalScope>,
     onProgress?: ProgressCallback,
+    /**
+     * The campaign's start date (`YYYY-MM-DD`), as the coverage-plan modal collects it (F1,
+     * 2026-09-25). Availability — leave, holidays, the project window — is judged on THAT day, not
+     * on the moment the plan happens to be generated: a plan built on Friday for a campaign starting
+     * the Monday after next excluded everyone on leave today and proposed people who are on leave
+     * then. Deploy still re-checks each branch on its own spread date. Absent, today (IST).
+     */
+    startDate?: string | null,
   ): Promise<CoveragePlanOutput> {
     const project = await this.projectQueryService.findOne(projectId);
     const planningBranches = await this.branchProvider.getBranchesForPlanning(projectId, scope);
+    const planDateKey = startDate && /^\d{4}-\d{2}-\d{2}/.test(startDate) ? startDate.slice(0, 10) : businessTodayDateKey();
+    const planDate = businessNoonOf(planDateKey);
+
+    /**
+     * The whole branch row for scoring (F13): the engine's holiday check reads its STATE, the cost
+     * scorer its CITY tier, the SLA and risk scorers its RISK score. It was handed
+     * `{ id, name, latitude, longitude }`, so every branch scored as a riskless, tierless branch in
+     * no state — and a state holiday on the start date excluded nobody.
+     */
+    const fullBranchById = new Map<string, any>(
+      ((await this.projectQueryService.findProjectBranches(projectId, scope)) ?? [])
+        .filter((pb: any) => pb?.branch)
+        .map((pb: any) => [pb.branchId, pb.branch]),
+    );
 
     // Group branches into domain structures for clustering
     const activeBranches = planningBranches.map((pb) => {
@@ -112,7 +136,7 @@ export class CoveragePlanningEngine {
 
     const clusters = this.clusterManager.clusterBranches(activeBranches);
 
-    const activeAssayers = await this.assayerProvider.getAvailableAssayers(new Date(), scope);
+    const activeAssayers = await this.assayerProvider.getAvailableAssayers(planDate, scope);
     const assayerIds = activeAssayers.map((a) => a.assayerId.value);
     const allocationMap = await this.workloadProvider.getAssayerCurrentWorkloads(assayerIds);
 
@@ -153,7 +177,7 @@ export class CoveragePlanningEngine {
     branchIds: string[];
     /** Quoted at plan time through FeePolicyService, so deployment prices what was approved. */
     estimatedTotalFee: number | null;
-    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null }>;
+    branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null; overrideReason?: string | null }>;
   }> = [];
 
     // Client and assayer roster are identical for every cluster in one project, so they are
@@ -181,7 +205,7 @@ export class CoveragePlanningEngine {
     let branchesScored = 0;
 
     for (const cluster of clusters) {
-      const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null }> = [];
+      const branchAssignments: Array<{ branchId: string; branchName: string; assayerId: string | null; assayerName: string | null; fee: number | null; rank: number | null; selectionNote: string | null; deskFee?: number | null; overrideReason?: string | null }> = [];
       const assayerCountInCluster = new Map<string, number>();
       let clusterFeeSum = 0;
 
@@ -201,8 +225,10 @@ export class CoveragePlanningEngine {
         } else {
           // Score this specific branch. `clientId` is threaded so id-keyed eligibility queries
           // resolve; `preloaded` keeps the client + assayer roster loaded once across all branches.
-          const branchForScoring = { ...branch, clientId: project.clientId } as any;
-          const candidates = await this.recommendationEngine.recommend(branchForScoring, new Date(), {}, preloaded);
+          const branchForScoring = { ...(fullBranchById.get(branch.id) ?? {}), ...branch, clientId: project.clientId } as any;
+          const candidates = await this.recommendationEngine.recommend(
+            branchForScoring, planDate, {}, preloaded, { projectId: project.id },
+          );
 
           // Walk the ranked list in order, recording why each higher-ranked candidate is skipped,
           // and stop at the first one that can actually take the work.
@@ -341,6 +367,7 @@ export class CoveragePlanningEngine {
     return {
       projectId,
       projectName: project.name,
+      startDate: planDateKey,
       coveragePercentage,
       /**
        * Working days to cover the plan, derived from the workforce actually assigned.

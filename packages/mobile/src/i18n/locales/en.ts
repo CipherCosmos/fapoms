@@ -809,7 +809,6 @@ export const en = {
       languages: 'Languages',
       languagesPlaceholder: 'Search or type to add a language…',
       experienceYears: 'Experience (years)',
-      maxPerDay: 'Max per day',
       maxPerWeek: 'Max per week',
       preferredRegions: 'Preferred regions',
       bankAccount: 'Bank account',
@@ -940,8 +939,7 @@ export const en = {
     },
     lockReasons: {
       fallback: 'Held by the back office — ask HR to change it.',
-      maxDailyWorkload: 'Set by operations — it decides how much work you can be offered.',
-      maxWeeklyWorkload: 'Set by operations, alongside your daily limit.',
+      maxWeeklyWorkload: 'Set by operations — it decides how much work you can be offered in a week.',
       panNumber: 'Held by HR. Contact your HR coordinator to correct this.',
       bankAccountNumber:
         'Payment details are changed by HR only, so a payout cannot be redirected from a handset.',

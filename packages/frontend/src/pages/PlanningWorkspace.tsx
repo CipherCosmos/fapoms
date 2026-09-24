@@ -18,8 +18,8 @@ import { AssayerDetailModal } from './planning/AssayerDetailModal';
 import { type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
 import { CoveragePlanModal } from './planning/CoveragePlanModal';
-import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder, feeToSend } from './planning/assign-route';
-import { feeQuoteRequestBody, dayTravelNote } from './planning/fee-quote';
+import { assignRoute, assignBlocker, reassignAndApply, postStopsInOrder, feeToSend, dayPlanStopBody } from './planning/assign-route';
+import { feeQuoteRequestBody, dayTravelNote, homeRouteOf, liveDistanceNote, cappedCandidatesNote } from './planning/fee-quote';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
 import {
   getProjects,
@@ -146,6 +146,15 @@ export interface Candidate {
   durationMinutes?: number | null;
   /** 'OSRM' = measured by road; 'ESTIMATE' = straight line at an assumed speed (routing was down). */
   distanceSource?: 'OSRM' | 'ESTIMATE' | null;
+  /**
+   * From HOME — what the job is priced from and the service limit / independence rule measure (F2).
+   * `distanceKm` is the RANKING figure, which is a live fix for anyone sharing their location.
+   */
+  homeDistanceKm?: number | null;
+  homeDurationMinutes?: number | null;
+  homeDistanceSource?: 'OSRM' | 'ESTIMATE' | null;
+  /** True when the ranking (and `distanceKm`) used a live GPS fix. */
+  rankedFromLive?: boolean;
   latitude: number | null;
   longitude: number | null;
   score?: number;
@@ -282,6 +291,10 @@ interface DayPlanCandidate {
   costPerPacket: number | null;
   idleHours: number;
   stops: DayPlanStop[];
+  /** Work this assayer already has that day, elsewhere — counted in `totalDayHours` (F5). */
+  existingSameDayJobs?: { count: number; hours: number };
+  /** The day, existing jobs included, runs past the working day (within the grace). */
+  exceedsWorkingDay?: boolean;
   clientPreferencesMatch: {
     skillsMatch: boolean;
     certificationsMatch: boolean;
@@ -514,6 +527,12 @@ export const PlanningWorkspace: React.FC = () => {
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkScheduledDate, setBulkScheduledDate] = useState('');
+  /**
+   * The written reason that waives an overridable rule (rotation, skills, client requirements, the
+   * service ceiling) on every branch of a bulk offer — recorded against each offer it was used on.
+   * Empty means "waive nothing": a branch that needs a waiver is refused with the rule named.
+   */
+  const [bulkOverrideReason, setBulkOverrideReason] = useState('');
   const [bulkFailures, setBulkFailures] = useState<Array<{ branchId: string; branchName: string; error: string }>>([]);
   /**
    * Where a bulk run on the server has got to ("Offering branches (37/120)"). Bulk offer and bulk
@@ -860,17 +879,19 @@ export const PlanningWorkspace: React.FC = () => {
     // whatever the last request found.
     queryKey: queryKeys.planning.recommendations(
       selectedBranchKey ?? '', scheduledAuditDate, ignoreDateAvailability, engineRadiusKm,
-      ignoreClientPolicy, ignoreDistancePolicy,
+      ignoreClientPolicy, ignoreDistancePolicy, selectedPb?.projectId ?? selectedProjectId ?? null,
     ),
     queryFn: ({ signal }) => getRecommendations<Candidate, ExcludedCandidate>(
       selectedBranchKey!, scheduledAuditDate, ignoreDateAvailability, engineRadiusKm, signal,
-      ignoreClientPolicy, ignoreDistancePolicy,
+      ignoreClientPolicy, ignoreDistancePolicy, selectedPb?.projectId ?? selectedProjectId ?? null,
     ),
     enabled: !!selectedBranchKey,
     staleTime: 30_000,
   });
   const candidates = candidatesQuery.data?.data ?? NO_CANDIDATES;
   const excludedCandidates = candidatesQuery.data?.meta?.excluded ?? NO_EXCLUDED;
+  /** How many the engine ranked before the server's top-N cut (F9); the list may be shorter. */
+  const candidateTotal = candidatesQuery.data?.meta?.candidateTotal ?? candidates.length;
   const isLoadingCandidates = candidatesQuery.isLoading;
   /**
    * A failure has to look different from "nobody suitable".
@@ -1209,6 +1230,9 @@ export const PlanningWorkspace: React.FC = () => {
     // time. Per-stop results are still collected for the retry-failed-only flow below; a refused
     // stop (e.g. BRANCH_HAS_LIVE_OFFER — the branch is already offered to someone) is reported
     // against that stop in the server's words and never moves the existing offer.
+    // The whole loop's travel is booked on the route's FIRST stop, priced on the loop the plan
+    // showed (F6) — see `dayPlanStopBody`. Every other stop prices base-only on the server.
+    const firstStopOrder = Math.min(...plan.stops.map((s) => s.order));
     const outcomes = await postStopsInOrder(
       stops,
       async (stop) => {
@@ -1217,6 +1241,7 @@ export const PlanningWorkspace: React.FC = () => {
         await api.request('/assignments', {
           method: 'POST',
           body: JSON.stringify({
+            ...dayPlanStopBody(stop, firstStopOrder, plan),
             projectBranchId: branchMeta.id,
             assayerId: plan.assayerId,
             // The date the plan was actually built for, not the operator's raw request. The
@@ -1325,6 +1350,7 @@ export const PlanningWorkspace: React.FC = () => {
         acceptanceReason: assignDirectly
           ? `Agreed by phone — bulk-assigned to ${assayerName} from the planning queue.`
           : undefined,
+        overrideReason: bulkOverrideReason.trim() || undefined,
       }, { onProgress: (p) => setBulkProgress(p.stage) });
     } catch (err: any) {
       // The run as a whole did not report back (it failed, or it is still going past the wait). The
@@ -1485,14 +1511,16 @@ export const PlanningWorkspace: React.FC = () => {
     // On a reassign, the job being moved must not count as "travel already paid" that day.
     const route = pb ? assignRoute(pb.assignment, c.id) : null;
     try {
+      // From HOME (F2): the job is priced from where they live, not where their phone is now.
+      const home = homeRouteOf(c);
       return await api.request<FeeQuote>('/pricing/quote', {
         method: 'POST',
         body: JSON.stringify(feeQuoteRequestBody({
           assayerId: c.id,
           projectId: selectedProjectId,
-          distanceKm: c.distanceKm,
-          durationMinutes: c.durationMinutes,
-          distanceSource: c.distanceSource,
+          distanceKm: home.distanceKm,
+          durationMinutes: home.durationMinutes,
+          distanceSource: home.distanceSource,
           branchId: pb?.branchId,
           onDate,
           excludeAssignmentId: route?.kind === 'reassign' ? route.assignmentId : undefined,
@@ -2181,6 +2209,12 @@ export const PlanningWorkspace: React.FC = () => {
           inside `searchRadiusKm`. Stated once here so the gap between the two views is a fact
           the operator is told, rather than one they infer from a pin that is not there.
         */}
+        {/* The list is the top N the server returns (F9); say so whenever more were ranked. */}
+        {candidateTotal > candidates.length && (
+          <div data-testid="candidates-capped" style={{ marginBottom: '8px', padding: '5px 9px', fontSize: 'var(--text-3xs)', fontWeight: 600, color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', borderRadius: '6px' }}>
+            {cappedCandidatesNote(candidates.length, candidateTotal)}
+          </div>
+        )}
         {qualificationBlock && (
           <div style={{ marginBottom: '8px', padding: '7px 10px', fontSize: 'var(--text-2xs)', fontWeight: 600, color: 'var(--danger)', background: 'var(--status-cancelled-bg)', borderRadius: '6px', lineHeight: 1.5 }}>
             <div>
@@ -2240,8 +2274,10 @@ export const PlanningWorkspace: React.FC = () => {
           // fixed: being near the branch is good for service level and bad only for independence,
           // so "compliant"/"breach" here is about whether the assayer is far enough away to audit
           // this branch — nothing to do with the SLA clock. Renamed so the variable says so too.
-          const independenceStatus = slaEnabled && c.distanceKm !== null
-            ? (c.distanceKm >= slaRadius ? 'independent' : 'too-close')
+          // From HOME, as the independence rule measures it (F2) — never the live fix.
+          const independenceKm = homeRouteOf(c).distanceKm;
+          const independenceStatus = slaEnabled && independenceKm !== null
+            ? (independenceKm >= slaRadius ? 'independent' : 'too-close')
             : null;
           const cardBorderColor = independenceStatus === 'independent' ? 'var(--status-active-bg)' : independenceStatus === 'too-close' ? 'var(--status-cancelled-bg)' : 'var(--border-color)';
           const cardBg = independenceStatus === 'independent' ? 'var(--status-active-bg)' : independenceStatus === 'too-close' ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)';
@@ -2313,17 +2349,29 @@ export const PlanningWorkspace: React.FC = () => {
                         <> · {formatTravelTime(c.durationMinutes, c.distanceSource ?? null).replace(' by road', '')}</>
                       )}
                     </span>
+                    {/* Ranked from a live fix (F2): say so, and give the home figure the job is priced from. */}
+                    {c.rankedFromLive && (
+                      <span title="Ranked by where their phone is now. The fee, the service limit and the independence rule are measured from their home."
+                        style={{ fontSize: 'var(--text-3xs)', color: 'var(--text-muted)' }}>
+                        ({liveDistanceNote(c, (km, src) => formatRouteDistance(km, (src as any) ?? null))}
+                        {homeRouteOf(c).distanceKm != null ? `; home ${formatRouteDistance(homeRouteOf(c).distanceKm!, (homeRouteOf(c).distanceSource as any) ?? null)}` : '; home not located'})
+                      </span>
+                    )}
                     {/*
                       This chip is about the *independence floor* — "far enough away not to be
                       auditing their own doorstep" — and nothing else. Labelled "✓ >50km Radius"
                       it read as general approval, so an assayer 1,749 km away wore a green tick
                       and no other distance signal at all. It now says which rule it is answering.
                     */}
-                    {slaEnabled && c.distanceKm !== null && (
-                      <span title={`Client independence rule: an assayer must be at least ${slaRadius} km from the branch they audit.`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: c.distanceKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
-                        {c.distanceKm >= slaRadius ? <><Check size={9} /> independent (&gt;{slaRadius}km)</> : <><X size={9} /> too close (&lt;{slaRadius}km)</>}
-                      </span>
-                    )}
+                    {/* Measured from HOME, as the rule itself is (F2). */}
+                    {slaEnabled && homeRouteOf(c).distanceKm !== null && (() => {
+                      const homeKm = homeRouteOf(c).distanceKm!;
+                      return (
+                        <span title={`Client independence rule: an assayer must be at least ${slaRadius} km from the branch they audit (measured from home).`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: 'var(--text-3xs)', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: homeKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: homeKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
+                          {homeKm >= slaRadius ? <><Check size={9} /> independent (&gt;{slaRadius}km)</> : <><X size={9} /> too close (&lt;{slaRadius}km)</>}
+                        </span>
+                      );
+                    })()}
                     {/*
                       And the ceiling, which nothing on this card used to mention.
                       The engine deliberately does not exclude on the service radius — see
@@ -2843,6 +2891,19 @@ export const PlanningWorkspace: React.FC = () => {
               value={bulkScheduledDate}
               onChange={(e) => setBulkScheduledDate(e.target.value)}
               style={{ padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-2xs)' }}
+            />
+          </label>
+
+          <label style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}
+            title="Only needed when a rule would refuse a branch — the rotation rule, a skill or certification the client requires, or the service limit. Recorded against every offer it is used on.">
+            Reason (if a rule needs waiving)
+            <input
+              type="text"
+              value={bulkOverrideReason}
+              onChange={(e) => setBulkOverrideReason(e.target.value)}
+              placeholder="Recorded on each offer"
+              maxLength={1000}
+              style={{ width: '200px', padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 'var(--text-2xs)' }}
             />
           </label>
 
@@ -3608,7 +3669,11 @@ export const PlanningWorkspace: React.FC = () => {
                                     { label: 'Branches', val: String(plan.totalBranches), icon: <Building2 size={10} />, warn: false },
                                     { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: <Clock size={10} />, warn: false },
                                     { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: <Car size={10} />, warn: false },
-                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: <Calendar size={10} />, warn: false },
+                                    // Jobs already booked that day elsewhere are part of the day (F5).
+                                    ...(plan.existingSameDayJobs && plan.existingSameDayJobs.count > 0
+                                      ? [{ label: 'Already booked', val: `${plan.existingSameDayJobs.count} job${plan.existingSameDayJobs.count > 1 ? 's' : ''} · ${plan.existingSameDayJobs.hours}h`, icon: <AlertTriangle size={10} />, warn: true }]
+                                      : []),
+                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: plan.exceedsWorkingDay ? <AlertTriangle size={10} /> : <Calendar size={10} />, warn: plan.exceedsWorkingDay === true },
                                     { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: <Clock size={10} />, warn: false },
                                     { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? <Flame size={10} /> : <BarChart3 size={10} />, warn: false },
                                   ].map((m, mi) => (

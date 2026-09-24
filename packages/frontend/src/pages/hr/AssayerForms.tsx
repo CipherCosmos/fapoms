@@ -39,7 +39,7 @@ const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-input)', bo
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
 const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode']);
 const FIELD_TEL = PHONE_FIELD_KEYS;
-const FIELD_NUM = new Set(['experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload']);
+const FIELD_NUM = new Set(['experienceYears', 'maxWeeklyWorkload']);
 const FIELD_TIME = new Set(['workingHoursStart', 'workingHoursEnd']);
 
 
@@ -522,10 +522,6 @@ export const EDIT_FIELDS: FieldDef[] = [
   {
     key: 'performanceRating', label: 'HR performance rating', type: 'number', options: PERFORMANCE_RATINGS,
     hint: 'Set by HR. Used when the system suggests who to send to a job. Separate from the rating worked out from remarks.',
-  },
-  {
-    key: 'maxDailyWorkload', label: 'Most jobs per day', type: 'number',
-    hint: 'How many jobs this person may be given in one day.',
   },
   {
     key: 'maxWeeklyWorkload', label: 'Most jobs per week', type: 'number',

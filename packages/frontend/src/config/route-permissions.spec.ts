@@ -401,8 +401,8 @@ describe('canAccessRoute', () => {
 
     it('grants a super administrator everything except what the developer split fenced off', () => {
       // Implication runs DEVELOPER → ADMIN, never the reverse: the service logs are the
-      // technical estate, and the support desk moved to the people who answer the tickets.
-      const CLOSED_TO_ADMIN = ['/admin/logs', '/feedback'];
+      // technical estate. (Support is open to admins again, as reporters: the desk is inside the page.)
+      const CLOSED_TO_ADMIN = ['/admin/logs'];
       for (const rp of ROUTE_PERMISSIONS) {
         const routePath = rp.path.replace(':id', 'some-id');
         const expected = !CLOSED_TO_ADMIN.includes(rp.path);
@@ -466,10 +466,17 @@ describe('canAccessRoute', () => {
       expect(canAccessRoute([SystemRole.ADMIN], [], '/admin/logs')).toBe(false);
     });
 
-    it('shares the support desk with PRODUCT_SUPPORT; ADMIN lost it', () => {
-      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/feedback')).toBe(true);
-      expect(canAccessRoute([SystemRole.PRODUCT_SUPPORT], [], '/feedback')).toBe(true);
-      expect(canAccessRoute([SystemRole.ADMIN], [], '/feedback')).toBe(false);
+    /**
+     * 2026-09-25: the page holds both sides of support. Reporting is everyone's — hiding the route
+     * from non-developers hid the Support button and sidebar entry with it, so nobody but the desk
+     * could report anything. The desk (queue, triage, resolve) is switched inside the page and
+     * enforced by the backend's FEEDBACK_TEAM_ROLES.
+     */
+    it('lets every signed-in role open Support, not just the desk', () => {
+      for (const role of Object.values(SystemRole)) {
+        expect({ role, allowed: canAccessRoute([role], [], '/feedback') }).toEqual({ role, allowed: true });
+      }
+      expect(canAccessRoute(CUSTOM_ROLE, [], '/feedback')).toBe(true);
     });
 
     /**
@@ -519,6 +526,11 @@ describe('defaultRouteFor', () => {
     // /feedback opened to PRODUCT_SUPPORT with the developer split and joined LANDING_ORDER;
     // before that the role fell through to /notifications — a page about the work, not the work.
     expect(defaultRouteFor([SystemRole.PRODUCT_SUPPORT], [])).toBe('/feedback');
+  });
+
+  it('does not land anyone else on Support just because everyone may open it', () => {
+    expect(defaultRouteFor(CUSTOM_ROLE, [])).toBe('/notifications');
+    expect(defaultRouteFor([SystemRole.CLIENT_USER], ['PROJECT:VIEW:ORGANIZATION'])).toBe('/dashboard');
   });
 
   /**

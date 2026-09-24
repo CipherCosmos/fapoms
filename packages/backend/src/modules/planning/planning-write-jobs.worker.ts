@@ -123,7 +123,7 @@ export class PlanningWriteJobsWorker {
   }
 
   async generateVersion(job: Job<GenerateVersionJobData>) {
-    const { projectId, overrides, justification, actor } = job.data;
+    const { projectId, overrides, justification, actor, scope, startDate } = job.data;
     return this.tracker.run(job, async (t) => {
       await t.progress(0, 1, 'Loading project and workforce');
       return runAsJobActor(actor, () =>
@@ -133,6 +133,7 @@ export class PlanningWriteJobsWorker {
           actor.userId,
           justification,
           t.progress,
+          { scope: scope ?? undefined, startDate: startDate ?? null },
         ));
     }, {
       describe: (plan) => ({
@@ -149,7 +150,7 @@ export class PlanningWriteJobsWorker {
    * arrive in a body, and a batch must not be a way around the check a single offer meets.
    */
   async bulkOffer(job: Job<BulkOfferJobData>): Promise<BulkBranchResult> {
-    const { projectBranchIds, assayerId, assayerName, scheduledDate, acceptOnBehalf, acceptanceReason, scope, actor } = job.data;
+    const { projectBranchIds, assayerId, assayerName, scheduledDate, acceptOnBehalf, acceptanceReason, overrideReason, scope, actor } = job.data;
     this.logger.log(`Bulk offer job ${job.id}: ${projectBranchIds.length} branch(es) to ${assayerId}.`);
     return this.tracker.run(job, (t) => runAsJobActor(actor, () =>
       this.eachBranch(t.progress, projectBranchIds, 'Offering branches', async (projectBranchId): Promise<BulkBranchSucceeded> => {
@@ -161,6 +162,8 @@ export class PlanningWriteJobsWorker {
           remarks: `Bulk-assigned to ${assayerName || 'the selected assayer'} from the planning queue`,
           acceptOnBehalf,
           acceptanceReason: acceptOnBehalf ? acceptanceReason : undefined,
+          // Waives an overridable rule (e.g. rotation) on this branch; recorded by create().
+          ...(overrideReason ? { overrideReason } : {}),
         }, actor.userId);
         return { projectBranchId, assignmentId: created?.id, status: created?.status };
       })), { describe: (r) => describeBulk(r, `offered to ${assayerName || 'the assayer'}`, 'offered') });

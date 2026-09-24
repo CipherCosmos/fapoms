@@ -90,8 +90,13 @@ export class PlanningWriteJobsService {
     overrides: Array<Record<string, unknown>>,
     justification: string | undefined,
     { actor, regions }: WriteJobRequester,
+    options: { scope?: ScopeSnapshot; startDate?: string | null } = {},
   ): Promise<TrackedEnqueueResult> {
-    const params = { projectId, overrides, justification };
+    const params = {
+      projectId, overrides, justification,
+      scope: options.scope ?? null,
+      ...(options.startDate ? { startDate: options.startDate } : {}),
+    };
     return this.backgroundJobs.enqueueTracked<GenerateVersionJobData>({
       kind: 'PLANNING_GENERATE_VERSION',
       actor,
@@ -121,6 +126,7 @@ export class PlanningWriteJobsService {
       scheduledDate?: string;
       acceptOnBehalf?: boolean;
       acceptanceReason?: string;
+      overrideReason?: string;
     },
     scope: ScopeSnapshot,
     { actor, regions }: WriteJobRequester,
@@ -132,6 +138,7 @@ export class PlanningWriteJobsService {
       scheduledDate: input.scheduledDate,
       acceptOnBehalf: input.acceptOnBehalf === true,
       acceptanceReason: input.acceptanceReason,
+      ...(input.overrideReason?.trim() ? { overrideReason: input.overrideReason.trim() } : {}),
       scope: scope ?? null,
     };
     const branches = params.projectBranchIds.length;

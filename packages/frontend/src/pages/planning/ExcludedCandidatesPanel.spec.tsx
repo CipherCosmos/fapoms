@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { ExcludedCandidatesPanel, type ExcludedCandidate } from './ExcludedCandidatesPanel';
+import { ExcludedCandidatesPanel, notOverridableTooltip, KIND_TOOLTIP, type ExcludedCandidate } from './ExcludedCandidatesPanel';
 
 /**
  * The override-reason box used to open empty for every exclusion. It now pre-fills a suggestion
@@ -67,5 +67,42 @@ describe('ExcludedCandidatesPanel — override reason suggestion', () => {
     fireEvent.click(screen.getByText('Assign anyway'));
     const box = screen.getByPlaceholderText('Reason for overriding this filter (recorded)') as HTMLInputElement;
     expect(box.value).toBe('Client specifically requested this assayer');
+  });
+});
+
+/**
+ * F18 (2026-09-25): the "Not overridable here" tooltip was the minimum-distance sentence on every
+ * row that could not be overridden — a compliance hold told the operator to go to Platform
+ * Settings about a distance rule. Each kind now explains itself.
+ */
+describe('ExcludedCandidatesPanel — tooltips name the actual rule', () => {
+  it('a compliance hold says compliance and points at the record, not at the distance setting', () => {
+    render(
+      <ExcludedCandidatesPanel excluded={[candidate({ kind: 'POLICY', overridable: false, reason: 'Held from new work' })]} onAssignAnyway={jest.fn()} defaultOpen />,
+    );
+    const note = screen.getByText('Not overridable here');
+    expect(note.getAttribute('title')).toMatch(/compliance/i);
+    expect(note.getAttribute('title')).not.toMatch(/minimum-distance/i);
+  });
+
+  it('a conflict-of-interest distance says so', () => {
+    render(
+      <ExcludedCandidatesPanel excluded={[candidate({ kind: 'DISTANCE', overridable: false })]} onAssignAnyway={jest.fn()} defaultOpen />,
+    );
+    expect(screen.getByText('Not overridable here').getAttribute('title')).toMatch(/minimum distance/i);
+  });
+
+  it('every kind has its own tooltip, and no two say the same thing', () => {
+    const kinds = Object.keys(KIND_TOOLTIP) as Array<keyof typeof KIND_TOOLTIP>;
+    expect(new Set(kinds.map((k) => KIND_TOOLTIP[k])).size).toBe(kinds.length);
+    // The kinds that can arrive without an override each explain themselves differently.
+    const final = ['DISTANCE', 'POLICY', 'DATE', 'ONBOARDING'] as const;
+    expect(new Set(final.map((k) => notOverridableTooltip({ kind: k }))).size).toBe(final.length);
+  });
+
+  it('the badge tooltip is the kind\'s explanation, not "Excluded by … rule"', () => {
+    render(<ExcludedCandidatesPanel excluded={[candidate({ kind: 'ROTATION' })]} onAssignAnyway={jest.fn()} defaultOpen />);
+    const badge = screen.getByText('ROTATION RULE');
+    expect(badge.getAttribute('title')).toBe(KIND_TOOLTIP.ROTATION);
   });
 });

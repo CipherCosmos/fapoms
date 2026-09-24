@@ -114,7 +114,7 @@ export const SELF_EDITABLE_ASSAYER_FIELDS: string[] = [
 export const HR_MAINTAINED_ASSAYER_FIELDS: string[] = [
   'panNumber', 'bankAccountNumber', 'ifscCode',
   'joiningDate',
-  'maxDailyWorkload', 'maxWeeklyWorkload',
+  'maxWeeklyWorkload',
   'employmentType', 'performanceRating',
 ];
 

@@ -18,7 +18,6 @@ describe('what a stated reason may waive', () => {
     AssignmentRule.SKILLS_AND_CERTIFICATIONS,
     AssignmentRule.DISTANCE_CEILING,
     AssignmentRule.REPEAT_AUDITOR_ROTATION,
-    AssignmentRule.DATE_AVAILABILITY,
   ])('%s is an operator judgement, so a reason waives it', (rule) => {
     expect(canOverrideAssignmentRule(rule)).toBe(true);
   });
@@ -30,6 +29,7 @@ describe('what a stated reason may waive', () => {
    */
   it.each([
     AssignmentRule.DISTANCE_FLOOR,
+    AssignmentRule.DATE_AVAILABILITY,
     AssignmentRule.BRANCH_ALREADY_ASSIGNED,
     AssignmentRule.BRANCH_NOT_OPEN,
     AssignmentRule.PROFILE_NOT_DEPLOYABLE,
@@ -42,6 +42,16 @@ describe('what a stated reason may waive', () => {
    * is what the code did while they were distinguishable only by reading the English in the
    * message — either lets a conflict of interest through or refuses a legitimate long journey.
    */
+  /**
+   * F17: every write path refuses an unworkable date outright, so offering "Assign anyway" on a
+   * leave or holiday exclusion was a button that could never work. It is classified with the
+   * rules no reason waives, and says where the real remedy is.
+   */
+  it('a date clash is not waived by a reason, and the refusal says what to do instead', () => {
+    expect(canOverrideAssignmentRule(AssignmentRule.DATE_AVAILABILITY)).toBe(false);
+    expect(overrideAdviceFor(AssignmentRule.DATE_AVAILABILITY)).toMatch(/another date/);
+  });
+
   it('separates the conflict-of-interest floor from the service ceiling', () => {
     expect(canOverrideAssignmentRule(AssignmentRule.DISTANCE_CEILING)).toBe(true);
     expect(canOverrideAssignmentRule(AssignmentRule.DISTANCE_FLOOR)).toBe(false);

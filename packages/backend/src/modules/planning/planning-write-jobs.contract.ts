@@ -72,6 +72,14 @@ export interface GenerateVersionJobData extends QueuedJobEnvelope {
   projectId: string;
   overrides: Array<Record<string, unknown>>;
   justification?: string;
+  /**
+   * The requester's region scope, frozen at the request (F19): the saved version covers the SAME
+   * branches the preview showed that operator. It used to be generated unscoped, so a regional
+   * planner previewed their region and saved the national project.
+   */
+  scope?: ScopeSnapshot;
+  /** The campaign start date the plan's availability is judged on (F1). */
+  startDate?: string | null;
   actor: JobActor;
 }
 
@@ -83,6 +91,8 @@ export interface BulkOfferJobData extends QueuedJobEnvelope {
   scheduledDate?: string;
   acceptOnBehalf: boolean;
   acceptanceReason?: string;
+  /** Waives an overridable rule on each branch, recorded per offer — see `BulkOfferRequestDto`. */
+  overrideReason?: string;
   /**
    * The region scope resolved at the request, re-asserted per branch in the worker. The synchronous
    * `POST /assignments` asserts it per call; a batch that skipped it would let a regional operator

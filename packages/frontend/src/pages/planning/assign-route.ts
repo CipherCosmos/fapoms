@@ -174,3 +174,28 @@ export async function postStopsInOrder<S>(
   }
   return results;
 }
+
+/**
+ * The day-plan fields one stop's `POST /assignments` carries (F6/Q10, 2026-09-25).
+ *
+ * A day plan is one journey, and the plan screen priced the day's travel on the whole loop. The
+ * route's FIRST stop sends that loop (`plannedDayLoopKm` / `plannedDayLoopMinutes`), so the server
+ * quotes its travel on the loop — a system quote, still under travel-once-a-day — and the booked
+ * total equals what the plan showed. Every other stop sends nothing extra and is priced base-only,
+ * because the first stop already carries the day's journey. No fee is ever sent: the server prices.
+ * A retry of only later stops therefore never re-sends the loop.
+ */
+export function dayPlanStopBody(
+  stop: { order: number },
+  firstStopOrder: number,
+  plan: { totalTravelKm?: number | null; totalTravelMinutes?: number | null },
+): Record<string, number> {
+  if (stop.order !== firstStopOrder) return {};
+  const km = Number(plan.totalTravelKm);
+  if (!Number.isFinite(km) || km <= 0) return {};
+  const minutes = Number(plan.totalTravelMinutes);
+  return {
+    plannedDayLoopKm: km,
+    ...(Number.isFinite(minutes) && minutes > 0 ? { plannedDayLoopMinutes: minutes } : {}),
+  };
+}

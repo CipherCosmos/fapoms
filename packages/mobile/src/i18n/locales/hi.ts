@@ -428,7 +428,6 @@ export const hi: PartialCatalogue<typeof en> = {
       skillsPlaceholder: 'सोने की जाँच, शुद्धता की जाँच',
       languages: 'भाषाएँ',
       experienceYears: 'तजुर्बा (साल)',
-      maxPerDay: 'एक दिन में ज़्यादा से ज़्यादा',
       maxPerWeek: 'एक हफ़्ते में ज़्यादा से ज़्यादा',
       preferredRegions: 'पसंदीदा इलाके',
       bankAccount: 'बैंक खाता',
@@ -544,8 +543,7 @@ export const hi: PartialCatalogue<typeof en> = {
       // "HR" left in English throughout: it is what this workforce calls the office that holds
       // these records, on every notice and roster message they already receive.
       fallback: 'यह ऑफ़िस के पास है — बदलवाने के लिए HR से कहें।',
-      maxDailyWorkload: 'ऑपरेशंस तय करता है — इसी से तय होता है कि आपको कितना काम दिया जा सकता है।',
-      maxWeeklyWorkload: 'ऑपरेशंस तय करता है, आपकी रोज़ की हद के साथ।',
+      maxWeeklyWorkload: 'ऑपरेशंस तय करता है — इसी से तय होता है कि हफ़्ते में आपको कितना काम दिया जा सकता है।',
       panNumber: 'HR के पास है। ठीक करवाने के लिए अपने HR से बात करें।',
       bankAccountNumber: 'पैसे की जानकारी सिर्फ़ HR बदलता है, ताकि फ़ोन से किसी और खाते में पैसा न भेजा जा सके।',
       ifscCode: 'HR इसे आपके बैंक खाते के साथ बदलता है।',

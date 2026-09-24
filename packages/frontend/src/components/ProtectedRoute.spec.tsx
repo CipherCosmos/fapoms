@@ -151,10 +151,9 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('page @ /feedback')).toBeInTheDocument();
     });
 
-    it('turns an ADMIN away from the support desk it no longer runs', () => {
+    it('lets an ADMIN into Support to report — the desk itself is switched inside the page', () => {
       openAt('/feedback', [SystemRole.ADMIN], []);
-      expect(screen.queryByText('page @ /feedback')).not.toBeInTheDocument();
-      expect(screen.getByText('page @ /dashboard')).toBeInTheDocument();
+      expect(screen.getByText('page @ /feedback')).toBeInTheDocument();
     });
   });
 });

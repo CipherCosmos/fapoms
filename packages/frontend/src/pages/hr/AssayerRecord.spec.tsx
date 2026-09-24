@@ -113,7 +113,6 @@ const record = (over: Record<string, unknown> = {}) => ({
   lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
   employmentType: 'INTERNAL',
   experienceYears: 4,
-  maxDailyWorkload: 3,
   maxWeeklyWorkload: 15,
   panNumber: 'ABCDE1234F',
   bankAccountNumber: '000111222333',

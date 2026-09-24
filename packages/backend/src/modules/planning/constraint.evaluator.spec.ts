@@ -192,4 +192,52 @@ describe('ConstraintEvaluator', () => {
     });
   });
 
+
+  /**
+   * Owner decision 2026-09-25: the CLIENT's required skills and certifications are a hard
+   * requirement (overridable with a reason at create/reassign), checked exactly like a project's.
+   */
+  describe('checkClientRequirements', () => {
+    const assayer = (skills: string[], certifications: Array<{ name: string; expiryDate?: string | null }>) => ({ id: 'a', skills, certifications }) as any;
+
+    it('refuses a missing client skill, naming it and the rule', () => {
+      const r = evaluator.checkClientRequirements(assayer(['silver'], []), { requiredSkills: ['Gold'] }, AUDIT_DATE);
+      expect(r).toMatchObject({ passed: false, rule: 'SKILLS_AND_CERTIFICATIONS' });
+      expect(r.reason).toMatch(/client requires skills this assayer lacks: Gold/);
+    });
+
+    it('refuses an expired certification the client requires', () => {
+      const r = evaluator.checkClientRequirements(assayer([], [{ name: 'XRF', expiryDate: '2026-01-01' }]), { requiredCertifications: ['xrf'] }, AUDIT_DATE);
+      expect(r.passed).toBe(false);
+      expect(r.reason).toMatch(/missing or expired.*xrf/);
+    });
+
+    it('passes when both are held, case-insensitively', () => {
+      const r = evaluator.checkClientRequirements(assayer(['GOLD'], [{ name: 'Xrf', expiryDate: '2099-01-01' }]), { requiredSkills: ['gold'], requiredCertifications: ['XRF'] }, AUDIT_DATE);
+      expect(r.passed).toBe(true);
+    });
+
+    it('ignores preferences that are not a list of names — jsonb the API does not type-check', () => {
+      expect(evaluator.checkClientRequirements(assayer([], []), { requiredSkills: 'Gold', requiredCertifications: [null, 7, ''] }, AUDIT_DATE).passed).toBe(true);
+      expect(evaluator.checkClientRequirements(assayer([], []), null, AUDIT_DATE).passed).toBe(true);
+    });
+  });
+
+  /**
+   * F20: the project window is compared on IST calendar days, both ends inclusive — the last day
+   * of an engagement is inside it, whatever time of day the check runs.
+   */
+  describe('checkProjectTimeline — calendar days, both ends inclusive', () => {
+    const project = { startDate: '2026-10-01', endDate: '2026-10-31' } as any;
+    it('accepts the last day at any hour', () => {
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-10-31T17:00:00+05:30')).passed).toBe(true);
+    });
+    it('accepts the first day early in the IST morning', () => {
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-09-30T19:00:00Z')).passed).toBe(true); // 00:30 IST on 1 Oct
+    });
+    it('refuses the day after the end, and the day before the start', () => {
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-11-01T06:30:00Z')).reason).toMatch(/after project end date 2026-10-31/);
+      expect(evaluator.checkProjectTimeline(project, new Date('2026-09-30T06:30:00Z')).reason).toMatch(/before project start date 2026-10-01/);
+    });
+  });
 });

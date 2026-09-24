@@ -25,6 +25,7 @@ import { LocationTrailService } from '../assayer/location-trail.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { DAY_TRAVEL_QUERY_MARKER, DayTravelService } from './assignment-day-travel';
+import { LAST_AUDITOR_QUERY_MARKER } from './branch-rotation';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { OperationsInboxService } from './operations-inbox.service';
@@ -317,6 +318,7 @@ const mockNotificationService = {
     checkDateAvailability: jest.fn().mockResolvedValue({ passed: true }),
     checkDistancePolicy: jest.fn().mockReturnValue({ passed: true }),
     checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
+    checkClientRequirements: jest.fn().mockReturnValue({ passed: true }),
   };
 
   /** The silent "your jobs changed" push (owner decision 2026-09-24). */
@@ -1030,6 +1032,34 @@ const mockNotificationService = {
       mockFeePolicyService.quote.mockClear();
     };
 
+    /**
+     * F6/Q10 (2026-09-25): a committed day plan books the WHOLE LOOP's travel on its first stop, so
+     * the booked total equals what the plan showed. The loop is quoted as a round trip through the
+     * same calculator — a system quote, still subject to travel-once-a-day.
+     */
+    it('prices a day plan\'s first stop on the plan\'s loop, as a round trip, with no desk fee', async () => {
+      setup();
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockFeePolicyService.quote
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 0, total: 1200 })
+        .mockResolvedValueOnce({ baseFee: 1200, baseComponent: 1200, travelFee: 900, total: 2100 });
+
+      await service.create({ projectBranchId: 'pb-1', assayerId: 'as-1', scheduledDate: '2026-08-20', plannedDayLoopKm: 184.5, plannedDayLoopMinutes: 212 } as any, 'user-1');
+
+      const loopQuote = mockFeePolicyService.quote.mock.calls.at(-1)?.[0];
+      expect(loopQuote).toMatchObject({ distanceKm: 184.5, distanceIsRoundTrip: true, road: expect.objectContaining({ distanceKm: 184.5, durationMinutes: 212 }) });
+      const created = mockAssignmentRepo.create.mock.calls.at(-1)?.[0];
+      // The loop's travel, at the calculator's own figure — never recorded as a desk-typed fee.
+      expect(created).toMatchObject({ quotedTravelFee: 900, proposedFee: 2100, agreedFee: 2100 });
+    });
+
+    it('refuses a loop shorter than the one-way distance to the branch, or beyond any plausible day', () => {
+      expect(() => AssignmentService.resolvePlannedDayLoop(3, 10, 40)).toThrow(/shorter than the one-way distance/);
+      expect(() => AssignmentService.resolvePlannedDayLoop(99_999, 10, 40)).toThrow(/cannot be priced|not a distance/);
+      expect(AssignmentService.resolvePlannedDayLoop(undefined, undefined, 40)).toBeNull();
+      expect(AssignmentService.resolvePlannedDayLoop(120, 0, 40)).toEqual({ km: 120, minutes: 0 });
+    });
+
     it('quotes travel on the first assignment of a day', async () => {
       setup();
       // No existing assignment for this assayer on this date — the journey is not yet paid for.
@@ -1226,6 +1256,79 @@ const mockNotificationService = {
       ).rejects.toThrow(/Conflict of interest/);
 
       expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Owner decisions 2026-09-25: the rotation rule and the client's own required skills and
+   * certifications are enforced when work is PLACED (create — which Send to app, Call & Assign, bulk
+   * offer, the day-plan commit and plan deploy all use — and reassign), as rules a written reason
+   * waives. A waiver is recorded exactly like every other one: ASSIGNMENT_ELIGIBILITY_OVERRIDDEN
+   * with the rule named. Before this the engine excluded the last auditor but the write path never
+   * looked, so the panel's "override recorded" was not true.
+   */
+  describe('placement rules — rotation and client requirements', () => {
+    const dto = { projectBranchId: 'pb-1', assayerId: 'as-1', proposedFee: 1500, scheduledDate: '2026-10-05' };
+    const arrange = (lastAuditorRows: any[]) => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-now', branchId: 'b-1', status: 'PLANNING',
+        branch: { name: 'Kothrud', state: 'MH' },
+        project: { client: { planningPreferences: { requiredCertifications: ['XRF'] } } },
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', displayName: 'Ravi', skills: [], certifications: [] });
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockAssignmentRepo.create.mockReturnValue({ id: 'asn-1', status: AssignmentStatus.PENDING });
+      mockAssignmentRepo.save.mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.PENDING });
+      (mockAssignmentRepo as any).manager = {
+        query: jest.fn(async (sql: string) => (sql.includes(LAST_AUDITOR_QUERY_MARKER) ? lastAuditorRows : [])),
+      };
+    };
+    const lastAuditRow = [{ id: 'asn-old', assayer_id: 'as-1', project_id: 'p-before', status: 'COMPLETED', audit_date: '2026-03-10' }];
+    const codeOf = (e: any) => e?.getResponse?.()?.code ?? e?.code;
+    afterEach(() => { delete (mockAssignmentRepo as any).manager; });
+
+    it('refuses the branch\'s last auditor without a reason, and says a reason is what is missing', async () => {
+      arrange(lastAuditRow);
+      const err = await service.create(dto, 'user-1').catch((e) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect(err.message).toMatch(/Ravi audited this branch last \(2026-03-10\)/);
+      expect(codeOf(err)).toBe('OVERRIDE_REASON_REQUIRED');
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('asks for the last auditor of THIS branch from an earlier project than this one', async () => {
+      arrange([]);
+      await service.create(dto, 'user-1').catch(() => undefined);
+      const call = (mockAssignmentRepo as any).manager.query.mock.calls.find((c: any[]) => String(c[0]).includes(LAST_AUDITOR_QUERY_MARKER));
+      expect(call[1]).toEqual(['b-1', 'p-now']);
+    });
+
+    it('with a reason, places the work and records the waiver against it, rule named', async () => {
+      arrange(lastAuditRow);
+      await service.create({ ...dto, overrideReason: 'Only certified assayer free this week' }, 'user-1');
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'ASSIGNMENT_ELIGIBILITY_OVERRIDDEN',
+        remarks: expect.stringMatching(/audited this branch last.*Overridden: Only certified assayer free this week/),
+        metadata: { rule: 'REPEAT_AUDITOR_ROTATION' },
+      }));
+    });
+
+    it('lets somebody who is not the last auditor through with no reason at all', async () => {
+      arrange([{ ...lastAuditRow[0], assayer_id: 'someone-else' }]);
+      await expect(service.create(dto, 'user-1')).resolves.toBeDefined();
+    });
+
+    it('refuses a client-required certification the assayer lacks, unless a reason is given', async () => {
+      arrange([]);
+      mockConstraintEvaluator.checkClientRequirements.mockReturnValueOnce({
+        passed: false, rule: 'SKILLS_AND_CERTIFICATIONS', reason: 'The client requires a valid certification this assayer lacks (missing or expired): XRF',
+      });
+      const err = await service.create(dto, 'user-1').catch((e) => e);
+      expect(err.message).toMatch(/client requires/);
+      expect(codeOf(err)).toBe('OVERRIDE_REASON_REQUIRED');
+      expect(mockConstraintEvaluator.checkClientRequirements).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'as-1' }), { requiredCertifications: ['XRF'] }, expect.any(Date),
+      );
     });
   });
 

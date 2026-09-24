@@ -1,4 +1,4 @@
-import { assignRoute, assignBlocker, reassignAndApply, reassignBody, feeToSend, postStopsInOrder, type LiveAssignment } from './assign-route';
+import { assignRoute, assignBlocker, reassignAndApply, reassignBody, feeToSend, postStopsInOrder, dayPlanStopBody, type LiveAssignment } from './assign-route';
 
 /**
  * Where a planning "assign" goes.
@@ -184,5 +184,26 @@ describe('postStopsInOrder — a day plan is posted one stop at a time, in route
       { stop: 'C', ok: true },
     ]);
     expect(post).toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
+ * F6/Q10 (2026-09-25): the day plan's whole loop is booked on its FIRST stop, so the booked total
+ * equals the plan's total. Other stops send nothing and are priced base-only by the server.
+ */
+describe('dayPlanStopBody — the loop travels with the first stop only', () => {
+  const plan = { totalTravelKm: 184.5, totalTravelMinutes: 212 };
+
+  it('sends the loop on the first stop of the route', () => {
+    expect(dayPlanStopBody({ order: 1 }, 1, plan)).toEqual({ plannedDayLoopKm: 184.5, plannedDayLoopMinutes: 212 });
+  });
+
+  it('sends nothing on any later stop — and never a fee', () => {
+    expect(dayPlanStopBody({ order: 2 }, 1, plan)).toEqual({});
+    expect(dayPlanStopBody({ order: 1 }, 1, plan)).not.toHaveProperty('proposedFee');
+  });
+
+  it('sends nothing when the plan has no measured travel', () => {
+    expect(dayPlanStopBody({ order: 1 }, 1, { totalTravelKm: 0 })).toEqual({});
   });
 });

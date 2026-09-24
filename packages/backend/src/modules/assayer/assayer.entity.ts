@@ -492,8 +492,8 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'working_hours', type: 'jsonb', nullable: true })
   workingHours: { start: string; end: string } | null;
 
-  @Column({ name: 'max_daily_workload', type: 'int', default: 3 })
-  maxDailyWorkload: number;
+  // The per-day job cap ("Most jobs per day") column was removed on 2026-09-25 — owner decision; an
+  // assayer may take several branches a day with no cap. See migration 1801700000000.
 
   @Column({ name: 'max_weekly_workload', type: 'int', default: 15 })
   maxWeeklyWorkload: number;
