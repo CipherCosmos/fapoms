@@ -126,7 +126,7 @@ systemctl --user enable --now fapoms-deploy.timer
 # The user session must survive logout or the timer stops with it. Already set on this host for
 # the app itself; asserted here because a timer that only runs while someone is logged in is
 # worse than no timer — it works whenever it is checked and stops whenever it is not.
-if ! loginctl show-user "$USER" -p Linger --value 2>/dev/null | grep -qi yes; then
+if ! grep -qi yes <<< "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)"; then
   echo "!! Lingering is OFF for $USER: the timer stops at logout."
   echo "   Fix with: loginctl enable-linger $USER"
 fi
