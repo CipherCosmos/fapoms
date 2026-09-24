@@ -192,7 +192,11 @@ describe('Background check step', () => {
     // The report uploaded, then the clear result recorded against it — both are mandatory, and the
     // report is the one the CHECK carries (a pass cannot lean on an earlier check's report).
     current.dossier = dossier({
-      currentCheck: { verdict: 'CLEAR', reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null }] },
+      currentCheck: {
+        verdict: 'CLEAR', reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null }],
+        // Its three parts (2026-09-24) — a clear check is recorded with them.
+        addressCheckMethod: 'DIGITAL', addressCheckResult: 'VERIFIED', cibilBand: 'NO_CREDIT_HISTORY', courtCheckResult: 'NO_RECORD',
+      },
       onboarding: [...dossier().onboarding, bgvReport()],
     });
     fireEvent.click(screen.getByRole('button', { name: /stub: saved in checks/ }));
@@ -203,6 +207,24 @@ describe('Background check step', () => {
     await waitFor(() => expect(lifecycleCalls()).toHaveLength(1));
     // HR's last step is sending them up: a senior approves them before training (2026-09-23).
     expect(JSON.parse(lifecycleCalls()[0][1].body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.FINAL_APPROVAL });
+  });
+
+  /**
+   * A clear check from before the address, CIBIL and court checks were asked for (2026-09-24), or
+   * brought in by the import: the server will not send them up on it, so the list says what is missing.
+   */
+  it('holds them at a clear check that lacks its parts, and names the missing ones', async () => {
+    current.dossier = dossier({
+      currentCheck: {
+        verdict: 'CLEAR', cibilBand: 'GOOD',
+        reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null }],
+      },
+      onboarding: [...dossier().onboarding, bgvReport()],
+    });
+    renderDrawer();
+
+    expect(await screen.findByText('Not on the background check yet: Address check, Court check')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send for approval/ })).toBeDisabled();
   });
 
   /** Background verification's report is mandatory too: a clear result alone does not let them on. */
@@ -250,7 +272,7 @@ describe('Background check step', () => {
         dossier({ currentCheck: null, bgvReportPending: waiting }) as never,
       );
       expect(plan.items.filter((i) => i.blocking && !i.done).map((i) => i.label)).toEqual([
-        'Background check recorded', 'Background check result is clear',
+        'Background check recorded', 'Address (physical or digital), CIBIL and court checks recorded', 'Background check result is clear',
       ]);
     });
   });

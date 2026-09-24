@@ -39,6 +39,7 @@ describe('reviewing one person before approving them', () => {
     currentCheck: {
       id: 'c-1', assayerId: 'a-1', verdict: BackgroundCheckVerdict.CLEAR, checkedByName: 'AuthBridge', checkedOn: '2026-09-23', createdAt: '2026-09-23',
       reportFiles: [{ documentId: 'd-bgv', versionId: 'v-1', path: 'bgv.pdf', uploadedAt: null }],
+      addressCheckMethod: 'PHYSICAL', addressCheckResult: 'VERIFIED', cibilBand: 'GOOD', cibilScore: 747, courtCheckResult: 'NO_RECORD',
     },
     onboarding: [doc('PAN_CARD', 'PAN card', 'VERIFIED'), doc('AADHAAR_FRONT', 'Aadhaar (front)', 'VERIFIED')],
     ...over,
@@ -79,6 +80,29 @@ describe('reviewing one person before approving them', () => {
     // Two references, one called — not everything is done, and the screen says so.
     expect(item('2 references')).toHaveAttribute('data-ok', 'no');
     expect(within(item('2 references')).getByText(/1 of 2 called/)).toBeInTheDocument();
+  });
+
+  /** What the agency actually checked (2026-09-24): the address, CIBIL and court checks, each on its own line. */
+  it('shows the background check\'s address, CIBIL and court checks', async () => {
+    serve();
+    draw();
+    expect(await screen.findByTestId('review-item-Address check')).toHaveAttribute('data-ok', 'yes');
+    expect(item('Address check')).toHaveTextContent('Address verified (physical visit)');
+    expect(item('CIBIL check')).toHaveTextContent('Good (747)');
+    expect(item('Court check')).toHaveTextContent('No case found');
+  });
+
+  it('marks a background check without its parts as not done', async () => {
+    const d = dossier();
+    const bare = { ...(d.currentCheck as Record<string, unknown>), addressCheckMethod: null, addressCheckResult: null, courtCheckResult: null };
+    serve(person(), { ...d, currentCheck: bare });
+    draw();
+    expect(await screen.findByTestId('review-item-Court check')).toHaveAttribute('data-ok', 'no');
+    expect(item('Court check')).toHaveTextContent('Not recorded');
+    expect(item('Address check')).toHaveAttribute('data-ok', 'no');
+    expect(item('CIBIL check')).toHaveAttribute('data-ok', 'yes');
+    // The result itself is not ticked while its parts are missing — the server would not accept it.
+    expect(item('Clear')).toHaveAttribute('data-ok', 'no');
   });
 
   /** The account number is money; the approver needs to know it is there, not to read it. */

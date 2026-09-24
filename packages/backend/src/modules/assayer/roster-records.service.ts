@@ -3,7 +3,7 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, IsNull, SelectQueryBuilder, DataSource } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { assertTenantOwns, tenantFilterId, tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
-import { CheckType, CHECK_TYPES, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL, checkTypeForReport, isAdverseVerdict, isRecheckedLifecycle, businessTodayDateKey as todayKey, BACKGROUND_CHECK_VERDICT_LABELS, type ComplianceHold } from '@fapoms/shared';
+import { AddressCheckMethod, AddressCheckResult, CourtCheckResult, bgvClearRefusal, bgvClearGaps, CheckType, CHECK_TYPES, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL, checkTypeForReport, isAdverseVerdict, isRecheckedLifecycle, businessTodayDateKey as todayKey, BACKGROUND_CHECK_VERDICT_LABELS, type ComplianceHold } from '@fapoms/shared';
 import { EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, isVerifiableDocument, normaliseBankAccountNumber, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar, DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS, DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS, DOCUMENT_REJECTION_GUIDANCE, referenceEmailProblem, toE164IndianMobile, compareNames, type NameMatchGrade, /**
    * The deployability vocabulary, imported rather than restated. Every one of these is the exact
    * predicate a dispatch or payment gate already calls — see `deploymentVerdict`, which composes
@@ -990,7 +990,10 @@ export class RosterRecordsService {
     dto: { verdict: BackgroundCheckVerdict; riskGrade?: RiskGrade; cibilScore?: number;
            cibilBand?: CibilBand; checkedOn?: string; checkedByName?: string; findings?: string;
            /** Which check — background (the default, and every check before 2026-09-23), police, credit or identity. */
-           checkType?: CheckType },
+           checkType?: CheckType;
+           /** A background verification's address and court checks — see `bgv-parts.ts` in shared. */
+           addressCheckMethod?: AddressCheckMethod; addressCheckResult?: AddressCheckResult;
+           courtCheckResult?: CourtCheckResult },
     actorId: string,
   ) {
     await this.assertOwnedAssayer(assayerId);
@@ -1000,6 +1003,27 @@ export class RosterRecordsService {
     }
     const label = CHECK_TYPE_LABELS[checkType];
     const completed = dto.verdict !== BackgroundCheckVerdict.NOT_CHECKED;
+    /*
+      A background verification's three parts — the address check (physical or digital), the CIBIL
+      check and the court check (owner, 2026-09-24). "Clear" is the agency's summary of all three,
+      so it is refused until all three are on the check, and while one of them found something.
+      Values this system does not know are refused outright rather than dropped: a part that was
+      typed and then silently lost reads afterwards as a part nobody did.
+    */
+    const isBgv = checkType === CheckType.BGV;
+    const oneOf = (field: string, values: Record<string, string>, v: unknown) => {
+      if (v == null || v === '') return null;
+      if (!(Object.values(values) as unknown[]).includes(v)) {
+        throw new BadRequestException(`"${String(v)}" is not a ${field} this system records.`);
+      }
+      return v as never;
+    };
+    const parts = {
+      addressCheckMethod: isBgv ? oneOf('way of checking an address', AddressCheckMethod, dto.addressCheckMethod) : null,
+      addressCheckResult: isBgv ? oneOf('result of an address check', AddressCheckResult, dto.addressCheckResult) : null,
+      courtCheckResult: isBgv ? oneOf('result of a court check', CourtCheckResult, dto.courtCheckResult) : null,
+      cibilBand: dto.cibilBand ?? null,
+    };
     /*
       The report first, then its result. A verdict with no report behind it is somebody's word —
       and "clear" is the word that admits a person to a vault. NOT_CHECKED records that no check
@@ -1044,6 +1068,11 @@ export class RosterRecordsService {
           : `Name the ${String(CHECK_ISSUER_LABEL[checkType]).toLowerCase()}.`,
       );
     }
+    // After the report and the agency: those come first on the dialog, and first in what is missing.
+    if (isBgv && dto.verdict === BackgroundCheckVerdict.CLEAR) {
+      const refusal = bgvClearRefusal(parts);
+      if (refusal) throw new BadRequestException(refusal);
+    }
     // Always a new row. Overwriting the last check would lose the fact that the picture changed,
     // which is the only reason to look at a second one.
     const row = this.checks.create({
@@ -1051,7 +1080,10 @@ export class RosterRecordsService {
       verdict: dto.verdict,
       riskGrade: dto.riskGrade ?? null,
       cibilScore: dto.cibilScore ?? null,
-      cibilBand: dto.cibilBand ?? null,
+      cibilBand: parts.cibilBand,
+      addressCheckMethod: parts.addressCheckMethod,
+      addressCheckResult: parts.addressCheckResult,
+      courtCheckResult: parts.courtCheckResult,
       checkedOn: dto.checkedOn ? new Date(dto.checkedOn) : new Date(),
       checkedByName: agency || null,
       findings: dto.findings ?? null,
@@ -1111,6 +1143,8 @@ export class RosterRecordsService {
         heldFromWork: holdsWork,
         newValue: {
           verdict: saved.verdict, riskGrade: saved.riskGrade, cibilBand: saved.cibilBand, cibilScore: saved.cibilScore,
+          addressCheckMethod: saved.addressCheckMethod, addressCheckResult: saved.addressCheckResult,
+          courtCheckResult: saved.courtCheckResult,
           checkedByName: saved.checkedByName, checkedOn: saved.checkedOn,
           // Which uploads the result was read from — the trail names the evidence, not just the verdict.
           reportFiles: (saved.reportFiles ?? []).map((f) => ({ versionId: f.versionId, path: f.path })),
@@ -2078,20 +2112,38 @@ export class RosterRecordsService {
    * the same person the time before.
    */
   async bgvReportOnFile(assayerId: string): Promise<boolean> {
-    const latest = await this.checks.findOne({
-      where: { assayerId, isActive: true, checkType: CheckType.BGV },
-      order: { checkedOn: 'DESC', createdAt: 'DESC' },
-    });
+    const latest = await this.operativeBackgroundCheck(assayerId);
     return (latest?.reportFiles?.length ?? 0) > 0;
   }
 
   async latestBackgroundVerdict(assayerId: string): Promise<BackgroundCheckVerdict | null> {
-    // Background verification only — a police or credit check is not what onboarding asks for.
-    const latest = await this.checks.findOne({
+    return (await this.operativeBackgroundCheck(assayerId))?.verdict ?? null;
+  }
+
+  /**
+   * What the operative check still lacks to count as clear — its address, CIBIL and court checks
+   * (2026-09-24, `bgvClearGaps` in shared) — in words that finish "is missing …". Empty when there
+   * is nothing to say, including when there is no check at all: that is the gate's other arm.
+   *
+   * A check recorded as clear today cannot lack them. This is for the ones that can: recorded
+   * before the parts were asked for, or brought in by the roster import, of somebody who is still
+   * joining. Joining now means all three, however the check got onto the record.
+   */
+  async bgvPartsMissing(assayerId: string): Promise<string[]> {
+    const latest = await this.operativeBackgroundCheck(assayerId);
+    return latest ? bgvClearGaps(latest) : [];
+  }
+
+  /**
+   * The check onboarding reads — the newest background verification. A police or credit check is
+   * not what onboarding asks for. One query for the verdict, its report and its parts, so the three
+   * can never be read off two different checks.
+   */
+  private operativeBackgroundCheck(assayerId: string): Promise<AssayerBackgroundCheckEntity | null> {
+    return this.checks.findOne({
       where: { assayerId, isActive: true, checkType: CheckType.BGV },
       order: { checkedOn: 'DESC', createdAt: 'DESC' },
     });
-    return latest?.verdict ?? null;
   }
 
   /**

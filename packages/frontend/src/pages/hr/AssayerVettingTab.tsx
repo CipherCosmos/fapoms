@@ -9,7 +9,7 @@ import {
   BACKGROUND_CHECK_VERDICT_LABELS, CheckType, CHECK_TYPE_LABELS, CHECK_REPORT_DOCUMENT, CHECK_ISSUER_LABEL,
   RECHECK_STATUS_LABELS, CheckReviewDecision, ONBOARDING_DOCUMENT_LABELS as REPORT_LABELS,
   isAdverseVerdict, checkTypeForReport, type RecheckStanding, type ComplianceHold,
-  hasPassedFinalApproval, OnboardingDocument,
+  hasPassedFinalApproval, OnboardingDocument, CIBIL_BAND_LABELS, bgvClearRefusal, BGV_PARTS, BGV_PART_LABELS,
 } from '@fapoms/shared';
 
 import { ScanOrAttach } from '../../components/scanner/ScanOrAttach';
@@ -28,6 +28,7 @@ import { LoadFailure, caughtLoad } from '../../components/LoadFailure';
 import { counted } from '../../utils/plural';
 import { relationshipOptions } from './reference-vocabulary';
 import { EMPANELMENT_STATUS_REASONS, OTHER_STATUS_REASON } from './empanelment-reason-vocabulary';
+import { BgvPartsFields, BgvPartsReadout, bgvPartText } from './BgvParts';
 import { queryClient } from '../../queryClient';
 import { invalidateKycMutation } from '../../services/queryInvalidation';
 
@@ -138,11 +139,8 @@ const RISK_LABELS: Record<string, string> = {
   [RiskGrade.HIGH]: 'High risk', [RiskGrade.VERY_HIGH]: 'Very high risk',
 };
 
-const CIBIL_LABELS: Record<string, string> = {
-  [CibilBand.GOOD]: 'Good', [CibilBand.AVERAGE]: 'Average', [CibilBand.POOR]: 'Poor',
-  [CibilBand.BAD]: 'Bad', [CibilBand.NO_CREDIT_HISTORY]: 'No credit history',
-  [CibilBand.NOT_CHECKED]: 'Not checked', [CibilBand.CHECK_FAILED]: 'Check failed',
-};
+// The words live in shared now, beside the three parts of a background check (`bgv-parts.ts`).
+const CIBIL_LABELS: Record<string, string> = CIBIL_BAND_LABELS;
 
 /**
  * The words for an empanelment standing, from `@fapoms/shared` — re-exported under the name the
@@ -647,7 +645,9 @@ const StatusReasonField: React.FC<{ value: string; onChange: (v: string) => void
  * hand-styled Save. One nullable union cannot hold two, and it renders through one `Editor`.
  */
 type EditorState =
-  | { kind: 'check'; checkType: CheckType; verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; checkedByName: string; findings: string }
+  | { kind: 'check'; checkType: CheckType; verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; checkedByName: string; findings: string;
+      /** A background verification's address and court checks — see `BgvParts.tsx`. */
+      addressCheckMethod: string; addressCheckResult: string; courtCheckResult: string }
   | { kind: 'reference'; id?: string; fullName: string; relationship: string; phone: string; email: string }
   | { kind: 'identity'; requirement: string; label: string; documentNumber: string; expiryDate: string }
   | { kind: 'standing'; clientId: string; clientName: string; status: string; statusReason: string; adding: boolean };
@@ -1270,6 +1270,13 @@ export const AssayerVettingTab: React.FC<{
       setEditorErr('Say which identity documents were re-checked against the originals, and what was found.');
       return;
     }
+    const isBgv = draft.checkType === CheckType.BGV;
+    // Clear needs the address, CIBIL and court checks, none of them finding anything — the server's words.
+    const partsRefusal = isBgv && draft.verdict === BackgroundCheckVerdict.CLEAR ? bgvClearRefusal(draft) : null;
+    if (partsRefusal) {
+      setEditorErr(partsRefusal);
+      return;
+    }
     setBusy(true);
     try {
       const score = Number(draft.cibilScore.replace(/[^\d]/g, ''));
@@ -1284,6 +1291,11 @@ export const AssayerVettingTab: React.FC<{
           checkedByName: draft.checkedByName?.trim() || undefined,
           findings: draft.findings || undefined,
           checkType: draft.checkType,
+          ...(isBgv ? {
+            addressCheckMethod: draft.addressCheckMethod || undefined,
+            addressCheckResult: draft.addressCheckResult || undefined,
+            courtCheckResult: draft.courtCheckResult || undefined,
+          } : {}),
         }),
       });
       toast({
@@ -1578,6 +1590,7 @@ export const AssayerVettingTab: React.FC<{
     checkType,
     verdict: BackgroundCheckVerdict.CLEAR, riskGrade: '', cibilScore: '',
     cibilBand: '', checkedOn: '', checkedByName: reportFor(checkType)?.issuer ?? '', findings: '',
+    addressCheckMethod: '', addressCheckResult: '', courtCheckResult: '',
   });
 
   /**
@@ -1916,9 +1929,14 @@ export const AssayerVettingTab: React.FC<{
               </div>
             </Field>
           )}
+          {/* The address, CIBIL and court checks — a clear result needs all three (2026-09-24). */}
+          {isBgv && (
+            <BgvPartsFields draft={editor} onChange={(patch) => setEditor({ ...editor, ...patch })} />
+          )}
           <Field title="Result">
             {/* The same words the chip will show once it is saved — see `verdictResultLabel`. */}
             <Select
+              aria-label="Result"
               value={editor.verdict}
               onChange={(v) => setEditor({ ...editor, verdict: String(v) })}
               options={Object.values(BackgroundCheckVerdict).map((v) => ({
@@ -1936,7 +1954,7 @@ export const AssayerVettingTab: React.FC<{
               />
             </Field>
           )}
-          {(isBgv || type === CheckType.CREDIT) && (
+          {type === CheckType.CREDIT && (
             <>
               <Field title="Credit band">
                 <Select
@@ -2138,15 +2156,8 @@ export const AssayerVettingTab: React.FC<{
             {check.riskGrade && (
               <div><div style={label}>Risk</div><div style={{ fontSize: 'var(--text-sm)' }}>{RISK_LABELS[check.riskGrade] ?? humanizeEnum(check.riskGrade)}</div></div>
             )}
-            {check.cibilBand && (
-              <div>
-                <div style={label}>Credit</div>
-                <div style={{ fontSize: 'var(--text-sm)' }}>
-                  {CIBIL_LABELS[check.cibilBand] ?? humanizeEnum(check.cibilBand)}
-                  {check.cibilScore ? ` (${check.cibilScore})` : ''}
-                </div>
-              </div>
-            )}
+            {/* The address, CIBIL and court checks — "Not recorded" on a check from before they were asked for. */}
+            <BgvPartsReadout check={check} />
             <div><div style={label}>Checked on</div><div style={{ fontSize: 'var(--text-sm)' }}>{fmtDate(check.checkedOn) || '—'}</div></div>
             {check.checkedByName && (
               <div><div style={label}>Background check agency</div><div style={{ fontSize: 'var(--text-sm)' }}>{check.checkedByName}</div></div>
@@ -2218,6 +2229,15 @@ export const AssayerVettingTab: React.FC<{
               { key: 'type', header: 'Check', render: (c) => <>{CHECK_TYPE_LABELS[(c.checkType ?? CheckType.BGV) as CheckType]}</> },
               { key: 'verdict', header: 'Result', render: (c) => <VerdictChip verdict={c.verdict} /> },
               { key: 'risk', header: 'Risk', render: (c) => <>{c.riskGrade ? (RISK_LABELS[c.riskGrade] ?? humanizeEnum(c.riskGrade)) : '—'}</> },
+              // An earlier background check's address, CIBIL and court checks; a credit check's band.
+              {
+                key: 'parts', header: 'Checked', wrap: true,
+                render: (c) => ((c.checkType ?? CheckType.BGV) === CheckType.BGV
+                  ? <>{BGV_PARTS.map((part) => `${BGV_PART_LABELS[part]}: ${bgvPartText(part, c)}`).join(' · ')}</>
+                  : (c.checkType === CheckType.CREDIT && c.cibilBand)
+                    ? <>{CIBIL_LABELS[c.cibilBand] ?? humanizeEnum(c.cibilBand)}{c.cibilScore ? ` (${c.cibilScore})` : ''}</>
+                    : <>—</>),
+              },
               { key: 'agency', header: 'Agency', render: (c) => <>{c.checkedByName || '—'}</> },
               // Free prose written by whoever did the check — the one column here that is a
               // paragraph rather than a value, so it wraps instead of stretching the table.

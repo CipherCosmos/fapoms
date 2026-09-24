@@ -114,6 +114,7 @@ export * from './registration-form';
 export * from './source-referral';
 export * from './onboarding-approval';
 export * from './periodic-checks';
+export * from './bgv-parts';
 export * from './record-capabilities';
 export * from './check-in-rules';
 // The candidate's road from the registration form to their first job — the one step list, and the

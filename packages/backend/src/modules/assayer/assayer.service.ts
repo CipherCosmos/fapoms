@@ -3036,11 +3036,12 @@ export class AssayerService implements OnModuleInit {
     const crossesBgvExit = path.includes(AssayerLifecycleStatus.FINAL_APPROVAL)
       && (from === AssayerLifecycleStatus.BACKGROUND_VERIFICATION || path.includes(AssayerLifecycleStatus.BACKGROUND_VERIFICATION));
     if (path.length > 1 && crossesBgvExit && this.rosterRecords) {
-      const [verdict, reportOnFile] = await Promise.all([
+      const [verdict, reportOnFile, partsMissing] = await Promise.all([
         this.rosterRecords.latestBackgroundVerdict(assayer.id),
         this.rosterRecords.bgvReportOnFile(assayer.id),
+        this.rosterRecords.bgvPartsMissing(assayer.id),
       ]);
-      const decision = assessBackgroundGate(verdict, 'leave-bgv', reportOnFile);
+      const decision = assessBackgroundGate(verdict, 'leave-bgv', reportOnFile, partsMissing);
       if (decision.refusal) {
         return `${assayer.displayName} cannot be moved: ${decision.refusal} Reaching ${targetStatus} `
           + `from ${from} passes through background verification${route}, so the whole move is `
@@ -3379,12 +3380,13 @@ export class AssayerService implements OnModuleInit {
          */
         const runBackgroundGate = async (site: 'leave-bgv' | 'finish-onboarding' | 'activate') => {
           if (!this.rosterRecords) return;
-          const [verdict, reportOnFile] = await Promise.all([
+          const [verdict, reportOnFile, partsMissing] = await Promise.all([
             this.rosterRecords.latestBackgroundVerdict(preRead.id),
             this.rosterRecords.bgvReportOnFile(preRead.id),
+            this.rosterRecords.bgvPartsMissing(preRead.id),
           ]);
           // Mandatory: no mode, no warn arm. See `assessBackgroundGate` for why it once had one.
-          const decision = assessBackgroundGate(verdict, site, reportOnFile);
+          const decision = assessBackgroundGate(verdict, site, reportOnFile, partsMissing);
           if (decision.refusal) {
             throw withCode(
               new BadRequestException(`${assayer.displayName} cannot be moved: ${decision.refusal}`),

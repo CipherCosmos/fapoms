@@ -1,6 +1,8 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { BackgroundCheckVerdict, DocumentVerification, OnboardingDocument } from '@fapoms/shared';
+import {
+  AddressCheckMethod, AddressCheckResult, BackgroundCheckVerdict, CibilBand, CourtCheckResult, DocumentVerification, OnboardingDocument,
+} from '@fapoms/shared';
 import { RosterRecordsService } from './roster-records.service';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -18,6 +20,12 @@ import { AuditService } from '../../core/audit/audit.service';
  * did not pass can be verified again, and the pass must come with the NEW report — the failed one
  * stays with the failed check, viewable, and cannot be removed.
  */
+/** A background verification's three parts, all clean — what a clear result needs (2026-09-24). */
+const ALL_PARTS = {
+  addressCheckMethod: AddressCheckMethod.PHYSICAL, addressCheckResult: AddressCheckResult.VERIFIED,
+  cibilBand: CibilBand.GOOD, courtCheckResult: CourtCheckResult.NO_RECORD,
+} as const;
+
 describe('background check reports, one per check', () => {
   let service: RosterRecordsService;
   let saved: any[];
@@ -30,7 +38,7 @@ describe('background check reports, one per check', () => {
     versions.unshift({ id: `ver-${path}`, documentId: doc.id, filePath: path, version: versions.length + 1, uploadedAt: new Date('2026-09-20T10:00:00Z') });
   };
   const record = (verdict: BackgroundCheckVerdict, over: Record<string, unknown> = {}) =>
-    service.recordBackgroundCheck('a-1', { verdict, ...over } as never, 'hr-1');
+    service.recordBackgroundCheck('a-1', { verdict, ...ALL_PARTS, ...over } as never, 'hr-1');
 
   beforeEach(async () => {
     saved = [];
@@ -154,6 +162,74 @@ describe('background check reports, one per check', () => {
 
       await expect(service.detachFile('doc-bgv', 1, 'hr-1')).resolves.toMatchObject({ key: 'bgv/wrong-person.pdf' });
       expect(doc.filePaths).toEqual(['bgv/first.pdf']);
+    });
+  });
+
+  /**
+   * THE THREE PARTS (owner, 2026-09-24): "address check (physical/digital), cibil check, court check
+   * should present before making that done".
+   */
+  describe('a clear background check needs its address, CIBIL and court checks', () => {
+    it('refuses clear without them, names what is missing, and records nothing', async () => {
+      upload('bgv/first.pdf');
+      await expect(record(BackgroundCheckVerdict.CLEAR, { addressCheckMethod: null, courtCheckResult: undefined }))
+        .rejects.toThrow('Still to fill in: the address check (physical or digital) and the court check.');
+      await expect(record(BackgroundCheckVerdict.CLEAR, { cibilBand: CibilBand.CHECK_FAILED }))
+        .rejects.toThrow(/Still to fill in: the CIBIL check\./);
+      expect(saved).toHaveLength(0);
+      expect(audit.recordEventSafe).not.toHaveBeenCalled();
+    });
+
+    it('refuses clear when a part found something', async () => {
+      upload('bgv/first.pdf');
+      await expect(record(BackgroundCheckVerdict.CLEAR, { courtCheckResult: CourtCheckResult.CRIMINAL_CASE }))
+        .rejects.toThrow(/court check found a criminal case, so the result cannot be clear/);
+      await expect(record(BackgroundCheckVerdict.CLEAR, { addressCheckResult: AddressCheckResult.DISCREPANCY }))
+        .rejects.toThrow(/address check found a discrepancy/);
+      expect(saved).toHaveLength(0);
+    });
+
+    it('keeps all three on the check', async () => {
+      upload('bgv/first.pdf');
+      const check = await record(BackgroundCheckVerdict.CLEAR, { addressCheckMethod: AddressCheckMethod.DIGITAL, cibilScore: 752 });
+      expect(check).toMatchObject({
+        addressCheckMethod: 'DIGITAL', addressCheckResult: 'VERIFIED', cibilBand: 'GOOD', cibilScore: 752, courtCheckResult: 'NO_RECORD',
+      });
+    });
+
+    /** An agency that found a criminal case may stop there — not passing needs no other part. */
+    it('records a result that is not clear with whatever parts were done', async () => {
+      upload('bgv/first.pdf');
+      const check = await record(BackgroundCheckVerdict.CRIMINAL_CASE, {
+        addressCheckMethod: null, addressCheckResult: null, cibilBand: null, courtCheckResult: CourtCheckResult.CRIMINAL_CASE,
+      });
+      expect(check).toMatchObject({ verdict: 'CRIMINAL_CASE', courtCheckResult: 'CRIMINAL_CASE', addressCheckResult: null, cibilBand: null });
+    });
+
+    it('refuses a value it does not know rather than dropping it', async () => {
+      upload('bgv/first.pdf');
+      await expect(record(BackgroundCheckVerdict.CLEAR, { addressCheckMethod: 'DRONE' }))
+        .rejects.toThrow('"DRONE" is not a way of checking an address this system records.');
+      await expect(record(BackgroundCheckVerdict.CIVIL_CASE, { courtCheckResult: 'PENDING' }))
+        .rejects.toThrow(/is not a result of a court check/);
+      expect(saved).toHaveLength(0);
+    });
+
+    describe('the gate reads them off the operative check', () => {
+      it('has nothing to add for a check recorded with all three', async () => {
+        upload('bgv/first.pdf');
+        await record(BackgroundCheckVerdict.CLEAR);
+        await expect(service.bgvPartsMissing('a-1')).resolves.toEqual([]);
+      });
+
+      it('names the parts a clear check from before them lacks', async () => {
+        saved.push({ id: 'chk-old', verdict: BackgroundCheckVerdict.CLEAR, cibilBand: CibilBand.GOOD, reportFiles: [] });
+        await expect(service.bgvPartsMissing('a-1')).resolves.toEqual(['the address check (physical or digital)', 'the court check']);
+      });
+
+      it('leaves "no check at all" to the gate\'s own arm', async () => {
+        await expect(service.bgvPartsMissing('a-1')).resolves.toEqual([]);
+      });
     });
   });
 

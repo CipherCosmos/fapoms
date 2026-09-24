@@ -122,8 +122,11 @@ export function assessIdentityArtifact(f: IdentityArtifactFacts): IdentityArtifa
  * and default to WARN — so anybody could be moved out of background verification with no check at
  * all, and only an activity row said so. Now onboarding cannot be finished without:
  *
- *  - a completed check whose latest verdict is CLEAR, and
- *  - the background verification report uploaded (`BGV_REPORT`) — the evidence the verdict came from.
+ *  - a completed check whose latest verdict is CLEAR,
+ *  - the background verification report uploaded (`BGV_REPORT`) — the evidence the verdict came from,
+ *  - and on that check its three parts (2026-09-24, `bgv-parts.ts` in shared): the address check
+ *    (physical or digital), the CIBIL check and the court check. A clear check recorded today
+ *    cannot lack them; one recorded before, or brought in by the roster import, can.
  *
  * WHERE it bites:
  *
@@ -156,6 +159,8 @@ export function assessBackgroundGate(
   site: BackgroundGateSite,
   /** Whether the background verification report is on file — a `BGV_REPORT` row with a scan. */
   reportOnFile: boolean,
+  /** What the operative check lacks of its three parts, from `bgvClearGaps` — empty when nothing. */
+  partsMissing: string[] = [],
 ): BackgroundGateDecision {
   if (latestVerdict !== null && ADVERSE_VERDICTS.includes(latestVerdict)) {
     const said = latestVerdict.toLowerCase().replace(/_/g, ' ');
@@ -179,6 +184,17 @@ export function assessBackgroundGate(
       refusal:
         'the background verification report has not been uploaded. The result is only as good as '
         + 'the report it came from — upload it on the Background tab first.',
+    };
+  }
+  if (partsMissing.length > 0) {
+    const list = partsMissing.length === 1
+      ? partsMissing[0]
+      : `${partsMissing.slice(0, -1).join(', ')} and ${partsMissing[partsMissing.length - 1]}`;
+    return {
+      refusal:
+        `the background check on file is missing ${list}. A background check counts as done only with `
+        + 'the address check (physical or digital), the CIBIL check and the court check on it — record '
+        + 'it again with all three on the Background tab first.',
     };
   }
   return { refusal: null };

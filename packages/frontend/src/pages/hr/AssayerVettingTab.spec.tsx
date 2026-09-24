@@ -269,10 +269,19 @@ describe('AssayerVettingTab — background checks', () => {
     filePaths: files, softCopyReceived: files.length > 0, hardCopyReceived: false, hardCopyLocation: null, issuedBy,
   });
   const checkPosts = () => mockRequest.mock.calls.filter(([url, o]: any[]) => url === '/assayers/a-1/background-check' && o?.method === 'POST');
+  /** The address, CIBIL and court checks, all clean — a clear result needs all three (2026-09-24). */
+  const fillParts = (dialog: ReturnType<typeof within>, over: Record<string, string> = {}) => {
+    const values: Record<string, string> = {
+      'How the address was checked': 'PHYSICAL', 'What the address check found': 'VERIFIED',
+      'CIBIL band': 'GOOD', 'What the court check found': 'NO_RECORD', ...over,
+    };
+    for (const [name, value] of Object.entries(values)) fireEvent.change(dialog.getByRole('combobox', { name }), { target: { value } });
+  };
   const recordPassed = async () => {
     fireEvent.click(await screen.findByText('Record a check'));
     const dialog = within(screen.getByRole('dialog'));
-    fireEvent.change(dialog.getAllByRole('combobox')[0], { target: { value: 'CLEAR' } });
+    fillParts(dialog);
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
     fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
     return dialog;
   };
@@ -284,7 +293,7 @@ describe('AssayerVettingTab — background checks', () => {
     fireEvent.click(await screen.findByText('Record a check'));
     const dialog = within(screen.getByRole('dialog'));
     fireEvent.change(dialog.getByLabelText('Background check agency'), { target: { value: 'AuthBridge' } });
-    fireEvent.change(dialog.getAllByRole('combobox')[0], { target: { value: 'CLEAR' } });
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
     fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
 
     expect(dialog.getByText(/Not uploaded yet — required before a result can be recorded/)).toBeInTheDocument();
@@ -412,11 +421,103 @@ describe('AssayerVettingTab — background checks', () => {
       expect(dialog.queryByRole('button', { name: other })).not.toBeInTheDocument();
     }
 
-    fireEvent.change(dialog.getAllByRole('combobox')[0], { target: { value: 'CLEAR' } });
+    fillParts(dialog);
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
     fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
 
     await waitFor(() => expect(checkPosts()).toHaveLength(1));
     expect(JSON.parse(checkPosts()[0][1].body)).toMatchObject({ checkType: 'BGV', verdict: 'CLEAR', checkedByName: 'AuthBridge' });
+  });
+
+  /**
+   * THE THREE PARTS (owner, 2026-09-24): "address check (physical/digital), cibil check, court check
+   * should present before making that done".
+   */
+  describe('the address, CIBIL and court checks', () => {
+    const ready = () => serve(dossier({ onboarding: [bgvReport(['scans/bgv.pdf'])], bgvReportPending: [pending('scans/bgv.pdf', 0)] }));
+
+    it('will not record Clear without all three, and names what is missing in the dialog', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fireEvent.change(dialog.getByRole('combobox', { name: 'CIBIL band' }), { target: { value: 'GOOD' } });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(dialog.getByRole('alert'))
+        .toHaveTextContent('Still to fill in: the address check (physical or digital) and the court check.'));
+      expect(checkPosts()).toHaveLength(0);
+    });
+
+    it('will not record Clear over a court case', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fillParts(dialog, { 'What the court check found': 'CRIMINAL_CASE' });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent(/court check found a criminal case, so the result cannot be clear/));
+      expect(checkPosts()).toHaveLength(0);
+    });
+
+    it('sends all three with the check', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fillParts(dialog, { 'How the address was checked': 'DIGITAL' });
+      fireEvent.change(dialog.getByLabelText('CIBIL score'), { target: { value: '752' } });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CLEAR' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(checkPosts()).toHaveLength(1));
+      expect(JSON.parse(checkPosts()[0][1].body)).toMatchObject({
+        addressCheckMethod: 'DIGITAL', addressCheckResult: 'VERIFIED', cibilBand: 'GOOD', cibilScore: 752, courtCheckResult: 'NO_RECORD',
+      });
+    });
+
+    /** Not passing needs no other part — an agency that found a criminal case may stop there. */
+    it('records a result that is not clear with the parts left empty', async () => {
+      ready();
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByText('Record a check'));
+      const dialog = within(screen.getByRole('dialog'));
+      fireEvent.change(dialog.getByRole('combobox', { name: 'Result' }), { target: { value: 'CRIMINAL_CASE' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Record check' }));
+
+      await waitFor(() => expect(checkPosts()).toHaveLength(1));
+      const body = JSON.parse(checkPosts()[0][1].body);
+      expect(body.verdict).toBe('CRIMINAL_CASE');
+      expect(body.addressCheckMethod).toBeUndefined();
+    });
+
+    it('shows them on the check, and says so when an older check never had them', async () => {
+      const recorded = {
+        id: 'c-1', verdict: 'CLEAR', checkedOn: '2026-09-24', reportFiles: [],
+        addressCheckMethod: 'PHYSICAL', addressCheckResult: 'VERIFIED', cibilBand: 'GOOD', cibilScore: 747, courtCheckResult: 'NO_RECORD',
+      };
+      const older = { id: 'c-0', verdict: 'CLEAR', checkedOn: '2022-01-01', reportFiles: [], cibilBand: 'AVERAGE' };
+      serve(dossier({ currentCheck: recorded, backgroundChecks: [recorded, older] }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+
+      expect(await screen.findByTestId('bgv-part-address')).toHaveTextContent('Address verified (physical visit)');
+      expect(screen.getByTestId('bgv-part-cibil')).toHaveTextContent('Good (747)');
+      expect(screen.getByTestId('bgv-part-court')).toHaveTextContent('No case found');
+      expect(screen.getByText('Address check: Not recorded · CIBIL check: Average · Court check: Not recorded')).toBeInTheDocument();
+    });
+
+    it('asks a police re-check for none of them', async () => {
+      const standing = { type: 'POLICE', lastCheckedOn: null, lastVerdict: null, dueOn: '2026-12-31', blockFrom: '2027-01-30', status: 'DUE', because: null };
+      serve(dossier({ compliance: { rechecked: true, hold: null, standings: [standing], blockers: [] } }));
+      render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Record' }));
+      const dialog = within(screen.getByRole('dialog'));
+      expect(dialog.getByText('Record a police verification')).toBeInTheDocument();
+      expect(dialog.queryByTestId('bgv-parts')).not.toBeInTheDocument();
+    });
   });
 
     it('offers somebody who did not pass a way back into background verification', async () => {
@@ -1011,7 +1112,7 @@ describe('AssayerVettingTab — one result per background check', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('Result')).toBeInTheDocument();
     expect(within(dialog).getByText('Background check agency')).toBeInTheDocument();
-    const options = Array.from(within(dialog).getAllByRole('combobox')[0].querySelectorAll('option')).map((o) => o.textContent);
+    const options = Array.from(within(dialog).getByRole('combobox', { name: 'Result' }).querySelectorAll('option')).map((o) => o.textContent);
     expect(options).toEqual(expect.arrayContaining(['Passed', 'Failed — criminal case', 'Pending — not checked yet']));
     expect(within(dialog).queryByText(/BGV|Verifier|Verdict/)).not.toBeInTheDocument();
   });

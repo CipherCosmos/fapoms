@@ -75,6 +75,8 @@ describe('bulk lifecycle — the contract between the response and the database'
   let identityGateMode: string;
   /** Whether the person's background verification is complete — a clear check and its report. */
   let bgvDone: boolean;
+  /** What the operative check lacks of its address, CIBIL and court checks (2026-09-24). */
+  let bgvPartsMissing: string[];
 
   const seed = (id: string, lifecycleStatus: AssayerLifecycleStatus): string => {
     rows.set(id, {
@@ -181,6 +183,7 @@ describe('bulk lifecycle — the contract between the response and the database'
     identityOk = true;
     identityGateMode = 'warn';
     bgvDone = true;
+    bgvPartsMissing = [];
 
     const module = await Test.createTestingModule({
       providers: [
@@ -205,6 +208,7 @@ describe('bulk lifecycle — the contract between the response and the database'
             identityStanding: jest.fn(async () => ({ ok: identityOk, verified: [], missing: identityOk ? [] : ['PAN_CARD'], rejected: [] })),
             latestBackgroundVerdict: jest.fn(async () => (bgvDone ? BackgroundCheckVerdict.CLEAR : null)),
             bgvReportOnFile: jest.fn(async () => bgvDone),
+            bgvPartsMissing: jest.fn(async () => bgvPartsMissing),
           },
         },
         { provide: PlatformSettingsService, useValue: { get: jest.fn(async () => identityGateMode) } },
@@ -428,6 +432,20 @@ describe('bulk lifecycle — the contract between the response and the database'
 
       expect(result.skipped).toHaveLength(1);
       expect(result.skipped[0].reason).toMatch(/background verification is mandatory/);
+      expect(result.skipped[0].reason).toMatch(/Nothing was changed/);
+      expect(stateOf(id)).toBe(AssayerLifecycleStatus.INVITED);
+      expect(transitionsFor(id)).toHaveLength(0);
+    });
+
+    /** A clear check without its address, CIBIL and court checks is not done either — refused the same way. */
+    it('refuses the whole walk on a clear check that lacks its parts', async () => {
+      bgvPartsMissing = ['the court check'];
+      const id = seed('b6', AssayerLifecycleStatus.INVITED);
+
+      const result = await service.bulkTransitionLifecycle([id], AssayerLifecycleStatus.FINAL_APPROVAL, 'op');
+
+      expect(result.skipped).toHaveLength(1);
+      expect(result.skipped[0].reason).toMatch(/background check on file is missing the court check/);
       expect(result.skipped[0].reason).toMatch(/Nothing was changed/);
       expect(stateOf(id)).toBe(AssayerLifecycleStatus.INVITED);
       expect(transitionsFor(id)).toHaveLength(0);

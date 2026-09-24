@@ -15,6 +15,8 @@ describe('background verification is mandatory to finish onboarding', () => {
     from: AssayerLifecycleStatus;
     verdict: BackgroundCheckVerdict | null;
     reportOnFile: boolean;
+    /** What the operative check lacks of its address, CIBIL and court checks — `bgvPartsMissing`. */
+    partsMissing?: string[];
     /** Where they were when last parked INACTIVE — the lifecycle trail's answer. */
     parkedFrom?: AssayerLifecycleStatus | null;
     mode?: string;
@@ -43,6 +45,7 @@ describe('background verification is mandatory to finish onboarding', () => {
     svc.rosterRecords = {
       latestBackgroundVerdict: jest.fn().mockResolvedValue(opts.verdict),
       bgvReportOnFile: jest.fn().mockResolvedValue(opts.reportOnFile),
+      bgvPartsMissing: jest.fn().mockResolvedValue(opts.partsMissing ?? []),
       identityStanding: jest.fn().mockResolvedValue({ ok: true, verified: [], missing: [], rejected: [] }),
     };
     // Every mode, including the one BGV used to hide behind.
@@ -80,6 +83,19 @@ describe('background verification is mandatory to finish onboarding', () => {
     it('refuses a clear check whose report was never uploaded', async () => {
       const svc = serviceWith({ from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: false });
       await expect(move(svc, AssayerLifecycleStatus.FINAL_APPROVAL)).rejects.toThrow(/report has not been uploaded/);
+    });
+
+    /**
+     * A clear check recorded before the three parts were asked for (2026-09-24), or brought in by
+     * the import, of somebody still joining: joining now means all three, however it got on file.
+     */
+    it('refuses a clear check that lacks its address, CIBIL or court check', async () => {
+      const svc = serviceWith({
+        from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true,
+        partsMissing: ['the address check (physical or digital)', 'the court check'],
+      });
+      await expect(move(svc, AssayerLifecycleStatus.FINAL_APPROVAL))
+        .rejects.toThrow(/missing the address check \(physical or digital\) and the court check\. A background check counts as done only with/);
     });
 
     it('sends them up for approval with a clear check and its report', async () => {
@@ -126,6 +142,23 @@ describe('background verification is mandatory to finish onboarding', () => {
     it('lets them in once the check and report are done', async () => {
       const svc = serviceWith({
         from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true, parkedFrom: AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+      });
+      await expect(move(svc, AssayerLifecycleStatus.ACTIVE)).resolves.toBeDefined();
+    });
+
+    it('refuses to finish onboarding on a clear check that lacks its parts', async () => {
+      const svc = serviceWith({
+        from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true, partsMissing: ['the CIBIL check'],
+        parkedFrom: AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+      });
+      await expect(move(svc, AssayerLifecycleStatus.ACTIVE)).rejects.toThrow(/missing the CIBIL check/);
+    });
+
+    /** The imported roster's checks carry no parts; a working return never asked for them. */
+    it('does not ask a working return for the parts', async () => {
+      const svc = serviceWith({
+        from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: false, partsMissing: ['the CIBIL check'],
+        parkedFrom: AssayerLifecycleStatus.ACTIVE,
       });
       await expect(move(svc, AssayerLifecycleStatus.ACTIVE)).resolves.toBeDefined();
     });

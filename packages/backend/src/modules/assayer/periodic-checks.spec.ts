@@ -2,8 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import {
-  AssayerLifecycleStatus, BackgroundCheckVerdict, CheckReviewDecision, CheckType, OnboardingDocument,
-} from '@fapoms/shared';
+  AssayerLifecycleStatus, BackgroundCheckVerdict, CheckReviewDecision, CheckType, OnboardingDocument, AddressCheckMethod, AddressCheckResult, CibilBand, CourtCheckResult } from '@fapoms/shared';
 import { RosterRecordsService } from './roster-records.service';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -22,6 +21,12 @@ import { ComplianceStandingService } from './compliance-standing.service';
  * each its own dated record with its own report; an adverse one on somebody working holds them from
  * new work until a senior decides.
  */
+/** A background verification's three parts, all clean — what a clear result needs (2026-09-24). */
+const ALL_PARTS = {
+  addressCheckMethod: AddressCheckMethod.PHYSICAL, addressCheckResult: AddressCheckResult.VERIFIED,
+  cibilBand: CibilBand.GOOD, courtCheckResult: CourtCheckResult.NO_RECORD,
+} as const;
+
 describe('recording a re-check', () => {
   let service: RosterRecordsService;
   let saved: any[];
@@ -113,7 +118,7 @@ describe('recording a re-check', () => {
   /** Onboarding asks about background verification — a police or credit check is not that. */
   it('keeps the onboarding gate on background verification alone', async () => {
     upload(OnboardingDocument.BGV_REPORT, 'bgv/report.pdf');
-    await record({ verdict: BackgroundCheckVerdict.CLEAR });
+    await record({ verdict: BackgroundCheckVerdict.CLEAR, ...ALL_PARTS });
     upload(OnboardingDocument.POLICE_CERTIFICATE, 'police/cert.pdf');
     await record({ checkType: CheckType.POLICE, verdict: BackgroundCheckVerdict.CRIMINAL_CASE, findings: 'x' });
 

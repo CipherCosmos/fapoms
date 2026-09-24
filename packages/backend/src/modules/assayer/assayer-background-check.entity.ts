@@ -1,6 +1,8 @@
 import { Entity, Column, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
-import { BackgroundCheckVerdict, RiskGrade, CibilBand, CheckType } from '@fapoms/shared';
+import {
+  BackgroundCheckVerdict, RiskGrade, CibilBand, CheckType, AddressCheckMethod, AddressCheckResult, CourtCheckResult,
+} from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 
 /**
@@ -48,6 +50,21 @@ export class AssayerBackgroundCheckEntity extends BaseEntity {
 
   @Column({ name: 'cibil_band', type: 'varchar', length: 30, nullable: true })
   cibilBand: CibilBand | null;
+
+  /**
+   * The address check, one of a background verification's three parts with CIBIL and the court
+   * check (2026-09-24, see `bgv-parts.ts`): how it was done, and what it found. Null on the other
+   * check types and on every check recorded before the parts were asked for.
+   */
+  @Column({ name: 'address_check_method', type: 'varchar', length: 10, nullable: true })
+  addressCheckMethod: AddressCheckMethod | null;
+
+  @Column({ name: 'address_check_result', type: 'varchar', length: 20, nullable: true })
+  addressCheckResult: AddressCheckResult | null;
+
+  /** The court check — whether any court holds a case against them. */
+  @Column({ name: 'court_check_result', type: 'varchar', length: 20, nullable: true })
+  courtCheckResult: CourtCheckResult | null;
 
   @Column({ name: 'checked_on', type: 'date', nullable: true })
   checkedOn: Date | null;

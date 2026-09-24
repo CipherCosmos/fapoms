@@ -7,6 +7,7 @@ import {
 import {
   AssayerLifecycleStatus, assayerLifecycleLabel, nextAssayerLifecycleStates,
   IDENTITY_GATE_DOCUMENTS, ONBOARDING_DOCUMENT_LABELS, type OnboardingDocument,
+  BGV_PART_LABELS, bgvClearGaps, bgvPartStates,
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
@@ -140,6 +141,25 @@ export function planStep(candidate: Assayer, dossier: AssayerDossier | undefined
             area: 'background',
           },
           { label: 'Background check recorded', done: !!verdict && verdict !== 'NOT_CHECKED', blocking: true, area: 'background' },
+          /*
+            Its three parts (owner, 2026-09-24): the server will not send them up without them, so
+            the list says so — naming what is missing, which a check recorded before the parts were
+            asked for (or brought in by the import) can be.
+          */
+          (() => {
+            const check = dossier?.currentCheck;
+            const unrecorded = check ? bgvPartStates(check).filter((p) => !p.recorded).map((p) => BGV_PART_LABELS[p.part]) : [];
+            return {
+              label: check && unrecorded.length > 0 && unrecorded.length < 3
+                ? `Not on the background check yet: ${unrecorded.join(', ')}`
+                : 'Address (physical or digital), CIBIL and court checks recorded',
+              // Done means a clear result could stand on them — a part that found something is
+              // not done, and the adverse result line below says why.
+              done: !!check && bgvClearGaps(check).length === 0,
+              blocking: true,
+              area: 'background' as const,
+            };
+          })(),
           {
             label: adverse ? `Background check result: ${VERDICT_LABELS[verdict!] ?? verdict} — they cannot move on` : 'Background check result is clear',
             done: verdict === 'CLEAR',

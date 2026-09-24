@@ -2,7 +2,9 @@ import React from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CheckCircle2, XCircle } from 'lucide-react';
-import { AssayerLifecycleStatus, BackgroundCheckVerdict, assayerLifecycleLabel, regionLabel } from '@fapoms/shared';
+import {
+  AssayerLifecycleStatus, BackgroundCheckVerdict, BGV_PART_LABELS, assayerLifecycleLabel, bgvClearGaps, bgvPartStates, regionLabel,
+} from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
 import { loadFailed } from '../../../queryClient';
@@ -14,6 +16,7 @@ import type { Assayer } from '../assayer-shared';
 import type { AssayerDossier } from '../record/record-types';
 import { ApprovalPanel } from '../record/ApprovalPanel';
 import { Attachments, CheckReport, VERDICT_LABELS } from '../AssayerVettingTab';
+import { bgvPartText } from '../BgvParts';
 import { activationBlockers } from '../joining-readiness';
 import { fmtDate, fmtWhen } from '../hr-ui';
 
@@ -185,11 +188,15 @@ export const ApprovalReviewPage: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', minWidth: 0 }}>
           <Section title="Background check">
             <Item
-              ok={check?.verdict === BackgroundCheckVerdict.CLEAR && reportFiles.length > 0}
+              ok={check?.verdict === BackgroundCheckVerdict.CLEAR && reportFiles.length > 0 && bgvClearGaps(check).length === 0}
               label={check ? (VERDICT_LABELS[check.verdict] ?? check.verdict) : 'Not recorded'}
               detail={check ? [check.checkedByName, check.checkedOn ? fmtDate(check.checkedOn) : null].filter(Boolean).join(' · ') || undefined : undefined}
               action={check ? <CheckReport files={reportFiles} documentPaths={bgvReport?.filePaths ?? []} onError={setErr} /> : undefined}
             />
+            {/* Its three parts (2026-09-24) — what the agency actually checked, each ticked on its own. */}
+            {check && bgvPartStates(check).map((p) => (
+              <Item key={p.part} ok={p.clear} label={BGV_PART_LABELS[p.part]} detail={bgvPartText(p.part, check)} />
+            ))}
           </Section>
 
           <Section title="Bank and location">

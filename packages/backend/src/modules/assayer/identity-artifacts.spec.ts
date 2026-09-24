@@ -124,6 +124,18 @@ describe('the background-verification exit rule', () => {
     expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, site, false).refusal).toMatch(/report has not been uploaded/);
   });
 
+  /** Its address, CIBIL and court checks (2026-09-24) — a clear check from before them does not count. */
+  it.each(ONBOARDING_EXITS)('%s refuses a clear check missing any of its three parts, and names them', (site) => {
+    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, site, true, ['the court check']).refusal)
+      .toMatch(/^the background check on file is missing the court check\. /);
+    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, site, true, ['the address check (physical or digital)', 'the CIBIL check', 'the court check']).refusal)
+      .toMatch(/missing the address check \(physical or digital\), the CIBIL check and the court check\./);
+  });
+
+  it('a working return is not asked for the parts either', () => {
+    expect(assessBackgroundGate(BackgroundCheckVerdict.CLEAR, 'activate', false, ['the CIBIL check'])).toEqual({ refusal: null });
+  });
+
   it.each([
     BackgroundCheckVerdict.CIVIL_CASE,
     BackgroundCheckVerdict.CRIMINAL_CASE,

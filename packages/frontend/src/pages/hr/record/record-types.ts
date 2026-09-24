@@ -77,6 +77,10 @@ export interface BackgroundCheck {
   riskGrade?: string | null;
   cibilScore?: number | null;
   cibilBand?: string | null;
+  /** A background verification's address and court checks (2026-09-24) — null on older checks. */
+  addressCheckMethod?: string | null;
+  addressCheckResult?: string | null;
+  courtCheckResult?: string | null;
   checkedOn?: string | null;
   checkedByName?: string | null;
   findings?: string | null;
