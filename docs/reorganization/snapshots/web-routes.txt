@@ -1,0 +1,129 @@
+# Web routes — 52 routes, 17 redirects, 40 paths × 11 principals
+
+## Routes
+(index)  DataEntryOverview[DataEntryOverview]
+(index)  HrOverviewPage[HrOverviewPage]
+(layout)  ProtectedRoute > Outlet
+*  NotFound
+*  RememberAndRedirectToLogin
+/  -
+/admin/approvals  Approvals[Approvals]
+/admin/compliance  CompliancePanel[CompliancePanel]
+/admin/logs  ServiceLogs[ServiceLogs]
+/admin/notifications  NotificationAdmin[NotificationAdmin]
+/admin/rule-bypass  RuleBypassPanel[RuleBypassPanel]
+/admin/settings  PlatformSettings[PlatformSettings]
+/assayers/:id  AssayerDeepLink
+/assignments  AuditWork[AuditWork]
+/billing  Billing[Billing]
+/billing/statement  AssayerStatementPage[AssayerStatementPage]
+/branches  Branches[Branches]
+/clients  Clients[Clients]
+/dashboard  Dashboard[Dashboard]
+/data-entry  DataEntryLayout[DataEntryLayout]
+/documents  Documents[Documents]
+/executive-map  ExecutiveMap[ExecutiveMap]
+/falling-behind  FallingBehind[FallingBehind]
+/feedback  FeedbackPage[FeedbackPage]
+/holidays  Holidays[Holidays]
+/hr  HrLayout[HrLayout]
+/hr/register/:assayerId  ResumeRegistrationRedirect
+/hr/register/application/:applicationId  RegistrationPage[RegistrationPage]
+/inbox  AuditWork[AuditWork]
+/login  -
+/login  Login
+/notifications  Notifications[Notifications]
+/planning  AuditWork[AuditWork]
+/projects  Projects[Projects]
+/scheduling  AuditWork[AuditWork]
+/settings  Settings[Settings]
+/users  Users[Users]
+/zones  Zones[Zones]
+approvals  HrApprovalsPage[HrApprovalsPage]
+approvals/:assayerId  ApprovalReviewPage[ApprovalReviewPage]
+case/:branchId  DataEntryCasePage[CasePage]
+clarifications  ClarificationsPage[ClarificationsPage]
+hiring  HrHiringPage[HrHiringPage]
+issues  HrIssuesPage[HrIssuesPage]
+packets  PacketsQueue[PacketsQueue]
+pay  HrPayPage[HrPayPage]
+rechecks  HrRechecksPage[HrRechecksPage]
+reviews  ReviewsQueue[ReviewsQueue]
+roster  HrRosterPage[HrRosterPage]
+roster/:assayerId  AssayerRecordPage[AssayerRecordPage]
+where  HrWherePeopleArePage[HrWherePeopleArePage]
+{from}  -
+
+## Redirects
+/assayers  →  /hr/roster
+/hr/register  →  /hr/hiring
+/rules  →  /admin/settings?group=rules
+/transport-costs  →  /admin/settings?group=transport
+/validation  →  /data-entry
+activity  →  /hr/where?view=changes  (HR legacy)
+applications  →  /hr/hiring
+capability  →  /hr/roster?segment=lapsed  (HR legacy)
+compliance  →  /hr/roster?segment=lapsed  (HR legacy)
+deployment  →  /hr/where?view=coverage  (HR legacy)
+documents  →  /hr/roster?segment=incomplete  (HR legacy)
+interviews  →  /hr/hiring
+onboarding  →  /hr/hiring
+paperwork  →  /hr/roster?segment=incomplete  (HR legacy)
+records  →  /hr/roster?segment=incomplete  (HR legacy)
+skills  →  /hr/roster?segment=lapsed  (HR legacy)
+utilisation  →  /hr/where?view=workload  (HR legacy)
+
+## Who may open each path
+/  (nobody)
+/admin/approvals  DEVELOPER, ADMIN
+/admin/compliance  DEVELOPER, ADMIN, AUDITOR
+/admin/logs  DEVELOPER
+/admin/notifications  DEVELOPER, ADMIN
+/admin/rule-bypass  DEVELOPER, ADMIN, CUSTOM(all perms)
+/admin/settings  DEVELOPER, ADMIN, OPERATIONS, AUDITOR
+/assayers  DEVELOPER, ADMIN, OPERATIONS, CUSTOM(all perms)
+/assayers/x  DEVELOPER, ADMIN, OPERATIONS, CUSTOM(all perms)
+/assignments  DEVELOPER, ADMIN, OPERATIONS, AUDITOR
+/billing  DEVELOPER, ADMIN, OPERATIONS, AUDITOR, CUSTOM(all perms)
+/billing/statement  DEVELOPER, ADMIN, OPERATIONS, AUDITOR, CUSTOM(all perms)
+/branches  DEVELOPER, ADMIN, OPERATIONS, DESK, DESK_OPERATOR, AUDITOR
+/clients  DEVELOPER, ADMIN, OPERATIONS, AUDITOR
+/dashboard  DEVELOPER, ADMIN, OPERATIONS, DESK, DESK_OPERATOR, AUDITOR, CLIENT_USER, CUSTOM(all perms)
+/data-entry  DEVELOPER, ADMIN, DESK, DESK_OPERATOR
+/documents  DEVELOPER, ADMIN, OPERATIONS, DESK, DESK_OPERATOR, AUDITOR, CUSTOM(all perms)
+/executive-map  DEVELOPER, ADMIN, OPERATIONS, AUDITOR, CUSTOM(all perms)
+/falling-behind  DEVELOPER, ADMIN, OPERATIONS
+/feedback  DEVELOPER, ADMIN, OPERATIONS, DESK, DESK_OPERATOR, AUDITOR, PRODUCT_SUPPORT, ASSAYER, CLIENT_USER, CUSTOM(all perms), CUSTOM(no perms)
+/holidays  DEVELOPER, ADMIN, OPERATIONS, AUDITOR
+/hr  DEVELOPER, ADMIN, OPERATIONS, CUSTOM(all perms)
+/hr/applications  DEVELOPER, ADMIN, OPERATIONS
+/hr/approvals  DEVELOPER, ADMIN, CUSTOM(all perms)
+/hr/interviews  DEVELOPER, ADMIN, OPERATIONS
+/hr/register  DEVELOPER, ADMIN, OPERATIONS
+/hr/register/application/x  DEVELOPER, ADMIN, OPERATIONS
+/hr/register/x  DEVELOPER, ADMIN, OPERATIONS
+/inbox  DEVELOPER, ADMIN, OPERATIONS
+/login  (nobody)
+/notifications  DEVELOPER, ADMIN, OPERATIONS, DESK, DESK_OPERATOR, AUDITOR, PRODUCT_SUPPORT, ASSAYER, CLIENT_USER, CUSTOM(all perms), CUSTOM(no perms)
+/planning  DEVELOPER, ADMIN, OPERATIONS, CUSTOM(all perms)
+/projects  DEVELOPER, ADMIN, OPERATIONS, DESK, DESK_OPERATOR, AUDITOR
+/rules  DEVELOPER, ADMIN, OPERATIONS
+/scheduling  DEVELOPER, ADMIN, OPERATIONS, DESK, AUDITOR, CUSTOM(all perms)
+/settings  DEVELOPER, ADMIN, OPERATIONS, DESK, DESK_OPERATOR, AUDITOR, PRODUCT_SUPPORT, ASSAYER, CLIENT_USER, CUSTOM(all perms), CUSTOM(no perms)
+/transport-costs  DEVELOPER, ADMIN, OPERATIONS, AUDITOR
+/users  DEVELOPER, ADMIN, CUSTOM(all perms)
+/validation  DEVELOPER, ADMIN, DESK, DESK_OPERATOR
+/zones  DEVELOPER, ADMIN, OPERATIONS
+
+## Landing page per principal
+DEVELOPER  →  /dashboard
+ADMIN  →  /dashboard
+OPERATIONS  →  /executive-map
+DESK  →  /documents
+DESK_OPERATOR  →  /data-entry
+AUDITOR  →  /dashboard
+PRODUCT_SUPPORT  →  /feedback
+ASSAYER  →  /notifications
+CLIENT_USER  →  /dashboard
+CUSTOM(all perms)  →  /dashboard
+CUSTOM(no perms)  →  /notifications

@@ -1,0 +1,732 @@
+# @fapoms/shared public exports — 730
+
+AADHAAR_PATTERN: const
+ACTIVITY_EVENT_LABELS: const
+ADDRESS_CHECK_METHOD_LABELS: const
+ADDRESS_CHECK_RESULT_LABELS: const
+API_ERROR_CODES: const
+APPLICATION_INFO_REQUESTABLE_FIELDS: const
+APPLICATION_REFERENCES_MAX: const
+APPLICATION_TERMINAL_STATUSES: const
+APPRAISER_MAX_AGE: const
+APPRAISER_MIN_AGE: const
+APPROVAL_DESTINATIONS: const
+APPROVAL_DESTINATION_WORDS: const
+APPROVAL_TEXT_MAX: const
+APPROVAL_TEXT_MIN: const
+ARRIVAL_RADIUS_SETTING: const
+ASSAYER_ENGAGEMENT_LABELS: const
+ASSAYER_ERROR_CODES: const
+ASSAYER_LIFECYCLE_LABELS: const
+ASSAYER_LIFECYCLE_TRANSITIONS: const
+ASSAYER_RECORD_FIELDS: const
+ASSAYER_REQUESTABLE_ASSIGNMENT_TRANSITIONS: const
+ASSAYER_SENT_INVOICE_STATUSES: const
+ASSAYER_TERMINAL_LIFECYCLE: const
+ASSAYER_UNAVAILABLE_LABELS: const
+ASSIGNMENT_ERROR_CODES: const
+ASSIGNMENT_ISSUE_CATEGORIES: const
+ASSIGNMENT_ISSUE_CATEGORY_LABELS: const
+ASSIGNMENT_TERMINAL_STATUSES: const
+ASSIGNMENT_TRANSITIONS: const
+ATTENDANCE_ERROR_CODES: const
+AUDIT_DOCUMENT_TYPE_LABELS: const
+AUTH_ERROR_CODES: const
+AWAITING_HOD_MESSAGE: const
+ActionGate: interface
+AddressCheckMethod: enum { DIGITAL, PHYSICAL }
+AddressCheckResult: enum { DISCREPANCY, UNABLE_TO_VERIFY, VERIFIED }
+ApiErrorBody: interface
+ApiErrorCode: type
+ApiMeta: interface
+ApiResponse: interface
+ApplicationDocumentReviewStatus: enum { APPROVED, NEEDS_RESUBMIT, PENDING }
+ApplicationInfoRequestItem: interface
+ApplicationReference: interface
+ApplicationSource: enum { HR_DESK, SELF_SERVICE }
+ApplicationStatus: enum { APPROVED, AWAITING_INFO, DRAFT, PENDING_VALIDATION, REJECTED, WITHDRAWN }
+AppliedBranchDecisions: interface
+ApprovalDestination: type
+Assayer: interface
+AssayerEngagementType: enum { AGENCY_AUDIT, BACK_UP, LOCAL, MYSTERY_AUDIT, REGULAR }
+AssayerInvoiceInvitation: interface
+AssayerInvoiceInviteOutcome: interface
+AssayerInvoiceLine: interface
+AssayerInvoiceStatus: enum { APPROVED, CANCELLED, HOD_APPROVED, INVITED, PAID, SUBMITTED, SUPERSEDED }
+AssayerInvoiceSummary: interface
+AssayerLifecycleStatus: enum { ACTIVE, ARCHIVED, BACKGROUND_VERIFICATION, DOCUMENT_VERIFICATION, FINAL_APPROVAL, INACTIVE, INVITED, ON_LEAVE, RESIGNED, SUSPENDED, TERMINATED, TRAINING }
+AssayerPayable: interface
+AssayerPayableStatus: enum { APPROVED, PAID, PENDING, VOIDED }
+AssayerQualificationView: interface
+AssayerRecordField: interface
+AssayerSelfCapabilities: interface
+AssayerStatement: interface
+AssayerStatementInvoicingBlock: interface
+AssayerStatementPayable: interface
+AssayerStatementPayment: interface
+AssayerStatementTotals: interface
+AssayerStatus: enum { ACTIVE, INACTIVE, SUSPENDED }
+AssayerUnavailableReason: enum { APPROVAL_REJECTED, BGV_FAILED, DECEASED, MOVED_ABROAD, MOVED_TO_COMPANY, NOT_INTERESTED, NO_WORK_IN_AREA, REJECTED_BY_US }
+Assessment: interface
+Assignment: interface
+AssignmentAction: enum { ACCEPT, CHECK_IN, CHECK_OUT, CLAIM_EXPENSE, DECLINE, REPORT_ISSUE, SUBMIT_RETURN }
+AssignmentCapabilities: interface
+AssignmentFeeInput: interface
+AssignmentFeeView: interface
+AssignmentIssueCategory: type
+AssignmentMoneyLine: interface
+AssignmentRule: enum { BRANCH_ALREADY_ASSIGNED, BRANCH_NOT_OPEN, CLIENT_ELIGIBILITY, DATE_AVAILABILITY, DISTANCE_CEILING, DISTANCE_FLOOR, PROFILE_NOT_DEPLOYABLE, REPEAT_AUDITOR_ROTATION, SKILLS_AND_CERTIFICATIONS }
+AssignmentStatus: enum { ACCEPTED, CANCELLED, CHECKED_IN, COMPLETED, IN_PROGRESS, PENDING, REJECTED }
+AuditEvent: interface
+AuditMetadata: interface
+AuthorizationScope: enum { ASSIGNED_RECORDS, CLIENT, DEPARTMENT, ORGANIZATION, PLATFORM, REGION, SELF, STATE, TEAM }
+BACKGROUND_CHECK_VERDICT_LABELS: const
+BACKGROUND_JOB_EVENT: const
+BACKGROUND_JOB_KINDS: const
+BACKGROUND_JOB_KIND_INFO: const
+BACKGROUND_JOB_STATUSES: const
+BANK_ACCOUNT_NUMBER_RULE: const
+BGV_PARTS: const
+BGV_PART_LABELS: const
+BILLING_ENTITY_TYPE_LABELS: const
+BILLING_FINAL_APPROVE_PERMISSION: const
+BILLING_STATE_LABELS: const
+BRANCH_ACTIVE_COVERED_STATUSES: const
+BRANCH_COVERED_STATUSES: const
+BRANCH_DONE_STATUSES: const
+BRANCH_PENDING_STATUSES: const
+BRANCH_READY_ACCURACY_METERS: const
+BRANCH_REVIEW_EDITABLE_FIELDS: const
+BRANCH_REVIEW_FIELD_MAX: const
+BUSINESS_TIME_ZONE: const
+BUSINESS_TODAY_SQL: const
+BYPASSABLE_RULES: const
+BYPASSABLE_RULE_INFO: const
+BackgroundCheckVerdict: enum { ADVERSE_FINDING, CIVIL_CASE, CLEAR, CRIMINAL_CASE, NOT_CHECKED }
+BackgroundJobAccepted: interface
+BackgroundJobDownload: interface
+BackgroundJobKind: type
+BackgroundJobKindInfo: interface
+BackgroundJobList: interface
+BackgroundJobProgress: interface
+BackgroundJobResult: interface
+BackgroundJobScope: interface
+BackgroundJobStatus: type
+BackgroundJobSummary: interface
+BgvPart: type
+BgvPartState: interface
+BgvParts: interface
+BillingAttentionItem: interface
+BillingEntityType: enum { ASSAYER_INVOICE, ENTRY, INVOICE, PAYABLE, PAYMENT }
+BillingEntry: interface
+BillingHistoryEvent: interface
+BillingInvoice: interface
+BillingOverview: interface
+BillingPayment: interface
+BillingState: enum { CANCELLED, INVOICED, PAID, UNBILLED }
+Branch: interface
+BranchCommitMode: type
+BranchContact: interface
+BranchDocument: interface
+BranchGeographyProblem: interface
+BranchImportCommitCounts: interface
+BranchImportCommitDetails: interface
+BranchImportDecisions: interface
+BranchImportRehearsalDetails: interface
+BranchImportRowNote: interface
+BranchReviewEditableField: type
+BranchReviewReport: interface
+BranchReviewRow: interface
+BranchReviewStatus: type
+BranchReviewSummary: interface
+BranchRowEdit: type
+BypassableRule: enum { ASSAYER_LEAVE, ASSAYER_ONBOARDING, BUSINESS_RULE_ENGINE, CHECK_IN_GEOFENCE, CHECK_IN_SCHEDULED_DAY, CLIENT_ELIGIBILITY, DISTANCE_POLICY, HOLIDAY_CALENDAR, PROJECT_TIMELINE, REPEAT_AUDITOR_ROTATION, SKILLS_AND_CERTIFICATIONS }
+BypassableRuleInfo: interface
+CALL_OUTCOME_LABELS: const
+CANDIDATE_JOURNEY_NEXT_WORDS: const
+CANDIDATE_JOURNEY_STEPS: const
+CANDIDATE_JOURNEY_STEP_WORDS: const
+CANDIDATE_JOURNEY_WORDS: const
+CANONICAL_STATE_NAMES: const
+CHECK_IN_ARRIVAL_CLOCK_SKEW_MS: const
+CHECK_IN_ARRIVAL_MAX_AGE_SETTING: const
+CHECK_IN_ARRIVAL_OUTCOME_LABELS: const
+CHECK_IN_ARRIVAL_TRAIL_WINDOW_SETTING: const
+CHECK_ISSUER_LABEL: const
+CHECK_REPORT_DOCUMENT: const
+CHECK_TYPES: const
+CHECK_TYPE_LABELS: const
+CIBIL_ANSWERED_BANDS: const
+CIBIL_BAND_LABELS: const
+CLIENT_INVOICE_NUMBER_PATTERN: const
+CLIENT_INVOICE_SERIAL_MAX: const
+CLIENT_LIFECYCLE_TRANSITIONS: const
+COMMON_MESSAGE_TOKENS: const
+COMMON_MESSAGE_TOKEN_HELP: const
+CONCURRENCY_ERROR_CODES: const
+CONSENT_NOTICE_VERSIONS: const
+COURT_CHECK_RESULT_LABELS: const
+CRITICAL_ASSAYER_RECORD_FIELDS: const
+CURRENT_CONSENT_NOTICE: const
+CURRENT_CONSENT_VERSION: const
+CandidateAsk: interface
+CandidateJourneyNext: type
+CandidateJourneyProgress: interface
+CandidateJourneyStage: type
+CandidateJourneyStep: type
+CandidateJourneyView: interface
+CandidateRoute: interface
+CandidateStepState: type
+Capability: interface
+CheckInArrivalOutcome: enum { ACCEPTED, DIFFERENT_DAY, IN_FUTURE, NOT_FROM_ASSAYER, NOT_SENT, NO_BRANCH_LOCATION, NO_TRAIL_EVIDENCE, TOO_OLD, UNREADABLE }
+CheckInTimeDecision: interface
+CheckInTimeSource: enum { DEVICE, SERVER }
+CheckInZone: interface
+CheckReviewDecision: enum { KEEP, SUSPEND }
+CheckType: enum { BGV, CREDIT, IDENTITY, POLICE }
+CibilBand: enum { AVERAGE, BAD, CHECK_FAILED, GOOD, NOT_CHECKED, NO_CREDIT_HISTORY, POOR }
+Client: interface
+ClientBilling: interface
+ClientConfiguration: interface
+ClientContact: interface
+ClientContract: interface
+ClientLifecycleStatus: enum { ACTIVE, ARCHIVED, INACTIVE, ONBOARDING, PROSPECT, SUSPENDED, TERMINATED, UNDER_REVIEW }
+ClientMismatchWarning: interface
+ClientType: enum { BANK, CORPORATE, GOVERNMENT, INSURANCE, MICROFINANCE, NBFC, OTHER }
+CommonMessageToken: type
+CommunicationType: enum { EMAIL, PHONE, SYSTEM, WHATSAPP }
+ComplianceHold: interface
+ConsentNotice: interface
+ConsentNoticePurpose: interface
+ContractStatus: enum { ACTIVE, DRAFT, EXPIRED, RENEWED, TERMINATED }
+CourtCheckResult: enum { CIVIL_CASE, CRIMINAL_CASE, NO_RECORD }
+CoverageBreakdown: interface
+CoverageBucket: type
+CustomerMasterStatus: enum { APPROVED, DRAFT, RECONCILED, REJECTED, SUPERSEDED }
+DEAD_BILLING_STATES: const
+DEAD_PAYABLE_STATUSES: const
+DEFAULT_ARRIVAL_RADIUS_METERS: const
+DEFAULT_BYPASS_HOURS: const
+DEFAULT_CHECK_IN_ARRIVAL_MAX_AGE_HOURS: const
+DEFAULT_CHECK_IN_ARRIVAL_TRAIL_WINDOW_MINUTES: const
+DEFAULT_EMAIL_BRAND: const
+DEFAULT_MAX_UPLOAD_MB: const
+DEFAULT_RECHECK_POLICY: const
+DEFAULT_STANDING_CAP_DOCUMENTS_PENDING: const
+DEFAULT_STANDING_CAP_DORMANT: const
+DEFAULT_STANDING_CAP_NEGATIVE: const
+DEPARTED_LIFECYCLE_STATES: const
+DESTRUCTIVE_APPROVAL_TTL_HOURS: const
+DLT_ID_PATTERN: const
+DLT_SENDER_ID_PATTERN: const
+DLT_VARIABLE_MAX_LENGTH: const
+DOCUMENTS_PRINTING_A_NAME: const
+DOCUMENT_PRINTED_FIELDS: const
+DOCUMENT_REJECTION_GUIDANCE: const
+DOCUMENT_REJECTION_LABELS: const
+DOCUMENT_SCAN_PROFILES: const
+DOCUMENT_TRANSITIONS: const
+DestructiveActionRequest: interface
+DestructiveActionRequestStatus: enum { APPROVED, CANCELLED, EXECUTED, EXPIRED, REJECTED, REQUESTED }
+DestructiveActionType: enum { DATA_RESET }
+DimensionScoreView: interface
+DispatchMethod: enum { AUTO, MANUAL }
+Document: interface
+DocumentGate: interface
+DocumentRejectionReason: enum { ALTERED_OR_SUSPECT, EXPIRED, ILLEGIBLE, INCOMPLETE_CAPTURE, NAME_MISMATCH, NOT_THE_PERSON, NUMBER_MISMATCH, WRONG_DOCUMENT }
+DocumentScanProfile: interface
+DocumentStatus: enum { ARCHIVED, COMPLETED, DISPATCHED, EXCEL_GENERATED, PROCESSED, RECEIVED, SENT_TO_DATA_ENTRY, SENT_TO_EXTERNAL_OCR, UPLOADED }
+DocumentType: enum { AUDITED_RETURN_PDF, BRANCH_LIST, CUSTOMER_MASTER_DATA, FINAL_REPORT, GENERATED_EXCEL, PRE_FIELD_AUDIT_PDF }
+DocumentVerification: enum { PENDING, REJECTED, VERIFIED }
+EARLIEST_BIRTH_YEAR: const
+EMAIL_LAYOUT_MARKER: const
+EMAIL_TEMPLATE_TOKEN_HELP: const
+EMAIL_TONE_STYLES: const
+EMERGENCY_CONTACT_RELATIONS: const
+EMPANELMENT_SCORE_CAPS: const
+EMPANELMENT_STANDING_LABELS: const
+EMPLOYMENT_TERM_FIELD_KEYS: const
+EMPLOYMENT_TYPE_LABELS: const
+EXPENSE_APPROVAL_OVERRIDABLE_CODES: const
+EXPENSE_APPROVAL_OVERRIDE_MIN_REASON: const
+EXPENSE_APPROVAL_OVERRIDE_ROLES: const
+EmailHeaderStyle: type
+EmailLayoutBadge: interface
+EmailLayoutBrand: interface
+EmailLayoutButton: interface
+EmailLayoutCallout: interface
+EmailLayoutCodeBox: interface
+EmailLayoutContent: type
+EmailLayoutKeyValue: interface
+EmailLayoutOptions: interface
+EmailLayoutTone: type
+EmpanelmentStatus: enum { ACTIVE, DOCUMENTS_PENDING, INACTIVE, NOT_RECOMMENDED, RECOMMENDED, REJECTED, RESIGNED, TERMINATED }
+EmploymentCategory: enum { FREELANCER, PROPRIETOR }
+EmploymentTermFieldKey: type
+EventCategory: enum { DATA_ACCESS, OPERATIONAL, SYSTEM, USER, WORKFLOW }
+ExpenseCategory: enum { FOOD, OTHER, TOLL, TRAVEL_KM }
+ExpenseStatus: enum { APPROVED, PENDING, REJECTED }
+ExtendedAuditMetadata: interface
+FEEDBACK_CATEGORY_LABELS: const
+FEEDBACK_STATUS_LABELS: const
+FIELD_ERROR_CODES: const
+FINAL_APPROVAL_KINDS: const
+FINAL_APPROVAL_KIND_LABELS: const
+FeeChangePreview: interface
+FeeSource: type
+FeeSplitSource: type
+FeedbackAuthorType: enum { REPORTER, SYSTEM, TEAM }
+FeedbackCategory: enum { BUG, ENHANCEMENT, OTHER, PROCESS, QUESTION }
+FeedbackSeverity: enum { CRITICAL, HIGH, LOW, MEDIUM }
+FeedbackStatus: enum { ACKNOWLEDGED, CLOSED, IN_PROGRESS, OPEN, RESOLVED }
+FieldError: interface
+FieldErrorCode: type
+FieldGate: interface
+FieldMode: type
+FinalApprovalBulkResult: interface
+FinalApprovalItem: interface
+FinalApprovalKind: type
+FinalApprovalQueue: interface
+FinalApprovalRef: interface
+GENERAL_ERROR_CODES: const
+GSTIN_OR_PAN_REFUSAL: const
+GSTIN_PATTERN: const
+GST_STATE_CODES: const
+HARD_COPY_LOCATIONS: const
+HOD_REJECT_REASON_MAX: const
+HOD_REJECT_REASON_MIN: const
+HR_DOCUMENT_TYPES: const
+HR_DOCUMENT_TYPE_LABELS: const
+HR_MAINTAINED_ASSAYER_FIELDS: const
+Holiday: interface
+HrDocumentType: type
+IDEMPOTENCY_ERROR_CODES: const
+IDENTITY_DOCUMENTS: const
+IDENTITY_DOCUMENT_FACTS: const
+IDENTITY_GATE_DOCUMENTS: const
+IDENTITY_NAME_PRECEDENCE: const
+IFSC_PATTERN: const
+INACTIVE_BYPASS: const
+INDIAN_PINCODE: const
+INDIAN_STATES: const
+INVOICE_STATUS_LABELS: const
+IdentifierFormatIssue: type
+IdentityDocumentFacts: interface
+IndianFinancialYear: interface
+InterviewOutcome: enum { FAIL, PASS }
+InvoiceStatus: enum { AWAITING_HOD, CANCELLED, DRAFT, HOD_APPROVED, ISSUED, PAID }
+LEGACY_REGION_PAIRS: const
+LEGACY_ROLE_ALIASES: const
+LIFECYCLE_REASON_MAX_LENGTH: const
+LOG_RESPONSE_MAX_BYTES: const
+LOG_SERVICES: const
+LOG_SERVICE_NAMES: const
+LOG_STREAM_MAX_SECONDS: const
+LOG_TAIL_DEFAULT: const
+LOG_TAIL_MAX: const
+LogLine: interface
+LogServiceDescriptor: interface
+LogStream: type
+MAX_BYPASS_HOURS: const
+MAX_DEVICE_ACCURACY_ALLOWANCE_M: const
+MAX_FEEDBACK_ATTACHMENTS: const
+MAX_FEEDBACK_ATTACHMENT_MB: const
+MAX_RESUMABLE_UPLOAD_MB: const
+MAX_UPLOAD_MB: const
+MessageChannel: type
+NOT_OVERRIDABLE_BECAUSE: const
+NameComparison: interface
+NameMatchGrade: type
+NotificationCategory: enum { ASSIGNMENT, BILLING, DOCUMENT, FEEDBACK, PLANNING, SYSTEM, VALIDATION, WORKFORCE }
+NotificationChannel: enum { EMAIL, IN_APP, PUSH, SMS }
+NotificationPriority: enum { CRITICAL, HIGH, LOW, NORMAL }
+NotificationStatus: enum { DELIVERED, FAILED, PENDING, READ, SENT, SUPPRESSED }
+ONBOARDING_APPROVAL_STATUS_LABELS: const
+ONBOARDING_DOCUMENT_COLUMNS: const
+ONBOARDING_DOCUMENT_LABELS: const
+ONBOARDING_NEXT_STEP: const
+ONBOARDING_STAGES: const
+OTHER_CONFLICT_ERROR_CODES: const
+OVERRIDABLE_WITH_A_REASON: const
+OnboardingApprovalEvent: interface
+OnboardingApprovalEventKind: enum { ANSWERED, APPROVED, INFO_REQUESTED, REJECTED, SUBMITTED }
+OnboardingApprovalStatus: enum { APPROVED, INFO_REQUESTED, PENDING, REJECTED }
+OnboardingDocument: enum { AADHAAR_BACK, AADHAAR_FRONT, ADDRESS_PROOF, APPOINTMENT_LETTER, ASSOCIATION_LETTER, BANK_PASSBOOK, BGV_REPORT, CODE_OF_CONDUCT, COMPANY_STAMP, CREDIT_REPORT, DRIVING_LICENCE, ELECTRICITY_BILL, ETHICAL_CONDUCT_LETTER, EXPERIENCE_LETTER, GOVERNANCE_AUDIT, ID_CARD, ID_PROOF, JOINING_FORM, NDA, OFFICE_ADDRESS_PROOF, PAN_CARD, PASSPORT, PENALTY_FORM, PHOTOGRAPH, POLICE_CERTIFICATE, REFERENCE_CHECK, RENT_AGREEMENT, SHOP_ENTITY_PROOF, VOTER_ID }
+Organization: interface
+OutboundMessageReceipt: interface
+OutboundMessageStatus: type
+OverridableScoreKey: type
+PAN_PATTERN: const
+PAYABLE_STATUS_LABELS: const
+PAYMENT_DIRECTION_LABELS: const
+PAYMENT_METHOD_LABELS: const
+PAYOUT_BLOCKING_ASSAYER_FIELDS: const
+PAYOUT_BLOCKING_COLUMNS: const
+PAYOUT_BLOCKING_KEYS: const
+PAYOUT_DESTINATION_SHARED_MESSAGE: const
+PAYOUT_DESTINATION_UNVERIFIED_WARNING: const
+PHONE_FIELD_KEYS: const
+PLACEHOLDER_PIN_METRES: const
+PLANNABLE_EMPANELMENT_STANDINGS: const
+PLATFORM_LIMIT_FALLBACK: const
+PRINTED_FIELD_LABELS: const
+PROFILE_DIMENSION_KEYS: const
+PROJECT_TRANSITIONS: const
+PaginatedResponse: interface
+PaginationMeta: interface
+PartnerQualificationView: interface
+PaymentDirection: enum { INBOUND, OUTBOUND }
+PaymentMethod: enum { BANK_TRANSFER, CARD, CHEQUE, NEFT, OTHER, RTGS, UPI }
+PayoutDestinationCheck: interface
+Permission: interface
+PermissionAction: enum { ACCEPT, APPROVE, ARCHIVE, ASSIGN, CANCEL, CLOSE, CREATE, DELETE, DOWNLOAD, EDIT, EXPORT, FINAL_APPROVE, GENERATE, IMPORT, MERGE, MODIFY, NEGOTIATE, REJECT, REOPEN, REPLACE, RESCHEDULE, REVIEW, UPLOAD, VIEW }
+PermissionResource: enum { ASSAYER, ASSIGNMENT, AUDIT_LOG, BILLING, BRANCH, CLIENT, CONFIGURATION, DOCUMENT, OCR, ORGANIZATION, PLANNING, PROJECT, REFERENCE_DATA, ROLE, SCHEDULING, SYSTEM, USER, VALIDATION }
+PincodeReading: interface
+PlatformLimits: interface
+PrintedIdentityFields: interface
+Priority: enum { CRITICAL, HIGH, LOW, MEDIUM }
+Project: interface
+ProjectBranchStatus: enum { ASSIGNMENT_CONFIRMED, AUDIT_COMPLETED, CANCELLED, CANDIDATE_SEARCH, CLOSED, CONTACT_INITIATED, IMPORTED, NEGOTIATION, ON_HOLD, PLANNING, SCHEDULED, UNABLE_TO_COVER, VALIDATION_COMPLETED }
+ProjectStatus: enum { ARCHIVED, CANCELLED, COMPLETED, DRAFT, EXECUTION, ON_HOLD, PLANNING, SCHEDULING, VALIDATION }
+QUALIFICATION_DIMENSIONS: const
+QualificationDimensionDef: interface
+QualificationDimensionKey: type
+REASSIGNABLE_ASSIGNMENT_STATUSES: const
+RECHECK_FIRST_ROUND_DEFAULT: const
+RECHECK_FIRST_ROUND_SETTING: const
+RECHECK_GRACE_DAYS_DEFAULT: const
+RECHECK_GRACE_DAYS_SETTING: const
+RECHECK_INTERVAL_DEFAULT_MONTHS: const
+RECHECK_INTERVAL_SETTING: const
+RECHECK_LIFECYCLES: const
+RECHECK_REMIND_DAYS_DEFAULT: const
+RECHECK_REMIND_DAYS_SETTING: const
+RECHECK_STATUS_LABELS: const
+REFERRAL_SOURCE_LABELS: const
+REGION_LABELS: const
+REGION_ORDER: const
+REGISTRATION_COLLECTABLE_FIELDS: const
+REGISTRATION_CONDITIONAL_DOCUMENTS: const
+REGISTRATION_EXPERIENCE_MAX: const
+REGISTRATION_EXPERIENCE_MIN: const
+REGISTRATION_FIELD_GROUPS: const
+REGISTRATION_FIELD_LIMITS: const
+REGISTRATION_GENDERS: const
+REGISTRATION_RECORD_FIELD_KEYS: const
+REGISTRATION_REQUIRED_DOCUMENTS: const
+REGISTRATION_SECRET_FIELD_KEYS: const
+REGISTRATION_STEP_COUNT: const
+REPORT_EXPORT_ROUTES: const
+ROLE_DESCRIPTIONS: const
+ROLE_IMPLICATIONS: const
+ROLE_LABELS: const
+RecheckPolicy: interface
+RecheckStanding: interface
+RecheckStatus: type
+ReferralRecordedBy: type
+ReferralSourceType: enum { ASSAYER, BANK_BRANCH, OTHER, STAFF }
+Region: enum { CENTRAL, EAST, NORTH, NORTH_EAST, SOUTH, WEST }
+RegistrationFormField: type
+RegistrationFormValues: interface
+RegistrationProblem: type
+RegistrationProgressView: interface
+RegistrationRecordFieldKey: type
+RegistrationStepProblems: type
+Responsibility: interface
+RiskGrade: enum { HIGH, LOW, MEDIUM, VERY_HIGH }
+Role: interface
+RosterAvailability: interface
+RouteSource: type
+RuleBypassState: interface
+RupeeFormatOptions: interface
+SCAN_SHAPE_ASPECT: const
+SCAN_UPLOAD_ACCEPT: const
+SCAN_UPLOAD_IMAGE_ACCEPT: const
+SCAN_UPLOAD_MIME_TYPES: const
+SCHEDULE_TRANSITIONS: const
+SELF_EDITABLE_ASSAYER_FIELDS: const
+SOCKET_RECONNECT_CONFIG: const
+STATE_REGION_PAIRS: const
+ScanFinishName: type
+ScanHintKey: type
+ScanShape: type
+Schedule: interface
+ScheduleStatus: enum { COMPLETED, CONFIRMED, RESCHEDULED, TENTATIVE }
+ScoreOverrideView: interface
+ServiceLogsPage: interface
+ServiceLogsQuery: interface
+ShapeVerdict: type
+SmsEncoding: type
+SmsSegmentCount: interface
+SourceReferral: interface
+SystemRole: enum { ADMIN, ASSAYER, AUDITOR, CLIENT_USER, DESK, DESK_OPERATOR, DEVELOPER, OPERATIONS, PRODUCT_SUPPORT }
+TRAVEL_MODE_LABELS: const
+TRAVEL_MODE_ORDER: const
+Tds194jBasis: type
+Tds194jInput: interface
+Tds194jOutcome: interface
+TrailFix: interface
+TransitionMap: type
+Travel: interface
+TravelMode: enum { AUTO_RICKSHAW, BUS, CAR, FLIGHT, OTHER, TAXI, TRAIN, TWO_WHEELER }
+TrustedEmailHtml: interface
+UPLOAD_LIMIT_HINT: const
+User: interface
+UserRole: interface
+UserStatus: enum { ACTIVE, ARCHIVED, DISABLED, INVITED, LOCKED, SUSPENDED }
+VALIDATION_QUERY_STATUS_LABELS: const
+VALIDATION_STATUS_LABELS: const
+VALIDATION_TRANSITIONS: const
+VERIFIED_DOCUMENTS: const
+ValidationCase: interface
+ValidationQueryStatus: enum { OPEN, RESOLVED, RESPONDED }
+ValidationStatus: enum { APPROVED, ASSIGNED, CORRECTION_REQUIRED, HUMAN_REVIEW, OCR_PROCESSING, PENDING, SUBMITTED }
+WRITE_VERIFICATION_ERROR_CODES: const
+WorkforceAttribute: interface
+Zone: interface
+activityEventLabel: function
+addDaysToDateKey: function
+addMonthsToDateKey: function
+addressCheckSummary: function
+ageInYears: function
+andLiveBillingEntrySql: const
+andLivePayableSql: const
+anyStatusLabel: function
+applicationFieldStep: function
+applicationIsEditableByCandidate: function
+applyBranchDecisions: function
+approvalPreparers: function
+approvalTextProblem: function
+assayerEngagementLabel: const
+assayerLifecycleBlockedBy: function
+assayerLifecycleLabel: function
+assayerLifecyclePath: function
+assayerUnavailableLabel: const
+assignmentIssueCategoryLabel: function
+assignmentStatusLabel: function
+auditDocumentTypeLabel: function
+backgroundJobHasDownload: function
+backgroundJobLabel: function
+backgroundJobReviewsOnPage: function
+backgroundJobRoute: function
+bankAccountConfirmProblem: function
+bgvClearGaps: function
+bgvClearRefusal: function
+bgvPartStates: function
+billingEntityTypeLabel: function
+billingStateLabel: function
+blankToNull: function
+branchComplexityLabel: function
+branchGeographyUnresolved: function
+branchReviewMissingFields: function
+branchReviewStatus: function
+branchStatusLabel: function
+branchTypeLabel: function
+businessDateKey: function
+businessNoonOf: function
+businessTodayDateKey: function
+calculateHaversineDistance: function
+callOutcomeLabel: function
+canOverrideAssignmentRule: const
+canTransitionAssayerLifecycle: function
+canTransitionAssignment: function
+canTransitionDocument: function
+candidateJourney: function
+candidateJourneyStage: function
+candidateMayEditSourceReferral: function
+cannotBePaid: function
+canonicalState: function
+canonicalStateName: function
+checkInAllowanceMeters: function
+checkTypeForReport: function
+cibilSummary: function
+cleanVocabularyList: function
+clientLifecycleLabel: function
+clientTypeLabel: function
+compareNames: function
+complianceWorkBlockers: function
+consentNoticeFor: function
+contractStatusLabel: function
+countSmsSegments: function
+coverageBucketOf: function
+coverageFromCounts: function
+coverageFromStatuses: function
+dateOfBirthProblem: function
+daysUntilExpiry: function
+decideCheckInTime: function
+describeAssignmentFee: function
+diffBranchDecisions: function
+editDistance: function
+emailTokenHelp: function
+empanelmentCapsFrom: function
+empanelmentStandingLabel: const
+employmentTypeLabel: function
+escapeEmailHtml: function
+expandAudience: function
+expandRoles: function
+fallbackCodeForStatus: function
+feedbackCategoryLabel: function
+fillSmsTemplate: function
+fitSmsVariable: function
+formatClientInvoiceNumber: function
+formatDateOnly: function
+formatKilometres: function
+formatRouteDistance: function
+formatRupees: function
+formatTravelTime: function
+gateFor: function
+groupRegistrationRecordFields: function
+gstStateCodeToName: function
+gstStateNameToCode: function
+gstinCheckDigit: function
+gstinStateCode: function
+hasLeftWorkforce: function
+hasPassedFinalApproval: function
+hodRejectReasonProblem: function
+hrDocumentTypeLabel: function
+identifierFormatIssue: function
+identityDocumentFacts: function
+indianFinancialYear: function
+inferRegistrationStep: function
+invoiceStatusLabel: function
+isAdverseVerdict: function
+isApiErrorCode: function
+isAssignmentTerminal: function
+isBackgroundJobInFlight: function
+isBackgroundJobOpen: function
+isBackgroundJobSettled: function
+isBankAccountNumber: function
+isBranchCovered: function
+isBranchRowCommittable: function
+isDrawableScan: function
+isDrawableScanType: function
+isEmailTemplateToken: function
+isGstinOrPan: function
+isIdentityDocument: const
+isKnownLogService: function
+isLiveBillingEntry: const
+isLivePayable: const
+isMetroPlace: function
+isOnboardingStage: function
+isPlaceholderAadhaar: function
+isPlaceholderPin: function
+isRecheckedLifecycle: const
+isRegion: function
+isRegistrationRecordField: function
+isRegistrationSecretField: function
+isRuleBypassed: function
+isSelfEditableAssayerField: function
+isSettledMessageStatus: function
+isSixDigitPincode: function
+isValidAadhaar: function
+isValidGstin: function
+isValidIfsc: function
+isValidPan: function
+isValidTransition: function
+isVerifiableDocument: const
+liveBackgroundJobDownload: function
+liveBillingEntrySql: const
+livePayableSql: const
+localDateKey: function
+looksMasked: function
+maskRegistrationFields: function
+maskTail: function
+matchIndianState: function
+mayReopenBackgroundVerification: function
+mayReopenFinalApproval: function
+mergedRegistrationView: function
+metersFromBranch: function
+missingAssayerRecordFields: function
+missingRegistrationFields: function
+mobileNumberLooksWrong: function
+nameAgreementIsAcceptable: const
+nextAssayerLifecycleStates: function
+nextOnboardingStep: function
+normaliseBankAccountNumber: function
+normaliseIdentifierOnBlur: function
+normaliseIndianName: function
+normalisePhone: function
+normalizeApplicationReferences: function
+normalizeSourceReferral: function
+numberToIndianWords: function
+onboardingNextStep: function
+openQuestionAsker: function
+operationalStatusFor: function
+overrideAdviceFor: function
+parseCalendarDate: function
+parseRupeeInput: function
+payableStatusLabel: function
+paymentDirectionLabel: function
+paymentMethodLabel: function
+payoutBlockingGaps: function
+payoutDestinationChangedWarning: function
+pickEmploymentTermFields: function
+pickRegistrationRecordFields: function
+pincodeFromAddress: function
+previewFeeChange: function
+priorityLabel: function
+projectStatusLabel: function
+readApplicationInfoRequests: function
+readAvailability: function
+readBackgroundCheck: function
+readCandidateJourneyProgress: function
+readCibilBand: function
+readEmpanelment: function
+readHardCopyLocation: function
+readPhoneNumbers: function
+readWorkingBanks: function
+readYesNo: function
+recheckStanding: function
+referenceEmailProblem: function
+referencePhoneForDisplay: function
+referenceSubmitProblem: function
+regionLabel: function
+registrationLengthProblem: function
+registrationStepProblems: function
+renderEmailLayout: function
+reopenTargetFor: function
+resolveGstStateCode: function
+resolveLiveKitUrl: function
+resolveRegion: function
+resumableRegistrationStep: function
+riskCategoryLabel: function
+roleLabel: function
+roleSatisfies: function
+roundMoney: function
+safeEmailColor: function
+safeEmailUrl: function
+scanFileName: function
+scanMimeType: function
+scanProfileFor: function
+scheduleStatusLabel: function
+shadeColor: function
+shapeRemark: function
+shapeVerdict: function
+smsTemplateTokens: function
+smsWordingProblems: function
+sourceReferralLine: function
+splitMissingByOwnership: function
+standingAllowsPlanning: function
+stateFromAddressAndPincode: function
+stateFromCity: function
+stateNameKey: const
+stillWorkable: function
+storedScanFileName: function
+summariseBranchReview: function
+tds194jDeduction: function
+toDltForm: function
+toE164IndianMobile: function
+toWorkflowTransitions: function
+todayDateKey: function
+travelModeLabel: function
+trustedEmailHtml: function
+uploadSizeProblem: function
+usableBranchPoint: function
+userStatusLabel: function
+validationQueryStatusLabel: function
+validationStatusLabel: function
+verhoeffCheckDigit: function
+vocabularyKey: function
+weekdayOfDateKey: function
+withBranchReviewStatus: function
+zoneNameForState: function

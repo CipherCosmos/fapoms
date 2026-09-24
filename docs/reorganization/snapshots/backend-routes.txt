@@ -1,0 +1,2246 @@
+# Backend HTTP surface — 561 endpoints
+
+DELETE /api/v1/admin/rule-bypass  RuleBypassController.disable
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(SystemRole.ADMIN)
+    params: Req:any
+DELETE /api/v1/assayer-remarks/:id  AssayerRemarksController.remove
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(204)  Roles(...REMARK_WRITE_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/assayers/:id  AssayerController.remove
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(204)  RequirePermissions('assayer:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:DeleteAssayerDto  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/assayers/document/:id/file/:index  AssayerController.removeDocumentFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(204)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('index'):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/assayers/empanelment/:id  AssayerController.removeEmpanelment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(204)  RequirePermissions('assayer:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/assayers/qualification/override/:id  AssayerController.clearScoreOverride
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(204)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/assayers/reference/:id  AssayerController.removeReference
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(204)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/assayers/workforce-attribute/:id  AssayerController.removeWorkforceAttribute
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:delete:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/auth/mfa  MfaController.disable
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  Throttle({ default: { limit: 5, ttl: 60_000 } })
+    params: Req:any  Body:MfaStepUpDto  Query('factor'):string
+DELETE /api/v1/branches/:id  BranchController.remove
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/branches/:id/contacts/:contactId  BranchController.removeContact
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('contactId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/branches/:id/documents/:documentId  BranchController.removeDocument
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('documentId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/clients/:id  ClientController.remove
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/clients/:id/contacts/:contactId  ClientController.removeContact
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('contactId', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/clients/:id/contracts/:contractId  ClientController.removeContract
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('contractId', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/holidays/:id  HolidayController.remove
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:delete:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/notification-admin/catalog/:type  NotificationAdminController.reset
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES)
+    params: Param('type'):string  Req:any
+DELETE /api/v1/organizations/:id  OrganizationController.remove
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(204)  RequirePermissions('organization:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/planning/rules/:id  PlanningController.deleteRule
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/platform-settings/:key  PlatformSettingsController.reset
+    class:  Roles(...SETTINGS_ADMIN_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...SETTINGS_ADMIN_ROLES)
+    params: Param('key'):string  Req:any
+DELETE /api/v1/projects/:id  ProjectController.remove
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/projects/:id/branches/:pbId  ProjectController.removeBranch
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:delete:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('pbId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+DELETE /api/v1/public/registration/:token/documents/:requirement/file/:index  PublicRegistrationController.removeDocumentFile
+    class:  -
+    method: Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('token'):string  Param('requirement'):string  Param('index', ParseIntPipe):number
+DELETE /api/v1/sessions/:id  SessionController.revoke
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/transport-rates/:id  TransportRateController.deactivate
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:delete:organization')  Roles(...RATE_MANAGER_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/users/roles/:id  UserController.deleteRole
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+DELETE /api/v1/validation-queries/messages/:messageId/reactions  ValidationQueryController.removeReaction
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('messageId', ParseUUIDPipe):string  Body:{ emoji: string }  Req:any
+DELETE /api/v1/zones/:id  ZoneController.remove
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:delete:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+GET    /api/v1/admin/compliance/health  ComplianceController.health
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
+    params: -
+GET    /api/v1/admin/compliance/incidents  ComplianceController.list
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
+    params: -
+GET    /api/v1/admin/compliance/incidents/:id  ComplianceController.get
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/admin/compliance/rights-requests  ComplianceController.listRights
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
+    params: -
+GET    /api/v1/admin/compliance/rights-requests/:id  ComplianceController.getRights
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/admin/data-reset/domains  DataResetController.domains
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: -
+GET    /api/v1/admin/data-reset/requests  DataResetController.listRequests
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.DEVELOPER, SystemRole.ADMIN)
+    params: Req:any
+GET    /api/v1/admin/data-reset/runs/:jobId  DataResetController.run
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('jobId', new ParseUUIDPipe()):string  Req:any
+GET    /api/v1/admin/logs/:service  ServiceLogsController.history
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: NoEnvelope  Throttle({ default: { limit: 60, ttl: 60_000 } })
+    params: Param('service'):string  Query('tail'):string | undefined  Query('since'):string | undefined  Query('until'):string | undefined  Query('q'):string | undefined  Query('format'):string | undefined  Query('download'):string | undefined  Req:Request  Res({ passthrough: true }):Response
+GET    /api/v1/admin/logs/:service/stream  ServiceLogsController.stream
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: NoEnvelope  Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('service'):string  Query('tail'):string | undefined  Req:Request  Res:Response
+GET    /api/v1/admin/logs/services  ServiceLogsController.services
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: -
+GET    /api/v1/admin/outbox/dead-letters  OutboxController.list
+    class:  RoleOnly  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: Query('limit', new ParseLimitPipe({ default: 100, max: 500 })):number  Req:Request
+GET    /api/v1/admin/outbox/dead-letters/:id  OutboxController.get
+    class:  RoleOnly  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  Req:Request
+GET    /api/v1/admin/outbox/health  OutboxController.health
+    class:  RoleOnly  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: -
+GET    /api/v1/admin/rule-bypass  RuleBypassController.state
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: -
+GET    /api/v1/admin/rule-bypass/catalogue  RuleBypassController.catalogue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('configuration:view:platform')  Roles(SystemRole.ADMIN)
+    params: -
+GET    /api/v1/admin/rule-bypass/history  RuleBypassController.history
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('configuration:view:platform')  Roles(SystemRole.ADMIN)
+    params: Query('limit', new ParseLimitPipe({ default: 50, max: 200 })):number
+GET    /api/v1/assayer-interviews  AssayerInterviewController.list
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: -
+GET    /api/v1/assayer-interviews/:id/file/:index  AssayerInterviewController.getFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'ASSAYER_INTERVIEW', idParam: 'id', eventType: 'ASSAYER_INTERVIEW_FILE_VIEWED' })  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('index'):string  Res:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayer-remarks/assayer/:assayerId  AssayerRemarksController.listForAssayer
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('assayerId', ParseUUIDPipe):string  Query('limit'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers  AssayerController.findAll
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Req:any  Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 20, max: 1000 })):number  Query('after'):string | undefined  Query:Record<string, unknown>  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/activity  AssayerController.getActivityTimeline
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 20, max: 200 })):number  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/approval  OnboardingApprovalController.history
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/approval/interview  OnboardingApprovalController.interview
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/commercial  AssayerController.getCommercials
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/commercial/active  AssayerController.getActiveCommercial
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Query('date'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/document/:requirement/file/:index  AssayerSelfServiceController.getOwnDocumentFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'ASSAYER_DOCUMENT', idParam: 'assayerId', eventType: 'ASSAYER_DOCUMENT_SCAN_VIEWED' })  OnboardingAllowed  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('assayerId', ParseUUIDPipe):string  Param('requirement'):string  Param('index'):string  Req:any  Res:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/dossier  AssayerController.getDossier
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'ASSAYER_DOSSIER', idParam: 'assayerId', eventType: 'ASSAYER_DOSSIER_VIEWED' })  RequirePermissions('assayer:view:organization')  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  RolesFallbackPermissions('assayer:view:organization', 'assayer:approve:organization')
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/expenses  ExpenseController.findForAssayer
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+    params: Param('assayerId', ParseUUIDPipe):string  Query('status'):ExpenseStatus  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/id-card/preview  AssayerController.previewIdCard
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/photo  AssayerController.getPhoto
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('assayerId', ParseUUIDPipe):string  Res:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/planning-snapshot  AssayerController.getPlanningSnapshot
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/profile  AssayerController.getProfile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: OnboardingAllowed  PasswordChangeExempt  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('assayerId'):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/qualification  AssayerController.getQualification
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/qualification/partners  AssayerController.getPartnerQualifications
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/registration-checklist  AssayerSelfServiceController.registrationChecklist
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: OnboardingAllowed  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('assayerId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:assayerId/workforce-attribute  AssayerController.getWorkforceAttributes
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Query('type'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:id  AssayerController.findOne
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  AuditRead({ resource: 'ASSAYER_RECORD', idParam: 'id' })  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:id/payables  AssayerController.getPayables
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/:id/sensitive/:field  AssayerController.revealSensitiveField
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  RoleOnly  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('field'):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/approvals/queue  OnboardingApprovalController.queue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('assayer:approve:organization')  Roles(SystemRole.ADMIN)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/bulk-jobs/:jobId  AssayerController.getBulkJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('jobId'):string  Req:any
+GET    /api/v1/assayers/commercial/roster  AssayerController.getRosterCommercialProfiles
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: -
+GET    /api/v1/assayers/counts  AssayerController.rosterCounts
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Query:Record<string, unknown>  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/document/:id/file/:index  AssayerController.getDocumentFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'ASSAYER_DOCUMENT', idParam: 'id', eventType: 'ASSAYER_DOCUMENT_SCAN_VIEWED' })  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('index'):string  Res:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/document/:id/version/:versionId/file  AssayerController.getDocumentVersionFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'ASSAYER_DOCUMENT', idParam: 'id', eventType: 'ASSAYER_DOCUMENT_VERSION_VIEWED' })  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+    params: Param('id', ParseUUIDPipe):string  Param('versionId', ParseUUIDPipe):string  Res:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/export  AssayerController.exportRoster
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Req:any  Query:Record<string, unknown>  Query('columns'):string | undefined  Res:Response  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/identifier-check  AssayerController.checkIdentifiers
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Query('phone'):string  Query('panNumber'):string  Query('aadhaarNumber'):string  Query('excludeId'):string
+GET    /api/v1/assayers/map-roster  AssayerController.mapRoster
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Req:any  Query('limit', new ParseLimitPipe({ default: 2000, max: 5000 })):number  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/me/capabilities  AssayerSelfServiceController.myCapabilities
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: OnboardingAllowed  Roles(SystemRole.ASSAYER)
+    params: Req:any
+GET    /api/v1/assayers/me/id-card  MyIdCardController.myCard
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  OnboardingAllowed
+    params: Req:any
+GET    /api/v1/assayers/me/id-card/code  MyIdCardController.liveCode
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  Throttle({ default: { limit: 20, ttl: 60_000 } })
+    params: Req:any
+GET    /api/v1/assayers/profile/editable-fields  AssayerController.getEditableFields
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: OnboardingAllowed  Roles(SystemRole.ASSAYER, ...STAFF_ROLES)
+    params: Req:any
+GET    /api/v1/assayers/rechecks/attention  ComplianceController.attention
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: -
+GET    /api/v1/assayers/roster/import-issues  AssayerController.listImportIssues
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Query('limit', new ParseLimitPipe({ default: 500, max: 500 })):number  Query('includeResolved'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/search  AssayerController.searchAssayers
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Req:any  Query('q'):string | undefined  Query('limit', new ParseLimitPipe({ default: 20, max: 50 })):number  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assayers/template/download  AssayerController.downloadTemplate
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Res:any
+GET    /api/v1/assayers/workforce-attribute/vocabulary  AssayerController.getWorkforceAttributeVocabulary
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: -
+GET    /api/v1/assignments  AssignmentController.findAll
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)  RolesFallbackPermissions('assignment:view:organization')
+    params: Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 50, max: 200 })):number  Query('status'):string  Query('projectBranchStatus'):string  Query('unscheduledOnly'):string  Query('priority'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/:assignmentId/expenses  ExpenseController.findForAssignment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, ...STAFF_ROLES)
+    params: Param('assignmentId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/:id  AssignmentController.findOne
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/:id/reassignments  AssignmentController.getReassignments
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+    params: Param('id'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/:id/timeline  AssignmentController.getTimeline
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/:id/travel-verification  AssignmentController.travelVerification
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/assayer/:assayerId  AssignmentController.findByAssayer
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('assayerId', ParseUUIDPipe):string  Req:any  Query('scope'):'active' | 'history' | 'all'  Query('limit'):string  Query('before'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/dashboard/summary  AssignmentController.getDashboardSummary
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/falling-behind  AssignmentController.fallingBehind
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/field-issues  AssignmentController.fieldIssues
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/inbox  AssignmentController.operationsInboxQueue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/assignments/operational-integrity/scan  AssignmentController.scanOperationalIntegrity
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+    params: -
+GET    /api/v1/audit-log/entity  AuditLogController.getEntityHistory
+    class:  RequirePermissions('audit_log:view:platform')  Roles(SystemRole.ADMIN, SystemRole.AUDITOR)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('entityType'):string  Query('entityId'):string  Query('limit', new ParseLimitPipe({ default: 50, max: MAX_AUDIT_PAGE_SIZE })):number  Query('offset'):any
+GET    /api/v1/audit-log/recent  AuditLogController.getRecentActivity
+    class:  RequirePermissions('audit_log:view:platform')  Roles(SystemRole.ADMIN, SystemRole.AUDITOR)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('limit', new ParseLimitPipe({ default: 50, max: MAX_AUDIT_PAGE_SIZE })):number  Query('offset'):any  Query('category'):string
+GET    /api/v1/audit-log/trail  AuditLogController.getUnifiedTrail
+    class:  RequirePermissions('audit_log:view:platform')  Roles(SystemRole.ADMIN, SystemRole.AUDITOR)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('entityId'):string  Query('entityType'):string  Query('limit', new ParseLimitPipe({ default: 200, max: 500 })):number
+GET    /api/v1/audit-log/user  AuditLogController.getUserActivity
+    class:  RequirePermissions('audit_log:view:platform')  Roles(SystemRole.ADMIN, SystemRole.AUDITOR)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('userId'):string  Query('limit', new ParseLimitPipe({ default: 50, max: MAX_AUDIT_PAGE_SIZE })):number  Query('offset'):any
+GET    /api/v1/audit-log/verify  AuditLogController.verify
+    class:  RequirePermissions('audit_log:view:platform')  Roles(SystemRole.ADMIN, SystemRole.AUDITOR)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('limit', new ParseLimitPipe({ default: 100_000, max: 1_000_000 })):number
+GET    /api/v1/auth/mfa  MfaController.status
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated
+    params: Req:any
+GET    /api/v1/auth/status  AuthController.status
+    class:  -
+    method: HttpCode(HttpStatus.OK)
+    params: -
+GET    /api/v1/billing-engine/assayer-invoices  BillingEngineController.listAssayerInvoices
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Query:AssayerInvoicesQuery  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/assayer-invoices/:id  BillingEngineController.assayerInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/assayers/:assayerId/invoice-invitation  BillingEngineController.assayerInvoiceInvitation
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...BILLING_ROLES, SystemRole.ASSAYER)
+    params: Param('assayerId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/assayers/:assayerId/statement  BillingEngineController.assayerStatement
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...BILLING_READ_ROLES, SystemRole.ASSAYER)
+    params: Param('assayerId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/assignments/:id/money  BillingEngineController.assignmentMoney
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/bulk-jobs/:jobId  BillingEngineController.bulkJobStatus
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_ROLES)
+    params: Param('jobId'):string  Req:any
+GET    /api/v1/billing-engine/final-approval  BillingEngineController.finalApprovalQueue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/invoiceable  BillingEngineController.invoiceable
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Query:InvoiceableQuery  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/invoices  BillingEngineController.invoices
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Query:InvoicesQuery  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/invoices/:id  BillingEngineController.invoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/invoices/:id/document  BillingEngineController.invoiceDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/jobs/:jobId  BillingEngineController.jobStatus
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:view:organization')  Roles(...BILLING_ROLES)
+    params: Param('jobId'):string  Req:any
+GET    /api/v1/billing-engine/lines  BillingEngineController.lines
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Query:LinesQuery  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/overview  BillingEngineController.overview
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/payouts  BillingEngineController.payouts
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Query:PayoutsQuery  GlobalScopeFilter:GlobalScope
+GET    /api/v1/billing-engine/reconcile/preview  BillingEngineController.reconcilePreview
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:view:organization')  Roles(...BILLING_ROLES)
+    params: Query:ReconcilePreviewQuery
+GET    /api/v1/billing-engine/tds-report  BillingEngineController.tdsReport
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)
+    params: Query:TdsReportQuery  Req:any
+GET    /api/v1/branches  BranchController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('page'):any  Query('limit', new ParseLimitPipe({ default: 20, max: 200 })):number  GlobalScopeFilter:GlobalScope  Query('search'):string  Query('risk'):string  Query('type'):string
+GET    /api/v1/branches/:id  BranchController.findOne
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/branches/:id/contacts  BranchController.findContacts
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/branches/:id/documents  BranchController.findDocuments
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/branches/summary  BranchController.summary
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: GlobalScopeFilter:GlobalScope  Query('search'):string  Query('risk'):string  Query('type'):string
+GET    /api/v1/call-logs  CallLogController.findForBranch
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('projectBranchId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/call-logs/last-contact  CallLogController.lastContact
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('projectBranchId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/calls/config  CallsController.config
+    class:  Roles(SystemRole.ASSAYER, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ADMIN)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: -
+GET    /api/v1/clients  ClientController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 20, max: 200 })):number  Query('search'):string  Query('status'):string  Query('clientType'):string  Query('priority'):string  Query('sortBy'):string  Query('sortOrder'):'ASC' | 'DESC'
+GET    /api/v1/clients/:clientId/qualified-assayers  ClientController.qualifiedAssayers
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('clientId', ParseUUIDPipe):string  Query('minScore'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/clients/:id  ClientController.findOne
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/clients/:id/billing  ClientController.findBilling
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/clients/:id/contacts  ClientController.findContacts
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/clients/:id/contracts  ClientController.findContracts
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/customer-master/projects/:projectId/daily-run  CustomerMasterController.dailyRun
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
+    params: Param('projectId', ParseUUIDPipe):string  Query('auditDate'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/customer-master/projects/:projectId/versions  CustomerMasterController.findByProject
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
+    params: Param('projectId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/customer-master/versions/:versionId/records  CustomerMasterController.findRecords
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'CUSTOMER_RECORD', idParam: 'versionId' })  RequirePermissions('project:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
+    params: Param('versionId', ParseUUIDPipe):string  Query('page', new DefaultValuePipe(1), ParseIntPipe):number  Query('limit', new ParseLimitPipe({ default: 50, max: 200 })):number  Query('branchId'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents  DocumentController.findAll
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+    params: GlobalScopeFilter:GlobalScope | undefined  Query('limit', new ParseLimitPipe({ default: 50, max: 500 })):number  Query('offset'):string
+GET    /api/v1/documents/:id  DocumentController.findOne
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/:id/download  DocumentController.downloadFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'DOCUMENT', idParam: 'id', eventType: 'DOCUMENT_DOWNLOADED' })  Public
+    params: Param('id', ParseUUIDPipe):string  Query('token'):string  Req:any  Res:Response
+GET    /api/v1/documents/:id/download-token  DocumentController.issueDownloadToken
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'DOCUMENT', idParam: 'id' })  Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/:id/trail  DocumentController.getTransportTrail
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/assessment/:assessmentId  DocumentController.findByAssessment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+    params: Param('assessmentId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/data-entry/mine  DocumentController.myDataEntryQueue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Req:any  Query('lane'):'unassigned' | 'working' | 'rework' | 'done'  Query('search'):string  Query('page'):number  Query('limit'):number  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/data-entry/queue  DocumentController.dataEntryQueue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+    params: Query('assignedTo'):string  Query('lane'):'unassigned' | 'working' | 'rework' | 'done'  Query('search'):string  Query('page'):number  Query('limit'):number  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/data-entry/team  DocumentController.dataEntryTeam
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: -
+GET    /api/v1/documents/dispatch-batch/:jobId  DocumentController.getDispatchBatchJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Param('jobId'):string  Req:any
+GET    /api/v1/documents/operations/overview  DocumentController.operationsOverview
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+    params: Query('projectId'):string  Query('status'):string  Query('type'):string  Query('page'):string  Query('limit'):string  Query('search'):string  Query('stage'):string
+GET    /api/v1/documents/project-branch/:projectBranchId  DocumentController.findByProjectBranch
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('projectBranchId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/project-branch/:projectBranchId/assayer-view  DocumentController.assayerBranchDocuments
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+    params: Param('projectBranchId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/project-branch/:projectBranchId/download-pdf  DocumentController.downloadBranchPdf
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'PROJECT_BRANCH', idParam: 'projectBranchId', eventType: 'PRE_FIELD_PACKET_DOWNLOADED' })  Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('projectBranchId', ParseUUIDPipe):string  Req:any  Res:Response  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/project/:projectId  DocumentController.findByProject
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('projectId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/queue/data-entry  DocumentController.getDataEntryQueue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/stats/summary  DocumentController.getStats
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/documents/upload/session/:uploadId  DocumentController.getUploadSession
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Param('uploadId'):string  Req:any
+GET    /api/v1/documents/upload/session/:uploadId/chunk/:index/presigned-url  DocumentController.getChunkPresignedUrl
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Param('uploadId'):string  Param('index'):string  Req:any
+GET    /api/v1/expenses/mine  ExpenseController.findMine
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER)
+    params: Req:any  Query('status'):ExpenseStatus
+GET    /api/v1/expenses/mine/summary  ExpenseController.mySummary
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER)
+    params: Req:any
+GET    /api/v1/expenses/pending  ExpenseController.findPending
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/feedback  FeedbackController.queue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: Req:any  Query('page'):number  Query('limit'):number  Query('status'):FeedbackStatus  Query('category'):FeedbackCategory  Query('severity'):FeedbackSeverity  Query('assignedToUserId'):string  Query('search'):string  Query('sort'):'recent' | 'impact'
+GET    /api/v1/feedback/:id  FeedbackController.findOne
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+GET    /api/v1/feedback/:id/messages  FeedbackController.messages
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+GET    /api/v1/feedback/assignees  FeedbackController.assignees
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: -
+GET    /api/v1/feedback/attachments/*path  FeedbackController.downloadAttachment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('path'):string | string[]  Req:any  Res:any
+GET    /api/v1/feedback/attention  FeedbackController.attention
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: -
+GET    /api/v1/feedback/digest  FeedbackController.digest
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: -
+GET    /api/v1/feedback/mine  FeedbackController.mine
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any
+GET    /api/v1/feedback/similar  FeedbackController.similar
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Query('text'):string  Req:any
+GET    /api/v1/feedback/stats  FeedbackController.stats
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: -
+GET    /api/v1/geo/autocomplete  GeoController.autocomplete
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Query('q'):string
+GET    /api/v1/geo/districts/:districtId/cities  GeoController.getCities
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('districtId'):string
+GET    /api/v1/geo/ifsc/:code  GeoController.ifscLookup
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('code'):string
+GET    /api/v1/geo/parse-location  GeoController.parseLocation
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Query('input'):string
+GET    /api/v1/geo/pincode/:pincode  GeoController.pincodeLookup
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('pincode'):string
+GET    /api/v1/geo/precision/:target  GeoController.precisionSummary
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:view:organization', 'assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('target'):string
+GET    /api/v1/geo/precision/:target/imprecise  GeoController.impreciseRecords
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:view:organization', 'assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('target'):string  Query('limit', new ParseLimitPipe({ default: 100, max: 500 })):number
+GET    /api/v1/geo/states  GeoController.getStates
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: -
+GET    /api/v1/geo/states/:stateId/districts  GeoController.getDistricts
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('stateId'):string
+GET    /api/v1/geo/tiles/:z/:x/:y  MapTilesController.tile
+    class:  -
+    method: Throttle({ default: { limit: 900, ttl: 60_000 } })
+    params: Param('z'):string  Param('x'):string  Param('y'):string  Res:Response
+GET    /api/v1/health  HealthController.check
+    class:  NoEnvelope  SkipThrottle
+    method: -
+    params: -
+GET    /api/v1/health/ready  HealthController.ready
+    class:  NoEnvelope  SkipThrottle
+    method: -
+    params: -
+GET    /api/v1/holidays  HolidayController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RolesFallbackPermissions('reference_data:view:organization')
+    params: Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 50, max: 500 })):number  Query('year'):number  Query('clientId'):string
+GET    /api/v1/holidays/check  HolidayController.checkHoliday
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('date'):string  Query('stateCode'):string  Query('clientId'):string
+GET    /api/v1/hr/applications  HrApplicationsController.list
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Query('status'):ApplicationStatus  GlobalScopeFilter:GlobalScope
+GET    /api/v1/hr/applications/:id  HrApplicationsController.get
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/hr/applications/:id/documents/:requirement/file/:index  HrApplicationsController.readDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AuditRead({ resource: 'ASSAYER_APPLICATION', idParam: 'id', eventType: 'APPLICATION_DOCUMENT_SCAN_VIEWED' })  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('requirement'):string  Param('index', ParseIntPipe):number  Res:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/hr/workforce  HrController.workforce
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/jobs  BackgroundJobsController.list
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any  Query('status'):string  Query('kind'):string  Query('scopeType'):string  Query('scopeId'):string  Query('all'):string  Query('limit', new ParseLimitPipe({ default: 10, max: 50 })):number
+GET    /api/v1/jobs/:id  BackgroundJobsController.get
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any  Param('id', ParseUUIDPipe):string
+GET    /api/v1/jobs/:id/result  BackgroundJobsController.result
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any  Param('id', ParseUUIDPipe):string  Res({ passthrough: true }):Response
+GET    /api/v1/metrics  MetricsController.scrape
+    class:  UseGuards(MetricsAuthGuard)
+    method: -
+    params: Res:Response
+GET    /api/v1/notification-admin/catalog  NotificationAdminController.catalog
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: -
+GET    /api/v1/notification-admin/email-templates  NotificationAdminController.listEmailTemplates
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: -
+GET    /api/v1/notification-admin/email-templates/:key  NotificationAdminController.getEmailTemplate
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('key'):string  Req:any
+GET    /api/v1/notification-admin/email/status  NotificationAdminController.emailStatus
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: -
+GET    /api/v1/notification-admin/sms-templates  NotificationAdminController.listSmsTemplates
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: -
+GET    /api/v1/notification-admin/sms/status  NotificationAdminController.smsStatus
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: -
+GET    /api/v1/notifications  NotificationController.findMyNotifications
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any  Query('category'):NotificationCategory  Query('unreadOnly', new DefaultValuePipe(false), ParseBoolPipe):boolean  Query('limit', new ParseLimitPipe({ default: 25, max: 100 })):number  Query('offset', new DefaultValuePipe(0), ParseIntPipe):number
+GET    /api/v1/notifications/preferences  NotificationController.getPreferences
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any
+GET    /api/v1/notifications/unread-count  NotificationController.unreadCount
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any
+GET    /api/v1/ocr-boundary/jobs/:id  OcrBoundaryController.findOne
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('ocr:edit:organization')  RoleOnly  Roles(SystemRole.DEVELOPER, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/organizations  OrganizationController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 50, max: 200 })):number
+GET    /api/v1/organizations/:id  OrganizationController.findOne
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/outbound-messages  OutboundMessageController.many
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Query('ids'):string | undefined  Req:any
+GET    /api/v1/outbound-messages/:id  OutboundMessageController.one
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+GET    /api/v1/planning/command-center  PlanningController.commandCenter
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/planning/day-plans  PlanningController.getMultiProjectDayPlans
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Query('projectIds'):string  Query('targetDate'):string  Query('minDistanceKm'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/planning/jobs/:jobId  PlanningController.getPlanningJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('jobId'):string  Req:any
+GET    /api/v1/planning/projects/:projectId/candidates  PlanningController.getProjectCandidates
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope  Query('startDate'):string
+GET    /api/v1/planning/projects/:projectId/coverage  PlanningController.getProjectCoverage
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('projectId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/planning/projects/:projectId/coverage-plan  PlanningController.getProjectCoveragePlan
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope  Query('startDate'):string
+GET    /api/v1/planning/projects/:projectId/day-plans  PlanningController.getDayPlans
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  Query('targetDate'):string  Query('minDistanceKm'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/planning/recommendations  PlanningController.getRecommendations
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Query('branchId', new ParseUUIDPipe({ exceptionFactory: () => new BadRequestException( 'branchId is required and must be a branch UUID — it is the branch you are asking for ' + 'candidates at.')})):string  Query('date'):string  Query('includeUnavailable'):string  Query('radiusKm'):string  Query('ignoreClientPolicy'):string  Query('ignoreDistancePolicy'):string  GlobalScopeFilter:GlobalScope  Query('projectId'):string
+GET    /api/v1/planning/rules  PlanningController.getRules
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Query('scope'):string
+GET    /api/v1/planning/rules/:id  PlanningController.getRule
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/planning/suggest-date  PlanningController.suggestAuditDate
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Query('branchId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/planning/write-jobs/:jobId  PlanningController.getPlanningWriteJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('jobId'):string  Req:any
+GET    /api/v1/platform-settings  PlatformSettingsController.findAll
+    class:  Roles(...SETTINGS_ADMIN_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+    params: Req:any
+GET    /api/v1/platform-settings/limits  PlatformSettingsController.limits
+    class:  Roles(...SETTINGS_ADMIN_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  Roles
+    params: -
+GET    /api/v1/pricing/rates  PricingController.getRates
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('clientId'):string  Query('projectId'):string
+GET    /api/v1/projects  ProjectController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RolesFallbackPermissions('project:view:organization')
+    params: Query('page'):number  Query('limit', new ParseLimitPipe({ default: 50, max: 200 })):number  GlobalScopeFilter:GlobalScope
+GET    /api/v1/projects/:id  ProjectController.findOne
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/projects/:id/branches  ProjectController.getProjectBranches
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/projects/:id/branches/template  ProjectController.downloadTemplate
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:import:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Res:Response
+GET    /api/v1/projects/branches/:projectBranchId/history  ProjectController.getBranchHistory
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('projectBranchId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/public/account-setup/:token  AccountSetupController.check
+    class:  -
+    method: Public  Throttle({ default: { limit: 20, ttl: 60_000 } })
+    params: Param('token'):string
+GET    /api/v1/public/app-links/apple-app-site-association  AppLinksController.appleAppSiteAssociation
+    class:  -
+    method: Header('Cache-Control', 'public, max-age=3600')  Header('Content-Type', 'application/json')  NoEnvelope
+    params: -
+GET    /api/v1/public/app-links/assetlinks.json  AppLinksController.assetLinks
+    class:  -
+    method: Header('Cache-Control', 'public, max-age=3600')  Header('Content-Type', 'application/json')  NoEnvelope
+    params: -
+GET    /api/v1/public/id-card/photo/:token  PublicIdCardController.photo
+    class:  -
+    method: Throttle({ default: { limit: 60, ttl: 60_000 } })
+    params: Param('token'):string  Res:any
+GET    /api/v1/public/id-card/verify/:token  PublicIdCardController.verifyToken
+    class:  -
+    method: Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('token'):string
+GET    /api/v1/public/registration/:token  PublicRegistrationController.hydrate
+    class:  -
+    method: Throttle({ default: { limit: 60, ttl: 60_000 } })
+    params: Param('token'):string  Headers(REGISTRATION_SESSION_HEADER):string
+GET    /api/v1/public/registration/:token/check-phone/:phone  PublicRegistrationController.checkPhone
+    class:  -
+    method: Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('token'):string  Param('phone'):string
+GET    /api/v1/public/registration/:token/documents/:requirement/file/:index  PublicRegistrationController.readDocument
+    class:  -
+    method: Throttle({ default: { limit: 60, ttl: 60_000 } })
+    params: Param('token'):string  Param('requirement'):string  Param('index', ParseIntPipe):number  Res:any  Headers(REGISTRATION_SESSION_HEADER):string  Query('t'):string
+GET    /api/v1/public/registration/:token/documents/:requirement/file/:index/link  PublicRegistrationController.documentLink
+    class:  -
+    method: Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('token'):string  Param('requirement'):string  Param('index', ParseIntPipe):number  Headers(REGISTRATION_SESSION_HEADER):string
+GET    /api/v1/public/registration/:token/lookup/ifsc/:code  PublicRegistrationController.lookupIfsc
+    class:  -
+    method: Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('token'):string  Param('code'):string
+GET    /api/v1/public/registration/:token/lookup/pincode/:pin  PublicRegistrationController.lookupPincode
+    class:  -
+    method: Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('token'):string  Param('pin'):string
+GET    /api/v1/reports/assayer-roster  ReportsController.assayerRoster
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any  GlobalScopeFilter:GlobalScope  Res:Response
+GET    /api/v1/reports/assayer-roster/pdf  ReportsController.assayerRosterPdf
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any  GlobalScopeFilter:GlobalScope  Res:Response
+GET    /api/v1/reports/assignments  ReportsController.assignments
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Query('status'):string  Query('projectBranchStatus'):string  Query('priority'):string  GlobalScopeFilter:GlobalScope  Res:Response
+GET    /api/v1/reports/billing  ReportsController.billing
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Query('clientId'):string  Query('projectId'):string  Query('assayerId'):string  Query('state'):BillingState  GlobalScopeFilter:GlobalScope  Res:Response
+GET    /api/v1/reports/command-center  ReportsController.commandCenter
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: GlobalScopeFilter:GlobalScope  Res:Response
+GET    /api/v1/reports/coverage/:projectId  ReportsController.coverage
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  Res:Response  GlobalScopeFilter:GlobalScope
+GET    /api/v1/reports/jobs/:jobId  ReportsController.reportJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('jobId'):string  Req:any
+GET    /api/v1/reports/jobs/:jobId/download  ReportsController.downloadReportJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('jobId'):string  Req:any  Res:Response
+GET    /api/v1/schedules  SchedulingController.findAll
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('scheduling:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
+    params: Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 50, max: 200 })):number  Query('status'):ScheduleStatus  Query('dateFrom'):string  Query('dateTo'):string  GlobalScopeFilter:GlobalScope  Req:any
+GET    /api/v1/schedules/:id  SchedulingController.findOne
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('scheduling:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope  Req:any
+GET    /api/v1/schedules/:id/timeline  SchedulingController.getTimeline
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/schedules/assayer-workload  SchedulingController.getAssayerWorkload
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Query('assayerId'):string  Query('date'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/scope/options  ScopeController.options
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/search  SearchController.search
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Query('q'):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/sessions  SessionController.forUser
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN)
+    params: Query('userId'):string
+GET    /api/v1/sessions/me  SessionController.mine
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any
+GET    /api/v1/system-dashboard/metrics  SystemDashboardController.getMetrics
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:view:organization')  RoleOnly  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: GlobalScopeFilter:GlobalScope
+GET    /api/v1/system-dashboard/operations  SystemDashboardController.getOperations
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('project:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
+    params: Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/telemetry/user  TelemetryController.forUser
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('audit_log:view:platform')  Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
+    params: Query('userId'):string  Query('limit', new ParseLimitPipe({ default: 100, max: 500 })):number
+GET    /api/v1/transport-rates  TransportRateController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: -
+GET    /api/v1/transport-rates/estimate  TransportRateController.estimate
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('distanceKm'):string  Query('state'):string  Query('region'):string  Query('onDate'):string  Query('durationMinutes'):string  Query('roadSource'):string
+GET    /api/v1/users  UserController.findAll
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('user:view:organization')  Roles(SystemRole.ADMIN)
+    params: Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 20, max: 2000 })):number
+GET    /api/v1/users/:id  UserController.findOne
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string
+GET    /api/v1/users/directory  UserController.findDirectory
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: -
+GET    /api/v1/users/me  UserController.getMe
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  PasswordChangeExempt
+    params: Req:any
+GET    /api/v1/users/permissions  UserController.findAllPermissions
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('user:view:organization')  Roles(SystemRole.ADMIN)
+    params: -
+GET    /api/v1/users/roles  UserController.findAllRoles
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  RequirePermissions('user:view:organization')  Roles(SystemRole.ADMIN)
+    params: -
+GET    /api/v1/validation  ValidationController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Req:any  Query('page'):any  Query('limit', new ParseLimitPipe({ default: 50, max: 200 })):number  GlobalScopeFilter:GlobalScope  Query('projectBranchId'):string  Query('status'):ValidationStatus  Query('reviewerId'):string  Query('search'):string  Query('workedBy'):string
+GET    /api/v1/validation-queries  ValidationQueryController.findAll
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Req:any  Query('assayerId'):string  Query('page'):string  Query('limit'):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation-queries/:id/messages  ValidationQueryController.listMessages
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation-queries/assayer/:assayerId  ValidationQueryController.findByAssayer
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('assayerId'):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation-queries/attachment-token  ValidationQueryController.issueAttachmentToken
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)
+    params: Query('key'):string  Req:any
+GET    /api/v1/validation-queries/attachment/*path  ValidationQueryController.downloadAttachment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Public
+    params: Param('path'):string | string[]  Query('token'):string  Req:any  Res:Response
+GET    /api/v1/validation-queries/validation-case/:validationCaseId  ValidationQueryController.findByValidationCase
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('validationCaseId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation-queries/worklist  ValidationQueryController.worklist
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Query:ClarificationWorklistQuery  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation-queries/worklist/by-assayer  ValidationQueryController.worklistByAssayer
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES)
+    params: Query:ClarificationWorklistQuery  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation/:id  ValidationController.findOne
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation/:id/trail  ValidationController.trail
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope
+GET    /api/v1/validation/activity  ValidationController.activity
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Query('limit', new ParseLimitPipe({ default: 20, max: 100 })):number
+GET    /api/v1/validation/attention  ValidationController.attention
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: -
+GET    /api/v1/validation/team  ValidationController.team
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: -
+GET    /api/v1/validation/workload  ValidationController.workload
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:view:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: -
+GET    /api/v1/zones  ZoneController.findAll
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Query('page', new ParsePagePipe()):number  Query('limit', new ParseLimitPipe({ default: 20, max: 200 })):number  Query('clientId'):string
+GET    /api/v1/zones/:id  ZoneController.findOne
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string
+PATCH  /api/v1/admin/compliance/incidents/:id  ComplianceController.update
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateIncidentDto  Req:any
+PATCH  /api/v1/admin/compliance/rights-requests/:id  ComplianceController.updateRights
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateRightsRequestDto  Req:any
+PATCH  /api/v1/assayer-interviews/:id  AssayerInterviewController.amend
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:AmendInterviewRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/billing-engine/assayer-invoices/:id/cancel  BillingEngineController.cancelAssayerInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:edit:organization')  Roles(...BILLING_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:ReasonDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/billing-engine/assignments/:id/client-line  BillingEngineController.editClientLine
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:edit:organization')  Roles(...BILLING_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:ClientLineDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/billing-engine/invoices/:id/cancel  BillingEngineController.cancelInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:edit:organization')  Roles(...BILLING_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:ReasonDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/billing-engine/invoices/:id/request-final-approval  BillingEngineController.requestInvoiceFinalApproval
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:edit:organization')  Roles(...BILLING_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/billing-engine/invoices/:id/send  BillingEngineController.sendInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:edit:organization')  Roles(...BILLING_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/billing-engine/payouts/:id/hold  BillingEngineController.holdPayout
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:approve:organization')  Roles(...DISBURSEMENT_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:HoldDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/clients/:id/lifecycle  ClientController.transitionLifecycle
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:LifecycleTransitionDto  Req:any
+PATCH  /api/v1/clients/bulk/lifecycle  ClientController.bulkTransitionLifecycle
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:BulkLifecycleTransitionDto  Req:any
+PATCH  /api/v1/documents/:id/status  DocumentController.updateStatus
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateDocumentStatusRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/hr/applications/:id  HrApplicationsController.updateStaffDraft
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:StaffDraftRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/hr/applications/:id/mobile  HrApplicationsController.updateMobile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateMobileDto  Req:any  GlobalScopeFilter:GlobalScope
+PATCH  /api/v1/public/registration/:token/draft  PublicRegistrationController.updateDraft
+    class:  -
+    method: Throttle({ default: { limit: 60, ttl: 60_000 } })
+    params: Param('token'):string  Body:UpdateDraftRequestDto  Headers(REGISTRATION_SESSION_HEADER):string
+POST   /api/v1/admin/compliance/incidents  ComplianceController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN)
+    params: Body:CreateIncidentDto  Req:any
+POST   /api/v1/admin/compliance/rights-requests  ComplianceController.createRights
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN)
+    params: Body:CreateRightsRequestDto  Req:any
+POST   /api/v1/admin/data-reset/execute  DataResetController.execute
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)
+    params: Body:ExecuteDataResetDto  Req:any
+POST   /api/v1/admin/data-reset/preview  DataResetController.preview
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Body:PreviewDataResetDto
+POST   /api/v1/admin/data-reset/requests  DataResetController.createRequest
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Body:CreateDestructiveRequestDto  Req:any
+POST   /api/v1/admin/data-reset/requests/:id/approve  DataResetController.approveRequest
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('system:approve:platform')  RoleOnly  Roles(SystemRole.ADMIN)
+    params: Param('id', new ParseUUIDPipe()):string  Req:any
+POST   /api/v1/admin/data-reset/requests/:id/cancel  DataResetController.cancelRequest
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('id', new ParseUUIDPipe()):string  Req:any
+POST   /api/v1/admin/data-reset/requests/:id/reject  DataResetController.rejectRequest
+    class:  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('system:approve:platform')  RoleOnly  Roles(SystemRole.ADMIN)
+    params: Param('id', new ParseUUIDPipe()):string  Body:RejectDestructiveRequestDto  Req:any
+POST   /api/v1/admin/outbox/dead-letters/:id/replay  OutboxController.replay
+    class:  RoleOnly  Roles(SystemRole.DEVELOPER)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: Param('id', ParseUUIDPipe):string  Req:Request
+POST   /api/v1/admin/rule-bypass  RuleBypassController.enable
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(SystemRole.ADMIN)
+    params: Body:EnableBypassDto  Req:any
+POST   /api/v1/assayer-interviews  AssayerInterviewController.record
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:RecordInterviewRequestDto  Req:any
+POST   /api/v1/assayer-interviews/:id/file  AssayerInterviewController.attachFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('assayer:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  UseInterceptors(FileInterceptor('file', uploadMulterOptions({ maxBytes: MAX_UPLOAD_BYTES })), FileScanInterceptor)
+    params: Param('id', ParseUUIDPipe):string  UploadedFile:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayer-remarks  AssayerRemarksController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  Roles(...REMARK_WRITE_ROLES)
+    params: Body:CreateAssayerRemarkRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers  AssayerController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('assayer:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateAssayerRequestDto  Req:any
+POST   /api/v1/assayers/:assayerId/app-access  AssayerController.issueAppAccess
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/approval/answer  OnboardingApprovalController.answer
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(200)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:ApprovalTextRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/approval/approve  OnboardingApprovalController.approve
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(200)  RequirePermissions('assayer:approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:ApproveRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/approval/reject  OnboardingApprovalController.reject
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(200)  RequirePermissions('assayer:approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:ApprovalTextRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/approval/request-info  OnboardingApprovalController.requestInfo
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(200)  RequirePermissions('assayer:approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:ApprovalTextRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/background-check  AssayerController.recordBackgroundCheck
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/checks/:checkId/review  ComplianceController.decide
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(200)  RequirePermissions('assayer:approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('assayerId', ParseUUIDPipe):string  Param('checkId', ParseUUIDPipe):string  Body:CheckReviewRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/commercial  AssayerController.createCommercial
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('assayer:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:CreateCommercialProfileRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/document/:requirement/file  AssayerController.attachDocumentFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  OnboardingAllowed  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)  RolesFallbackPermissions('assayer:edit:organization')  UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
+    params: Param('assayerId', ParseUUIDPipe):string  Param('requirement'):string  UploadedFile:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/document/:requirement/request-reupload  AssayerController.requestDocumentReupload
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(200)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Param('requirement'):string  Body:RequestReuploadRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/reference  AssayerController.addReference
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/reference/:id/notify  AssayerController.notifyReference
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/reset-password  AssayerController.resetAssayerPassword
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:ResetAssayerPasswordRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:assayerId/workforce-attribute  AssayerController.addWorkforceAttribute
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('assayer:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:CreateWorkforceAttributeRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:id/lifecycle  AssayerController.transitionLifecycle
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:TransitionLifecycleDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:id/location-pings  AssayerController.uploadLocationPings
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UploadLocationPingsDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:id/recovery/reconcile-empanelments  AssayerController.operatorReconcileDepartedEmpanelments
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:{ reason: string }  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:id/recovery/reset-onboarding-stage  AssayerController.operatorResetOnboardingStage
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:{ targetStage: AssayerLifecycleStatus; reason: string }  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/:id/recovery/revoke-invitation  AssayerController.operatorRevokeInvitation
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:{ reason: string }  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/app-access/bulk  AssayerController.bulkIssueAppAccess
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:BulkIssueAppAccessDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/bulk/lifecycle  AssayerController.bulkTransitionLifecycle
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:BulkTransitionLifecycleDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/bulk/notify  AssayerController.bulkNotify
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:BulkNotifyDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/document/:id/verify  AssayerController.verifyDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:VerifyDocumentRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/me/change-password  AssayerController.changeMyPassword
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  OnboardingAllowed  PasswordChangeExempt
+    params: Body:ChangeOwnPasswordRequestDto  Req:any
+POST   /api/v1/assayers/reference/:id/checked  AssayerController.markReferenceChecked
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:{ remarks?: string }  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/roster/import  AssayerController.importRoster
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('assayer:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  UseInterceptors(FileInterceptor('file', rosterImportMulterOptions), DiskUploadScanInterceptor)
+    params: UploadedFile:any  Body:any  Query:any  Req:any
+POST   /api/v1/assayers/roster/import-issues/:id/resolve  AssayerController.resolveImportIssue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:{ resolution: string }  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assayers/roster/import-issues/resolve  AssayerController.resolveImportIssues
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:BatchResolveImportIssuesDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments  AssignmentController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assignment:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateAssignmentRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:assignmentId/expenses  ExpenseController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('assignmentId', ParseUUIDPipe):string  Body:CreateExpenseRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/accept  AssignmentController.accept
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/cancel  AssignmentController.cancel
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/check-in  AssignmentController.checkIn
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/check-out  AssignmentController.checkOut
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/comments  AssignmentController.addComment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('id', ParseUUIDPipe):string  Body:AddCommentRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/complete  AssignmentController.complete
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/escalate  AssignmentController.escalate
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:EscalateAssignmentRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/reassign  AssignmentController.reassign
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id'):string  Body:ReassignAssignmentRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/reject  AssignmentController.reject
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/reopen  AssignmentController.reopen
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:{ reason?: string; expectedVersion?: number; clientRequestId?: string }  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/report-issue  AssignmentController.reportIssue
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('id', ParseUUIDPipe):string  Body:ReportIssueRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/start  AssignmentController.start
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/assignments/:id/transition  AssignmentController.transition
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+    params: Param('id'):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/auth/biometric-login  AuthController.biometricLogin
+    class:  -
+    method: HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:BiometricLoginDto  Req:any
+POST   /api/v1/auth/login  AuthController.login
+    class:  -
+    method: HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 20, ttl: 60_000 } })
+    params: Body:LoginDto  Req:any
+POST   /api/v1/auth/logout  AuthController.logout
+    class:  -
+    method: HttpCode(HttpStatus.OK)  OnboardingAllowed  PasswordChangeExempt  UseGuards(JwtAuthGuard)
+    params: Req:any
+POST   /api/v1/auth/mfa/email/confirm  MfaController.confirmEmail
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:MfaCodeDto  Req:any
+POST   /api/v1/auth/mfa/email/enrol  MfaController.enrolEmail
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 5, ttl: 60_000 } })
+    params: Body:EmailEnrolDto  Req:any
+POST   /api/v1/auth/mfa/recovery/regenerate  MfaController.regenerate
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 5, ttl: 60_000 } })
+    params: Req:any  Body:MfaStepUpDto
+POST   /api/v1/auth/mfa/send  AuthController.sendMfaCode
+    class:  -
+    method: HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:MfaSendDto
+POST   /api/v1/auth/mfa/sms/confirm  MfaController.confirmSms
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:MfaCodeDto  Req:any
+POST   /api/v1/auth/mfa/sms/enrol  MfaController.enrolSms
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 5, ttl: 60_000 } })
+    params: Body:SmsEnrolDto  Req:any
+POST   /api/v1/auth/mfa/totp/confirm  MfaController.confirm
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:MfaCodeDto  Req:any
+POST   /api/v1/auth/mfa/totp/enrol  MfaController.enrol
+    class:  UseGuards(JwtAuthGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any
+POST   /api/v1/auth/mfa/verify  AuthController.verifyMfa
+    class:  -
+    method: HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 20, ttl: 60_000 } })
+    params: Body:MfaVerifyDto  Req:any
+POST   /api/v1/auth/refresh  AuthController.refresh
+    class:  -
+    method: HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Body:RefreshDto  Req:any
+POST   /api/v1/auth/verify-assayer  AuthController.verifyAssayer
+    class:  -
+    method: HttpCode(HttpStatus.OK)  Throttle({ default: { limit: 20, ttl: 60_000 } })
+    params: Body:VerifyAssayerDto
+POST   /api/v1/billing-engine/assayer-invoices/:id/approve  BillingEngineController.approveAssayerInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:approve:organization')  Roles(...DISBURSEMENT_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/assayer-invoices/:id/revise  BillingEngineController.reviseAssayerInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:edit:organization')  Roles(...BILLING_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:ReasonDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/assayer-invoices/invite  BillingEngineController.inviteAssayerInvoices
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:create:organization')  Roles(...BILLING_ROLES)
+    params: Body:InviteAssayerInvoiceDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/assayer-invoices/invite-all  BillingEngineController.inviteAllAssayerInvoices
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('billing:create:organization')  Roles(...BILLING_ROLES)
+    params: Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/assayers/:assayerId/invoice-invitation/submit  BillingEngineController.submitAssayerInvoiceInvitation
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.OK)  Roles(...BILLING_ROLES, SystemRole.ASSAYER)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:SubmitInvoiceInvitationDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/final-approval/approve  BillingEngineController.finalApproveMany
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: Body:FinalApproveManyDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/final-approval/assayer-invoices/:id/approve  BillingEngineController.finalApproveBill
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.OK)  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/final-approval/assayer-invoices/:id/reject  BillingEngineController.finalRejectBill
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.OK)  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:HodRejectDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/final-approval/invoices/:id/approve  BillingEngineController.finalApproveInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.OK)  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/final-approval/invoices/:id/reject  BillingEngineController.finalRejectInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.OK)  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:HodRejectDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/final-approval/payouts/:id/approve  BillingEngineController.finalApprovePayout
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.OK)  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/final-approval/payouts/:id/reject  BillingEngineController.finalRejectPayout
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.OK)  RequirePermissions('billing:final_approve:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:HodRejectDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/invoices  BillingEngineController.createInvoice
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:create:organization')  Roles(...BILLING_ROLES)
+    params: Body:CreateInvoiceDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/invoices/:id/payment  BillingEngineController.recordPayment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:create:organization')  Roles(...BILLING_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:InvoicePaymentDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/payments/:id/reverse  BillingEngineController.reversePayment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:approve:organization')  Roles(...DISBURSEMENT_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:ReasonDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/payouts/approve  BillingEngineController.approvePayouts
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('billing:approve:organization')  Roles(...DISBURSEMENT_ROLES)
+    params: Body:PayoutIdsDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/payouts/bank-file  BillingEngineController.payoutBankFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.OK)  RequirePermissions('billing:approve:organization')  Roles(...DISBURSEMENT_ROLES)
+    params: Body:PayoutIdsDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/payouts/destination-check  BillingEngineController.payoutDestinationCheck
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.OK)  RequirePermissions('billing:approve:organization')  Roles(...DISBURSEMENT_ROLES)
+    params: Body:PayoutIdsDto  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/payouts/pay  BillingEngineController.payPayouts
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('billing:approve:organization')  Roles(...DISBURSEMENT_ROLES)
+    params: Body:PayPayoutsDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/billing-engine/reconcile  BillingEngineController.reconcile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('billing:create:organization')  Roles(...BILLING_ROLES)
+    params: Body:ReconcileDto  Req:any
+POST   /api/v1/branches  BranchController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateBranchRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/branches/:id/contacts  BranchController.addContact
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:CreateContactRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/branches/:id/documents  BranchController.addDocument
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:CreateDocumentRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/branches/import/:clientId  BranchImportController.importBranches
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('branch:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  UseInterceptors(FileInterceptor('file', branchImportUploadOptions), DiskUploadScanInterceptor)
+    params: Param('clientId', ParseUUIDPipe):string  Req:any  UploadedFile:Express.Multer.File
+POST   /api/v1/branches/import/:clientId/jobs/:jobId/commit  BranchImportController.commitImport
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('branch:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('clientId', ParseUUIDPipe):string  Param('jobId', ParseUUIDPipe):string  Body:CommitBranchImportDto  Req:any
+POST   /api/v1/branches/import/:clientId/jobs/:jobId/retry  BranchImportController.retryImport
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('branch:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('clientId', ParseUUIDPipe):string  Param('jobId', ParseUUIDPipe):string  Req:any
+POST   /api/v1/call-logs  CallLogController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateCallLogRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/calls/answer  CallsController.answer
+    class:  Roles(SystemRole.ASSAYER, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ADMIN)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: Body:RoomActionDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/calls/decline  CallsController.decline
+    class:  Roles(SystemRole.ASSAYER, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ADMIN)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: Body:RoomActionDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/calls/hangup  CallsController.hangup
+    class:  Roles(SystemRole.ASSAYER, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ADMIN)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: Body:RoomActionDto  Req:any
+POST   /api/v1/calls/initiate  CallsController.initiate
+    class:  Roles(SystemRole.ASSAYER, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ADMIN)  UseGuards(JwtAuthGuard, RolesGuard)
+    method: -
+    params: Body:InitiateCallDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/clients  ClientController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateClientRequestDto  Req:any
+POST   /api/v1/clients/:id/contacts  ClientController.addContact
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:CreateContactRequestDto  Req:any
+POST   /api/v1/clients/:id/contracts  ClientController.addContract
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:CreateContractRequestDto  Req:any
+POST   /api/v1/customer-master/upload  CustomerMasterController.upload
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('document:upload:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)  UseInterceptors(FileInterceptor('file', customerMasterUploadMulterOptions), DiskUploadScanInterceptor)
+    params: UploadedFile:Express.Multer.File | undefined  Req:any  Query('projectId'):string  Query('auditDate'):string  GlobalScopeFilter:GlobalScope
+POST   /api/v1/customer-master/versions/:versionId/approve  CustomerMasterController.approveVersion
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('versionId', ParseUUIDPipe):string  Req:any
+POST   /api/v1/documents/:id/assign-data-entry  DocumentController.assignDataEntry
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Body:AssignDataEntryRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/documents/:id/complete-data-entry  DocumentController.completeDataEntry
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/documents/:id/dispatch  DocumentController.dispatchDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Body:{ branchEmail?: string } | undefined  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/documents/:id/receive  DocumentController.receiveDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/documents/:id/send-external-ocr  DocumentController.sendToExternalOcr
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/documents/dispatch-batch  DocumentController.dispatchBatch
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Body:DispatchBatchRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/documents/mobile-upload  DocumentController.mobileUpload
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Body:any  Req:any
+POST   /api/v1/documents/mobile-upload-binary  DocumentController.mobileUploadBinary
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)  UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
+    params: UploadedFile:any  Query('assessmentId'):string  Query('assignmentId'):string  Req:any
+POST   /api/v1/documents/upload  DocumentController.uploadFile
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:upload:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)  UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
+    params: UploadedFile:any  Query('assessmentId', ParseUUIDPipe):string  Query('type'):DocumentType  Req:any  Query('customerMasterVersionId'):string
+POST   /api/v1/documents/upload-excel  DocumentController.uploadExcelReport
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:upload:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)  UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
+    params: UploadedFile:any  Query('assessmentId', ParseUUIDPipe):string  Req:any
+POST   /api/v1/documents/upload-generated-batch  DocumentController.uploadGeneratedBatch
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('document:upload:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)  UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), DiskUploadCleanupInterceptor)
+    params: UploadedFiles:Express.Multer.File[]  Req:any  Query('projectId'):string  Query('auditDate'):string  Query('customerMasterVersionId'):string  GlobalScopeFilter:GlobalScope
+POST   /api/v1/documents/upload/finalize  DocumentController.finalizeUpload
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:upload:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Body:FinalizeUploadRequestDto  Req:any
+POST   /api/v1/documents/upload/presign  DocumentController.presignUpload
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('document:upload:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Body:PresignUploadRequestDto
+POST   /api/v1/documents/upload/session  DocumentController.createUploadSession
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Body:CreateUploadSessionRequestDto  Req:any
+POST   /api/v1/documents/upload/session/:uploadId/complete  DocumentController.completeUpload
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+    params: Param('uploadId'):string  Body:CompleteUploadSessionRequestDto  Req:any
+POST   /api/v1/expenses/:expenseId/review  ExpenseController.review
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('billing:approve:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('expenseId', ParseUUIDPipe):string  Body:ReviewExpenseRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/feedback  FeedbackController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  Throttle({ default: { limit: 20, ttl: 60_000 } })
+    params: Body:CreateFeedbackRequestDto  Req:any
+POST   /api/v1/feedback/:id/messages  FeedbackController.postMessage
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  Throttle({ default: { limit: 30, ttl: 60_000 } })
+    params: Param('id', ParseUUIDPipe):string  Body:PostFeedbackMessageRequestDto  Req:any
+POST   /api/v1/feedback/:id/messages/read  FeedbackController.markRead
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/feedback/:id/reopen  FeedbackController.reopen
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/feedback/:id/resolve  FeedbackController.resolve
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:ResolveFeedbackRequestDto  Req:any
+POST   /api/v1/feedback/:id/triage  FeedbackController.triage
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...FEEDBACK_TEAM_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:TriageFeedbackRequestDto  Req:any
+POST   /api/v1/feedback/:id/vote  FeedbackController.vote
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/feedback/attachments  FeedbackController.uploadAttachments
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  UseInterceptors(FilesInterceptor('files', MAX_FEEDBACK_ATTACHMENTS, feedbackMulterOptions), FileScanInterceptor)
+    params: UploadedFiles:Express.Multer.File[]  Req:any
+POST   /api/v1/geo/branches/enrich-addresses  GeoController.enrichBranchAddresses
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:edit:organization')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: Body:BackfillDto
+POST   /api/v1/geo/precision/:target/:id/pin  GeoController.pin
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:edit:organization', 'assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('target'):string  Param('id'):string  Body:PinCoordinateDto  Req:any
+POST   /api/v1/geo/precision/:target/backfill  GeoController.backfillPrecision
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:edit:organization', 'assayer:edit:organization')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: Param('target'):string  Body:BackfillDto
+POST   /api/v1/geo/route  GeoController.routeBetween
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:RouteBetweenDto
+POST   /api/v1/geo/route/optimize  GeoController.optimizeRoute
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:OptimizeRouteDto
+POST   /api/v1/holidays  HolidayController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateHolidayRequestDto  Req:any
+POST   /api/v1/hr/applications/:id/approve  HrApplicationsController.approve
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:ApproveApplicationDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/hr/applications/:id/documents/:requirement  HrApplicationsController.uploadDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  UseInterceptors(FileInterceptor('file', staffUploadMulterOptions), FileScanInterceptor)
+    params: Param('id', ParseUUIDPipe):string  Param('requirement'):string  UploadedFile:any  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/hr/applications/:id/documents/:requirement/review  HrApplicationsController.reviewDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('requirement'):string  Body:ReviewApplicationDocumentDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/hr/applications/:id/reject  HrApplicationsController.reject
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:RejectApplicationDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/hr/applications/:id/request-info  HrApplicationsController.requestMoreInfo
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:RequestMoreInfoDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/hr/applications/:id/resend-invite  HrApplicationsController.resendInvite
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/hr/applications/invite  HrApplicationsController.openWithoutInterview
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:OpenWithoutInterviewDto  Req:any
+POST   /api/v1/jobs  BackgroundJobsController.start
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  HttpCode(202)  UseInterceptors(FileInterceptor('file', jobUploadMulterOptions), DiskUploadScanInterceptor)
+    params: Req:any  Body:StartBackgroundJobDto  UploadedFile:Express.Multer.File  GlobalScopeFilter:GlobalScope
+POST   /api/v1/jobs/:id/cancel  BackgroundJobsController.cancel
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  HttpCode(200)
+    params: Req:any  Param('id', ParseUUIDPipe):string
+POST   /api/v1/jobs/:id/commit  BackgroundJobsController.commit
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  HttpCode(202)
+    params: Req:any  Param('id', ParseUUIDPipe):string  Body:CommitReviewedJobDto
+POST   /api/v1/notification-admin/digest/run  NotificationAdminController.runDigest
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('system:edit:platform')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: -
+POST   /api/v1/notification-admin/email-templates/:key/draft  NotificationAdminController.saveEmailTemplateDraft
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES)
+    params: Param('key'):string  Body:SaveEmailTemplateDraftDto  Req:any
+POST   /api/v1/notification-admin/email-templates/:key/preview  NotificationAdminController.previewEmailTemplate
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('key'):string  Body:PreviewEmailTemplateDto  Req:any
+POST   /api/v1/notification-admin/email-templates/:key/publish  NotificationAdminController.publishEmailTemplate
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES)
+    params: Param('key'):string  Body:PublishEmailTemplateDto  Req:any
+POST   /api/v1/notification-admin/email-templates/:key/rollback  NotificationAdminController.rollbackEmailTemplate
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES)
+    params: Param('key'):string  Body:RollbackEmailTemplateDto  Req:any
+POST   /api/v1/notification-admin/email-templates/:key/source  NotificationAdminController.setTemplateSource
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES)
+    params: Param('key'):string  Body:SetTemplateSourceDto  Req:any
+POST   /api/v1/notification-admin/email-templates/:key/test  NotificationAdminController.sendTestEmail
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES, SystemRole.DEVELOPER)
+    params: Param('key'):string  Body:TestEmailTemplateDto  Req:any
+POST   /api/v1/notification-admin/email-templates/:key/validate  NotificationAdminController.validateEmailTemplate
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Param('key'):string  Body:ValidateEmailTemplateDto
+POST   /api/v1/notification-admin/email/test  NotificationAdminController.testEmail
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('system:edit:platform')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: Body:TestEmailRequestDto  Req:any
+POST   /api/v1/notification-admin/preview  NotificationAdminController.preview
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Body:PreviewTemplateRequestDto
+POST   /api/v1/notification-admin/sms-templates/:key/test  NotificationAdminController.testSmsTemplate
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('system:edit:platform')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: Param('key'):string  Body:TestSmsTemplateDto  Req:any
+POST   /api/v1/notification-admin/sms/test  NotificationAdminController.testSms
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('system:edit:platform')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: Body:TestSmsRequestDto  Req:any
+POST   /api/v1/notifications/:id/read  NotificationController.markAsRead
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/notifications/:id/unread  NotificationController.markAsUnread
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/notifications/device-token  NotificationController.registerDeviceToken
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any  Body:RegisterDeviceTokenRequestDto
+POST   /api/v1/notifications/device-token/unregister  NotificationController.unregisterDeviceToken
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any  Body:UnregisterDeviceTokenRequestDto
+POST   /api/v1/notifications/read-all  NotificationController.markAllAsRead
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Req:any
+POST   /api/v1/ocr-boundary/jobs  OcrBoundaryController.createJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('ocr:create:organization')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: Query('documentId', ParseUUIDPipe):string  Req:any
+POST   /api/v1/ocr-boundary/jobs/:id/results  OcrBoundaryController.callbackOcr
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('ocr:edit:organization')  RoleOnly  Roles(SystemRole.DEVELOPER)
+    params: Param('id', ParseUUIDPipe):string  Body:ReceiveOcrResultsDto  Req:any
+POST   /api/v1/ocr-boundary/jobs/:id/retry  OcrBoundaryController.retryJob
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('ocr:edit:organization')  RoleOnly  Roles(SystemRole.DEVELOPER, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/organizations  OrganizationController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(201)  RequirePermissions('organization:create:organization')  Roles(SystemRole.ADMIN)
+    params: Body:CreateOrganizationRequestDto  Req:any
+POST   /api/v1/planning/bulk-offers/jobs  PlanningController.queueBulkOffers
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('assignment:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:BulkOfferRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/planning/coverage-plans/:planId/execute  PlanningController.executePlan
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('planning:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('planId', ParseUUIDPipe):string  Body:ExecutePlanRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/planning/day-plans/jobs  PlanningController.queueMultiProjectDayPlans
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Query('projectIds'):string  Req:any  Query('targetDate'):string  Query('minDistanceKm'):string  GlobalScopeFilter:GlobalScope
+POST   /api/v1/planning/projects/:projectId/candidates/jobs  PlanningController.queueProjectCandidates
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope  Body:CoveragePlanPreviewRequestDto
+POST   /api/v1/planning/projects/:projectId/coverage-plan  PlanningController.createOrRegeneratePlan
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('projectId', ParseUUIDPipe):string  Body:CreateCoveragePlanRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/planning/projects/:projectId/coverage-plan/jobs  PlanningController.queueProjectCoveragePlan
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope  Body:CoveragePlanPreviewRequestDto
+POST   /api/v1/planning/projects/:projectId/coverage-plan/versions/jobs  PlanningController.queueCreateOrRegeneratePlan
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('planning:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  Body:CreateCoveragePlanRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/planning/projects/:projectId/day-plans/jobs  PlanningController.queueDayPlans
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('planning:view:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  Req:any  Query('targetDate'):string  Query('minDistanceKm'):string  GlobalScopeFilter:GlobalScope
+POST   /api/v1/planning/projects/:projectId/optimize  PlanningController.optimizeProjectDeployment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 6, ttl: 60_000 } })
+    params: Param('projectId', ParseUUIDPipe):string  GlobalScopeFilter:GlobalScope  Query('startDate'):string
+POST   /api/v1/planning/rules  PlanningController.createRule
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateBusinessRuleRequestDto  Req:any
+POST   /api/v1/planning/scenarios/simulate  PlanningController.simulateScenario
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 6, ttl: 60_000 } })
+    params: Body:SimulateScenarioRequestDto  GlobalScopeFilter:GlobalScope
+POST   /api/v1/planning/unable-to-cover/jobs  PlanningController.queueBulkUnableToCover
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('project:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:BulkUnableToCoverRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/pricing/quote  PricingController.quote
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: -
+    params: Body:QuoteRequestDto
+POST   /api/v1/projects  ProjectController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateProjectRequestDto  Req:any
+POST   /api/v1/projects/:id/branches  ProjectController.associateBranches
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:AddProjectBranchesRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/projects/:id/branches/import  ProjectController.importBranches
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('project:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)  UseInterceptors(FileInterceptor('file', branchImportUploadOptions), DiskUploadScanInterceptor)
+    params: Param('id', ParseUUIDPipe):string  Req:any  UploadedFile:Express.Multer.File
+POST   /api/v1/projects/:id/branches/import/:jobId/commit  ProjectController.commitBranchImport
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('project:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('jobId', ParseUUIDPipe):string  Body:CommitBranchImportDto  Req:any
+POST   /api/v1/projects/:id/branches/import/:jobId/retry  ProjectController.retryBranchImport
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(202)  RequirePermissions('project:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Param('jobId', ParseUUIDPipe):string  Req:any
+POST   /api/v1/projects/:id/transition  ProjectController.transition
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:TransitionProjectRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/projects/branches/:projectBranchId/reopen-coverage  ProjectController.reopenBranchCoverage
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('projectBranchId', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/projects/branches/:projectBranchId/unable-to-cover  ProjectController.markBranchUnableToCover
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('projectBranchId', ParseUUIDPipe):string  Body:MarkUnableToCoverRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/public/account-setup/:token  AccountSetupController.complete
+    class:  -
+    method: Public  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('token'):string  Body:CompleteSetupDto
+POST   /api/v1/public/id-card/verify  PublicIdCardController.verifyCode
+    class:  -
+    method: HttpCode(200)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Body:VerifyByCodeRequestDto
+POST   /api/v1/public/registration/:token/consent  PublicRegistrationController.acceptConsent
+    class:  -
+    method: Throttle({ default: { limit: 20, ttl: 60_000 } })
+    params: Param('token'):string  Body:AcceptConsentDto
+POST   /api/v1/public/registration/:token/consent/withdraw  PublicRegistrationController.withdrawConsent
+    class:  -
+    method: Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('token'):string  Body:WithdrawConsentDto
+POST   /api/v1/public/registration/:token/documents/:requirement  PublicRegistrationController.uploadDocument
+    class:  -
+    method: Throttle({ default: { limit: 30, ttl: 60_000 } })  UseInterceptors(FileInterceptor('file', publicUploadMulterOptions), FileScanInterceptor)
+    params: Param('token'):string  Param('requirement'):string  UploadedFile:any  Query('replace'):string
+POST   /api/v1/public/registration/:token/otp/request  PublicRegistrationController.requestOtp
+    class:  -
+    method: Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('token'):string  Body:RequestOtpDto  Headers(REGISTRATION_SESSION_HEADER):string
+POST   /api/v1/public/registration/:token/otp/verify  PublicRegistrationController.verifyOtp
+    class:  -
+    method: Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('token'):string  Body:VerifyOtpDto
+POST   /api/v1/public/registration/:token/submit  PublicRegistrationController.submit
+    class:  -
+    method: Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Param('token'):string
+POST   /api/v1/reports/assayer-roster-pdf/jobs  ReportsController.queueAssayerRosterPdf
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/reports/assayer-roster/jobs  ReportsController.queueAssayerRoster
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/reports/assignments/jobs  ReportsController.queueAssignments
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  Roles(...STAFF_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any  Query('status'):string  Query('projectBranchStatus'):string  Query('priority'):string  GlobalScopeFilter:GlobalScope
+POST   /api/v1/reports/billing/jobs  ReportsController.queueBilling
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AllowPermissionFallback  HttpCode(HttpStatus.ACCEPTED)  RequirePermissions('billing:view:organization')  Roles(...BILLING_READ_ROLES)  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any  Query('clientId'):string  Query('projectId'):string  Query('assayerId'):string  Query('state'):BillingState  GlobalScopeFilter:GlobalScope
+POST   /api/v1/reports/command-center/jobs  ReportsController.queueCommandCenter
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: HttpCode(HttpStatus.ACCEPTED)  Roles(...STAFF_ROLES)  RolesFallbackPermissions('planning:view:organization')  Throttle({ default: { limit: 10, ttl: 60_000 } })
+    params: Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/schedules  SchedulingController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('scheduling:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateScheduleRequestDto  Req:any
+POST   /api/v1/schedules/:id/transition  SchedulingController.transition
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('scheduling:modify:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:TransitionScheduleRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/sessions/me/revoke-all  SessionController.revokeAllMine
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  HttpCode(HttpStatus.OK)
+    params: Req:any
+POST   /api/v1/telemetry  TelemetryController.record
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Body:{ events?: RawTelemetryEvent[] }  Req:any
+POST   /api/v1/transport-rates  TransportRateController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:create:organization')  Roles(...RATE_MANAGER_ROLES)
+    params: Body:CreateTransportRateRequestDto  Req:any
+POST   /api/v1/users  UserController.create
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:create:organization')  Roles(SystemRole.ADMIN)
+    params: Body:CreateUserRequestDto  Req:any
+POST   /api/v1/users/:id/reset-password  UserController.resetPassword
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:ResetPasswordRequestDto  Req:any
+POST   /api/v1/users/:id/send-setup-link  UserController.sendSetupLink
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:SendSetupLinkDto  Req:any
+POST   /api/v1/users/:id/unlock  UserController.unlockAccount
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/users/bulk/status  UserController.bulkSetStatus
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Body:BulkSetStatusDto  Req:any
+POST   /api/v1/users/me/change-password  UserController.changePassword
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated  PasswordChangeExempt
+    params: Body:SelfChangePasswordDto  Req:any
+POST   /api/v1/users/roles  UserController.createRole
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Body:CreateRoleRequestDto  Req:any
+POST   /api/v1/validation  ValidationController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:create:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Body:CreateValidationCaseRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/validation-queries  ValidationQueryController.createQuery
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Body:CreateValidationQueryDto  Req:any
+POST   /api/v1/validation-queries/:id/messages  ValidationQueryController.postMessage
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.ASSAYER)
+    params: Param('id', ParseUUIDPipe):string  Body:PostQueryMessageDto  Req:any
+POST   /api/v1/validation-queries/:id/messages/read  ValidationQueryController.markRead
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('id', ParseUUIDPipe):string  Req:any
+POST   /api/v1/validation-queries/:id/reopen  ValidationQueryController.reopenQuery
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/validation-queries/:id/resolve  ValidationQueryController.resolveQuery
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+    params: Param('id', ParseUUIDPipe):string  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/validation-queries/:id/respond  ValidationQueryController.respondToQuery
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Body:RespondValidationQueryDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/validation-queries/messages/:messageId/reactions  ValidationQueryController.addReaction
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('messageId', ParseUUIDPipe):string  Body:{ emoji: string }  Req:any
+POST   /api/v1/validation-queries/messages/:messageId/star  ValidationQueryController.toggleStar
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+    params: Param('messageId', ParseUUIDPipe):string
+POST   /api/v1/validation-queries/upload-attachment  ValidationQueryController.uploadAttachments
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)  UseInterceptors(FilesInterceptor('files', 10, chatMulterOptions), FileScanInterceptor)
+    params: UploadedFiles:Express.Multer.File[]  Req:any
+POST   /api/v1/validation-queries/upload-single  ValidationQueryController.uploadSingleAttachment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)  UseInterceptors(FileInterceptor('file', chatMulterOptions), FileScanInterceptor)
+    params: UploadedFile:Express.Multer.File  Req:any
+POST   /api/v1/validation/:id/assign  ValidationController.assign
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Body:AssignReviewerDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/validation/:id/transition  ValidationController.transition
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Param('id', ParseUUIDPipe):string  Body:TransitionValidationCaseDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/validation/bulk/transition  ValidationController.bulkTransition
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('validation:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.DESK)
+    params: Body:BulkTransitionValidationCaseDto  Req:any  GlobalScopeFilter:GlobalScope
+POST   /api/v1/zones  ZoneController.create
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:create:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Body:CreateZoneRequestDto  Req:any
+PUT    /api/v1/assayers/:assayerId/document/:requirement  AssayerController.setDocument
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: OnboardingAllowed  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)  RolesFallbackPermissions('assayer:edit:organization')
+    params: Param('assayerId', ParseUUIDPipe):string  Param('requirement'):string  Body:SetDocumentRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:assayerId/empanelment/:clientId  AssayerController.setEmpanelment
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Param('clientId', ParseUUIDPipe):string  Body:SetEmpanelmentDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:assayerId/qualification/override  AssayerController.setScoreOverride
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:assayerId/reference/:id  AssayerController.updateReference
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Param('id', ParseUUIDPipe):string  Body:any  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:assayerId/source-referral  AssayerController.setSourceReferral
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('assayerId', ParseUUIDPipe):string  Body:SetSourceReferralRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:id  AssayerController.update
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: OnboardingAllowed  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)  RolesFallbackPermissions('assayer:edit:organization')
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateAssayerRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:id/base-location  AssayerController.confirmBaseLocation
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: OnboardingAllowed  Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)  RolesFallbackPermissions('assayer:edit:organization')
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateLiveLocationDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:id/live  AssayerController.setLiveTracking
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateLiveTrackingDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/:id/live-location  AssayerController.updateLiveLocation
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateLiveLocationDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/commercial/:id  AssayerController.updateCommercial
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateCommercialProfileRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assayers/workforce-attribute/:id  AssayerController.updateWorkforceAttribute
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('assayer:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateWorkforceAttributeRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/assignments/:id  AssignmentController.update
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateAssignmentDetailsRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/branches/:id  BranchController.update
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateBranchRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/branches/:id/contacts/:contactId  BranchController.updateContact
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('branch:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('contactId', ParseUUIDPipe):string  Body:UpdateContactRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/clients/:id  ClientController.update
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateClientRequestDto  Req:any
+PUT    /api/v1/clients/:id/billing  ClientController.upsertBilling
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateBillingRequestDto  Req:any
+PUT    /api/v1/clients/:id/contacts/:contactId  ClientController.updateContact
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('contactId', ParseUUIDPipe):string  Body:UpdateContactRequestDto  Req:any
+PUT    /api/v1/clients/:id/contracts/:contractId  ClientController.updateContract
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('client:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('contractId', ParseUUIDPipe):string  Body:UpdateContractRequestDto  Req:any
+PUT    /api/v1/documents/upload/session/:uploadId/chunk/:index  DocumentController.uploadChunk
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)  UseInterceptors(FileInterceptor('chunk', resumableChunkMulterOptions))
+    params: Param('uploadId'):string  Param('index'):string  UploadedFile:any  Req:any
+PUT    /api/v1/holidays/:id  HolidayController.update
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateHolidayRequestDto  Req:any
+PUT    /api/v1/notification-admin/catalog/:type  NotificationAdminController.update
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES)
+    params: Param('type'):string  Body:UpdateNotificationSettingRequestDto  Req:any
+PUT    /api/v1/notification-admin/sms-templates/:key  NotificationAdminController.saveSmsTemplate
+    class:  Roles(...NOTIFICATION_ADMIN_READ_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...NOTIFICATION_ADMIN_ROLES)
+    params: Param('key'):string  Body:SaveSmsTemplateDto  Req:any
+PUT    /api/v1/notifications/preferences/:category  NotificationController.setPreference
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Param('category'):NotificationCategory  Req:any  Body:UpdatePreferenceRequestDto
+PUT    /api/v1/organizations/:id  OrganizationController.update
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('organization:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateOrganizationRequestDto  Req:any
+PUT    /api/v1/planning/coverage-plans/:planId/transition  PlanningController.transitionPlan
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('planId', ParseUUIDPipe):string  Body:TransitionCoveragePlanRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/planning/rules/:id  PlanningController.updateRule
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('planning:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateBusinessRuleRequestDto  Req:any
+PUT    /api/v1/platform-settings/:key  PlatformSettingsController.set
+    class:  Roles(...SETTINGS_ADMIN_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('configuration:edit:platform')  RoleOnly  Roles(...SETTINGS_ADMIN_ROLES)
+    params: Param('key'):string  Body:SetSettingRequestDto  Req:any
+PUT    /api/v1/projects/:id  ProjectController.update
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('project:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateProjectRequestDto  Req:any  GlobalScopeFilter:GlobalScope
+PUT    /api/v1/transport-rates/:id  TransportRateController.update
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:edit:organization')  Roles(...RATE_MANAGER_ROLES)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateTransportRateRequestDto  Req:any
+PUT    /api/v1/users/:id  UserController.update
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateUserRequestDto  Req:any
+PUT    /api/v1/users/:id/roles  UserController.assignRoles
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:AssignRolesDto  Req:any
+PUT    /api/v1/users/me  UserController.updateMe
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: AnyAuthenticated
+    params: Body:SelfUpdateProfileDto  Req:any
+PUT    /api/v1/users/roles/:id  UserController.updateRole
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateRoleRequestDto  Req:any
+PUT    /api/v1/users/roles/:id/permissions  UserController.setRolePermissions
+    class:  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('user:edit:organization')  Roles(SystemRole.ADMIN)
+    params: Param('id', ParseUUIDPipe):string  Body:SetRolePermissionsRequestDto  Req:any
+PUT    /api/v1/zones/:id  ZoneController.update
+    class:  Roles(...STAFF_ROLES)  UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+    method: RequirePermissions('reference_data:edit:organization')  Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+    params: Param('id', ParseUUIDPipe):string  Body:UpdateZoneRequestDto  Req:any
