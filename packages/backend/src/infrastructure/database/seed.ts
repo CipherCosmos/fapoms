@@ -185,7 +185,7 @@ async function seed() {
           + 'application role: it may read and write rows and may not TRUNCATE, deliberately.\n\n'
           + '    Seeding over existing data is a deploy-time act. Re-run it as the migration role:\n'
           + '      DB_USERNAME=fapoms_migrator DB_PASSWORD=$FAPOMS_MIGRATION_PASSWORD npm run seed -- --force\n\n'
-          + '    See docs/database-roles.md. The underlying error was: ' + message,
+          + '    See docs/reference/database-roles.md. The underlying error was: ' + message,
         );
       }
     } else if (toTruncate.length) {

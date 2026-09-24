@@ -460,3 +460,23 @@ cd ~/apps/fapoms && for k in DB_PASSWORD JWT_SECRET; do v=$(grep -E "^${k}=" .en
 - 2026-09-25: Merged `test` (= `main`, `349634d5`, 19 commits) into the branch before starting
   Phase 0. No conflicts. The file counts and line numbers quoted above are from the 2026-09-21
   audit; each phase re-measures its own area before moving anything.
+- 2026-09-25: Phase 1 documentation pass. Moved the 10 flat `docs/*.md` files into
+  `architecture/`, `operations/` and `reference/` by content, dated the incident report into
+  `reports/2026-09-09-incident-audit-truncate.md`, and moved `deploy/nginx/fapoms.conf` (nothing
+  deploys it) to `docs/operations/reference-nginx-fapoms.conf`. No `docs/adr/` was created: no ADR
+  files exist anywhere in the repo yet, despite this plan describing one. Added
+  `docs/README.md` (full index) and `docs/operations/environments.md` (branch → host → compose →
+  migrations → deploy/backup/restore, each fact cited to the file it was verified against).
+  Rewrote DEPLOYMENT.md's "Deploy" section, which pointed at the root dev compose file and printed
+  `admin`/`admin123`, to match `setup.sh` + `deploy/docker-compose.prod.yml` without printing a
+  password. Updated README.md's CI/Deployment/Documentation sections (CI's real trigger list and
+  `database` job, both deployments, links to the new index) and `deploy/aws/README.md` (documented
+  the "mounted" layout the EC2 box actually runs, alongside the "bootstrap" layout the rest of that
+  doc describes). Appended a "This project" section to CLAUDE.md, keeping the existing AWS/Secret
+  Safety content verbatim, and added CONTRIBUTING.md and SECURITY.md. Confirmed
+  `screenshots/` and `docs/discovery/screenshots/` are referenced nowhere but this plan and
+  removed both (`git rm -r`). Updated every non-doc file that referenced a moved path by string
+  (CODEOWNERS, `.env.production.example`, `deploy/docker-compose.prod.yml`, backend `seed.ts` /
+  `main.ts` / `security-controls.spec.ts`, `setup.sh`, four `scripts/acceptance/*.mjs` files,
+  `packages/shared/src/coverage.ts`) and re-grepped every old path repo-wide to confirm zero
+  stale references remain outside this plan's own historical text.

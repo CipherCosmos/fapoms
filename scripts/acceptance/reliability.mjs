@@ -20,7 +20,7 @@
  *
  * Destructive-probe rule: `audit_events` is never TRUNCATEd or DELETEd from, and any SQL probe
  * that could remove data runs inside a transaction that is always rolled back. See
- * docs/incident-2026-09-09-audit-truncate.md for why that rule exists.
+ * docs/reports/2026-09-09-incident-audit-truncate.md for why that rule exists.
  */
 /**
  * ────────────────────────────────────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@
  * api writes  : creates assignments tagged ACC-REL and completes them, which books real money.
  * destructive : SQL probes that could remove data run inside a transaction that is ALWAYS rolled
  *               back, and audit_events is never TRUNCATEd or DELETEd from. That rule is the
- *               lesson of docs/incident-2026-09-09-audit-truncate.md.
+ *               lesson of docs/reports/2026-09-09-incident-audit-truncate.md.
  * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs
  *               (postAndAwait), none of its gates. DO NOT run it against a deployment
  *               anybody is using.

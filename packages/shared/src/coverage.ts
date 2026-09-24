@@ -6,7 +6,7 @@ import { BRANCH_COVERED_STATUSES, BRANCH_DONE_STATUSES } from './labels';
  *
  * ## The definition, and where it comes from
  *
- * `docs/business-spec.md` §2 glossary: *"Coverage — the share of a Project's branches
+ * `docs/architecture/business-spec.md` §2 glossary: *"Coverage — the share of a Project's branches
  * successfully assigned to an assessor and audited, versus those that couldn't be."* Phase 4 of
  * the same document says the report "compiles covered branches (assessor + date) and uncovered
  * branches". So a branch is COVERED from the moment an assayer is secured for it, and it stays

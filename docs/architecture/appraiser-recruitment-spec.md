@@ -13,7 +13,7 @@ code deliberately departs from it, the departure is recorded next to the require
 remembered. Those departures are in the status table at the end; two of them were the owner's own
 decisions and one of them is a bug.
 
-One word of caution about vocabulary. `docs/business-spec.md` is a **different system** — the
+One word of caution about vocabulary. `docs/architecture/business-spec.md` is a **different system** — the
 Branch Audit Management System — and it instructs that "Appraiser" be replaced by "Regional
 Operator", an internal staff role. In THIS document "Appraiser" means the field worker, which the
 code calls an **Assayer**. The two documents use the same word for two different people.

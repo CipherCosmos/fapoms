@@ -14,41 +14,65 @@ Every step below was executed against a genuinely empty stack — new containers
 
 ## Deploy
 
-```bash
-cp .env.production.example .env.docker   # then edit — see "Before production" below
-docker compose --env-file .env.docker up -d
-```
-
-That is the whole thing. On first boot the backend:
-
-1. Creates the Postgres extensions it needs (`uuid-ossp`, `postgis`, `pg_trgm`)
-2. Applies every pending migration — the baseline builds all 80 tables
-3. Starts serving
-
-Then seed the first administrator and the reference data:
+The production stack is `deploy/docker-compose.prod.yml` — **not** the root `docker-compose.yml`,
+which is the bind-mounted, dev-image stack used for local development (see README.md). Use
+`./setup.sh` from the repository root; it wraps every step below and is safe to re-run:
 
 ```bash
-docker compose exec backend sh -c 'cd /app/packages/backend && npm run seed:prod'
+./setup.sh                                    # local, http://localhost:8080
+./setup.sh --public-url https://audit.example.com
 ```
 
-`seed:prod` runs the compiled seed. `npm run seed` is the development one and invokes `ts-node`
-against `src/`, neither of which exists in the production image — it fails with
-`command failed: sh -c ts-node ...`, which reads like a broken script rather than the wrong one.
+It generates `.env.docker` with real entropy for every secret the API refuses to boot without,
+links `.env` and `deploy/.env` to it (compose resolves `${VAR}` only from those, never from a
+service's own `env_file:`), runs `docker compose -f deploy/docker-compose.prod.yml up -d --build`,
+waits for `database: up`, seeds reference data with `--if-empty`, and **prints a generated
+administrator password once** — capture it there and change it after first sign-in. It never
+overwrites an existing `.env.docker`, never reseeds a populated database, and never rotates a
+password it did not just create.
+
+On first boot:
+
+1. `db-migrate` (a one-shot service in `deploy/docker-compose.prod.yml`) creates the Postgres
+   extensions (`uuid-ossp`, `postgis`, `pg_trgm`), applies every pending migration as
+   `fapoms_migrator` — the baseline builds all 80 tables — and hardens the runtime role.
+2. `backend` and `backend-worker` wait on `db-migrate` (`condition: service_completed_successfully`)
+   and only then start serving.
+
+<details>
+<summary>By hand, if you would rather not run <code>setup.sh</code></summary>
+
+```bash
+cp .env.production.example .env.docker    # then set JWT_SECRET, PII_ENCRYPTION_KEY, DB_PASSWORD,
+                                            # MINIO_ROOT_PASSWORD, CORS_ORIGINS — see "Before
+                                            # production" below
+ln -s .env.docker .env
+ln -s ../.env.docker deploy/.env           # both required — see README.md "Configuration"
+docker compose -f deploy/docker-compose.prod.yml up -d --build
+docker compose exec backend sh -c \
+  'cd /app/packages/backend && node dist/infrastructure/database/seed.js --if-empty'
+```
+
+`--if-empty` seeds an empty database and is a silent no-op on a populated one; with no flag the
+seed refuses a populated database and prints what it would have destroyed; only `--force` truncates.
+`npm run seed:prod` passes no flag. Change the seeded administrator password immediately after
+first sign-in.
+
+</details>
 
 **Which identity seeds.** The `backend` container connects as `fapoms_runtime`, which may read and
 write rows and may not `TRUNCATE` — that is the audit boundary, not an oversight. Seeding an EMPTY
-database needs no truncate and works as it stands, which is the case this step exists for. Seeding
-*over existing data* does need one, so it is a deploy-time act:
+database needs no truncate and works as it stands, which is the case the step above covers. Seeding
+*over existing data* does need one, so it is a deliberate, separate, deploy-time act:
 
 ```bash
-docker compose exec -e DB_USERNAME=fapoms_migrator -e DB_PASSWORD="$FAPOMS_MIGRATION_PASSWORD" \
-  backend sh -c 'cd /app/packages/backend && npm run seed:prod -- --force'
+docker compose -f deploy/docker-compose.prod.yml exec \
+  -e DB_USERNAME=fapoms_migrator -e DB_PASSWORD="$FAPOMS_MIGRATION_PASSWORD" \
+  backend sh -c 'cd /app/packages/backend && node dist/infrastructure/database/seed.js --force'
 ```
 
 The seed says so itself if you get it wrong, naming the role and the command, rather than failing
 with `permission denied for table users`.
-
-Sign in as `admin` / `admin123` and **change that password immediately**.
 
 ### Verify it worked
 
@@ -102,8 +126,8 @@ wait on it with `condition: service_completed_successfully`.
 fresh install, and adds them to an older `.env.docker` that predates them — naming what it added.
 For an existing deployment, follow the transition procedure and take the backup it asks for first.
 
-**Read `docs/database-roles.md`** for the full model, every environment variable, the transition
-procedure and its rollback.
+**Read `docs/reference/database-roles.md`** for the full model, every environment variable, the
+transition procedure and its rollback.
 
 ## How the schema is managed
 
@@ -465,5 +489,6 @@ changes need a new APK. See `packages/mobile/BUILD-APK.md`.
 
 `/admin/logs` serves live and historical container output to administrators, and the same logs are
 available over HTTP for pasting into a conversation. The Docker socket is never mounted into the
-backend — a read-only proxy container fronts it. See [docs/service-logs.md](docs/service-logs.md)
-for the endpoints, the security model and the retention caveats.
+backend — a read-only proxy container fronts it. See
+[docs/operations/service-logs.md](docs/operations/service-logs.md) for the endpoints, the security
+model and the retention caveats.

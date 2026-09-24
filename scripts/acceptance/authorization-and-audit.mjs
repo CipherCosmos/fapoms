@@ -20,7 +20,7 @@
  * db writes   : none through SQL except the destructive audit probes below.
  * destructive : ATTEMPTS TRUNCATE/DELETE/UPDATE/DROP on audit_events and audit_chain as the
  *               runtime role, to prove they are refused. Each runs inside a transaction that is
- *               ALWAYS rolled back — docs/incident-2026-09-09-audit-truncate.md is why.
+ *               ALWAYS rolled back — docs/reports/2026-09-09-incident-audit-truncate.md is why.
  * deletion    : attempts DELETE /assayers/:id expecting 403; asserts nothing moved.
  * teardown    : none needed.
  * gate        : none of its own — it imports only the job-polling helpers from _lib.mjs

@@ -39,7 +39,7 @@
 
 # ── The tripwire itself: removing an entry here must be deliberate and reviewed ──
 /packages/backend/src/security-controls.spec.ts        @DeepStacker
-/docs/SECURITY-CONTROLS.md                             @DeepStacker
+/docs/reference/SECURITY-CONTROLS.md                             @DeepStacker
 
 # ── CI and deploy: the gate, and the thing the gate protects ────────────────────
 /.github/                                              @DeepStacker

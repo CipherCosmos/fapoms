@@ -25,7 +25,7 @@
  * Self-provisioning and re-runnable: it brings its own client, projects, branches and people,
  * prefixed `MESSY-<stamp>`, and removes them children-first at the end. It never writes to
  * `audit_events` — the audit trail is evidence, and a probe that edits evidence has cost more
- * than it found (see docs/incident-2026-09-09-audit-truncate.md).
+ * than it found (see docs/reports/2026-09-09-incident-audit-truncate.md).
  *
  *   AC_API=http://127.0.0.1:8080/api/v1 AC_PASSWORD=... \
  *   DB_HOST=127.0.0.1 DB_PORT=55432 DB_USERNAME=fapoms DB_PASSWORD=... DB_DATABASE=fapoms \

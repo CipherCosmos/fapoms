@@ -91,7 +91,7 @@ before a grant is consulted.
 
 The migration role can still do it, and that is the stated boundary: it is a deploy-time credential
 a running process never holds. `npm run verify:runtime-role` proves the whole of it on a disposable
-database it builds and drops, 43 checks. See `docs/database-roles.md`.
+database it builds and drops, 43 checks. See `docs/reference/database-roles.md`.
 
 **Nothing in the recovery figures above changes.** The destroyed rows stay destroyed and the count
 stays interrupted. This closes the cause; it does not and cannot restore the evidence.

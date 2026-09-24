@@ -529,7 +529,7 @@ describe('security controls are still wired', () => {
           + 'packages/backend/src/security-controls.spec.ts in the SAME commit and say why in the '
           + 'commit message. If you did not, you have hit the failure mode this file exists for: '
           + 'commit 7c9ee664 removed seven controls and their tests together, and CI stayed green '
-          + 'for twelve days. See docs/SECURITY-CONTROLS.md.',
+          + 'for twelve days. See docs/reference/SECURITY-CONTROLS.md.',
       );
     }
   });

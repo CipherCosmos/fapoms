@@ -2,7 +2,7 @@
 /**
  * THE ENVIRONMENT CHECKLIST, RUN AGAINST A DEPLOYMENT INSTEAD OF DESCRIBED.
  *
- * `docs/go-live-checklist.md` §3 is fifteen checks that had never been performed, on the stated
+ * `docs/operations/go-live-checklist.md` §3 is fifteen checks that had never been performed, on the stated
  * grounds that no route existed from the acceptance machine to either deployment. That is no
  * longer true, so this script exists to run them against ANY deployment given its URL — and, just
  * as importantly, to be honest about the ones it cannot run from outside.
@@ -854,7 +854,7 @@ async function openDatabase() {
 // ── main ───────────────────────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\nFAPOMS deployment certification — docs/go-live-checklist.md §3`);
+  console.log(`\nFAPOMS deployment certification — docs/operations/go-live-checklist.md §3`);
   console.log(`target: ${API}`);
   console.log(`mode:   read-only${ALLOW_EICAR ? ' + EICAR upload' : ''}${ALLOW_WRITES ? ' + business writes' : ''}\n`);
 

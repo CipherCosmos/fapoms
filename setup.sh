@@ -147,7 +147,7 @@ if [ -f "$ENV_FILE" ]; then
   #
   # So: nothing already present is touched, and anything ABSENT that the compose file cannot start
   # without is added, named out loud. The three below arrived with the database role split — see
-  # docs/database-roles.md.
+  # docs/reference/database-roles.md.
   ADDED_KEYS=()
   add_missing() {
     if [ -z "$(read_key "$1")" ]; then
@@ -168,7 +168,7 @@ if [ -f "$ENV_FILE" ]; then
 
   if [ ${#ADDED_KEYS[@]} -gt 0 ]; then
     warn "added ${#ADDED_KEYS[@]} newly-required key(s) to $(basename "$ENV_FILE"): ${ADDED_KEYS[*]}"
-    warn "these are the database role credentials — read docs/database-roles.md before the next deploy, and take a backup first"
+    warn "these are the database role credentials — read docs/reference/database-roles.md before the next deploy, and take a backup first"
   fi
 
   # NOT changed, deliberately, even though the compose file needs it false: flipping a value
@@ -205,7 +205,7 @@ else
   # The API and the worker do NOT migrate. `deploy/docker-compose.prod.yml` runs `db-migrate`
   # first, as the deploy role, and both application services gate on it finishing. A process that
   # migrates needs schema privileges, and a runtime identity with schema privileges can remove the
-  # audit triggers — which is the whole of docs/database-roles.md.
+  # audit triggers — which is the whole of docs/reference/database-roles.md.
   #
   # The compose file sets this for the two application services regardless, so the value here only
   # governs a `docker-compose.yml` (dev) stack, where one role still does everything.

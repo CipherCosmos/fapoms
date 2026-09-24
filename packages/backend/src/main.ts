@@ -362,7 +362,7 @@ async function assertDatabaseIdentity(): Promise<void> {
   console.error(
     `FATAL: the database this application is connecting to has not been hardened.\n${detail}\n\n`
     + '  Run `npm run db:harden` against it, and check DB_USERNAME is the runtime role.\n'
-    + '  See docs/database-roles.md. Refusing to start: an unhardened database is not a reduced\n'
+    + '  See docs/reference/database-roles.md. Refusing to start: an unhardened database is not a reduced\n'
     + '  deployment, it is one where the application credential can remove the audit triggers.',
   );
   process.exit(1);

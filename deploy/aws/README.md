@@ -127,6 +127,28 @@ BRANCH=test MODE=saving bash /opt/fapoms/deploy/aws/install-auto-deploy.sh
 `MODE` must match the mode you bootstrapped with, so the compose file list agrees with what is
 actually running. Re-run the installer to change branch or mode; the stored token is preserved.
 
+### Two layouts, auto-detected
+
+Everything in sections 1–2 above builds the **"bootstrap"** layout: the CloudFormation stack,
+`bootstrap.sh`, `deploy/docker-compose.aws.yml`, production images with source baked in. That is
+the layout to follow for a *new* deployment.
+
+`install-auto-deploy.sh` also supports a second, simpler **"mounted"** layout, and this is what
+the project's own running EC2 box actually uses: no CloudFormation stack, no `bootstrap.sh` — just
+a plain git clone with the root `docker-compose.yml` (the same file `docker compose up` runs
+locally), dev images, `packages/*/src` bind-mounted into the containers, and `nest start --watch` /
+`vite --host` running inside them. There, `git reset --hard` onto the new commit **is** the deploy:
+the watchers inside the containers pick up the new files immediately, and nothing is rebuilt unless
+a dependency manifest or a Dockerfile changed.
+
+`install-auto-deploy.sh` tells the two apart by which compose file it finds under `APP_DIR` —
+`deploy/docker-compose.aws.yml` present → bootstrap; only the root `docker-compose.yml` present →
+mounted — and prints which one it detected before writing any configuration. `MODE` is read but
+ignored for the mounted layout, since that layout has no `saving`/`full` split. See
+`deploy/aws/install-auto-deploy.sh` (the `LAYOUTS` comment near the top) for the exact detection
+logic, and [docs/operations/environments.md](../../docs/operations/environments.md) for the
+side-by-side comparison with the homeserver.
+
 | | |
 |---|---|
 | Watch | `tail -f /opt/fapoms-ops/auto-deploy.log` |

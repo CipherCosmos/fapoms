@@ -199,22 +199,42 @@ npm test                                    # every workspace
 npx tsc --noEmit -p packages/backend/tsconfig.json
 ```
 
-`.github/workflows/ci.yml` runs on every push and PR to `main`: install, build shared, typecheck all
-three apps (mobile is typechecked **here and nowhere else** — it has no build step in CI), run the
-tests, build backend and frontend.
+`.github/workflows/ci.yml` runs on every push to `main`, `test` and `refactor/**`, and on every PR
+into `main` or `test`: install, build shared, typecheck all three apps (mobile is typechecked
+**here and nowhere else** — it has no build step in CI), run the tests, build backend and
+frontend. A second job, `database`, boots a real PostGIS + Redis service, migrates a database from
+empty, and runs the `.db.spec.ts` suites that need a live connection — the half `verify` cannot do
+because it has no database.
 
 CI is not a status badge. `deploy/auto-deploy.sh` **refuses to deploy a commit CI has not marked
-green**, so a red build cannot reach the field.
+green** on `main` or `test`, so a red build cannot reach either deployment. `refactor/**` runs the
+same CI but deploys nowhere — it is how this reorganization branch gets a "nothing changed" verdict
+before each phase merges.
 
 ---
 
 ## Deployment
 
 Read **[DEPLOYMENT.md](DEPLOYMENT.md)** — it is the current, verified guide and covers the
-production compose stack, backups, and what to change before going live.
+production compose stack, backups, and what to change before going live. See
+**[docs/README.md](docs/README.md)** for every other doc in this repo, and
+**[docs/operations/environments.md](docs/operations/environments.md)** for exactly which branch,
+host, compose file and image mode each of the two deployments below runs.
 
-The running deployment polls `main` and redeploys what changed, rebuilding only the image whose
-package moved. `deploy/aws/` holds an alternative AWS path.
+There are two live deployments, both driven by the same `deploy/auto-deploy.sh`, each on its own
+systemd timer that checks every two minutes and only deploys a commit CI has marked green:
+
+- **AWS EC2** (Ubuntu, Docker) follows `test`, running the root `docker-compose.yml` — the same
+  bind-mounted dev-image stack `docker compose up` runs locally. `deploy/aws/` holds its
+  bootstrap/installer scripts and an alternative, fully self-hosted "bootstrap" layout; see
+  [deploy/aws/README.md](deploy/aws/README.md).
+- **The homeserver** (AlmaLinux, rootless Podman) follows `main`, running
+  `deploy/docker-compose.prod.yml` — production images, no bind mounts, a dedicated `db-migrate`
+  service.
+
+Only the image whose package changed gets rebuilt (or, on EC2's mounted layout, nothing is rebuilt
+at all — the `git reset --hard` the deploy performs is the deploy, since the running containers
+bind-mount the source and hot-reload it).
 
 The mobile app does **not** deploy this way. It ships through EAS
 (`npm run build:apk --workspace=packages/mobile`); see
@@ -225,27 +245,25 @@ reads needs a new build to reach field devices.
 
 ## Documentation
 
+Full index: **[docs/README.md](docs/README.md)**. The most-read docs:
+
 | Document | Read it when |
 |---|---|
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Putting the system on a machine. **Current.** |
+| [docs/operations/environments.md](docs/operations/environments.md) | Which branch runs where, and how to deploy/check/back up/restore each one. |
 | [deploy/aws/README.md](deploy/aws/README.md) | Deploying to AWS. |
-| [docs/go-live-checklist.md](docs/go-live-checklist.md) | Certifying a deployment before real use (`scripts/acceptance/verify-deployment.mjs` runs its §3). |
+| [docs/operations/go-live-checklist.md](docs/operations/go-live-checklist.md) | Certifying a deployment before real use (`scripts/acceptance/verify-deployment.mjs` runs its §3). |
 | [scripts/acceptance/README.md](scripts/acceptance/README.md) | Checking a running deployment end to end with the acceptance probes. |
-| [docs/business-spec.md](docs/business-spec.md) | Learning the domain: the audit process end to end, entity by entity. |
-| [docs/appraiser-recruitment-spec.md](docs/appraiser-recruitment-spec.md) | The recruitment requirements the hiring pipeline was built from. |
-| [docs/database-roles.md](docs/database-roles.md) | Who the app is when it talks to PostgreSQL; migrations and hardening. |
-| [docs/env-vars.md](docs/env-vars.md) | Every environment variable the code reads. |
-| [docs/SECURITY-CONTROLS.md](docs/SECURITY-CONTROLS.md) | `security-controls.spec.ts` failed, or you are touching a security control. |
-| [docs/outbox-recovery-runbook.md](docs/outbox-recovery-runbook.md) | Completed work stopped turning into payables. |
-| [docs/service-logs.md](docs/service-logs.md) | Reading container logs from the app. |
-| [docs/incident-2026-09-09-audit-truncate.md](docs/incident-2026-09-09-audit-truncate.md) | Why probes never touch the audit tables (the guards cite it). |
-| [docs/load-test-and-scale.md](docs/load-test-and-scale.md) | Proving the capacity ceiling; scaling past one instance. |
+| [docs/architecture/business-spec.md](docs/architecture/business-spec.md) | Learning the domain: the audit process end to end, entity by entity. |
+| [docs/reference/env-vars.md](docs/reference/env-vars.md) | Every environment variable the code reads. |
+| [docs/reference/SECURITY-CONTROLS.md](docs/reference/SECURITY-CONTROLS.md) | `security-controls.spec.ts` failed, or you are touching a security control. |
 | [packages/mobile/BUILD-APK.md](packages/mobile/BUILD-APK.md) | Building and publishing the field app. |
-| `deploy/maps/` (see `fetch-map-data.sh`) | The India map: its data, borders and tile server. |
 | [CLAUDE.md](CLAUDE.md) | Conventions for AI coding agents working in this repo. |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branch rule, commit style, how to run the checks before a PR. |
 
 Dated reports (certifications, acceptance runs, audits, the discovery report) were removed on
-2026-09-24 once their findings were fixed or superseded; they remain in git history.
+2026-09-24 once their findings were fixed or superseded, except where kept as a permanent record
+under [docs/reports/](docs/reports/); everything else remains in git history.
 
 ---
 
