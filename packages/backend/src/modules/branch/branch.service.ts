@@ -1000,16 +1000,21 @@ export class BranchService {
     // rejecting a legitimate branch — a hard-coded map can't know every district.
     if (!cityEntity) {
       const live = await autocompleteIndia(city);
+      // Names are compared in one form on both sides: the lookup writes "Dadra and Nagar Haveli
+      // and Daman and Diu" where a bank writes "Dadra & Nagar Haveli and Daman & Diu", and an
+      // exact comparison refused real union-territory branches for spelling alone.
+      const wantState = samePlaceState(state);
+      const wantDistrict = samePlaceName(district);
       const found = live.some(
         (p) =>
           p.district &&
           p.state &&
-          p.district.toLowerCase() === district.toLowerCase() &&
-          p.state.toLowerCase() === state.toLowerCase(),
+          samePlaceName(p.district) === wantDistrict &&
+          samePlaceState(p.state) === wantState,
       );
       const stateLive = await autocompleteIndia(state);
       const stateExists = stateLive.some(
-        (p) => p.type === 'state' || p.state.toLowerCase() === state.toLowerCase(),
+        (p) => p.type === 'state' || (!!p.state && samePlaceState(p.state) === wantState),
       );
       if (!found && !stateExists) {
         throw new BadRequestException(
@@ -1041,4 +1046,19 @@ export class BranchService {
     }
     return zone;
   }
+}
+
+/** A place name in one comparable form: case, "&" versus "and", punctuation and spacing ignored. */
+export function samePlaceName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/** A state in one comparable form — its canonical name when it has one, else `samePlaceName`. */
+export function samePlaceState(state: string): string {
+  return samePlaceName(canonicalStateName(state) ?? state);
 }
