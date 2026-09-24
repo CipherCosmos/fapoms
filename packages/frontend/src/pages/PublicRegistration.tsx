@@ -625,6 +625,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   const [infoRequests, setInfoRequests] = useState<ApplicationInfoRequestItem[]>([]);
   /** Where an approved candidate has got to since, and what HR has asked of them — from the server. */
   const [journeyProgress, setJourneyProgress] = useState<CandidateJourneyProgress | null>(null);
+  /** The link has expired and only shows their progress — see `statusOnly` on the hydrate result. */
+  const [statusOnly, setStatusOnly] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
 
   /*
@@ -727,6 +729,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       setLoadState('loading');
       setLoadError(null);
       const result = await hydrateRegistration(token);
+      // An expired link sends its status, the steps and what HR asked for — and nothing to fill a
+      // form from, which is fine: the flag keeps the form from rendering (see below).
+      setStatusOnly(Boolean(result.statusOnly));
       setApplication(result.application);
       setConsentNotice(result.consentNotice);
       setDocumentsRequested(result.documentsRequested);
@@ -1465,6 +1470,40 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     of an approved candidate goes first. A paused joiner is told only that, in the same words
     whatever paused them — the link is not the place to learn how a check or an approval went.
   */
+  /*
+    AN EXPIRED LINK TO A FORM HR SENT BACK (2026-09-24).
+
+    The form cannot open behind an expired link, so what HR asked for is shown as a list, with the
+    one way forward: a new link, which HR can send. Everything else an expired link shows falls
+    through to the status screen below, with a line saying the link only shows progress now.
+  */
+  if (statusOnly && application.status === ApplicationStatus.AWAITING_INFO) {
+    return shortScreen(
+      <>
+        <AlertCircle size={36} style={{ color: 'var(--warning)' }} />
+        <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          {CANDIDATE_JOURNEY_WORDS.expiredFixTitle}
+        </h1>
+        {infoRequests.length > 0 && (
+          <ul data-testid="expired-info-requests" style={{ textAlign: 'left', margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {infoRequests.map((r) => (
+              <li key={`${r.kind}:${r.key}`} style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                <strong style={{ color: 'var(--text-primary)' }}>{r.label}</strong> — {r.message}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
+          {CANDIDATE_JOURNEY_WORDS.expiredFixBody}
+        </p>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+          Reference <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>#{applicationRef(application.id)}</strong>
+        </div>
+      </>,
+      'neutral',
+    );
+  }
+
   const journey = candidateJourney(application.status, journeyProgress);
   const baseStatusView = STATUS_VIEW[application.status]?.(application);
   const statusView = baseStatusView && journey?.paused
@@ -1490,6 +1529,11 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
           </p>
         )}
         {journey && !journey.paused && <CandidateJourneySteps view={journey} />}
+        {statusOnly && (
+          <div data-testid="status-only-note" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            {CANDIDATE_JOURNEY_WORDS.progressOnly}
+          </div>
+        )}
         {/* A withdrawn application has nothing left to quote: its details were deleted. */}
         {!withdrawn && (
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>

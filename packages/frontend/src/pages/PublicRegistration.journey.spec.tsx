@@ -139,3 +139,52 @@ describe('a form HR sent back', () => {
     expect(screen.getByText(/Plain background please\./)).toBeInTheDocument();
   });
 });
+
+/**
+ * AN EXPIRED LINK STILL SAYS HOW THEY ARE GETTING ON (owner, 2026-09-24: "status-only after expiry").
+ *
+ * The server sends only the status, the steps and what HR asked for (`statusOnly`). The page shows
+ * that, says the link only shows progress now, and never opens the form behind it.
+ */
+describe('a link that has expired', () => {
+  const openExpired = async (status: ApplicationStatus, extra: Record<string, unknown> = {}) => {
+    api.hydrateRegistration.mockResolvedValue({
+      application: { id: 'abcdef12-0000', status }, documents: [], documentsRequested: [],
+      otpVerified: false, consentNotice: null, infoRequests: [], journey: null, statusOnly: true, ...extra,
+    } as never);
+    render(<MemoryRouter><PublicRegistration token={TOKEN} /></MemoryRouter>);
+    await screen.findByRole('heading', { level: 1 });
+  };
+
+  it('still shows an approved candidate their steps, and says the link only shows progress now', async () => {
+    await openExpired(ApplicationStatus.APPROVED, { journey: { stage: 'APPROVAL', paused: false, asks: [] } });
+    // No name: the expired link carries none, and the heading does not pretend otherwise.
+    expect(screen.getByRole('heading', { name: 'Approved.' })).toBeInTheDocument();
+    expect(steps()).toContain('Final approval ←');
+    expect(screen.getByTestId('status-only-note')).toHaveTextContent('only shows your progress');
+    expect(screen.queryByText('Link not working — ask HR for a new one.')).not.toBeInTheDocument();
+  });
+
+  it('shows what HR asked for on a form it sent back, and how to get a working link', async () => {
+    await openExpired(ApplicationStatus.AWAITING_INFO, {
+      infoRequests: [{ kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'The photo is blurred — retake it.' }],
+    });
+    expect(screen.getByRole('heading', { name: 'HR has asked you to fix a few things.' })).toBeInTheDocument();
+    expect(screen.getByTestId('expired-info-requests')).toHaveTextContent('PAN card — The photo is blurred — retake it.');
+    expect(screen.getByText(/Ask HR to send you a new link/)).toBeInTheDocument();
+    // The form never opens behind an expired link.
+    expect(screen.queryByRole('button', { name: /Continue|Next|Submit/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Full name/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a submitted form as submitted', async () => {
+    await openExpired(ApplicationStatus.PENDING_VALIDATION);
+    expect(screen.getByRole('heading', { name: 'Submitted. HR will call you.' })).toBeInTheDocument();
+    expect(screen.getByTestId('status-only-note')).toBeInTheDocument();
+  });
+
+  it('leaves a live link exactly as it was — no "only shows progress" line', async () => {
+    await open({});
+    expect(screen.queryByTestId('status-only-note')).not.toBeInTheDocument();
+  });
+});

@@ -87,6 +87,12 @@ export interface RegistrationHydrateResult {
    * copy hard-coded here would drift out of step with what the row claims was agreed.
    */
   consentNotice: ConsentNotice & { grievanceContact: string };
+  /**
+   * The link has expired, and this is only how the candidate is getting on (owner, 2026-09-24):
+   * `application` carries its id and status and nothing else, there is no consent notice and no
+   * documents, and nothing can be changed through it. See the backend's `statusOnlyView`.
+   */
+  statusOnly?: boolean;
 }
 
 export interface UpdateRegistrationDraftInput {

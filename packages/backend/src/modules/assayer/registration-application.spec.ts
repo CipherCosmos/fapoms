@@ -519,6 +519,84 @@ describe('the registration link after approval', () => {
   });
 });
 
+/**
+ * AN EXPIRED LINK STILL SAYS HOW THE CANDIDATE IS GETTING ON (owner, 2026-09-24: "status-only after
+ * expiry").
+ *
+ * The link lives 72 hours; joining takes longer, so the steps after approval were mostly behind
+ * "this link has expired". Past its expiry the link now shows progress and nothing else. What must
+ * never follow from that: anything of what the candidate gave coming back through an old link, or
+ * the old link changing anything.
+ */
+describe('a registration link after it has expired', () => {
+  const expired = (over: Record<string, unknown> = {}) => ({
+    id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.APPROVED, tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() - 60_000),
+    tokenConsumedAt: new Date('2026-09-20T10:00:00Z'), employmentCategory: 'FREELANCER', organizationId: 'org-1',
+    promotedAssayerId: 'assayer-1', panNumber: 'ABCDE1234F', extendedProfile: { fields: { bankAccountNumber: '123456789012' } },
+    ...over,
+  });
+  const open = async (application: Row, lifecycleStatus = AssayerLifecycleStatus.BACKGROUND_VERIFICATION) => {
+    // A verified number, so a refused write is refused for the expired link and not for want of a code.
+    const ctx = makeService({ application, cache: { [`regotp:verified:${TOKEN_HASH}`]: { phone: '9822014455' } } }) as any;
+    ctx.assayers.findOne.mockResolvedValue({ id: 'assayer-1', lifecycleStatus });
+    ctx.rosterRecords.selfDocumentGates = jest.fn(async () => []);
+    return { ...ctx, view: await ctx.service.hydrate(RAW_TOKEN) };
+  };
+
+  it('still shows an approved candidate where they have got to', async () => {
+    const { view } = await open(expired());
+    expect(view.statusOnly).toBe(true);
+    expect(view.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(view.journey).toEqual({ stage: 'BACKGROUND', paused: false, asks: [] });
+  });
+
+  it('gives nothing of what they gave — no name, no contact details, no answers, no scans, no consent text', async () => {
+    const { view } = await open(expired());
+    expect(Object.keys(view.application).sort()).toEqual(['id', 'status']);
+    expect(view.documents).toEqual([]);
+    expect(view.consentNotice).toBeNull();
+    const text = JSON.stringify(view);
+    for (const secret of ['Ramesh', 'candidate@example.com', '9822014455', '4455', 'ABCDE1234F', '123456789012']) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it('says what HR sent the form back for, when it was waiting on them', async () => {
+    const { view } = await open(expired({
+      status: ApplicationStatus.AWAITING_INFO,
+      infoRequests: [{ kind: 'document', key: 'PAN_CARD', label: 'PAN card', message: 'The photo is blurred — retake it.' }],
+    }));
+    expect(view.statusOnly).toBe(true);
+    expect(view.infoRequests).toEqual([expect.objectContaining({ label: 'PAN card', message: 'The photo is blurred — retake it.' })]);
+  });
+
+  it('shows a submitted form as submitted', async () => {
+    const { view } = await open(expired({ status: ApplicationStatus.PENDING_VALIDATION, promotedAssayerId: null }));
+    expect(view).toMatchObject({ statusOnly: true, application: { status: ApplicationStatus.PENDING_VALIDATION }, journey: null });
+  });
+
+  /** A read that writes is a read somebody can use to move a record; this one writes nothing. */
+  it('writes nothing when it is opened', async () => {
+    const { applications } = await open(expired({ tokenConsumedAt: null }));
+    expect(applications.save).not.toHaveBeenCalled();
+  });
+
+  it('still refuses every change made through it, exactly as before', async () => {
+    const { service } = await open(expired({ status: ApplicationStatus.AWAITING_INFO }));
+    await expect(service.updateDraft(RAW_TOKEN, { fullName: 'Someone Else' } as never)).rejects.toThrow(/expired/);
+    await expect(service.requestOtp(RAW_TOKEN, '9822014455')).rejects.toThrow(/expired/);
+    await expect(service.submit(RAW_TOKEN)).rejects.toThrow(/expired/);
+    await expect(service.withdrawConsent(RAW_TOKEN, 'changed my mind')).rejects.toThrow(/expired/);
+  });
+
+  it('is served in full, form and all, while it has not expired — nothing changes for a live link', async () => {
+    const { view } = await open(expired({ status: ApplicationStatus.AWAITING_INFO, tokenExpiresAt: new Date(Date.now() + 3_600_000) }));
+    expect(view.statusOnly).toBe(false);
+    expect(view.application.fullName).toBe('Ramesh Kulkarni');
+  });
+});
+
 describe('pre-account OTP', () => {
   it('never stores the code itself — only its hash, beside the phone it is bound to', async () => {
     const { service, cacheData, mailbox } = makeService();

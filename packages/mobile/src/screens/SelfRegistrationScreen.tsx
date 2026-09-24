@@ -24,7 +24,8 @@ import {
   wholeFormPatch, type StepErrors,
 } from './self-registration/registration-form';
 import { ConsentGate } from './self-registration/ConsentGate';
-import { FINISHED_STATUSES, RegistrationStatus } from './self-registration/RegistrationStatus';
+import { RegistrationStatus } from './self-registration/RegistrationStatus';
+import { registrationScreenFor } from './self-registration/registration-screen';
 import { StepPersonal } from './self-registration/StepPersonal';
 import { StepAddress } from './self-registration/StepAddress';
 import { StepBank } from './self-registration/StepBank';
@@ -76,6 +77,8 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   const [infoRequests, setInfoRequests] = useState<ApplicationInfoRequestItem[]>([]);
   /** Where an approved candidate has got to since, and what HR has asked of them — the status screen's. */
   const [journey, setJourney] = useState<CandidateJourneyProgress | null>(null);
+  /** The link has expired and only shows progress — the server sends nothing to fill a form from. */
+  const [statusOnly, setStatusOnly] = useState(false);
   const [consentNotice, setConsentNotice] = useState<RegistrationHydration['consentNotice'] | null>(null);
 
   const [form, setForm] = useState<RegistrationFormValues | null>(null);
@@ -135,6 +138,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     setInfoRequests(data.infoRequests ?? []);
     // Not on the service's declared shape: the shared reader answers null for a server that sends none.
     setJourney(readCandidateJourneyProgress((data as { journey?: unknown }).journey));
+    setStatusOnly(Boolean(data.statusOnly));
     setReferences(readReferences(data.application));
     setReferencesError(null);
     setConsentNotice(data.consentNotice);
@@ -468,8 +472,13 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
 
   // ── Render: finished ─────────────────────────────────────────────────────
 
-  if (FINISHED_STATUSES.has(application.status)) {
-    return <RegistrationStatus application={application} journey={journey} onExit={onExit} />;
+  if (registrationScreenFor(application.status, statusOnly) !== 'form') {
+    return (
+      <RegistrationStatus
+        application={application} journey={journey} onExit={onExit}
+        statusOnly={statusOnly} infoRequests={infoRequests}
+      />
+    );
   }
 
   // ── Render: the notice, then the four steps ──────────────────────────────

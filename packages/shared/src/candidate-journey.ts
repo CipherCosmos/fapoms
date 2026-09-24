@@ -104,6 +104,14 @@ export const CANDIDATE_JOURNEY_WORDS = {
    */
   resendHowOnWeb: 'Open the appraiser app, sign in, and send them from Your papers. HR can also add them for you.',
   resendHowInApp: 'Sign in to this app and send them from Your papers. HR can also add them for you.',
+  /**
+   * An EXPIRED link (owner, 2026-09-24: "status-only after expiry"). It still shows where they have
+   * got to, and says it can do nothing else.
+   */
+  progressOnly: 'This link now only shows your progress. To change anything, ask HR.',
+  /** A form HR sent back, behind an expired link: what was asked is listed, and the form cannot open. */
+  expiredFixTitle: 'HR has asked you to fix a few things.',
+  expiredFixBody: 'This link has expired, so the form cannot be opened here. Ask HR to send you a new link — what you already gave is kept.',
 } as const;
 
 /** One document HR has asked an approved candidate to send again. */

@@ -81,6 +81,11 @@ export interface RegistrationHydration {
    * must be the same ones.
    */
   consentNotice: ConsentNotice & { grievanceContact: string };
+  /**
+   * The link has expired and this is only how the candidate is getting on (2026-09-24): the
+   * application is its id and status, there is no consent notice, and nothing can be changed.
+   */
+  statusOnly?: boolean;
 }
 
 export interface RegistrationPincodeLookup {

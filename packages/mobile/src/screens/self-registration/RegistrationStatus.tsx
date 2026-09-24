@@ -1,19 +1,14 @@
 import React from 'react';
 import { ScrollView, View } from 'react-native';
-import { ApplicationStatus, candidateJourney, type CandidateJourneyProgress } from '@fapoms/shared';
+import { ApplicationStatus, candidateJourney, type ApplicationInfoRequestItem, type CandidateJourneyProgress } from '@fapoms/shared';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AmbientGlow, AppText, Button, Card, Icon } from '../../components/ui/primitives';
 import { useT } from '../../i18n';
 import type { RegistrationApplication } from '../../services/self-registration.service';
 import { applicationRef } from './registration-form';
 
-/** The statuses with no form behind them. */
-export const FINISHED_STATUSES: ReadonlySet<string> = new Set([
-  ApplicationStatus.PENDING_VALIDATION,
-  ApplicationStatus.APPROVED,
-  ApplicationStatus.REJECTED,
-  ApplicationStatus.WITHDRAWN,
-]);
+// Moved to `registration-screen.ts`, where the choice of screen can be tested; kept here for importers.
+export { FINISHED_STATUSES } from './registration-screen';
 
 /**
  * Submitted, approved, not approved or withdrawn — one short sentence, the reference to quote, and
@@ -31,14 +26,25 @@ export const RegistrationStatus: React.FC<{
   /** Where an approved candidate has got to, from the server; null before approval or from an older server. */
   journey: CandidateJourneyProgress | null;
   onExit: () => void;
-}> = ({ application, journey: progress, onExit }) => {
+  /** The link has expired and shows only progress (2026-09-24): say so, and offer nothing to change. */
+  statusOnly?: boolean;
+  /** What HR asked for, shown when a sent-back form sits behind an expired link. */
+  infoRequests?: ApplicationInfoRequestItem[];
+}> = ({ application, journey: progress, onExit, statusOnly = false, infoRequests = [] }) => {
   const t = useTheme();
   const tr = useT();
   const status = application.status;
   const journey = candidateJourney(status, progress);
 
+  // A form HR sent back, behind an expired link: what was asked, and how to get a working link.
+  const expiredFix = statusOnly && status === ApplicationStatus.AWAITING_INFO;
   const view: { icon: string; color: string; soft: string; title: string; body: string | null } =
-    journey?.paused
+    expiredFix
+      ? {
+        icon: 'alert-circle', color: t.colors.warning, soft: t.colors.surfaceAlt,
+        title: tr('selfRegistration.journey.expiredFixTitle'), body: tr('selfRegistration.journey.expiredFixBody'),
+      }
+      : journey?.paused
       ? {
         icon: 'pause-circle', color: t.colors.textMuted, soft: t.colors.surfaceAlt,
         title: tr('selfRegistration.journey.pausedTitle'), body: tr('selfRegistration.journey.pausedBody'),
@@ -94,6 +100,16 @@ export const RegistrationStatus: React.FC<{
           {view.body ? <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>{view.body}</AppText> : null}
         </View>
 
+        {expiredFix && infoRequests.length > 0 && (
+          <Card level={1} style={{ gap: t.space.sm }}>
+            {infoRequests.map((r) => (
+              <AppText key={`${r.kind}:${r.key}`} variant="body">
+                <AppText variant="bodyStrong">{r.label}</AppText>{' — '}{r.message}
+              </AppText>
+            ))}
+          </Card>
+        )}
+
         {journey && !journey.paused && (
           <View style={{ gap: t.space.md }}>
             <View accessibilityRole="list" accessibilityLabel={tr('selfRegistration.journey.stepsLabel')} style={{ gap: 2 }}>
@@ -124,6 +140,10 @@ export const RegistrationStatus: React.FC<{
             </View>
             {journey.next ? <AppText variant="body" tone="muted">{tr(`selfRegistration.journeyNext.${journey.next}`)}</AppText> : null}
           </View>
+        )}
+
+        {statusOnly && !expiredFix && (
+          <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>{tr('selfRegistration.journey.progressOnly')}</AppText>
         )}
 
         {status !== ApplicationStatus.WITHDRAWN && (
