@@ -56,6 +56,27 @@ describe('AssayerInvoiceService', () => {
   let narrowedTotalsRow: any = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, tds_withheld: 0, payable_count: 0 };
   /** Rows behind `SELECT id, invoice_number, status FROM assayer_invoices` (statement labels). */
   let invoiceLabelRows: any[] = [];
+  /**
+   * The assayer's bills as the reveal query sees them — id, status, submitted_at and the
+   * supersession link. Defaults to the label rows (no revision history) when a test sets none.
+   */
+  let invoiceChainRows: any[] | null = null;
+  /** A JS model of `assayerRevealingInvoiceIds`' SQL, so the tests exercise its meaning. */
+  const revealingIds = (): Array<{ id: string }> => {
+    const rows = invoiceChainRows ?? invoiceLabelRows;
+    const byId = new Map(rows.map((r: any) => [r.id, r]));
+    const sent = ['SUBMITTED', 'APPROVED', 'PAID'];
+    const out = new Set<string>();
+    for (const r of rows) {
+      if (sent.includes(r.status)) out.add(r.id);
+      let ancestor = r.supersedes_invoice_id ? byId.get(r.supersedes_invoice_id) : undefined;
+      while (ancestor) {
+        if (ancestor.submitted_at) { out.add(r.id); break; }
+        ancestor = ancestor.supersedes_invoice_id ? byId.get(ancestor.supersedes_invoice_id) : undefined;
+      }
+    }
+    return [...out].map((id) => ({ id }));
+  };
   /** The recompute SUM the engine runs after a detach/re-price. */
   let recomputeRow: any = { n: 0, base: 0, travel: 0, tds: 0, total: 0 };
   /** The bulk round's grouped eligible-assayer query. */
@@ -65,7 +86,8 @@ describe('AssayerInvoiceService', () => {
 
   const defaultManagerQuery = async (sql: string): Promise<any[]> => {
     // Order matters: the narrowed totals SQL also contains the plain-totals markers.
-    if (sql.includes('LEFT JOIN assayer_invoices ai') && sql.includes('awaiting_approval')) return [narrowedTotalsRow];
+    if (sql.includes('WITH RECURSIVE chain')) return revealingIds();
+    if (sql.includes('assayer_invoice_id = ANY($2::uuid[])') && sql.includes('awaiting_approval')) return [narrowedTotalsRow];
     if (sql.includes('FROM assayer_payables') && sql.includes('awaiting_approval')) return [totalsRow];
     if (sql.includes('SELECT id, invoice_number, status FROM assayer_invoices')) return invoiceLabelRows;
     if (sql.includes('GROUP BY p.assayer_id')) return eligibleAssayerRows;
@@ -283,6 +305,7 @@ describe('AssayerInvoiceService', () => {
     totalsRow = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, tds_withheld: 0, payable_count: 0 };
     narrowedTotalsRow = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, tds_withheld: 0, payable_count: 0 };
     invoiceLabelRows = [];
+    invoiceChainRows = null;
     recomputeRow = { n: 0, base: 0, travel: 0, tds: 0, total: 0 };
     eligibleAssayerRows = [];
     awaitingCountRow = { n: 0 };
@@ -792,13 +815,76 @@ describe('AssayerInvoiceService', () => {
       expect(s.payables.find((p: any) => p.id === 'p-inv').preInvoicingEra).toBe(false);
     });
 
+    /**
+     * Owner decision 2026-09-24: "amounts appear in Money as soon as the assayer sends the bill".
+     * Sent = SUBMITTED, APPROVED or PAID. INVITED (not yet sent) stays hidden. PAID matters on its
+     * own: under the approved-only gate a bill's lines vanished from Money the moment it was paid.
+     */
+    it.each([
+      ['SUBMITTED', true],
+      ['APPROVED', true],
+      ['PAID', true],
+      ['INVITED', false],
+      ['CANCELLED', false],
+      ['SUPERSEDED', false],
+    ])('assayer shape: a line on a %s bill is visible = %s', async (status, visible) => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9', status }];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.some((p: any) => p.id === 'p-inv')).toBe(visible);
+      // Never the unbilled or the voided line, whatever the bill's state.
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-new');
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-void');
+    });
+
+    /**
+     * Owner decision 2026-09-24: when the office revises a bill the assayer already SENT, the
+     * revision starts unsent (it asks them to check and send again) — but the amounts they already
+     * saw stay in Money meanwhile. A bill never sent reveals nothing at any revision.
+     */
+    it('sent → revised: the line stays visible on the unsent revision', async () => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9-R2', status: 'INVITED' }];
+      invoiceChainRows = [
+        { id: 'ainv-1', status: 'SUPERSEDED', submitted_at: '2026-09-20T10:00:00Z', supersedes_invoice_id: null },
+        { id: 'ainv-9', status: 'INVITED', submitted_at: null, supersedes_invoice_id: 'ainv-1' },
+      ];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.map((p: any) => p.id)).toContain('p-inv');
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-new');
+    });
+
+    it('sent → revised → revised again: still visible through the whole chain', async () => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9-R3', status: 'INVITED' }];
+      invoiceChainRows = [
+        { id: 'ainv-1', status: 'SUPERSEDED', submitted_at: '2026-09-20T10:00:00Z', supersedes_invoice_id: null },
+        { id: 'ainv-2', status: 'SUPERSEDED', submitted_at: null, supersedes_invoice_id: 'ainv-1' },
+        { id: 'ainv-9', status: 'INVITED', submitted_at: null, supersedes_invoice_id: 'ainv-2' },
+      ];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.map((p: any) => p.id)).toContain('p-inv');
+    });
+
+    it('never sent → revised: still hidden', async () => {
+      invoiceLabelRows = [{ id: 'ainv-9', invoice_number: 'AINV-9-R2', status: 'INVITED' }];
+      invoiceChainRows = [
+        { id: 'ainv-1', status: 'SUPERSEDED', submitted_at: null, supersedes_invoice_id: null },
+        { id: 'ainv-9', status: 'INVITED', submitted_at: null, supersedes_invoice_id: 'ainv-1' },
+      ];
+      const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
+      expect(s.payables.map((p: any) => p.id)).not.toContain('p-inv');
+    });
+
     it('assayer totals come from the narrowed SUM — same expressions, narrower WHERE', async () => {
       narrowedTotalsRow = { earned: 2700, paid: 1800, outstanding: 900, awaiting_approval: 0, on_hold: 0, tds_withheld: 300, payable_count: 2 };
       const s = await engine.assayerStatement('assayer-1', undefined, 'assayer');
       expect(s.totals).toMatchObject({ earned: 2700, paid: 1800, outstanding: 900, payableCount: 2 });
-      const narrowedSql = managerQuery.mock.calls.find(([sql]) => sql.includes('LEFT JOIN assayer_invoices ai'))?.[0];
-      expect(narrowedSql).toContain(`p.status <> 'VOIDED'`);
-      expect(narrowedSql).toContain(`(p.pre_invoicing_era = true OR ai.status = 'APPROVED')`);
+      const narrowed = managerQuery.mock.calls.find(([sql]) => sql.includes('assayer_invoice_id = ANY($2::uuid[])'));
+      expect(narrowed?.[0]).toContain(`p.status <> 'VOIDED'`);
+      // The totals read the same revealing-bill set as the rows (a sent bill, or a revision of one).
+      expect(narrowed?.[0]).toContain(`(p.pre_invoicing_era = true OR p.assayer_invoice_id = ANY($2::uuid[]))`);
+      expect(narrowed?.[1]?.[1]).toEqual(['ainv-9']);
+      const reveal = managerQuery.mock.calls.find(([sql]) => sql.includes('WITH RECURSIVE chain'));
+      expect(reveal?.[1]?.[1]).toEqual(['SUBMITTED', 'APPROVED', 'PAID']);
+      expect(reveal?.[0]).toContain('submitted_at IS NOT NULL');
     });
 
     it('assayer payments are filtered to visible payables and carry NO balanceAfter', async () => {

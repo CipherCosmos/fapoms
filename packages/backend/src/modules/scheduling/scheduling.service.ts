@@ -309,8 +309,6 @@ export class SchedulingService {
 
     // The assayer must hear that their audit moved — the reschedule was previously silent, so a
     // field worker could drive to a branch on the original date.
-    // A cancellation is every bit as time-critical and was the one transition that said
-    // nothing at all, so both share the same date formatting and branch lookup.
     const fmt = (d: Date | string | null) => {
       if (!d) return 'the original date';
       const dd = typeof d === 'string' ? new Date(d) : d;
@@ -335,25 +333,9 @@ export class SchedulingService {
       });
     }
 
-    // Compared as a string on purpose: ScheduleStatus has no CANCELLED member yet and
-    // SCHEDULE_TRANSITIONS has no edge into it, so nothing can reach this today. Widening the
-    // shared enum needs a matching DB enum migration, which belongs with that change and not
-    // with wiring up the notification — this is here so the assayer is told the moment it can.
-    if (String(targetStatus) === 'CANCELLED') {
-      this.notificationDispatch.emitSafe({
-        type: 'SCHEDULE_CANCELLED',
-        entityType: 'SCHEDULE',
-        entityId: saved.id,
-        actorUserId: userId,
-        assayerId: saved.assayerId,
-        dedupeKey: `SCHEDULE_CANCELLED:${saved.id}`,
-        payload: {
-          assignmentId: saved.assignmentId,
-          branchName,
-          scheduledDate: fmt(saved.scheduledDate),
-        },
-      });
-    }
+    // A SCHEDULE_CANCELLED notice was raised here for a status ScheduleStatus does not have, so it
+    // could never fire; it and its catalog entry were removed (2026-09-24). An assayer hears about a
+    // called-off visit through the assignment's own cancellation (ASSIGNMENT_CANCELLED).
 
     try {
       this.eventPublisher.publish('schedule:updated', {

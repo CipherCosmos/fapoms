@@ -47,7 +47,7 @@ import {
   NotificationDispatchService,
   EmitOptions,
 } from '../notifications/notification-dispatch.service';
-import { BillingState, DEAD_BILLING_STATES, DEAD_PAYABLE_STATUSES, isLiveBillingEntry, isLivePayable, liveBillingEntrySql, livePayableSql, andLivePayableSql, InvoiceStatus, PaymentMethod, PaymentDirection, AssayerPayableStatus, AssayerInvoiceStatus, BillingEntityType, AssignmentStatus, BillingAttentionItem, BillingOverview, AssignmentMoneyLine, EventCategory, businessTodayDateKey, BUSINESS_TODAY_SQL, gstinStateCode, gstStateCodeToName, resolveGstStateCode, numberToIndianWords, OnboardingDocument, maskTail, SystemRole, businessDateKey } from '@fapoms/shared';
+import { BillingState, DEAD_BILLING_STATES, DEAD_PAYABLE_STATUSES, isLiveBillingEntry, isLivePayable, liveBillingEntrySql, livePayableSql, andLivePayableSql, InvoiceStatus, PaymentMethod, PaymentDirection, AssayerPayableStatus, AssayerInvoiceStatus, BillingEntityType, AssignmentStatus, BillingAttentionItem, BillingOverview, AssignmentMoneyLine, EventCategory, businessTodayDateKey, BUSINESS_TODAY_SQL, gstinStateCode, gstStateCodeToName, resolveGstStateCode, numberToIndianWords, OnboardingDocument, maskTail, SystemRole, businessDateKey, ASSAYER_SENT_INVOICE_STATUSES } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY, SEGREGATION_OF_DUTIES_SETTING_KEY } from '../../infrastructure/settings/settings.registry';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
@@ -897,6 +897,22 @@ export class BillingEngineService implements OnModuleInit {
     return this.payableRepository.findOne({
       where: { assignmentId, expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
     });
+  }
+
+  /**
+   * `liveFeePayable` for many assignments in one read, keyed by assignment id — for the field app's
+   * work list, which asks the expense rule of every job on it and must not ask once per job.
+   * Same predicate as the single form; an assignment with no live fee payable is absent.
+   */
+  async liveFeePayables(assignmentIds: string[]): Promise<Map<string, AssayerPayableEntity>> {
+    const ids = [...new Set(assignmentIds.filter(Boolean))];
+    const out = new Map<string, AssayerPayableEntity>();
+    if (ids.length === 0) return out;
+    const rows = await this.payableRepository.find({
+      where: { assignmentId: In(ids), expenseId: IsNull(), status: Not(In(DEAD_PAYABLE_STATUSES)) },
+    });
+    for (const row of rows) if (row.assignmentId) out.set(row.assignmentId, row);
+    return out;
   }
 
   // -----------------------------------------------------------------------
@@ -2227,23 +2243,63 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   /**
-   * The same figures, over only the rows the ASSAYER may see: lines on an APPROVED invoice,
-   * plus grandfathered `pre_invoicing_era` rows (revealed under the old rules), never VOIDED.
-   * The SELECT list is shared with `assayerTotals` above — the fork narrows the WHERE, it never
-   * re-derives a formula.
+   * The assayer's bills whose lines they may see amounts for — the ONE answer both the statement's
+   * rows and its totals read, so the two cannot disagree.
+   *
+   *  - Any bill they have SENT (`ASSAYER_SENT_INVOICE_STATUSES`: submitted, approved, paid).
+   *  - A revision the office made of a bill they had already sent (owner decision 2026-09-24).
+   *    Revising marks the bill SUPERSEDED and moves its lines to a new revision that starts unsent,
+   *    so it can ask them to check and send again; the amounts they already saw stay in Money
+   *    meanwhile. "Already sent" is read from the supersession chain: any earlier revision with a
+   *    `submitted_at` — the stamp `submit` writes — anywhere back along `supersedes_invoice_id`.
+   *    A revision only ever carries lines from the bill it supersedes, so every line on it was on
+   *    that sent bill.
+   *
+   * An invitation never sent, at any revision, reveals nothing — the amounts are shown only inside
+   * the invitation the assayer is reviewing.
    */
-  private async assayerVisibleTotals(assayerId: string): Promise<{
+  private async assayerRevealingInvoiceIds(assayerId: string): Promise<string[]> {
+    const rows: Array<{ id: string }> = await this.payableRepository.manager.query(
+      `WITH RECURSIVE chain AS (
+         SELECT i.id AS invoice_id, i.supersedes_invoice_id AS ancestor_id
+           FROM assayer_invoices i
+          WHERE i.assayer_id = $1 AND i.supersedes_invoice_id IS NOT NULL
+         UNION
+         SELECT c.invoice_id, a.supersedes_invoice_id
+           FROM chain c
+           JOIN assayer_invoices a ON a.id = c.ancestor_id
+          WHERE a.supersedes_invoice_id IS NOT NULL
+       )
+       SELECT i.id FROM assayer_invoices i
+        WHERE i.assayer_id = $1 AND i.status = ANY($2::text[])
+       UNION
+       SELECT c.invoice_id FROM chain c
+         JOIN assayer_invoices a ON a.id = c.ancestor_id
+        WHERE a.submitted_at IS NOT NULL`,
+      [assayerId, [...ASSAYER_SENT_INVOICE_STATUSES]],
+    );
+    return (rows ?? []).map((r) => r.id);
+  }
+
+  /**
+   * The same figures, over only the rows the ASSAYER may see: lines on a bill that reveals them
+   * (`assayerRevealingInvoiceIds` — a bill they have sent, or a revision of one; owner decision
+   * 2026-09-24. It was approved-only before, which also dropped a bill's lines from view the
+   * moment it was paid), plus grandfathered `pre_invoicing_era` rows (revealed under the old
+   * rules), never VOIDED. The SELECT list is shared with `assayerTotals` above — the fork narrows
+   * the WHERE, it never re-derives a formula.
+   */
+  private async assayerVisibleTotals(assayerId: string, revealingInvoiceIds: string[]): Promise<{
     earned: number; paid: number; outstanding: number; awaitingApproval: number; onHoldOrDisputed: number;
     tdsWithheld: number; payableCount: number;
   }> {
     const rows = await this.payableRepository.manager.query(
       `SELECT ${BillingEngineService.ASSAYER_TOTALS_SELECT}
          FROM assayer_payables p
-         LEFT JOIN assayer_invoices ai ON ai.id = p.assayer_invoice_id
         WHERE p.assayer_id = $1 AND p.is_active = true
           AND p.status <> 'VOIDED'
-          AND (p.pre_invoicing_era = true OR ai.status = 'APPROVED')`,
-      [assayerId],
+          AND (p.pre_invoicing_era = true OR p.assayer_invoice_id = ANY($2::uuid[]))`,
+      [assayerId, revealingInvoiceIds],
     );
     return this.totalsFromRow(rows?.[0]);
   }
@@ -2257,8 +2313,9 @@ export class BillingEngineService implements OnModuleInit {
    *
    *  - `'staff'` (default): today's full statement, unchanged, plus each payable's
    *    `invoiceNumber`/`invoiceStatus` so finance can see which lines ride which invoice.
-   *  - `'assayer'`: the earnings gate. Amounts appear only for payables whose invoice the
-   *    assayer has been through the invite → submit → approve loop for (invoice APPROVED), plus
+   *  - `'assayer'`: the earnings gate. Amounts appear only for payables on a bill the assayer
+   *    has SENT (`ASSAYER_SENT_INVOICE_STATUSES` — submitted, approved or paid; owner decision
+   *    2026-09-24, "amounts appear as soon as the assayer sends the bill"), plus
    *    grandfathered `preInvoicingEra` rows whose money was already revealed under the old
    *    rules; VOIDED rows never. Payments are filtered to those visible payables,
    *    `balanceAfter` is OMITTED (a running balance over rows the reader cannot see is a money
@@ -2283,8 +2340,10 @@ export class BillingEngineService implements OnModuleInit {
 
     // Loaded through the repository, not raw SQL, so the encrypted PAN is decrypted for the
     // statement's TDS block. tds.section is a label only — it never changes an amount.
+    // Which bills reveal their lines to the assayer — read once, used by the totals and the rows.
+    const revealing = gated ? new Set(await this.assayerRevealingInvoiceIds(assayerId)) : new Set<string>();
     const [totals, payables, payments, assayer, tdsSection] = await Promise.all([
-      gated ? this.assayerVisibleTotals(assayerId) : this.assayerTotals(assayerId),
+      gated ? this.assayerVisibleTotals(assayerId, [...revealing]) : this.assayerTotals(assayerId),
       this.payableRepository.find({ where: { assayerId, isActive: true }, order: { createdAt: 'DESC' } }),
       this.paymentRepository.find({ where: { assayerId, direction: PaymentDirection.OUTBOUND, isActive: true }, order: { createdAt: 'DESC' } }),
       this.assayerRepository.findOne({ where: { id: assayerId } }).catch(() => null),
@@ -2355,8 +2414,7 @@ export class BillingEngineService implements OnModuleInit {
     const visible = payables.filter(
       (p) =>
         p.status !== AssayerPayableStatus.VOIDED &&
-        (p.preInvoicingEra ||
-          (p.assayerInvoiceId && invoiceById.get(p.assayerInvoiceId)?.status === AssayerInvoiceStatus.APPROVED)),
+        (p.preInvoicingEra || (!!p.assayerInvoiceId && revealing.has(p.assayerInvoiceId))),
     );
     const visibleIds = new Set(visible.map((p) => p.id));
 

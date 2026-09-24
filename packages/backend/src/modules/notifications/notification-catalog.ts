@@ -351,6 +351,85 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
+  // ── Job changes the assayer used to hear nothing about ─────────────────────
+  // Owner decision 2026-09-24: these four changes reached no one in the field. Worded for a
+  // field worker reading a lock screen — short, plain, one thing to do. The desk's own copies
+  // (where they exist) stay separate, in the third person. Every one also triggers the silent
+  // refresh push (`AssignmentRefreshPushService`), so the app is already up to date when opened.
+  /** A completed job put back to open by the office (`AssignmentService.reopen`). */
+  ASSIGNMENT_REOPENED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job opened again',
+    body: 'The office opened your job at ${branchName} again. Please open it to see what is needed. Reason: ${reason}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The date of an offer changed through the edit route (`AssignmentService.update`). Only when the
+   * day actually moved; `alsoNote` is filled when the office's note changed in the same save.
+   */
+  ASSIGNMENT_DATE_CHANGED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job date changed',
+    body: 'Your job at ${branchName} is now on ${newDate}. ${alsoNote}',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The office's note on an offer changed through the edit route, and the date did not. A fee
+   * change alone sends nothing visible: the assayer's app does not show fees.
+   */
+  ASSIGNMENT_NOTE_CHANGED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'New note from the office',
+    body: 'The office changed the note on your job at ${branchName}. Open the job to read it.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * The desk escalated the job (`AssignmentService.escalate`). The desk's reason is NOT repeated:
+   * it is written for colleagues and may be about the assayer.
+   */
+  ASSIGNMENT_MARKED_URGENT: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Urgent job',
+    body: 'The office marked your job at ${branchName} as urgent. Please open it now.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
+  /**
+   * Work cancelled because the office closed the branch or stopped the whole project
+   * (`BranchService.remove`, `ProjectService.cancelProject`). Those paths cancel with a direct
+   * UPDATE and used to tell the assayer nothing — the failure ASSIGNMENT_CANCELLED exists to
+   * prevent. `because` is one of two fixed phrases the emitting code chooses.
+   */
+  ASSIGNMENT_CANCELLED_BY_CLOSURE: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.CRITICAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Job cancelled',
+    body: 'Your job at ${branchName} is cancelled because ${because}. Do not go to the branch for it.',
+    link: '/assignments',
+    skipActor: true,
+  },
   // ASSIGNMENT_COUNTER_OFFERED lived here until in-app fee negotiation was removed: the
   // assayer no longer sees or proposes fees, so there is no counter-offer left to announce.
   // Fee questions are settled by phone; the desk records the outcome via acceptOnBehalf.
@@ -415,18 +494,10 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
-  /** A cancelled visit is as time-critical as a moved one, and was the only transition that told the assayer nothing. */
-  SCHEDULE_CANCELLED: {
-    category: NotificationCategory.ASSIGNMENT,
-    priority: NotificationPriority.HIGH,
-    roles: [],
-    special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
-    title: 'Audit cancelled',
-    body: 'Your audit at ${branchName} on ${scheduledDate} is no longer scheduled.',
-    link: '/assignments?id=${assignmentId}',
-    skipActor: true,
-  },
+  // SCHEDULE_CANCELLED lived here with nothing able to raise it — ScheduleStatus has no CANCELLED
+  // member and no transition reaches one. Removed (owner decision 2026-09-24) rather than kept
+  // waiting: an assignment's own cancellation already reaches the assayer as ASSIGNMENT_CANCELLED,
+  // and a cancellation caused by a branch or project closing as ASSIGNMENT_CANCELLED_BY_CLOSURE.
   ASSIGNMENT_AUTO_DECLINED: {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
@@ -611,17 +682,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/documents',
     skipActor: true,
   },
-  DOCUMENT_REJECTED: {
-    category: NotificationCategory.DOCUMENT,
-    priority: NotificationPriority.HIGH,
-    roles: [],
-    special: ['ASSIGNED_ASSAYER'],
-    channels: BOTH_CHANNELS,
-    title: 'Document needs re-upload',
-    body: '${documentName} for ${branchName} was not accepted. Reason: ${reason}',
-    link: '/assignments?id=${assignmentId}',
-    skipActor: true,
-  },
+  // DOCUMENT_REJECTED (audit-packet re-upload) lived here and was never emitted by anything.
+  // Removed 2026-09-24. A document the office sends back to an assayer is
+  // ASSAYER_IDENTITY_DOCUMENT_REJECTED below.
 
   // ── Data entry hand-offs ────────────────────────────────────────────────
   // Work moving between desks. Each hand-off previously relied on the receiving
@@ -901,8 +964,8 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   /**
    * The office could not accept a document, and the person who sent it needs to know.
    *
-   * Named for the identity document rather than just DOCUMENT_REJECTED, which already exists on
-   * this catalogue for the audit-packet pipeline and is a different resource entirely.
+   * Named for the identity document. (A generic DOCUMENT_REJECTED for the audit-packet pipeline
+   * used to sit beside it, never emitted; it was removed on 2026-09-24.)
    *
    * Addressed to nobody in the office: `roles: []`. Every other workforce notification goes to the
    * desk, and this one goes the other way — it is the only thing in the system that asks an

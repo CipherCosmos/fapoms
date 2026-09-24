@@ -38,8 +38,11 @@ export interface UploadOutbox {
  * Native streams the packet off disk with the resumable uploader — the one that asks the server
  * which chunks survived and resends only the gaps. Web has no file path to stream, so it keeps
  * the single-shot path (which retries the whole file on its own).
+ *
+ * Exported for the rebuilt app's background sync (`src/next/background`), which drains the same
+ * outbox with no screen mounted and must send exactly what this hook would.
  */
-async function sendOne(
+export async function sendOne(
   entry: OutboxUpload,
   onProgress: (percent: number) => void,
 ): Promise<{ success: boolean; error?: string; code?: string; status?: number }> {

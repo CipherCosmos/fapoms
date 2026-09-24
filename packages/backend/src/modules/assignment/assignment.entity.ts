@@ -146,6 +146,31 @@ export class AssignmentEntity extends BaseEntity {
   checkedInAt: Date | null;
 
   /**
+   * Which clock `checked_in_at` was written in, and the evidence either way — owner decision
+   * 2026-09-24 (`decideCheckInTime` in `@fapoms/shared` check-in-rules.ts).
+   *
+   * The phone may say when it actually arrived. `checked_in_at` takes that time only when it is
+   * today, recent, not in the future, and corroborated by a location-trail fix inside the zone;
+   * otherwise it is the server's receive time as it always was. Both moments, the phone's claim and
+   * why one was chosen are kept, so a check-in time is never an assertion nobody can check.
+   * Null on every check-in recorded before the rule existed.
+   */
+  @Column({ name: 'check_in_received_at', type: 'timestamptz', nullable: true })
+  checkInReceivedAt: Date | null;
+
+  /** The arrival time the phone sent, as sent (parsed), whether or not it was used. */
+  @Column({ name: 'check_in_claimed_arrival_at', type: 'timestamptz', nullable: true })
+  checkInClaimedArrivalAt: Date | null;
+
+  /** `SERVER` or `DEVICE` (`CheckInTimeSource`). */
+  @Column({ name: 'check_in_time_source', type: 'varchar', length: 16, nullable: true })
+  checkInTimeSource: string | null;
+
+  /** Why (`CheckInArrivalOutcome`): ACCEPTED, NOT_SENT, TOO_OLD, NO_TRAIL_EVIDENCE, … */
+  @Column({ name: 'check_in_time_outcome', type: 'varchar', length: 32, nullable: true })
+  checkInTimeOutcome: string | null;
+
+  /**
    * The other end of the on-site window. Same shape as the check-in columns above, because it is
    * the same evidence about the opposite moment.
    *

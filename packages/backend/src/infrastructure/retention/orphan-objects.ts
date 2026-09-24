@@ -71,6 +71,7 @@ export const NOT_STORAGE_KEYS: ReadonlyArray<{ table: string; column: string; wh
   { table: 'assayer_document_versions', column: 'file_checksum', why: 'A hash of the contents.' },
   { table: 'assayer_document_versions', column: 'file_size', why: 'A byte count.' },
   { table: 'assayer_documents', column: 'document_number', why: 'The number printed ON the document (a PAN, a licence number).' },
+  { table: 'assayer_documents', column: 'reupload_note', why: "HR's sentence asking for the document again — text, not a key." },
   { table: 'assayer_client_empanelments', column: 'documents_outstanding', why: 'A list of document TYPES still to be collected.' },
   { table: 'assayers', column: 'documents_link', why: 'A link to an external folder, not an object in our bucket.' },
   { table: 'branch_documents', column: 'file_name', why: 'The name the uploader gave it.' },

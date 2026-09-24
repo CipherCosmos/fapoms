@@ -4,7 +4,8 @@
  * Handles CRUD and lifecycle state transitions for projects and project branches (Part 3 Module 2, Part 5 §3).
  */
 
-import { Injectable, NotFoundException, BadRequestException, ConflictException, OnModuleInit } from '@nestjs/common';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
 
@@ -189,6 +190,8 @@ export class ProjectService implements OnModuleInit {
       private readonly geoPrecision: GeoPrecisionService,
       @InjectDataSource()
       private readonly dataSource: DataSource,
+      /** The silent "your jobs changed" push, for work a project cancellation cancels. */
+      @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
    ) {}
 
   private async resolveZoneName(stateName: string, clientId?: string): Promise<string> {
@@ -2333,10 +2336,13 @@ export class ProjectService implements OnModuleInit {
       assignment_number: string;
       status: string;
       project_branch_id: string;
+      assayer_id: string | null;
+      branch_name: string | null;
     }> = await this.dataSource.query(
-      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id
+      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id, a.assayer_id, b.name AS branch_name
        FROM assignments a
        INNER JOIN project_branches pb ON a.project_branch_id = pb.id
+       LEFT JOIN branches b ON b.id = pb.branch_id
        WHERE pb.project_id = $1 AND a.is_active = true`,
       [id],
     ).catch(() => []);
@@ -2387,6 +2393,25 @@ export class ProjectService implements OnModuleInit {
             userId,
             remarks: `Auto-cancelled due to cancellation of project ${project.name}`,
           });
+          // Owner decision 2026-09-24: the assayer holding this job is told, in words, and their
+          // phone refreshes. This path cancels with a direct UPDATE and used to tell nobody.
+          if (a.assayer_id) {
+            this.notificationDispatch.emitSafe({
+              type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE',
+              entityType: 'ASSIGNMENT',
+              entityId: a.id,
+              actorUserId: userId,
+              assayerId: a.assayer_id,
+              dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}`,
+              payload: {
+                assignmentId: a.id,
+                assignmentNumber: a.assignment_number,
+                branchName: a.branch_name ?? 'the branch',
+                because: 'the office has stopped this audit project',
+              },
+            });
+            this.refreshPush?.assignmentChanged(a.assayer_id, a.id);
+          }
           this.eventPublisher.publish('assignment:status-changed', {
             eventType: 'assignment:status-changed',
             assignmentId: a.id,

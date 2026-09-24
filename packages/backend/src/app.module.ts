@@ -68,6 +68,7 @@ import { createResilientThrottlerStorage } from './infrastructure/http/throttlin
 import { MetricsService } from './infrastructure/observability/metrics.service';
 import { APP_GUARD } from '@nestjs/core';
 import { PlatformSettingsModule } from './infrastructure/settings/platform-settings.module';
+import { AppLinksModule } from './modules/app-links/app-links.module';
 import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
 
 @Module({
@@ -252,6 +253,8 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
     SlaScannerModule,
 
     ExpenseModule,
+    // `/.well-known` files that let invite links open the field app (via deploy/Caddyfile rewrites).
+    AppLinksModule,
 
     // Reporting / Excel exports
     ReportsModule,

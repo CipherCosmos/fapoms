@@ -1,3 +1,4 @@
+import { pushRefreshData } from './push-refresh-data';
 import { Process, Processor } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -209,6 +210,8 @@ export class NotificationDeliveryWorker {
           // Carried in `data` as well as on the payload so the app can present a
           // locally-raised copy of the same event on the same channel.
           priority: notification.priority ?? '',
+          // Additive: the ids the app refreshes in the background (see push-refresh-data.ts).
+          ...pushRefreshData(notification),
         },
       },
     );

@@ -158,4 +158,13 @@ export class AssayerDocumentEntity extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
+
+  /**
+   * HR's own sentence from "Ask to re-upload" (`RosterRecordsService.requestReupload`) — what the
+   * assayer is asked to fix, shown to them beside the reopened document (`hrNote` in
+   * `GET /assayers/me/capabilities`). It was only ever appended to `remarks` before, where a later
+   * edit could bury it. Cleared when the document gets a new verdict from review.
+   */
+  @Column({ name: 'reupload_note', type: 'text', nullable: true })
+  reuploadNote: string | null;
 }

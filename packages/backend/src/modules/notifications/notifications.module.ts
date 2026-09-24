@@ -1,3 +1,4 @@
+import { AssignmentRefreshPushService } from './assignment-refresh-push.service';
 import { Module, OnModuleInit, Logger } from '@nestjs/common';
 import { BullModule, InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
@@ -57,6 +58,8 @@ import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-
   controllers: [NotificationController, NotificationAdminController, OutboundMessageController],
   providers: [
     NotificationService, PushNotificationService, NotificationDispatchService,
+    // The silent "your jobs changed" push — see its own comment.
+    AssignmentRefreshPushService,
     NotificationDeliveryWorker, NotificationSweeper, FcmProvider, EmailProvider, SmsProvider, NotificationSettingsService,
     EmailTemplateLoader, EmailTemplateRenderer, MessageTokensService,
     // Emails an action asks for leave the request here; see OutboundMessageService.
@@ -79,7 +82,7 @@ import { EmailTemplateRenderer } from '../../infrastructure/notifications/email-
   */
   exports: [
     NotificationService, PushNotificationService, NotificationDispatchService, NotificationSettingsService,
-    EmailService, SmsService,
+    EmailService, SmsService, AssignmentRefreshPushService,
   ],
 })
 export class NotificationsModule implements OnModuleInit {

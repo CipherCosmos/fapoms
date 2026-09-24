@@ -107,4 +107,26 @@ describe('AssignmentService.reopen', () => {
     expect(billingEngine.voidPayable).not.toHaveBeenCalled();
     expect(result.status).toBe(AssignmentStatus.ACCEPTED);
   });
+
+  /** Owner decision 2026-09-24: a reopened job is back on the assayer's list — they are told. */
+  it('tells the assayer the job is open again, with the reason, and refreshes their phone', async () => {
+    const { service } = makeService({
+      lockedStatus: AssignmentStatus.COMPLETED,
+      assignment: { ...completedAssignment(), assayerId: 'assayer-1', assignmentNumber: 'ASN-1', projectBranch: { branch: { name: 'Thrissur Main' } } },
+      payable: null,
+    });
+    const emitSafe = jest.fn();
+    const assignmentChanged = jest.fn();
+    (service as any).notificationDispatch = { emitSafe };
+    (service as any).refreshPush = { assignmentChanged };
+
+    await service.reopen('asn-1', 'admin-1', 'Two packets were missed');
+
+    expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'ASSIGNMENT_REOPENED',
+      assayerId: 'assayer-1',
+      payload: expect.objectContaining({ branchName: 'Thrissur Main', reason: 'Two packets were missed' }),
+    }));
+    expect(assignmentChanged).toHaveBeenCalledWith('assayer-1', 'asn-1');
+  });
 });

@@ -111,3 +111,5 @@ export * from './registration-form';
 export * from './source-referral';
 export * from './onboarding-approval';
 export * from './periodic-checks';
+export * from './record-capabilities';
+export * from './check-in-rules';

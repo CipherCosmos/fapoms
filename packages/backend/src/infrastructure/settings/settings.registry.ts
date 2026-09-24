@@ -768,6 +768,39 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     min: 50, max: 50_000, unit: 'metres',
     applies: 'immediately',
   },
+  {
+    key: 'field.arrivalRadiusMeters',
+    label: 'The app treats them as arrived within',
+    description: 'How close to the branch the phone must be before the app treats the assayer as having arrived — that is when it offers them the Check in button and notes their arrival time. It only decides when the app speaks up: checking in is still allowed anywhere inside the check-in distance above. If this is set larger than that distance, the check-in distance is used.',
+    group: 'field',
+    type: 'number',
+    default: 200,
+    min: 25, max: 2000, unit: 'metres',
+    applies: 'immediately',
+  },
+  // The arrival-time rule (owner decision 2026-09-24): when the phone's own "I arrived at" time is
+  // written as the check-in time instead of the moment the server received it. Both keys are read
+  // through the constants in `@fapoms/shared` check-in-rules.ts, which also hold the defaults.
+  {
+    key: 'field.checkInArrivalMaxAgeHours',
+    label: 'Accept the phone\'s arrival time for up to',
+    description: 'When an assayer checks in from somewhere with no signal, the check-in reaches us late. The app also sends the time the phone actually arrived, and we record that instead — but only if it is the same day, no older than this, and the phone\'s location history shows it at the branch around then. Anything older is recorded at the time it reached us. Set it lower to trust late check-ins less; the location-history check applies either way.',
+    group: 'field',
+    type: 'number',
+    default: 4,
+    min: 0, max: 24, unit: 'hours',
+    applies: 'immediately',
+  },
+  {
+    key: 'field.checkInArrivalTrailWindowMinutes',
+    label: 'Location history must show them at the branch within',
+    description: 'To accept the phone\'s arrival time, its location history must have a reading inside the check-in zone this close to that time, before or after. Wider accepts phones that record their position less often; narrower makes the arrival time harder to claim without really being there.',
+    group: 'field',
+    type: 'number',
+    default: 15,
+    min: 1, max: 120, unit: 'minutes',
+    applies: 'immediately',
+  },
   // `field.maxNegotiationRounds` and `field.maxCounterOfferTravelFee` lived here until in-app
   // fee negotiation was removed. Their orphaned DB rows are left in place (harmless, historical);
   // the limits endpoint still answers `maxNegotiationRounds: 0` as the old-APK kill-switch — see
@@ -776,7 +809,8 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     /**
      * The rollout gate for assayer invoicing — the flow where an assayer, invited by the desk,
      * first SEES the fees for their completed work, submits them as one invoice, and gains
-     * visible earnings only once the desk approves it. Off (the default) keeps the assayer's
+     * visible earnings once they have sent it (owner decision 2026-09-24; it was once the desk's
+     * approval). Off (the default) keeps the assayer's
      * statement in its full pre-gate shape and hides every invite control, so the code can ship
      * dark and the switch is flipped only once the mobile build that renders the invitation
      * states is distributed. Old apps degrade safely either way — the gated statement is a
@@ -785,7 +819,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
      */
     key: 'billing.assayerInvoicingEnabled',
     label: 'Assayer invoicing',
-    description: 'The invoicing round, which is how assayers are paid: the desk invites them to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and earnings appear only after the desk approves what they submitted. On by default, because this IS the payment flow. Switch it off only for a deployment whose field app predates the invoicing round — assayers there will not see their fees at all.',
+    description: 'The invoicing round, which is how assayers are paid: the desk invites them to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and their earnings appear as soon as they send the invoice. On by default, because this IS the payment flow. Switch it off only for a deployment whose field app predates the invoicing round — assayers there will not see their fees at all.',
     group: 'billing',
     type: 'boolean',
     default: true,
@@ -1414,6 +1448,27 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     label: 'Registration link expiry',
     description: 'How long an emailed self-registration link stays valid before a candidate must be re-invited from the interview log.',
     group: 'registration', type: 'number', default: 72, min: 1, max: 720, unit: 'hours', applies: 'immediately',
+  },
+  /**
+   * Invite links that open the field app instead of the browser (2026-09-24). Android checks
+   * `https://<host>/.well-known/assetlinks.json` for the app's package and signing-certificate
+   * fingerprint; iOS checks `/.well-known/apple-app-site-association` for Team ID + bundle id. Both
+   * files are served by `AppLinksController` from these two values. Not secrets — both files are
+   * public by design.
+   */
+  {
+    key: 'registration.androidAppCertSha256',
+    label: 'Android app signing fingerprint',
+    description: 'The SHA-256 fingerprint of the certificate the field app is signed with, so invite links open the app on Android instead of the browser. Change it only if the app is ever signed with a different key (for example after moving to Google Play app signing, which re-signs the app). Several can be listed, separated by commas.',
+    group: 'registration', type: 'string',
+    default: '65:EC:61:13:9B:44:E5:07:96:8E:92:78:37:F4:05:F1:42:BA:8D:A3:A3:0B:AA:64:90:24:B9:07:BD:17:A6:23',
+    applies: 'immediately',
+  },
+  {
+    key: 'registration.iosAppTeamId',
+    label: 'Apple Team ID for the iPhone app',
+    description: 'The 10-character Apple Developer Team ID the iPhone app is published under. Until it is filled in, invite links open in the browser on iPhones (they still work there). Android is not affected by this.',
+    group: 'registration', type: 'string', default: '', applies: 'immediately',
   },
   {
     key: 'registration.otpResendCooldownSeconds',

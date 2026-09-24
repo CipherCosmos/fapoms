@@ -47,6 +47,8 @@ import type { StorageEngine } from '../../infrastructure/storage/storage-engine.
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
+import { selfFieldGates } from './self-record-capabilities';
+import type { AssayerSelfCapabilities } from '@fapoms/shared';
 
 /**
  * The paperwork a person can actually produce from a phone.
@@ -137,6 +139,37 @@ export class AssayerSelfServiceController {
    * handful of extra indexed reads (references, empanelments, checks) that are discarded here;
    * that is cheaper than a second copy of the checklist rules drifting from the first.
    */
+  /**
+   * What the signed-in assayer may change on their own record from the phone, and why not
+   * (contract `AssayerSelfCapabilities`, `@fapoms/shared` record-capabilities.ts).
+   *
+   *  - `fields`: `SELF_EDITABLE_ASSAYER_FIELDS` → `direct`, `HR_MAINTAINED_ASSAYER_FIELDS` → `locked`
+   *    (HR_MAINTAINED_FIELD) — the decision `PUT /assayers/:id` enforces, from the same function
+   *    (`evaluateSelfFieldChange`) that also feeds `GET /assayers/profile/editable-fields`.
+   *  - `documents`: one gate per document the phone can produce (`SELF_SERVICE_REQUIRED` then
+   *    `SELF_SERVICE_OPTIONAL`, the same two lists the registration checklist shows) — VERIFIED and
+   *    the approved photograph `locked`, sent back by HR `reopened` with HR's note, else `direct`.
+   *    The upload routes refuse with the same function (`evaluateSelfDocumentChange`).
+   *
+   * Self only: the path names no id, the answer is always about `req.user`. Reachable during
+   * registration, because the document gates are exactly what an applicant is working through.
+   */
+  @Get('me/capabilities')
+  @OnboardingAllowed()
+  @Roles(SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'What the signed-in assayer may change on their own record, and why not' })
+  async myCapabilities(@Req() req: any): Promise<AssayerSelfCapabilities> {
+    const assayerId: string | undefined = req.user?.id;
+    if (!assayerId) {
+      throw new BadRequestException('This route answers for a signed-in assayer.');
+    }
+    const documents = await this.rosterRecords.selfDocumentGates(assayerId, [
+      ...SELF_SERVICE_REQUIRED,
+      ...SELF_SERVICE_OPTIONAL,
+    ]);
+    return { fields: selfFieldGates(), documents };
+  }
+
   @Get(':assayerId/registration-checklist')
   @OnboardingAllowed()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)

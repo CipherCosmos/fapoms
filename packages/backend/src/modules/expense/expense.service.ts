@@ -6,7 +6,8 @@ import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity'
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssignmentStatus, AssayerPayableStatus, OTHER_CONFLICT_ERROR_CODES, isLivePayable } from '@fapoms/shared';
+import { EventCategory } from '@fapoms/shared';
+import { evaluateExpenseClaim } from '../assignment/assignment-capabilities';
 import { withCode } from '../../infrastructure/http/api-error';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
@@ -25,16 +26,6 @@ export interface CreateExpenseDto {
 
 /** An assayer cannot claim an unbounded amount against a single visit without review. */
 const MAX_SINGLE_CLAIM = 50000;
-
-/**
- * Fee-payable states after which the job's pay is settled and takes no new claims even when no
- * bill carries it (direct approval) — the "Ready to pay" (APPROVED) and "Paid" (PAID) payout
- * stages. A payable on a bill is refused before this is asked. See `ExpenseService.create`.
- */
-const PAY_SETTLED_STATUSES: readonly AssayerPayableStatus[] = [
-  AssayerPayableStatus.APPROVED,
-  AssayerPayableStatus.PAID,
-];
 
 @Injectable()
 export class ExpenseService {
@@ -122,20 +113,14 @@ export class ExpenseService {
       throw new BadRequestException(`Unknown expense category: ${dto.category}`);
     }
 
-    // Claiming against work that was never carried out has no basis. Offered and rejected
-    // assignments have involved no travel yet; cancelled ones no longer will.
-    const claimable: AssignmentStatus[] = [
-      AssignmentStatus.CHECKED_IN,
-      AssignmentStatus.IN_PROGRESS,
-      AssignmentStatus.COMPLETED,
-    ];
-    if (!claimable.includes(assignment.status)) {
-      throw new BadRequestException(
-        `Expenses can only be claimed once the visit is under way — this assignment is ${assignment.status}.`,
-      );
-    }
-
     /**
+     * The claim rule — `evaluateExpenseClaim` (assignment-capabilities.ts), the same function the
+     * field app's CLAIM_EXPENSE capability is built from, so the app offers a claim only when this
+     * would accept it. Two halves:
+     *
+     * Claiming against work that was never carried out has no basis. Offered and rejected
+     * assignments have involved no travel yet; cancelled ones no longer will.
+     *
      * No new claim once the job's pay is on a bill — owner decision 2026-09-24: "Refuse once on a
      * bill." Claims are made before billing.
      *
@@ -153,25 +138,17 @@ export class ExpenseService {
      * also refuse, with their own code.
      *
      * Applies to every caller, staff raising a claim on an assayer's behalf included: the rule is
-     * about the state of the money, not about who is typing.
+     * about the state of the money, not about who is typing. The visit-state half is read first and
+     * answers 400 as it always has; the money half answers 409, as it always has.
      */
+    const visit = evaluateExpenseClaim(assignment, null);
+    if (!visit.allowed) {
+      throw withCode(new BadRequestException(visit.reason), visit.code as any);
+    }
     const feePayable = await this.billing.liveFeePayable(assignmentId);
-    if (feePayable && isLivePayable(feePayable.status)) {
-      if (feePayable.assayerInvoiceId) {
-        throw withCode(
-          new ConflictException('This job is already on a bill. Claims must be made before billing.'),
-          OTHER_CONFLICT_ERROR_CODES.EXPENSE_JOB_ALREADY_BILLED,
-        );
-      }
-      if (PAY_SETTLED_STATUSES.includes(feePayable.status)) {
-        throw withCode(
-          new ConflictException(
-            `The pay for this job has already been ${feePayable.status === AssayerPayableStatus.PAID ? 'paid' : 'approved'}. `
-            + 'Claims must be made before billing.',
-          ),
-          OTHER_CONFLICT_ERROR_CODES.EXPENSE_PAYOUT_ALREADY_APPROVED,
-        );
-      }
+    const money = evaluateExpenseClaim(assignment, feePayable);
+    if (!money.allowed) {
+      throw withCode(new ConflictException(money.reason), money.code as any);
     }
 
     const expense = this.expenseRepository.create({

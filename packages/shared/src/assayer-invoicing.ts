@@ -9,6 +9,25 @@ import { AssayerInvoiceStatus } from './enums';
  * agree on the payloads without any of them re-deriving a rupee.
  */
 
+/**
+ * The bill states in which the ASSAYER HAS SENT the bill — owner decision 2026-09-24: amounts
+ * appear in the assayer's Money as soon as they send the bill, not only once the desk approves it.
+ *
+ * INVITED is the desk's invitation the assayer has not sent yet (its amounts are shown only inside
+ * the invitation they are reviewing); SUBMITTED is the moment of sending; APPROVED and PAID follow
+ * it. CANCELLED and SUPERSEDED carry no lines — cancelling releases them and a revision moves them
+ * to the new revision (which starts INVITED again) — so a payable never rides one.
+ *
+ * The earnings statement's gate (`BillingEngineService.assayerRevealingInvoiceIds`) reveals a bill
+ * in one of these states, and ALSO a revision (INVITED again) of a bill the assayer had already
+ * submitted — owner decision 2026-09-24 — for the rows and for the totals alike.
+ */
+export const ASSAYER_SENT_INVOICE_STATUSES: readonly AssayerInvoiceStatus[] = [
+  AssayerInvoiceStatus.SUBMITTED,
+  AssayerInvoiceStatus.APPROVED,
+  AssayerInvoiceStatus.PAID,
+];
+
 /** One invoice line — a payable, labelled for a human reviewer. */
 export interface AssayerInvoiceLine {
   payableId: string;

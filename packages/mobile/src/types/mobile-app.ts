@@ -1,4 +1,5 @@
 import { ValidationQueryStatus } from '@fapoms/shared';
+import type { AssignmentCapabilities } from '@fapoms/shared';
 import type {
   AssayerStatement as SharedAssayerStatement,
   AssayerStatementPayable as SharedAssayerStatementPayable,
@@ -151,6 +152,13 @@ export interface AssayerAssignment {
   documentReadiness?: { state: 'READY' | 'PREPARING' | 'NONE'; dispatchedCount: number; message: string };
   queries: ValidationQuery[];
   expenses: AssayerExpense[];
+  /**
+   * The server's verdict on what the assayer may do to this job right now, and why not — built by
+   * the same evaluators the routes enforce with. Absent from an older server; readers treat that
+   * as "nothing is allowed" (`gateFor` does). Used by the rebuilt app (`src/next`); the current
+   * screens ignore it.
+   */
+  capabilities?: AssignmentCapabilities | null;
 }
 
 export interface AppNotification {

@@ -99,6 +99,19 @@
 		file_server browse
 	}
 
+	# Invite links open the field app. Android App Links and iOS Universal Links fetch these two
+	# files from the site root; the backend serves them from Platform Settings
+	# (registration.androidAppCertSha256, registration.iosAppTeamId — the iOS one answers 404
+	# until a Team ID is set). See packages/backend/src/modules/app-links.
+	handle /.well-known/assetlinks.json {
+		rewrite * /api/v1/public/app-links/assetlinks.json
+		reverse_proxy backend:3000
+	}
+	handle /.well-known/apple-app-site-association {
+		rewrite * /api/v1/public/app-links/apple-app-site-association
+		reverse_proxy backend:3000
+	}
+
 	# --- Everything else is the web app -------------------------------------------------------
 	# The frontend image handles SPA fallback internally (try_files → index.html), so a deep link
 	# forwarded here returns the app rather than a 404.

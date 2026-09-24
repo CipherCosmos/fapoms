@@ -18,7 +18,14 @@ import {
   BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
-import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES, AssignmentStatus } from '@fapoms/shared';
+import {
+  SystemRole,
+  ASSIGNMENT_ISSUE_CATEGORIES,
+  AssignmentStatus,
+  AssignmentAction,
+  ASSAYER_REQUESTABLE_ASSIGNMENT_TRANSITIONS,
+} from '@fapoms/shared';
+import { evaluateOwnership } from './assignment-capabilities';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
@@ -189,6 +196,18 @@ function requireRealCoordinate(body: any, action: 'Check-in' | 'Check-out'): { l
   return { lat, lng };
 }
 
+/**
+ * Which field-app action a requested target status is, for the ownership evaluator's label. The
+ * answer only names the gate; the ownership rule itself does not vary by action.
+ */
+function ownershipActionFor(targetStatus: string): AssignmentAction {
+  if (targetStatus === AssignmentStatus.REJECTED) return AssignmentAction.DECLINE;
+  if (targetStatus === AssignmentStatus.CHECKED_IN || targetStatus === AssignmentStatus.IN_PROGRESS) {
+    return AssignmentAction.CHECK_IN;
+  }
+  return AssignmentAction.ACCEPT;
+}
+
 @ApiTags('Assignments')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -244,6 +263,10 @@ export class AssignmentController {
       scope: listScope,
       limit: limit ? Number(limit) : undefined,
       before,
+      // What the assayer may do next on each job, and why not — the server's own verdict, built
+      // by the same evaluators the action routes enforce with. Only for the assayer's own read;
+      // an additive field older app builds ignore.
+      capabilitiesFor: isStaff ? undefined : assayerId,
     });
     // `items` stays an array: that is the shape the shipped app reads, and paging is additive.
     return { success: true, items: assignments, meta: { hasMore, nextCursor, scope: listScope ?? 'all' } };
@@ -294,6 +317,9 @@ export class AssignmentController {
     const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy, {
       expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
       clientRequestId: body.clientRequestId,
+      // Optional, from new app builds: when the phone actually arrived. Whether it is used is the
+      // server's decision (`decideCheckInTime`); the geofence above is still asked of THIS fix.
+      arrivedAt: body.arrivedAt,
     });
     if (!result.success) {
       return {
@@ -663,14 +689,14 @@ export class AssignmentController {
        * `COUNTER_OFFER`/`NEGOTIATION`/`PENDING` were in this list while in-app negotiation
        * existed; they left with it (the explicit refusal above answers the old builds).
        */
-      const ASSAYER_TRANSITIONS = ['ACCEPTED', 'REJECTED', 'CHECKED_IN', 'IN_PROGRESS'];
-      if (!ASSAYER_TRANSITIONS.includes(targetStatus)) {
+      // One list, in `@fapoms/shared` beside the transition table it is a permission over.
+      if (!(ASSAYER_REQUESTABLE_ASSIGNMENT_TRANSITIONS as readonly string[]).includes(targetStatus)) {
         throw new ForbiddenException(
           'Cancelling or completing an assignment is done by the operations team, not from the field app.',
         );
       }
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(ownershipActionFor(targetStatus), owned, userId).allowed) {
         throw new ForbiddenException('You can only act on an assignment that is assigned to you.');
       }
     }
@@ -751,7 +777,7 @@ export class AssignmentController {
         body.syncToken,
         userId,
         accuracy,
-        cmdOptions,
+        { ...cmdOptions, arrivedAt: body.arrivedAt },
       );
       /**
        * A refused check-in is a failure, on this route too.
@@ -826,7 +852,7 @@ export class AssignmentController {
     const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
     if (callerIsAssayer) {
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(AssignmentAction.ACCEPT, owned, userId).allowed) {
         throw new ForbiddenException('You can only accept an assignment that is assigned to you.');
       }
     }
@@ -861,7 +887,7 @@ export class AssignmentController {
     const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
     if (callerIsAssayer) {
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(AssignmentAction.DECLINE, owned, userId).allowed) {
         throw new ForbiddenException('You can only reject an assignment that is assigned to you.');
       }
     }
@@ -1052,7 +1078,7 @@ export class AssignmentController {
     const isStaff = roles.some((r) => (STAFF_ROLES as string[]).includes(r));
     if (!isStaff) {
       const owned = await this.assignmentService.findOne(id);
-      if (!owned || owned.assayerId !== userId) {
+      if (!evaluateOwnership(AssignmentAction.REPORT_ISSUE, owned, userId).allowed) {
         throw new ForbiddenException('You can only report an issue on an assignment that is assigned to you.');
       }
     }

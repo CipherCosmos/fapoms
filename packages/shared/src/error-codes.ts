@@ -111,6 +111,13 @@ export const ASSIGNMENT_ERROR_CODES = {
    * a reason: the remedy is recording the check, or the senior's decision, on their record.
    */
   ASSAYER_COMPLIANCE_BLOCKED: 'ASSAYER_COMPLIANCE_BLOCKED',
+  /**
+   * The assignment's status does not allow the move asked for (`ASSIGNMENT_TRANSITIONS` in
+   * `state-machines.ts`) — accepting an offer that has already been declined, say. The message
+   * keeps its original wording ("Invalid transition path from 'X' to 'Y'"); this names it so the
+   * field app's capability list and the route that refuses can share one code.
+   */
+  INVALID_ASSIGNMENT_TRANSITION: 'INVALID_ASSIGNMENT_TRANSITION',
 } as const;
 
 export const ASSAYER_ERROR_CODES = {
@@ -347,6 +354,11 @@ export const OTHER_CONFLICT_ERROR_CODES = {
    * billing.
    */
   EXPENSE_JOB_ALREADY_BILLED: 'EXPENSE_JOB_ALREADY_BILLED',
+  /**
+   * A new expense claim refused because the visit is not under way yet — the assignment has not
+   * been checked into (or was declined or cancelled). Claims open at check-in.
+   */
+  EXPENSE_VISIT_NOT_STARTED: 'EXPENSE_VISIT_NOT_STARTED',
 } as const;
 
 // ---------------------------------------------------------------------------

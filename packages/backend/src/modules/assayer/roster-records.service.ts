@@ -19,8 +19,10 @@ import { ComplianceStandingService } from './compliance-standing.service';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
-import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, IDEMPOTENCY_ERROR_CODES, EventCategory, hasPassedFinalApproval } from '@fapoms/shared';
+import { ASSAYER_ERROR_CODES, CONCURRENCY_ERROR_CODES, OTHER_CONFLICT_ERROR_CODES, IDEMPOTENCY_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { evaluateSelfDocumentChange } from './self-record-capabilities';
+import type { DocumentGate } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { EmailService } from '../notifications/email.service';
 import { SmsService } from '../notifications/sms.service';
@@ -1793,37 +1795,39 @@ export class RosterRecordsService {
   async assertSelfMayChangeDocument(assayerId: string, requirement: OnboardingDocument): Promise<void> {
     this.assertKnownRequirement(requirement);
     const row = await this.onboarding.findOne({ where: { assayerId, requirement } });
-    // HR has asked for it again ("Ask to re-upload", `requestReupload`) — open, whatever it was.
-    if (row?.isActive !== false && row?.verificationStatus === DocumentVerification.REJECTED) return;
-
-    /**
-     * The photograph is locked once the person is approved — owner decision 2026-09-24, "Lock
-     * once approved". It is never VERIFIED (it is not a document a reviewer checks against an
-     * original), so the verification rule below could not hold it; approval is the moment it
-     * became the face on the ID card. `hasPassedFinalApproval` is the shared reading of "approved".
-     * Only a photo that EXISTS is locked: somebody approved with none on file may still add one.
-     */
-    if (requirement === OnboardingDocument.PHOTOGRAPH) {
-      const person = await this.assayers.findOne({
+    // The photograph rule reads the person (approval locks it); nothing else does.
+    const person = requirement === OnboardingDocument.PHOTOGRAPH
+      ? await this.assayers.findOne({
         where: { id: assayerId },
         select: { id: true, lifecycleStatus: true, unavailableReason: true, photograph: true },
-      });
-      const hasPhoto = !!person?.photograph || (row?.filePaths ?? []).length > 0;
-      if (hasPhoto && hasPassedFinalApproval(person?.lifecycleStatus, person?.unavailableReason)) {
-        throw withCode(
-          new ForbiddenException('Your photo is locked. Ask HR if it needs changing.'),
-          ASSAYER_ERROR_CODES.PHOTOGRAPH_LOCKED,
-        );
-      }
-      return;
+      })
+      : null;
+    // `evaluateSelfDocumentChange` — the same decision `GET /assayers/me/capabilities` reports to
+    // the field app in advance (self-record-capabilities.ts).
+    const gate = evaluateSelfDocumentChange(requirement, row, person);
+    if (gate.mode === 'locked') {
+      throw withCode(new ForbiddenException(gate.reason), gate.code as any);
     }
+  }
 
-    if (row?.isActive !== false && row?.verificationStatus === DocumentVerification.VERIFIED) {
-      throw withCode(
-        new ForbiddenException('HR has verified this. Ask HR if it needs changing.'),
-        ASSAYER_ERROR_CODES.DOCUMENT_VERIFIED_LOCKED,
-      );
-    }
+  /**
+   * The document half of `GET /assayers/me/capabilities`: for each requirement, may the assayer
+   * replace it themselves (`direct`), not until HR asks (`locked`), or has HR asked (`reopened`,
+   * with HR's note). Two reads for the whole list — the rows, and the person for the photograph.
+   */
+  async selfDocumentGates(assayerId: string, requirements: readonly OnboardingDocument[]): Promise<DocumentGate[]> {
+    const [rows, person] = await Promise.all([
+      requirements.length
+        ? this.onboarding.find({ where: { assayerId, requirement: In([...requirements]) } })
+        : Promise.resolve([] as AssayerDocumentEntity[]),
+      this.assayers.findOne({
+        where: { id: assayerId },
+        select: { id: true, lifecycleStatus: true, unavailableReason: true, photograph: true },
+      }),
+    ]);
+    const byRequirement = new Map(rows.map((r) => [r.requirement, r]));
+    return requirements.map((requirement) =>
+      evaluateSelfDocumentChange(requirement, byRequirement.get(requirement) ?? null, person));
   }
 
   /**
@@ -1897,6 +1901,8 @@ export class RosterRecordsService {
     }
     row.verificationStatus = DocumentVerification.REJECTED;
     row.rejectionReason = input.reason;
+    // HR's own words, kept where the assayer's capability list can read them back as `hrNote`.
+    row.reuploadNote = note;
     // The verdict's moment and author, as `verifyDocument` records a rejection.
     row.verifiedAt = new Date();
     row.verifiedBy = actorId;
@@ -2559,6 +2565,9 @@ export class RosterRecordsService {
     row.rejectionReason = verdict === DocumentVerification.REJECTED
       ? (attested?.rejectionReason ?? null)
       : null;
+    // A new verdict from review supersedes any earlier "Ask to re-upload" note: a rejection here
+    // speaks through its reason's guidance, and a verification closes the ask.
+    row.reuploadNote = null;
     if (remarks !== undefined) row.remarks = remarks || null;
     row.updatedBy = actorId;
     const saved = await this.onboarding.save(row);

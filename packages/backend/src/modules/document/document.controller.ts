@@ -16,7 +16,8 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AllowPermissionFallback } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES, isAssignmentTerminal } from '@fapoms/shared';
+import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod, OTHER_CONFLICT_ERROR_CODES, isAssignmentTerminal, AssignmentAction } from '@fapoms/shared';
+import { evaluateOwnership, evaluateSubmitReturn } from '../assignment/assignment-capabilities';
 import { withCode } from '../../infrastructure/http/api-error';
 
 import { ValidationService } from '../validation/validation.service';
@@ -690,7 +691,8 @@ export class DocumentController {
       throw new BadRequestException('An assignment must be specified when submitting an audited return.');
     }
 
-    if (assignment.assayerId !== user?.id) {
+    // `evaluateOwnership` — the rule the field app's SUBMIT_RETURN capability is built from.
+    if (!evaluateOwnership(AssignmentAction.SUBMIT_RETURN, assignment, user?.id).allowed) {
       this.logger.warn(
         `Assayer ${user?.id} attempted to submit an audited return for assignment ${assignment.id}, which belongs to ${assignment.assayerId}.`,
       );
@@ -728,7 +730,11 @@ export class DocumentController {
     assignment: AssignmentEntity | null,
     sha256: string,
   ): Promise<DocumentEntity | null> {
-    if (!assignment || !isAssignmentTerminal(assignment.status)) return null;
+    if (!assignment) return null;
+    // `evaluateSubmitReturn` — a finished job (`isAssignmentTerminal`) takes no more paperwork. The
+    // same function tells the field app, in advance, that a return can no longer be sent.
+    const gate = evaluateSubmitReturn(assignment);
+    if (gate.allowed) return null;
 
     const stored = await this.documentService.findStoredReturnByContent(
       [assignment.id, assignment.assessmentId, assignment.projectBranchId].filter(Boolean) as string[],
@@ -741,13 +747,7 @@ export class DocumentController {
       );
       return stored;
     }
-    throw withCode(
-      new ConflictException(
-        `Assignment ${assignment.assignmentNumber ?? assignment.id} is already ${String(assignment.status).toLowerCase()}, `
-        + 'so no more paperwork can be added to it. If its return needs replacing, ask operations to reopen it.',
-      ),
-      OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CLOSED,
-    );
+    throw withCode(new ConflictException(gate.reason), gate.code as any);
   }
 
   /**

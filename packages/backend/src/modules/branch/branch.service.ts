@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { BranchEntity } from './branch.entity';
@@ -217,6 +219,12 @@ export class BranchService {
     private readonly geoPrecision: GeoPrecisionService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    /**
+     * Only for telling an assayer their job was cancelled because this branch closed (`remove`).
+     * Optional so the many specs that build this service by hand keep building.
+     */
+    @Optional() private readonly notificationDispatch?: NotificationDispatchService,
+    @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -627,8 +635,9 @@ export class BranchService {
       assignment_number: string;
       status: string;
       project_branch_id: string;
+      assayer_id: string | null;
     }> = await this.dataSource.query(
-      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id
+      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id, a.assayer_id
        FROM assignments a
        INNER JOIN project_branches pb ON a.project_branch_id = pb.id
        WHERE pb.branch_id = $1 AND a.is_active = true`,
@@ -669,6 +678,25 @@ export class BranchService {
         userId,
         remarks: `Auto-cancelled due to deactivation of branch ${branch.name}`,
       });
+      // Owner decision 2026-09-24: the assayer holding this job is told, in words, and their
+      // phone refreshes. This path cancels with a direct UPDATE and used to tell nobody.
+      if (a.assayer_id) {
+        this.notificationDispatch?.emitSafe({
+          type: 'ASSIGNMENT_CANCELLED_BY_CLOSURE',
+          entityType: 'ASSIGNMENT',
+          entityId: a.id,
+          actorUserId: userId,
+          assayerId: a.assayer_id,
+          dedupeKey: `ASSIGNMENT_CANCELLED_BY_CLOSURE:${a.id}`,
+          payload: {
+            assignmentId: a.id,
+            assignmentNumber: a.assignment_number,
+            branchName: branch.name,
+            because: 'the office has closed this branch',
+          },
+        });
+        this.refreshPush?.assignmentChanged(a.assayer_id, a.id);
+      }
       this.eventPublisher.publish('assignment:status-changed', {
         eventType: 'assignment:status-changed',
         assignmentId: a.id,

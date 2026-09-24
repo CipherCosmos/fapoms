@@ -8,6 +8,7 @@ import { BranchQueryService } from './branch-query.service';
 import { BranchController } from './branch.controller';
 import { ClientModule } from '../client/client.module';
 import { GeoModule } from '../geo/geo.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 
@@ -26,6 +27,9 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
     // For `GeoPrecisionService.enqueueBackfill` — the bulk importer hands coarsely placed rows to
     // the precision worker. GeoModule is a leaf; no cycle.
     GeoModule,
+    // Branch deactivation cancels open work and tells the assayer holding it (2026-09-24).
+    // NotificationsModule imports nothing that imports this module; no cycle.
+    NotificationsModule,
   ],
   controllers: [BranchController],
   providers: [BranchService, BranchQueryService],

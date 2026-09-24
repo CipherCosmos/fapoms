@@ -1722,7 +1722,7 @@ export class DocumentService {
               : `Audit PDF "${doc.fileName}" has been dispatched to you. Open your schedule to view and download.`,
             // Kept as a hand-rolled notifyAssayer rather than migrated to a catalog emit: no
             // catalog entry covers "pre-field PDF dispatched to the assayer" (DOCUMENT_UPLOADED
-            // targets the office desk, DOCUMENT_REJECTED is the re-upload path), and inventing
+            // targets the office desk), and inventing
             // one is out of scope here. Only the link is corrected — the frontend declares
             // `/assignments` and reads the record from `?id=`; there is no `/assignments/:id`
             // route, so the old path fell through to the dashboard and the assayer never saw

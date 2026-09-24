@@ -264,6 +264,13 @@ interface Exemption { kind: 'by-design' | 'open'; reason: string }
 
 const EXEMPT: Record<string, Exemption> = {
   // ── by design ───────────────────────────────────────────────────────────
+  'assayer/assayer-self-service.controller.ts::myCapabilities': {
+    kind: 'by-design',
+    reason:
+      'ASSAYER-only and self-only: the path carries no id, the answer is always about req.user, so ' +
+      'there is no other record to reach. An assayer principal carries no regions, so the ceiling ' +
+      'would be a no-op for the only caller the route admits.',
+  },
   'planning/planning.controller.ts::queueBulkOffers': {
     kind: 'by-design',
     reason:

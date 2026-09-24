@@ -1754,6 +1754,9 @@ export class MobileApiService {
           // way. The earnings screen sums these with `+`, so leaving them as strings would
           // concatenate rather than add ("0" + "180.00" = "0180.00") and show a nonsense total.
           expenses: (item.expenses || []).map((e: any) => ({ ...e, amount: Number(e.amount) || 0 })),
+          // Passed through untouched: the server's own verdict per action (see `record-capabilities`).
+          // Absent from an older server, which the reader treats as "not allowed".
+          capabilities: item.capabilities ?? undefined,
         };
       });
   }
@@ -1860,10 +1863,17 @@ export class MobileApiService {
     lng: number,
     accuracy?: number,
     syncToken?: string,
+    /**
+     * When the phone noticed the arrival (the geofence event, or the tap), which can be well before
+     * this request goes out if it waited for signal. Sent as `arrivedAt`; `timestamp` keeps meaning
+     * "when this request was made". The server records `arrivedAt` after checking it against the
+     * same day, its age and the location trail; an older server ignores it (untyped body).
+     */
+    arrivedAt?: string,
   ): Promise<{ success: boolean; error?: string; status?: number; code?: string }> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-in`, {
       method: 'POST',
-      body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
+      body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString(), ...(arrivedAt ? { arrivedAt } : {}) }),
     });
     const resData = await response.json().catch(() => ({}));
     return {

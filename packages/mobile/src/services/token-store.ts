@@ -33,6 +33,19 @@ export type TokenKey =
 
 const isWeb = Platform.OS === 'web';
 
+/**
+ * Keychain options for every token read and write, or none (the platform default).
+ *
+ * The current app never sets this, so it keeps the default iOS class (readable only while the
+ * phone is unlocked). The rebuilt app sets AFTER_FIRST_UNLOCK at its entry point, before anything
+ * reads a token, so a check-in triggered by arriving at a branch works while the phone is locked in
+ * a pocket. Android ignores it.
+ */
+let secureOptions: SecureStore.SecureStoreOptions | undefined;
+export function setSecureStoreOptions(options: SecureStore.SecureStoreOptions | undefined): void {
+  secureOptions = options;
+}
+
 const webStorage = (): Storage | null => {
   try {
     const g: any = typeof globalThis !== 'undefined' ? globalThis : {};
@@ -45,7 +58,7 @@ const webStorage = (): Storage | null => {
 export async function readToken(key: TokenKey): Promise<string | null> {
   try {
     if (isWeb) return webStorage()?.getItem(key) ?? null;
-    return await SecureStore.getItemAsync(key);
+    return await SecureStore.getItemAsync(key, secureOptions);
   } catch (err) {
     // A keystore read can fail on a device whose credentials were invalidated (biometric
     // enrolment changed, for instance). Report it rather than silently signing the user out
@@ -61,7 +74,7 @@ export async function writeToken(key: TokenKey, value: string): Promise<void> {
       webStorage()?.setItem(key, value);
       return;
     }
-    await SecureStore.setItemAsync(key, value);
+    await SecureStore.setItemAsync(key, value, secureOptions);
   } catch (err) {
     console.warn(`Could not persist ${key} to secure storage:`, err);
   }
@@ -73,7 +86,7 @@ export async function deleteToken(key: TokenKey): Promise<void> {
       webStorage()?.removeItem(key);
       return;
     }
-    await SecureStore.deleteItemAsync(key);
+    await SecureStore.deleteItemAsync(key, secureOptions);
   } catch (err) {
     console.warn(`Could not clear ${key} from secure storage:`, err);
   }

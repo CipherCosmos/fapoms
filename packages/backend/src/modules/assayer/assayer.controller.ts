@@ -117,6 +117,7 @@ import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RosterImportService } from './roster-import.service';
 import { ImportJobService } from '../import/import-job.service';
+import { evaluateSelfFieldChange, selfFieldGates } from './self-record-capabilities';
 import { RosterRecordsService } from './roster-records.service';
 import { LIFECYCLE_REASON_MAX_LENGTH } from './lifecycle-reason-limit';
 import { DataIntegrityService } from './data-integrity.service';
@@ -1791,6 +1792,12 @@ export class AssayerController {
       hrMaintained: isStaff ? [] : HR_MAINTAINED_FIELDS,
       // null selfEditable means "no restriction" — staff edit the whole record.
       unrestricted: isStaff,
+      /**
+       * Additive: the same answer as per-field gates, from the function the self-edit refusal and
+       * `GET /assayers/me/capabilities` both use (`evaluateSelfFieldChange`). Null for staff, who
+       * are not restricted field by field. Older clients read the three keys above and ignore it.
+       */
+      fields: isStaff ? null : selfFieldGates(),
     };
   }
 
@@ -1883,7 +1890,8 @@ export class AssayerController {
       const attempted = Object.entries(dto ?? {})
         .filter(([, v]) => v !== undefined)
         .map(([k]) => k);
-      const forbidden = attempted.filter((f) => !SELF_EDITABLE_FIELDS.includes(f));
+      // `evaluateSelfFieldChange` — the decision `GET /assayers/me/capabilities` shows in advance.
+      const forbidden = attempted.filter((f) => evaluateSelfFieldChange(f).mode !== 'direct');
       if (forbidden.length) {
         // Not a permissions failure, and the difference is the whole point of coding it: the
         // answer is "ask your HR contact", not "you should not be here". The field list is

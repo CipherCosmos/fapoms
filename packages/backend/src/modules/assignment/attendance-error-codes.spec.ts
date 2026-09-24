@@ -43,7 +43,12 @@ describe('check-in / check-out refusal codes come from the shared catalogue', ()
   it('keeps the two refusals the audit named, with their original wire values', () => {
     expect(shared.ATTENDANCE_ERROR_CODES.NOT_SCHEDULED_TODAY).toBe('NOT_SCHEDULED_TODAY');
     expect(shared.ATTENDANCE_ERROR_CODES.TOO_FAR_FROM_BRANCH).toBe('TOO_FAR_FROM_BRANCH');
-    expect(body('recordCheckIn')).toContain('error: ATTENDANCE_ERROR_CODES.NOT_SCHEDULED_TODAY');
-    expect(body('recordCheckIn')).toContain('error: ATTENDANCE_ERROR_CODES.TOO_FAR_FROM_BRANCH');
+    // Both refusals are now decided by the capability evaluators the field app's list is built
+    // from (assignment-capabilities.ts) and passed through by the route as `error: <gate>.code`.
+    const evaluators = readFileSync(join(__dirname, 'assignment-capabilities.ts'), 'utf8');
+    expect(evaluators).toContain('ATTENDANCE_ERROR_CODES.NOT_SCHEDULED_TODAY');
+    expect(evaluators).toContain('ATTENDANCE_ERROR_CODES.TOO_FAR_FROM_BRANCH');
+    expect(body('recordCheckIn')).toContain('evaluateCheckInDay(');
+    expect(body('recordCheckIn')).toContain('evaluateCheckInPosition(');
   });
 });

@@ -41,6 +41,22 @@ try {
   // firebase-admin is optional
 }
 
+/**
+ * The data-only multicast message (see `FcmProvider.sendDataOnlyMulticast`): no `notification`
+ * block, Android high priority, iOS background push with content-available and no alert.
+ */
+export function buildDataOnlyMessage(tokens: string[], data: Record<string, string>) {
+  return {
+    tokens,
+    data,
+    android: { priority: 'high' as const },
+    apns: {
+      headers: { 'apns-push-type': 'background', 'apns-priority': '5' },
+      payload: { aps: { contentAvailable: true } },
+    },
+  };
+}
+
 @Injectable()
 export class FcmProvider implements PushProvider, OnModuleInit {
   private readonly logger = new Logger(FcmProvider.name);
@@ -182,6 +198,35 @@ export class FcmProvider implements PushProvider, OnModuleInit {
     } catch (err: any) {
       this.logger.error(`FCM send failed: ${err.message}`);
       return { success: false, error: err.message, errorCode: err?.code };
+    }
+  }
+
+  /**
+   * A DATA-ONLY message: nothing is shown, the app is woken to refresh something in the background.
+   *
+   * No `notification` block anywhere — its presence is what makes Android draw a notification
+   * instead of handing the data to the app, and makes iOS treat the message as an alert.
+   *  - Android: `priority: 'high'`, so a dozing device delivers it now rather than at the next
+   *    maintenance window.
+   *  - iOS: `content-available: 1` with no alert, sound or badge, sent as a background push
+   *    (`apns-push-type: background`, which Apple requires to carry `apns-priority: 5`).
+   * `data` values must be strings — FCM refuses anything else.
+   */
+  async sendDataOnlyMulticast(tokens: string[], data: Record<string, string>): Promise<PushResult[]> {
+    if (!this.initialized) {
+      return tokens.map(() => ({ success: false, error: 'FCM not initialized' }));
+    }
+    try {
+      const response = await getMessaging().sendEachForMulticast(buildDataOnlyMessage(tokens, data));
+      return response.responses.map((r: any) => ({
+        success: r.success,
+        messageId: r.messageId ?? undefined,
+        error: r.error?.message,
+        errorCode: r.error?.code,
+      }));
+    } catch (err: any) {
+      this.logger.error(`FCM data-only multicast failed: ${err.message}`);
+      return tokens.map(() => ({ success: false, error: err.message, errorCode: err?.code }));
     }
   }
 

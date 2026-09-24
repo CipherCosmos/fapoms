@@ -16,6 +16,7 @@ import { UserEntity } from '../user/user.entity';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ValidationCaseEntity } from '../validation/validation-case.entity';
@@ -41,6 +42,21 @@ import {
 import { ProjectEntity } from '../project/project.entity';
 import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES, ENGAGED_ASSIGNMENT_STATUSES } from './assignment-workload';
 import { throwMappedUniqueViolation, throwIfRetryable } from './assignment-constraint-errors';
+import {
+  buildAssignmentCapabilities,
+  evaluateAcceptOffer,
+  evaluateCheckInDay,
+  evaluateCheckInNotClosed,
+  evaluateCheckInPosition,
+  evaluateCheckInState,
+  evaluateCheckOut,
+  evaluateCheckOutNotClosed,
+  evaluateDeclineOffer,
+  evaluateFieldWorkStanding,
+  evaluateReportIssue,
+  relevantActions,
+  type CapabilityFeePayable,
+} from './assignment-capabilities';
 import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
@@ -55,6 +71,18 @@ import { EventCategory, ScheduleStatus, AssignmentStatus, AssayerStatus, Project
   WRITE_VERIFICATION_ERROR_CODES,
   OTHER_CONFLICT_ERROR_CODES,
   ATTENDANCE_ERROR_CODES,
+  CheckInArrivalOutcome,
+  CheckInTimeSource,
+  CHECK_IN_ARRIVAL_MAX_AGE_SETTING,
+  ARRIVAL_RADIUS_SETTING,
+  DEFAULT_ARRIVAL_RADIUS_METERS,
+  CHECK_IN_ARRIVAL_TRAIL_WINDOW_SETTING,
+  DEFAULT_CHECK_IN_ARRIVAL_MAX_AGE_HOURS,
+  DEFAULT_CHECK_IN_ARRIVAL_TRAIL_WINDOW_MINUTES,
+  decideCheckInTime,
+  usableBranchPoint,
+  type CheckInTimeDecision,
+  type TrailFix,
 } from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -63,7 +91,7 @@ import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { AssayerPayableEntity } from '../billing-engine/payable.entity';
 import { BillingEntryEntity } from '../billing-engine/billing-entry.entity';
 import { AssayerInvoiceEntity } from '../billing-engine/assayer-invoice.entity';
-import { BillingState, AssayerInvoiceStatus, AssayerPayableStatus } from '@fapoms/shared';
+import { BillingState, AssayerInvoiceStatus, AssayerPayableStatus, AssignmentAction } from '@fapoms/shared';
 import * as crypto from 'crypto';
 
 // Fee rates are no longer declared here. They resolve per client contract through
@@ -158,6 +186,11 @@ export interface TransitionAssignmentDto {
   scheduledDate?: string;
 }
 
+/** A day as a field worker reads it on a lock screen: "Friday, 25 September" (IST). */
+function spokenDay(d: Date | string): string {
+  return new Date(d).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' });
+}
+
 /** Shipped default for the check-in geofence; the saved setting wins. */
 const DEFAULT_CHECK_IN_GEOFENCE_METERS = 2000;
 
@@ -230,7 +263,19 @@ export class AssignmentService {
     private readonly targetEligibility: AssignmentTargetEligibilityService,
     /** Re-checks over time: who is held from new work. Optional so older specs build unchanged. */
     @Optional() private readonly compliance?: ComplianceStandingService,
+    /** The silent "your jobs changed" push. Optional so older specs build unchanged. */
+    @Optional() private readonly refreshPush?: AssignmentRefreshPushService,
   ) {}
+
+  /**
+   * Tell the assayer's phone, silently, that this job changed so the app refreshes it (owner
+   * decision 2026-09-24; see `AssignmentRefreshPushService`, which coalesces bursts). Skipped when
+   * the assayer made the change themselves — their own phone already has the result.
+   */
+  private jobChanged(assayerId: string | null | undefined, assignmentId: string, actorId?: string | null): void {
+    if (!assayerId || (actorId && actorId === assayerId)) return;
+    this.refreshPush?.assignmentChanged(assayerId, assignmentId);
+  }
 
   /**
    * Refuse NEW work for somebody held on compliance grounds — a re-check overdue past its grace
@@ -1225,6 +1270,8 @@ export class AssignmentService {
        * already relies on.
        */
       this.assayerService.scheduleStatsRefresh(saved.assayerId);
+      // A new job on their list, offered or desk-confirmed alike.
+      this.jobChanged(saved.assayerId, saved.id, userId);
 
       if (!dto.acceptOnBehalf) {
         notifyOffered();
@@ -1324,6 +1371,10 @@ export class AssignmentService {
       }
     }
 
+    // What the assayer can see before the edit, so only a real change to it is announced.
+    const dayBefore = assignment.scheduledDate ? businessDateKey(assignment.scheduledDate) : null;
+    const noteBefore = (assignment.remarks ?? '').trim();
+
     if (dto.proposedFee !== undefined) assignment.proposedFee = dto.proposedFee;
     if (dto.agreedFee !== undefined) assignment.agreedFee = dto.agreedFee;
     if (dto.scheduledDate !== undefined) {
@@ -1362,6 +1413,46 @@ export class AssignmentService {
       userId,
       remarks: `Updated details for assignment ${saved.assignmentNumber}.`,
     });
+
+    /**
+     * Owner decision 2026-09-24: an edit the assayer can see is announced to them. The date and
+     * the office's note are what their app shows; fees it does not (the response interceptor
+     * strips them for the assayer), so a fee-only edit sends nothing visible. Every saved edit
+     * still sends the silent refresh — the version moved, and a stale version is refused at
+     * check-in.
+     */
+    const dayAfter = saved.scheduledDate ? businessDateKey(saved.scheduledDate) : null;
+    const dateMoved = dayAfter !== dayBefore && !!dayAfter;
+    const noteChanged = (saved.remarks ?? '').trim() !== noteBefore;
+    if (saved.assayerId && (dateMoved || noteChanged)) {
+      const branchName = assignment.projectBranch?.branch?.name ?? saved.assignmentNumber;
+      this.notificationDispatch.emitSafe(dateMoved
+        ? {
+          type: 'ASSIGNMENT_DATE_CHANGED',
+          entityType: 'ASSIGNMENT',
+          entityId: saved.id,
+          actorUserId: userId,
+          assayerId: saved.assayerId,
+          dedupeKey: `ASSIGNMENT_DATE_CHANGED:${saved.id}:${dayAfter}`,
+          payload: {
+            assignmentId: saved.id,
+            assignmentNumber: saved.assignmentNumber,
+            branchName,
+            newDate: spokenDay(saved.scheduledDate as Date),
+            alsoNote: noteChanged ? 'The office also changed the note on it.' : '',
+          },
+        }
+        : {
+          type: 'ASSIGNMENT_NOTE_CHANGED',
+          entityType: 'ASSIGNMENT',
+          entityId: saved.id,
+          actorUserId: userId,
+          assayerId: saved.assayerId,
+          dedupeKey: `ASSIGNMENT_NOTE_CHANGED:${saved.id}:${saved.entityVersion}`,
+          payload: { assignmentId: saved.id, assignmentNumber: saved.assignmentNumber, branchName },
+        });
+    }
+    this.jobChanged(saved.assayerId, saved.id, userId);
 
     try {
       if (dto.proposedFee !== undefined || dto.agreedFee !== undefined) {
@@ -1473,16 +1564,23 @@ export class AssignmentService {
     let event: any;
     let pbEvent: any;
     if (targetStatus === AssignmentStatus.ACCEPTED) {
-      if (assignment.assayerId) {
-        const assayer = await this.assayerService.findOne(assignment.assayerId).catch(() => null);
-        if (assayer && assayer.status != null && (assayer.status !== AssayerStatus.ACTIVE || assayer.isActive === false)) {
-          throw new BadRequestException(
-            `Assayer ${assayer.assayerCode || assayer.id} is '${assayer.status}' and cannot accept assignments.`,
-          );
-        }
-        // Accepting an offer is taking on new work.
-        await this.assertNotComplianceHeld(assignment.assayerId, assayer?.displayName ?? 'This assayer');
-      }
+      /**
+       * `evaluateAcceptOffer` is the decision — the same function the field app's capability list is
+       * built from (assignment-capabilities.ts). Asked twice so the compliance read is only paid for
+       * an assayer whose standing already allows the work, exactly as the inline checks it replaced.
+       */
+      const assayer = assignment.assayerId
+        ? await this.assayerService.findOne(assignment.assayerId).catch(() => null)
+        : null;
+      const refuseAccept = (gate: { allowed: boolean; code?: string; reason?: string }) => {
+        if (gate.allowed) return;
+        throw withCode(new BadRequestException(gate.reason), gate.code as any);
+      };
+      const standing = evaluateAcceptOffer(assignment, assayer, []);
+      if (!standing.allowed && standing.code === ATTENDANCE_ERROR_CODES.ASSAYER_NOT_ACTIVE) refuseAccept(standing);
+      // Accepting an offer is taking on new work.
+      const blockers = assignment.assayerId ? ((await this.compliance?.workBlockers(assignment.assayerId)) ?? []) : [];
+      refuseAccept(evaluateAcceptOffer(assignment, assayer, blockers));
       if (fee !== undefined) {
         assignment.agreedFee = fee;
       }
@@ -1494,6 +1592,8 @@ export class AssignmentService {
         pbEvent = ProjectBranchStateMachine.confirmAssignment(assignment.projectBranch, userId);
       }
     } else if (targetStatus === AssignmentStatus.REJECTED) {
+      const decline = evaluateDeclineOffer(assignment);
+      if (!decline.allowed) throw withCode(new BadRequestException(decline.reason), decline.code as any);
       event = AssignmentStateMachine.rejectOffer(assignment, userId, reason || '');
       if (assignment.projectBranch) {
         assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
@@ -1906,6 +2006,8 @@ export class AssignmentService {
     // cancel and complete wait on a fan of statistics queries before returning. `getProfile`
     // recomputes on read, so a momentarily stale counter corrects itself where it is looked at.
     this.assayerService.scheduleStatsRefresh(saved.assayerId);
+    // Accepted, declined, cancelled, started or completed by somebody other than the assayer.
+    this.jobChanged(saved.assayerId, saved.id, userId);
 
     return { saved, event };
   }
@@ -2035,6 +2137,8 @@ export class AssignmentService {
       }
     }
 
+    // Set only when THIS call reopened the job — not on an idempotent replay of an earlier one.
+    let reopenedNow = false;
     const saved = await this.uow.run(async (manager, emit) => {
       const lockedRows: Array<{ status: string; entity_version: number }> = await manager.query(
         'SELECT status, entity_version FROM assignments WHERE id = $1 FOR UPDATE',
@@ -2187,6 +2291,7 @@ export class AssignmentService {
         userId,
       });
 
+      reopenedNow = true;
       return savedAssign;
     }).catch(async (err: any) => {
       const isIdempConflict =
@@ -2210,6 +2315,26 @@ export class AssignmentService {
       }
       throw err;
     });
+
+    if (reopenedNow && saved?.assayerId) {
+      // The assayer had finished this job; it is back on their list. Owner decision 2026-09-24:
+      // tell them, in words, and refresh the app silently.
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_REOPENED',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: saved.assayerId,
+        dedupeKey: `ASSIGNMENT_REOPENED:${saved.id}:${saved.entityVersion ?? ''}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          branchName: saved.projectBranch?.branch?.name ?? saved.assignmentNumber,
+          reason: statedReason,
+        },
+      });
+      this.jobChanged(saved.assayerId, saved.id, userId);
+    }
 
     return saved;
   }
@@ -2840,6 +2965,11 @@ export class AssignmentService {
         },
       });
 
+      // Both phones refresh: the job leaves one list and arrives on the other. The coalescing
+      // window (2 s) outlasts this transaction, so neither refresh reads an uncommitted state.
+      this.jobChanged(prevAssayerId, saved.id, userId);
+      this.jobChanged(persistedAssayerId, saved.id, userId);
+
       emit('assignment:reassigned', {
         eventType: 'assignment:reassigned',
         assignmentId: saved.id,
@@ -2934,6 +3064,27 @@ export class AssignmentService {
       });
     }
 
+    // The assayer holding live work hears it too, in their own words and without the desk's
+    // reason (written for colleagues). Not on a declined or cancelled job: nothing is theirs to do.
+    const inFlight = [AssignmentStatus.PENDING, AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.IN_PROGRESS]
+      .includes(saved.status);
+    if (!alreadyCritical && saved.assayerId && inFlight) {
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_MARKED_URGENT',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        actorUserId: userId,
+        assayerId: saved.assayerId,
+        dedupeKey: `ASSIGNMENT_MARKED_URGENT:${saved.id}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
+        },
+      });
+    }
+    this.jobChanged(saved.assayerId, saved.id, userId);
+
     this.publishAssignmentEvent('assignment:escalated', saved, { userId, previousState: assignment.status, timestamp: new Date() });
 
     return saved;
@@ -2961,8 +3112,10 @@ export class AssignmentService {
   ): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
 
-    if (assignment.status === AssignmentStatus.COMPLETED) {
-      throw new BadRequestException('This assignment is already completed.');
+    // The same decision the field app's capability list shows (assignment-capabilities.ts).
+    const gate = evaluateReportIssue(assignment);
+    if (!gate.allowed) {
+      throw withCode(new BadRequestException(gate.reason), gate.code as any);
     }
 
     const branchName = assignment.projectBranch?.branch?.name ?? assignment.assignmentNumber;
@@ -3212,7 +3365,7 @@ export class AssignmentService {
       // 2026-09-04T00:00:00.000Z." on a real device — a raw ISO instant on a field (branch
       // visits have no time-of-day component anywhere else in the app). Matches the date-only
       // convention `scheduling.service.ts`'s own `fmt()` helper already uses for
-      // SCHEDULE_RESCHEDULED/SCHEDULE_CANCELLED's date fields, and what `dto.scheduledDate`
+      // SCHEDULE_RESCHEDULED's date fields, and what `dto.scheduledDate`
       // naturally is when a schedule is created directly through that service instead of here.
       scheduledDate: businessDateKey(scheduledDateObj),
     };
@@ -3290,6 +3443,8 @@ export class AssignmentService {
       userId,
     });
 
+    // Scheduling and rescheduling both land here (SchedulingService calls it for either).
+    this.jobChanged(saved.assayerId, saved.id, userId);
     return saved;
   }
 
@@ -3465,7 +3620,17 @@ export class AssignmentService {
    */
   async findByAssayer(
     assayerId: string,
-    options: { scope?: 'active' | 'history' | 'all'; limit?: number; before?: string } = {},
+    options: {
+      scope?: 'active' | 'history' | 'all';
+      limit?: number;
+      before?: string;
+      /**
+       * Attach `capabilities` (what this caller may do next, and why not) to every assignment,
+       * judged for this assayer id. Set by the controller only when the assayer is reading their
+       * own list; staff reads skip the extra work.
+       */
+      capabilitiesFor?: string;
+    } = {},
   ): Promise<{ assignments: AssignmentEntity[]; hasMore: boolean; nextCursor: string | null }> {
     const scope = options.scope ?? 'all';
     const limit = Math.min(Math.max(Number(options.limit) || DEFAULT_ASSAYER_PAGE_SIZE, 1), MAX_ASSAYER_PAGE_SIZE);
@@ -3681,7 +3846,85 @@ export class AssignmentService {
       (assignment as any).queries = caseIds.flatMap((id) => queriesByCase.get(id) ?? []);
     }
 
+    if (options.capabilitiesFor && assignments.length) {
+      await this.attachCapabilities(assignments, options.capabilitiesFor);
+    }
+
     return { assignments, hasMore, nextCursor };
+  }
+
+  /**
+   * `capabilities` for each assignment on the field app's list — the server's own verdict, built by
+   * the evaluators the routes enforce with (assignment-capabilities.ts), so the phone offers only
+   * what will work and says why not.
+   *
+   * Batched: however long the list, this is at most one assayer read, one compliance standing (only
+   * if an offer is on the list), one fee-payable read (only if a claim is), one geofence setting and
+   * one rule-bypass lookup (only if a check-in is off its scheduled day). Nothing per assignment.
+   */
+  private async attachCapabilities(assignments: AssignmentEntity[], callerAssayerId: string): Promise<void> {
+    const now = new Date();
+    const listed = assignments.map((a) => relevantActions(a));
+    const any = (action: AssignmentAction) => listed.some((actions) => actions.includes(action));
+
+    const effectiveScheduled = (a: AssignmentEntity) => a.scheduledDate ?? a.projectBranch?.scheduledDate ?? null;
+    const needsDayBypass = assignments.some((a, i) =>
+      listed[i].includes(AssignmentAction.CHECK_IN)
+      && !!effectiveScheduled(a)
+      && !evaluateCheckInDay(effectiveScheduled(a), now, false).allowed);
+
+    const [assayer, blockers, feePayables, zoneSettings, dayRuleSuspended] = await Promise.all([
+      this.dataSource.getRepository(AssayerEntity).findOne({
+        where: { id: callerAssayerId },
+        select: { id: true, assayerCode: true, displayName: true, status: true, isActive: true, lifecycleStatus: true },
+      }).catch(() => null),
+      any(AssignmentAction.ACCEPT)
+        ? Promise.resolve(this.compliance?.workBlockers(callerAssayerId) ?? []).catch(() => [] as string[])
+        : Promise.resolve([] as string[]),
+      any(AssignmentAction.CLAIM_EXPENSE)
+        ? this.billingEngine.liveFeePayables(
+          assignments.filter((_, i) => listed[i].includes(AssignmentAction.CLAIM_EXPENSE)).map((a) => a.id),
+        ).catch(() => new Map<string, CapabilityFeePayable>())
+        : Promise.resolve(new Map<string, CapabilityFeePayable>()),
+      any(AssignmentAction.CHECK_IN)
+        ? this.settings.getMany(['field.checkInGeofenceMeters', ARRIVAL_RADIUS_SETTING])
+          .then((v) => ({
+            geofence: Number.isFinite(Number(v['field.checkInGeofenceMeters']))
+              ? Number(v['field.checkInGeofenceMeters']) : DEFAULT_CHECK_IN_GEOFENCE_METERS,
+            arrival: Number.isFinite(Number(v[ARRIVAL_RADIUS_SETTING]))
+              ? Number(v[ARRIVAL_RADIUS_SETTING]) : DEFAULT_ARRIVAL_RADIUS_METERS,
+          }))
+          .catch(() => ({ geofence: DEFAULT_CHECK_IN_GEOFENCE_METERS, arrival: DEFAULT_ARRIVAL_RADIUS_METERS }))
+        : Promise.resolve({ geofence: DEFAULT_CHECK_IN_GEOFENCE_METERS, arrival: DEFAULT_ARRIVAL_RADIUS_METERS }),
+      needsDayBypass
+        ? this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_SCHEDULED_DAY).catch(() => false)
+        : Promise.resolve(false),
+    ]);
+
+    for (const assignment of assignments) {
+      (assignment as any).capabilities = buildAssignmentCapabilities(
+        {
+          id: assignment.id,
+          assignmentNumber: assignment.assignmentNumber,
+          status: assignment.status,
+          assayerId: assignment.assayerId,
+          checkedInAt: assignment.checkedInAt,
+          checkedOutAt: assignment.checkedOutAt,
+          scheduledDate: effectiveScheduled(assignment),
+          branch: assignment.projectBranch?.branch ?? null,
+        },
+        {
+          callerAssayerId,
+          assayer,
+          complianceBlockers: blockers,
+          now,
+          dayRuleSuspended,
+          geofenceMeters: zoneSettings.geofence,
+          arrivalRadiusMeters: zoneSettings.arrival,
+          feePayable: (feePayables as Map<string, CapabilityFeePayable>).get(assignment.id) ?? null,
+        },
+      );
+    }
   }
 
   /**
@@ -4303,6 +4546,58 @@ export class AssignmentService {
     );
   }
 
+  /**
+   * Load what the arrival rule needs — the two settings and the trail fixes around the claim — and
+   * let `decideCheckInTime` (shared, pure) decide. Reads nothing when no claim was sent, so an old
+   * app's check-in costs exactly what it did.
+   *
+   * A trail that cannot be read is treated as no evidence: the check-in still succeeds, written in
+   * server time, which is the answer the phone would have got before this rule existed.
+   */
+  private async decideCheckInArrival(input: {
+    assayerId: string;
+    arrivedAt: unknown;
+    fromAssignedAssayer: boolean;
+    receivedAt: Date;
+    branch: { latitude?: unknown; longitude?: unknown; geoAccuracyMeters?: unknown } | null;
+    geofenceMeters: number;
+  }): Promise<CheckInTimeDecision> {
+    const decide = (maxAgeHours: number, trailWindowMinutes: number, fixes: TrailFix[]) => decideCheckInTime({
+      receivedAt: input.receivedAt,
+      arrivedAt: input.arrivedAt,
+      fromAssignedAssayer: input.fromAssignedAssayer,
+      maxAgeHours,
+      trailWindowMinutes,
+      geofenceMeters: input.geofenceMeters,
+      branch: usableBranchPoint(input.branch?.latitude, input.branch?.longitude),
+      branchAccuracyMeters: Number(input.branch?.geoAccuracyMeters ?? 0) || 0,
+      fixes,
+      businessDayOf: (d) => businessDateKey(d),
+    });
+
+    // Everything that can be decided without the trail is decided first, so a stale, future or
+    // absent claim costs no reads at all.
+    const [maxAgeHours, trailWindowMinutes] = await Promise.all([
+      this.settings.getNumber(CHECK_IN_ARRIVAL_MAX_AGE_SETTING, DEFAULT_CHECK_IN_ARRIVAL_MAX_AGE_HOURS)
+        .catch(() => DEFAULT_CHECK_IN_ARRIVAL_MAX_AGE_HOURS),
+      this.settings.getNumber(CHECK_IN_ARRIVAL_TRAIL_WINDOW_SETTING, DEFAULT_CHECK_IN_ARRIVAL_TRAIL_WINDOW_MINUTES)
+        .catch(() => DEFAULT_CHECK_IN_ARRIVAL_TRAIL_WINDOW_MINUTES),
+    ]);
+    const withoutTrail = decide(maxAgeHours, trailWindowMinutes, []);
+    if (withoutTrail.outcome !== CheckInArrivalOutcome.NO_TRAIL_EVIDENCE || !withoutTrail.claimedArrivalAt) {
+      return withoutTrail;
+    }
+    const windowMs = Math.max(0, trailWindowMinutes) * 60_000;
+    const claimed = withoutTrail.claimedArrivalAt.getTime();
+    const fixes = await this.locationTrail
+      .fixesBetween(input.assayerId, new Date(claimed - windowMs), new Date(claimed + windowMs))
+      .catch((err) => {
+        AssignmentService.logger.warn(`Could not read the location trail to confirm an arrival time: ${err?.message}`);
+        return [] as TrailFix[];
+      });
+    return decide(maxAgeHours, trailWindowMinutes, fixes);
+  }
+
   async recordCheckIn(
     id: string,
     lat: number,
@@ -4310,8 +4605,20 @@ export class AssignmentService {
     syncToken?: string,
     userId?: string,
     accuracyMeters?: number,
-    options?: { expectedVersion?: number; clientRequestId?: string },
+    options?: {
+      expectedVersion?: number;
+      clientRequestId?: string;
+      /**
+       * When the phone says it actually arrived (ISO). Optional — every app that predates it sends
+       * nothing and gets exactly the old behaviour. Recorded as the check-in time only when the
+       * arrival rule in `check-in-rules.ts` (`decideCheckInTime`) accepts it.
+       */
+      arrivedAt?: unknown;
+    },
   ): Promise<{ success: boolean; assignment: AssignmentEntity; error?: string; message?: string }> {
+    // The server's receive time, taken before any lock is waited on: it is the fallback check-in
+    // time and the "now" every arrival rule is measured against.
+    const receivedAt = new Date();
     return this.runTransactional(async (manager) => {
       const lockedRows: Array<{
         id: string;
@@ -4352,21 +4659,15 @@ export class AssignmentService {
         };
       }
 
-      // Quick-reject if cancelled or completed
-      if (lockedRow?.status === AssignmentStatus.CANCELLED) {
+      // Quick-reject if cancelled or completed — `evaluateCheckInNotClosed`, the same function
+      // the field app's capability list is built from.
+      const lockedClosed = lockedRow ? evaluateCheckInNotClosed(lockedRow.status) : null;
+      if (lockedClosed && !lockedClosed.allowed) {
         return {
           success: false,
           assignment: null as any,
-          error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED,
-          message: 'Cannot check in: assignment has been cancelled.',
-        };
-      }
-      if (lockedRow?.status === AssignmentStatus.COMPLETED) {
-        return {
-          success: false,
-          assignment: null as any,
-          error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED,
-          message: 'Cannot check in: assignment is already completed.',
+          error: lockedClosed.code,
+          message: lockedClosed.reason,
         };
       }
 
@@ -4444,11 +4745,9 @@ export class AssignmentService {
         }
       }
 
-      if (assignment.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment, error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED, message: 'Cannot check in: assignment has been cancelled.' };
-      }
-      if (assignment.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED, message: 'Cannot check in: assignment is already completed.' };
+      const closed = evaluateCheckInNotClosed(assignment.status);
+      if (!closed.allowed) {
+        return { success: false, assignment, error: closed.code, message: closed.reason };
       }
       if (assignment.checkedInAt) {
         return {
@@ -4458,13 +4757,9 @@ export class AssignmentService {
         };
       }
 
-      if (!AssignmentStateMachine.canTransition(assignment.status, AssignmentStatus.CHECKED_IN)) {
-        return {
-          success: false,
-          assignment,
-          error: ATTENDANCE_ERROR_CODES.INVALID_STATE_FOR_CHECK_IN,
-          message: `You need to accept this assignment before checking in. It is currently ${String(assignment.status).replace(/_/g, ' ').toLowerCase()}.`,
-        };
+      const state = evaluateCheckInState(assignment.status);
+      if (!state.allowed) {
+        return { success: false, assignment, error: state.code, message: state.reason };
       }
 
       // Authoritative Assayer Lifecycle & Status Gate at Check-in:
@@ -4475,14 +4770,9 @@ export class AssignmentService {
         lock: { mode: 'pessimistic_read' },
       });
 
-      if (!assayer || assayer.status !== AssayerStatus.ACTIVE || assayer.isActive === false) {
-        const statusLabel = assayer ? (assayer.lifecycleStatus || assayer.status) : 'UNKNOWN';
-        return {
-          success: false,
-          assignment,
-          error: ATTENDANCE_ERROR_CODES.ASSAYER_NOT_ACTIVE,
-          message: `Check-in refused: Assayer is currently ${statusLabel}. Suspended or inactive assayers cannot start new field work.`,
-        };
+      const standing = evaluateFieldWorkStanding(assayer);
+      if (!standing.allowed) {
+        return { success: false, assignment, error: standing.code, message: standing.reason };
       }
 
       if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
@@ -4494,81 +4784,78 @@ export class AssignmentService {
         };
       }
 
-      const branchLat = Number(assignment.projectBranch?.branch?.latitude);
-      const branchLng = Number(assignment.projectBranch?.branch?.longitude);
-      const distanceMeters =
-        Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
-          ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
-          : null;
+      const branch = assignment.projectBranch?.branch ?? null;
+      const GEOFENCE_METERS = await this.settings
+        .getNumber('field.checkInGeofenceMeters', DEFAULT_CHECK_IN_GEOFENCE_METERS)
+        .catch(() => DEFAULT_CHECK_IN_GEOFENCE_METERS);
+      // Measured for everyone (it is recorded as evidence); enforced only for the assayer below.
+      const position = evaluateCheckInPosition({
+        fix: { latitude: lat, longitude: lng },
+        deviceAccuracyMeters: accuracyMeters,
+        branch,
+        geofenceMeters: GEOFENCE_METERS,
+      });
+      const distanceMeters = position.distanceMeters;
 
       if (!staffOverride) {
         const scheduledIso = assignment.scheduledDate ?? assignment.projectBranch?.scheduledDate ?? null;
         if (scheduledIso) {
-          const istDay = (d: Date | string) =>
-            new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-          const today = istDay(new Date());
-          const scheduled = istDay(scheduledIso);
-          const dayRuleSuspended = today !== scheduled
-            && (await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_SCHEDULED_DAY));
-          if (dayRuleSuspended) {
+          // The day rule, from `evaluateCheckInDay`. The bypass window is only asked about when the
+          // days actually differ — as before, a same-day check-in costs no lookup.
+          const sameDay = evaluateCheckInDay(scheduledIso, receivedAt, false).allowed;
+          const dayRuleSuspended = !sameDay && (await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_SCHEDULED_DAY));
+          const day = evaluateCheckInDay(scheduledIso, receivedAt, dayRuleSuspended);
+          if (day.mismatch) {
             this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_SCHEDULED_DAY, {
               entityType: 'ASSIGNMENT',
               entityId: assignment.id,
               userId,
-              detail: `checked in on ${today}, scheduled for ${scheduled}`,
+              detail: `checked in on ${day.mismatch.today}, scheduled for ${day.mismatch.scheduled}`,
             });
           }
-          if (today !== scheduled && !dayRuleSuspended) {
-            const early = today < scheduled;
-            return {
-              success: false,
-              assignment,
-              error: ATTENDANCE_ERROR_CODES.NOT_SCHEDULED_TODAY,
-              message: early
-                ? `This audit is scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })}. Check-in opens on the day itself — if the visit has genuinely moved, ask operations to reschedule it first.`
-                : `This audit was scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })} and that day has passed. Ask operations to reschedule it before checking in.`,
-            };
+          if (!day.allowed) {
+            return { success: false, assignment, error: day.code, message: day.reason };
           }
         }
 
-        const GEOFENCE_METERS = await this.settings
-          .getNumber('field.checkInGeofenceMeters', DEFAULT_CHECK_IN_GEOFENCE_METERS)
-          .catch(() => DEFAULT_CHECK_IN_GEOFENCE_METERS);
-        if (distanceMeters != null) {
-          const branchAccuracyMeters = Math.max(
-            0,
-            Number(assignment.projectBranch?.branch?.geoAccuracyMeters ?? 0) || 0,
-          );
-          const MAX_DEVICE_ACCURACY_ALLOWANCE_M = 1000;
-          const deviceAllowance = Math.min(Math.max(0, accuracyMeters ?? 0), MAX_DEVICE_ACCURACY_ALLOWANCE_M);
-          const allowance = GEOFENCE_METERS + deviceAllowance + branchAccuracyMeters;
-          if (distanceMeters > allowance && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
-            this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_GEOFENCE, {
-              entityType: 'ASSIGNMENT',
-              entityId: assignment.id,
-              userId,
-              detail: `check-in accepted ${(distanceMeters / 1000).toFixed(1)} km from the branch`,
-            });
-          } else if (distanceMeters > allowance) {
-            const km = (distanceMeters / 1000).toFixed(1);
-            const branchGeoIsVague = branchAccuracyMeters >= 1000;
-            return {
-              success: false,
-              assignment,
-              error: ATTENDANCE_ERROR_CODES.TOO_FAR_FROM_BRANCH,
-              message: branchGeoIsVague
-                ? `You appear to be ${km} km from this branch, but this branch's recorded location is only accurate to about ${Math.round(branchAccuracyMeters / 1000)} km — it was never pinned precisely. Ask operations to correct the branch's location; this is not something you can fix from here.`
-                : `You appear to be ${km} km from this branch. Check-in works only at the branch itself — if you are standing there, get clear sky for a GPS fix and try again.`,
-            };
-          }
+        // The geofence, asked of the fix this request carries (`evaluateCheckInPosition`, whose zone
+        // is the same `checkInAllowanceMeters` the arrival rule below tests trail fixes against).
+        if (!position.allowed && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
+          this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_GEOFENCE, {
+            entityType: 'ASSIGNMENT',
+            entityId: assignment.id,
+            userId,
+            detail: `check-in accepted ${((distanceMeters ?? 0) / 1000).toFixed(1)} km from the branch`,
+          });
+        } else if (!position.allowed) {
+          return { success: false, assignment, error: position.code, message: position.reason };
         }
       }
 
-      const now = new Date();
+      /**
+       * Which clock the arrival is written in — owner decision 2026-09-24, `decideCheckInTime`.
+       * The phone's own arrival time is used only when it is today, recent, not in the future, and
+       * the assayer's location trail shows them inside the zone around then; otherwise the server's
+       * receive time, as always. Both, the claim and the reason are stored either way.
+       */
+      const timeDecision = await this.decideCheckInArrival({
+        assayerId: assignment.assayerId,
+        arrivedAt: options?.arrivedAt,
+        fromAssignedAssayer: actorIsAssignedAssayer,
+        receivedAt,
+        branch,
+        geofenceMeters: GEOFENCE_METERS,
+      });
+
+      const now = receivedAt;
       assignment.checkInLatitude = lat;
       assignment.checkInLongitude = lng;
       assignment.checkInAccuracyMeters = accuracyMeters ?? null;
-      assignment.checkedInAt = now;
+      assignment.checkedInAt = timeDecision.checkedInAt;
+      assignment.checkInReceivedAt = receivedAt;
+      assignment.checkInClaimedArrivalAt = timeDecision.claimedArrivalAt;
+      assignment.checkInTimeSource = timeDecision.source;
+      assignment.checkInTimeOutcome = timeDecision.outcome;
       assignment.checkInDistanceMeters = distanceMeters;
 
       AssignmentStateMachine.checkIn(assignment, userId || assignment.assayerId || id);
@@ -4609,10 +4896,17 @@ export class AssignmentService {
           entityType: 'ASSIGNMENT',
           entityId: saved.id,
           userId: userId || saved.assayerId,
-          remarks: `Assayer ${saved.assayer?.displayName || ''} GPS checked in at branch ${saved.projectBranch?.branch?.name || ''} (${lat}, ${lng}).`,
+          remarks: `Assayer ${saved.assayer?.displayName || ''} GPS checked in at branch ${saved.projectBranch?.branch?.name || ''} (${lat}, ${lng}).`
+            + (timeDecision.source === CheckInTimeSource.DEVICE
+              ? ` Arrival recorded at ${timeDecision.checkedInAt.toISOString()} from the phone, confirmed by its location trail; received ${receivedAt.toISOString()}.`
+              : ''),
           metadata: {
             clientRequestId: options?.clientRequestId,
             entityVersion: saved.entityVersion,
+            checkInReceivedAt: receivedAt.toISOString(),
+            checkInClaimedArrivalAt: timeDecision.claimedArrivalAt?.toISOString() ?? null,
+            checkInTimeSource: timeDecision.source,
+            checkInTimeOutcome: timeDecision.outcome,
           },
         });
       } catch (err) {
@@ -4652,6 +4946,8 @@ export class AssignmentService {
         }
       }
 
+      // Staff recording attendance on the assayer's behalf changes the job on their phone.
+      this.jobChanged(saved.assayerId, saved.id, userId);
       return {
         success: true,
         assignment: saved,
@@ -4702,11 +4998,11 @@ export class AssignmentService {
         };
       }
 
-      if (lockedRow?.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment: null as any, error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED, message: 'Cannot check out of a cancelled assignment.' };
-      }
-      if (lockedRow?.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment: null as any, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED, message: 'Assignment is already completed.' };
+      // `evaluateCheckOutNotClosed` / `evaluateCheckOut` — the functions the field app's capability
+      // list is built from (assignment-capabilities.ts).
+      const lockedClosed = lockedRow ? evaluateCheckOutNotClosed(lockedRow.status) : null;
+      if (lockedClosed && !lockedClosed.allowed) {
+        return { success: false, assignment: null as any, error: lockedClosed.code, message: lockedClosed.reason };
       }
 
       if (lockedRow?.checked_out_at) {
@@ -4718,13 +5014,11 @@ export class AssignmentService {
         };
       }
 
-      if (lockedRow && !lockedRow.checked_in_at) {
-        return {
-          success: false,
-          assignment: null as any,
-          error: ATTENDANCE_ERROR_CODES.NOT_CHECKED_IN,
-          message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
-        };
+      const lockedGate = lockedRow
+        ? evaluateCheckOut({ status: lockedRow.status as AssignmentStatus, checkedInAt: lockedRow.checked_in_at })
+        : null;
+      if (lockedGate && !lockedGate.allowed) {
+        return { success: false, assignment: null as any, error: lockedGate.code, message: lockedGate.reason };
       }
 
       if (options?.expectedVersion !== undefined && lockedRow?.entity_version != null) {
@@ -4769,20 +5063,9 @@ export class AssignmentService {
         }
       }
 
-      if (assignment.status === AssignmentStatus.CANCELLED) {
-        return { success: false, assignment, error: OTHER_CONFLICT_ERROR_CODES.ASSIGNMENT_CANCELLED, message: 'Cannot check out of a cancelled assignment.' };
-      }
-      if (assignment.status === AssignmentStatus.COMPLETED) {
-        return { success: false, assignment, error: ATTENDANCE_ERROR_CODES.ASSIGNMENT_COMPLETED, message: 'Assignment is already completed.' };
-      }
-
-      if (!assignment.checkedInAt) {
-        return {
-          success: false,
-          assignment,
-          error: ATTENDANCE_ERROR_CODES.NOT_CHECKED_IN,
-          message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
-        };
+      const gate = evaluateCheckOut(assignment);
+      if (!gate.allowed) {
+        return { success: false, assignment, error: gate.code, message: gate.reason };
       }
 
       if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
@@ -4852,6 +5135,7 @@ export class AssignmentService {
         console.error('Failed to log check-out audit event:', err);
       }
 
+      this.jobChanged(saved.assayerId, saved.id, userId);
       return {
         success: true,
         assignment: saved,

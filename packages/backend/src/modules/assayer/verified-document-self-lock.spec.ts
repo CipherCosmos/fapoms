@@ -290,3 +290,70 @@ describe('an assayer may not replace a document HR has verified', () => {
     });
   });
 });
+
+/**
+ * `GET /assayers/me/capabilities` — the same lock decisions, asked in advance, for the documents
+ * the phone can produce, in two reads; and HR's re-upload note reaching the assayer as `hrNote`.
+ */
+describe('the assayer\'s own capabilities', () => {
+  const ASSAYER = 'asr-1';
+  const { AssayerSelfServiceController } = jest.requireActual('./assayer-self-service.controller');
+
+  const serviceWith = (rows: any[], person: any) => {
+    const svc: any = Object.create(RosterRecordsService.prototype);
+    svc.onboarding = { find: jest.fn(async () => rows), findOne: jest.fn(), save: jest.fn(async (r: any) => r) };
+    svc.assayers = { findOne: jest.fn(async () => person) };
+    return svc;
+  };
+
+  it('selfDocumentGates reads the rows and the person once, and judges each requirement', async () => {
+    const svc = serviceWith(
+      [
+        { requirement: OnboardingDocument.PAN_CARD, verificationStatus: DocumentVerification.VERIFIED, isActive: true },
+        { requirement: OnboardingDocument.AADHAAR_FRONT, verificationStatus: DocumentVerification.REJECTED, isActive: true, reuploadNote: 'Retake in daylight.' },
+      ],
+      { id: ASSAYER, lifecycleStatus: AssayerLifecycleStatus.ACTIVE, photograph: 'p.jpg' },
+    );
+    const gates = await svc.selfDocumentGates(ASSAYER, [
+      OnboardingDocument.PAN_CARD, OnboardingDocument.AADHAAR_FRONT, OnboardingDocument.PHOTOGRAPH, OnboardingDocument.NDA,
+    ]);
+    expect(svc.onboarding.find).toHaveBeenCalledTimes(1);
+    expect(svc.assayers.findOne).toHaveBeenCalledTimes(1);
+    expect(gates.map((g: any) => [g.requirement, g.mode])).toEqual([
+      ['PAN_CARD', 'locked'], ['AADHAAR_FRONT', 'reopened'], ['PHOTOGRAPH', 'locked'], ['NDA', 'direct'],
+    ]);
+    expect(gates[1].hrNote).toBe('Retake in daylight.');
+  });
+
+  it('GET me/capabilities answers for the signed-in assayer only, raw (no envelope)', async () => {
+    const c: any = Object.create(AssayerSelfServiceController.prototype);
+    c.rosterRecords = { selfDocumentGates: jest.fn(async () => [{ requirement: 'PAN_CARD', mode: 'direct' }]) };
+    const out = await c.myCapabilities({ user: { id: ASSAYER, roles: [{ name: 'ASSAYER' }] } });
+    expect(c.rosterRecords.selfDocumentGates).toHaveBeenCalledWith(ASSAYER, expect.arrayContaining(['PHOTOGRAPH', 'PAN_CARD', 'PASSPORT']));
+    expect(out).toEqual({ fields: expect.any(Array), documents: [{ requirement: 'PAN_CARD', mode: 'direct' }] });
+    expect(out.success).toBeUndefined();
+    expect(Reflect.getMetadata(ROLES_KEY, AssayerSelfServiceController.prototype.myCapabilities)).toEqual(['ASSAYER']);
+  });
+
+  it('the old editable-fields route keeps its shape and gains the same field gates', () => {
+    const c: any = Object.create(AssayerController.prototype);
+    const out = c.getEditableFields({ user: { id: ASSAYER, roles: [{ name: 'ASSAYER' }] } });
+    expect(out).toMatchObject({ unrestricted: false, selfEditable: expect.any(Array), hrMaintained: expect.any(Array) });
+    expect(out.fields.find((f: any) => f.field === 'panNumber')).toMatchObject({ mode: 'locked', code: 'HR_MAINTAINED_FIELD' });
+  });
+
+  it('HR\'s re-upload note is stored where the capability list reads it', async () => {
+    const row: any = { id: 'd', assayerId: ASSAYER, requirement: OnboardingDocument.PAN_CARD, verificationStatus: DocumentVerification.VERIFIED, isActive: true, filePaths: ['x'] };
+    const svc: any = Object.create(RosterRecordsService.prototype);
+    svc.onboarding = { findOne: jest.fn(async () => row), save: jest.fn(async (r: any) => r) };
+    svc.assayers = { findOne: jest.fn(async () => ({ id: ASSAYER })), update: jest.fn() };
+    svc.assertOwnedAssayer = jest.fn(async () => undefined);
+    svc.deriveLegalName = jest.fn(async () => undefined);
+    svc.auditService = { recordEventSafe: jest.fn() };
+    svc.notifications = { emitSafe: jest.fn() };
+    const saved = await svc.requestReupload(ASSAYER, OnboardingDocument.PAN_CARD, 'hr-1', {
+      reason: DocumentRejectionReason.ILLEGIBLE, note: 'The number is not readable, please retake.',
+    });
+    expect(saved.reuploadNote).toBe('The number is not readable, please retake.');
+  });
+});

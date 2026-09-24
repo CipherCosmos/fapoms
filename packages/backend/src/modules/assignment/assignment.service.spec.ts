@@ -14,6 +14,7 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
+import { AssignmentRefreshPushService } from '../notifications/assignment-refresh-push.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority, businessTodayDateKey, BypassableRule, AssayerStatus, AssayerLifecycleStatus } from '@fapoms/shared';
@@ -93,6 +94,7 @@ describe('AssignmentService', () => {
     record: jest.fn().mockResolvedValue(undefined),
     ingest: jest.fn().mockResolvedValue({ accepted: 1, duplicates: 0, rejected: [] }),
     assessAssignmentTravel: jest.fn().mockResolvedValue(null),
+    fixesBetween: jest.fn().mockResolvedValue([]),
   };
 
   // Unlabelled by default — a route from something older than the labelled provider — which
@@ -317,9 +319,13 @@ const mockNotificationService = {
     checkSkillsAndCertifications: jest.fn().mockReturnValue({ passed: true }),
   };
 
+  /** The silent "your jobs changed" push (owner decision 2026-09-24). */
+  const mockRefreshPush = { assignmentChanged: jest.fn() };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: AssignmentRefreshPushService, useValue: mockRefreshPush },
         {
           // Rules are enforced unless an administrator suspends them — see
           // modules/platform/rule-bypass. Nothing is suspended here by default, which is the
@@ -1740,6 +1746,189 @@ const mockNotificationService = {
       expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: 'SCHEDULE_DISPATCHED' }),
       );
+    });
+  });
+
+  /**
+   * Owner decision 2026-09-24: the phone's own arrival time becomes the check-in time only when it
+   * is today, recent, not in the future and corroborated by a trail fix inside the zone. Every
+   * rejection falls back to the server's receive time, and both are stored either way.
+   */
+  describe('recordCheckIn — the phone\'s arrival time (arrivedAt)', () => {
+    const BRANCH = { latitude: '12.9716', longitude: '77.5946' };
+    const acceptedToday = () => ({
+      id: 'asn-1',
+      assayerId: 'assayer-1',
+      status: AssignmentStatus.ACCEPTED,
+      syncToken: null,
+      scheduledDate: new Date().toISOString(),
+      projectBranch: { branch: { ...BRANCH } },
+      assessment: null,
+    });
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+    const fixAt = (at: Date, over: any = {}) => ({
+      latitude: 12.9717, longitude: 77.5947, accuracyMeters: 10, recordedAt: at, isMocked: false, ...over,
+    });
+
+    let assignment: any;
+    beforeEach(() => {
+      assignment = acceptedToday();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      mockLocationTrail.fixesBetween.mockReset().mockResolvedValue([]);
+    });
+
+    const expectServerTime = (outcome: string) => {
+      expect(assignment.checkInTimeSource).toBe('SERVER');
+      expect(assignment.checkInTimeOutcome).toBe(outcome);
+      expect(assignment.checkedInAt).toEqual(assignment.checkInReceivedAt);
+    };
+
+    it('an old app sends nothing: server time, recorded as NOT_SENT, and the trail is not read', async () => {
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1');
+      expect(res.success).toBe(true);
+      expectServerTime('NOT_SENT');
+      expect(assignment.checkInClaimedArrivalAt).toBeNull();
+      expect(mockLocationTrail.fixesBetween).not.toHaveBeenCalled();
+    });
+
+    it('accepts a recent arrival the trail corroborates, and keeps both times', async () => {
+      const arrived = minutesAgo(3);
+      mockLocationTrail.fixesBetween.mockResolvedValue([fixAt(minutesAgo(2))]);
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 10, { arrivedAt: arrived.toISOString() });
+      expect(res.success).toBe(true);
+      expect(assignment.checkInTimeSource).toBe('DEVICE');
+      expect(assignment.checkInTimeOutcome).toBe('ACCEPTED');
+      expect(assignment.checkedInAt.getTime()).toBe(arrived.getTime());
+      expect(assignment.checkInClaimedArrivalAt.getTime()).toBe(arrived.getTime());
+      expect(assignment.checkInReceivedAt.getTime()).toBeGreaterThan(arrived.getTime());
+      expect(mockLocationTrail.fixesBetween).toHaveBeenCalledWith('assayer-1', expect.any(Date), expect.any(Date));
+    });
+
+    it('refuses an arrival with no trail fix inside the zone near it', async () => {
+      mockLocationTrail.fixesBetween.mockResolvedValue([fixAt(minutesAgo(2), { latitude: 13.5, longitude: 78.5 })]);
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 10, { arrivedAt: minutesAgo(3).toISOString() });
+      expectServerTime('NO_TRAIL_EVIDENCE');
+      expect(assignment.checkInClaimedArrivalAt).toBeInstanceOf(Date);
+    });
+
+    it('does not count a mocked (spoofed) fix as evidence', async () => {
+      mockLocationTrail.fixesBetween.mockResolvedValue([fixAt(minutesAgo(2), { isMocked: true })]);
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 10, { arrivedAt: minutesAgo(3).toISOString() });
+      expectServerTime('NO_TRAIL_EVIDENCE');
+    });
+
+    it('refuses an arrival older than the configured maximum (default 4 hours), without reading the trail', async () => {
+      // Only valid when 5 hours ago is still the same IST day — otherwise DIFFERENT_DAY answers first.
+      const claim = minutesAgo(5 * 60);
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 10, { arrivedAt: claim.toISOString() });
+      const sameDay = claim.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+        === new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      expectServerTime(sameDay ? 'TOO_OLD' : 'DIFFERENT_DAY');
+      expect(mockLocationTrail.fixesBetween).not.toHaveBeenCalled();
+    });
+
+    it('refuses an arrival on another day', async () => {
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 10, {
+        arrivedAt: new Date(Date.now() - 36 * 3_600_000).toISOString(),
+      });
+      expectServerTime('DIFFERENT_DAY');
+    });
+
+    it('refuses an arrival in the future beyond the clock skew', async () => {
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 10, {
+        arrivedAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      });
+      expectServerTime('IN_FUTURE');
+    });
+
+    it('refuses an unreadable arrival time, and still checks in', async () => {
+      const res = await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'assayer-1', 10, { arrivedAt: 'yesterday-ish' });
+      expect(res.success).toBe(true);
+      expectServerTime('UNREADABLE');
+    });
+
+    it('ignores an arrival time sent by staff checking in on the assayer\'s behalf', async () => {
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
+      mockLocationTrail.fixesBetween.mockResolvedValue([fixAt(minutesAgo(2))]);
+      await service.recordCheckIn('asn-1', 12.9716, 77.5946, undefined, 'ops-1', 10, { arrivedAt: minutesAgo(3).toISOString() });
+      expectServerTime('NOT_FROM_ASSAYER');
+    });
+
+    it('still asks the geofence of the fix sent with the request, whatever the claimed arrival', async () => {
+      mockLocationTrail.fixesBetween.mockResolvedValue([fixAt(minutesAgo(2))]);
+      const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'assayer-1', 10, { arrivedAt: minutesAgo(3).toISOString() });
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('TOO_FAR_FROM_BRANCH');
+    });
+  });
+
+  /**
+   * Owner decision 2026-09-24: job changes the assayer used to hear nothing about now reach them —
+   * visibly for what they can see, and silently (a refresh push) for every change.
+   */
+  describe('job changes reach the assayer', () => {
+    const offer = (over: any = {}) => ({
+      id: 'asn-1', assignmentNumber: 'ASN-1', status: AssignmentStatus.PENDING, assayerId: 'assayer-1',
+      scheduledDate: new Date('2026-09-25T00:00:00+05:30'), remarks: 'Bring the seal.',
+      projectBranch: { branch: { name: 'Thrissur Main' } }, entityVersion: 3, ...over,
+    });
+    const emitted = (type: string) => mockNotificationDispatch.emitSafe.mock.calls
+      .map((c: any[]) => c[0]).filter((e: any) => e.type === type);
+    beforeEach(() => {
+      mockRefreshPush.assignmentChanged.mockClear();
+      mockNotificationDispatch.emitSafe.mockClear();
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+    });
+
+    it('a date change on the edit route tells the assayer the new day, and refreshes the phone', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(offer());
+      await service.update('asn-1', { scheduledDate: '2026-09-28' }, 'ops-1');
+      const [e] = emitted('ASSIGNMENT_DATE_CHANGED');
+      expect(e).toMatchObject({ assayerId: 'assayer-1', payload: { branchName: 'Thrissur Main', newDate: 'Monday, 28 September', alsoNote: '' } });
+      expect(emitted('ASSIGNMENT_NOTE_CHANGED')).toHaveLength(0);
+      expect(mockRefreshPush.assignmentChanged).toHaveBeenCalledWith('assayer-1', 'asn-1');
+    });
+
+    it('a note-only change sends the note notice', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(offer());
+      await service.update('asn-1', { remarks: 'Branch opens at 10.' }, 'ops-1');
+      expect(emitted('ASSIGNMENT_NOTE_CHANGED')).toHaveLength(1);
+      expect(emitted('ASSIGNMENT_DATE_CHANGED')).toHaveLength(0);
+    });
+
+    it('an edit that changes nothing the assayer sees (fee only, same date, same note) sends nothing visible — only the refresh', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(offer());
+      await service.update('asn-1', { proposedFee: 900, scheduledDate: '2026-09-25', remarks: ' Bring the seal. ' }, 'ops-1');
+      expect(emitted('ASSIGNMENT_DATE_CHANGED')).toHaveLength(0);
+      expect(emitted('ASSIGNMENT_NOTE_CHANGED')).toHaveLength(0);
+      expect(mockRefreshPush.assignmentChanged).toHaveBeenCalledWith('assayer-1', 'asn-1');
+    });
+
+    it('escalation tells the assayer holding live work — without the desk\'s reason', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(offer({ status: AssignmentStatus.ACCEPTED, priority: Priority.MEDIUM }));
+      await service.escalate('asn-1', 'ops-1', 'Assayer keeps missing calls');
+      const [e] = emitted('ASSIGNMENT_MARKED_URGENT');
+      expect(e).toMatchObject({ assayerId: 'assayer-1', payload: { branchName: 'Thrissur Main' } });
+      expect(JSON.stringify(e.payload)).not.toContain('missing calls');
+      expect(mockRefreshPush.assignmentChanged).toHaveBeenCalledWith('assayer-1', 'asn-1');
+    });
+
+    it('escalating a cancelled job does not tell the assayer', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(offer({ status: AssignmentStatus.CANCELLED, priority: Priority.MEDIUM }));
+      await service.escalate('asn-1', 'ops-1', 'x');
+      expect(emitted('ASSIGNMENT_MARKED_URGENT')).toHaveLength(0);
+    });
+
+    it('a desk transition refreshes the assayer\'s phone; the assayer\'s own does not', async () => {
+      // No entity version: the harness's locked re-read serves this same in-memory object.
+      mockAssignmentRepo.findOne.mockResolvedValue(offer({ entityVersion: undefined }));
+      await service.rejectOffer('asn-1', 'ops-1', 'Covered by another assayer');
+      expect(mockRefreshPush.assignmentChanged).toHaveBeenCalledWith('assayer-1', 'asn-1');
+      mockRefreshPush.assignmentChanged.mockClear();
+      mockAssignmentRepo.findOne.mockResolvedValue(offer({ entityVersion: undefined }));
+      await service.rejectOffer('asn-1', 'assayer-1', 'Too far');
+      expect(mockRefreshPush.assignmentChanged).not.toHaveBeenCalled();
     });
   });
 });

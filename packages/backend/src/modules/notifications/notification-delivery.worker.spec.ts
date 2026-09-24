@@ -221,6 +221,27 @@ describe('NotificationDeliveryWorker', () => {
     );
   });
 
+  it('adds the ids the app refreshes in the background, beside the keys it already sent', async () => {
+    notifRepo.findOne.mockResolvedValue(baseNotification({
+      type: 'VALIDATION_QUERY_RAISED', entityType: 'VALIDATION_QUERY', entityId: 'q-1',
+      payload: { queryId: 'q-1', assignmentId: 'asn-9' },
+    }));
+    tokenRepo.find.mockResolvedValue([{ id: 't1', token: 'tok' }]);
+    fcm.sendMulticast.mockResolvedValue([{ success: true }]);
+
+    await run();
+
+    expect(fcm.sendMulticast).toHaveBeenCalledWith(
+      ['tok'],
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'VALIDATION_QUERY_RAISED', entityType: 'VALIDATION_QUERY', entityId: 'q-1',
+          queryId: 'q-1', assignmentId: 'asn-9',
+        }),
+      }),
+    );
+  });
+
   it('ignores a job whose notification has since been deleted', async () => {
     notifRepo.findOne.mockResolvedValue(null);
     await expect(run()).resolves.toBeUndefined();

@@ -1,8 +1,37 @@
+/**
+ * The rebuilt field app (`src/next`) is a separate BUILD: EXPO_PUBLIC_APP_V2=1 at build time.
+ *
+ * Everything below that only the new app needs — background location, background runs, silent
+ * push, the deep-link scheme and invite links, and its own runtime version — is switched on ONLY
+ * for that build, so a build of the current app produces exactly the manifest and Info.plist it
+ * always has (no new Play Store background-location declaration, no new iOS prompts).
+ */
+const APP_V2 = process.env.EXPO_PUBLIC_APP_V2 === '1';
+
+/**
+ * iPhone-only values the owner supplies later (IOS-SETUP.md). Each is optional: missing → that
+ * feature is off and the build still works. Only consulted for the new app; an Android build
+ * reads nothing from them (their only effects are iOS fields and iOS-only plugins).
+ */
+const { iosFirebase, appleTeamId } = require('./plugins/ios-setup');
+const IOS_FIREBASE = APP_V2 ? iosFirebase(__dirname) : { enabled: false };
+const APPLE_TEAM_ID = APP_V2 ? appleTeamId() : null;
+
+/** `https://host` of the server this build talks to, for invite links — https only. */
+const inviteHost = (() => {
+  const m = /^https:\/\/([^/?#:]+)/i.exec(process.env.EXPO_PUBLIC_API_URL || '');
+  return m ? m[1].toLowerCase() : null;
+})();
+
 module.exports = {
   expo: {
     name: 'Orbit',
     slug: 'fapoms-mobile',
-    version: '1.0.0',
+    // The new app carries native modules the current APKs do not (task manager, background task,
+    // reanimated, screens…). Its own version — and so its own runtimeVersion below — means an OTA
+    // built for one can never be delivered to the other: an update of the new app landing on an
+    // old APK would crash on launch.
+    version: APP_V2 ? '2.0.0' : '1.0.0',
 
     /**
      * Over-the-air updates, so a fix reaches a field assayer without an APK reinstall.
@@ -32,7 +61,9 @@ module.exports = {
      * Keep this in step with `version` above — bumping one without the other is what the policy
      * was there to prevent.
      */
-    runtimeVersion: '1.0.0',
+    runtimeVersion: APP_V2 ? '2.0.0' : '1.0.0',
+    // Deep links (`com.fapoms.assayer://register/<token>`), new app only.
+    ...(APP_V2 ? { scheme: 'com.fapoms.assayer' } : {}),
     updates: {
       fallbackToCacheTimeout: 0,
       url: `https://u.expo.dev/${
@@ -101,6 +132,13 @@ module.exports = {
       supportsTablet: false,
       bundleIdentifier: 'com.fapoms.assayer',
       buildNumber: '1',
+      // New app, iPhone push via Firebase: only with a valid GOOGLE_SERVICE_INFO_PLIST.
+      ...(IOS_FIREBASE.enabled ? { googleServicesFile: IOS_FIREBASE.plistPath } : {}),
+      // New app, invite links open the app (universal links): only with APPLE_TEAM_ID and an https
+      // server. The server must also publish /.well-known/apple-app-site-association.
+      ...(APP_V2 && APPLE_TEAM_ID && inviteHost
+        ? { appleTeamId: APPLE_TEAM_ID, associatedDomains: [`applinks:${inviteHost}`] }
+        : {}),
       infoPlist: {
         NSCameraUsageDescription:
           'Take photos of your documents and your face photo, and scan audit papers.',
@@ -112,6 +150,16 @@ module.exports = {
           'Orbit uses Face ID to allow quick biometric sign-in.',
         NSMicrophoneUsageDescription:
           'Orbit uses the microphone for in-app voice calls with the operations desk about audit clarifications.',
+        ...(APP_V2
+          ? {
+              // A silent ("content-available") push may wake the app to refresh a job. Set here
+              // rather than through the expo-notifications plugin, whose `mode` would also rewrite
+              // the push entitlement. No `location` mode: region monitoring (geofencing) relaunches
+              // the app without it, and there is no continuous tracking. `processing` for the
+              // background run is added by the expo-background-task plugin below.
+              UIBackgroundModes: ['remote-notification'],
+            }
+          : {}),
       },
     },
     android: {
@@ -147,6 +195,22 @@ module.exports = {
         'BLUETOOTH_CONNECT',
         'MODIFY_AUDIO_SETTINGS',
       ],
+      ...(APP_V2 && inviteHost
+        ? {
+            // Invite links (https://<server>/register/<token>) open the app. `autoVerify` makes it
+            // an App Link, which Android only honours once the server publishes
+            // /.well-known/assetlinks.json for this package and signing key; until then the link
+            // opens in the browser as it does today.
+            intentFilters: [
+              {
+                action: 'VIEW',
+                autoVerify: true,
+                data: [{ scheme: 'https', host: inviteHost, pathPrefix: '/register/' }],
+                category: ['BROWSABLE', 'DEFAULT'],
+              },
+            ],
+          }
+        : {}),
       config: {
         googleMaps: {
           apiKey: process.env.GOOGLE_MAPS_API_KEY || '',
@@ -169,11 +233,47 @@ module.exports = {
       '@livekit/react-native-expo-plugin',
       [
         'expo-location',
-        {
-          locationWhenInUsePermission:
-            'Allow Orbit to use your location to show the route and travel time to your assigned audit branch.',
-        },
+        APP_V2
+          ? {
+              locationWhenInUsePermission:
+                'Orbit uses your location to check you in when you reach the branch for your job.',
+              locationAlwaysAndWhenInUsePermission:
+                'Orbit checks you in by itself when you reach the branch for today’s job, even when the app is closed. It only watches for today’s branches and does not follow you all day.',
+              locationAlwaysPermission:
+                'Orbit checks you in by itself when you reach the branch for today’s job, even when the app is closed.',
+              // ACCESS_BACKGROUND_LOCATION, for geofencing ("Allow all the time").
+              isAndroidBackgroundLocationEnabled: true,
+              // Off explicitly: the plugin otherwise turns on a location foreground service with
+              // background location, which geofencing does not use and Play would ask us to justify.
+              isAndroidForegroundServiceEnabled: false,
+              // Off: region monitoring does not need iOS's continuous-location background mode.
+              isIosBackgroundLocationEnabled: false,
+            }
+          : {
+              locationWhenInUsePermission:
+                'Allow Orbit to use your location to show the route and travel time to your assigned audit branch.',
+            },
       ],
+      // The OS-scheduled background run (Android WorkManager / iOS BGTaskScheduler), new app only.
+      ...(APP_V2 ? ['expo-background-task'] : []),
+      // iPhone push via Firebase (new app, only once the plist is supplied). The plugin's Android
+      // changes are discarded: Android keeps its existing push path.
+      ...(IOS_FIREBASE.enabled ? [['./plugins/withIosOnly', ['@react-native-firebase/app']]] : []),
+      // Says which iPhone features are off and why; runs only when an iOS project is generated.
+      ...(APP_V2
+        ? [
+            [
+              './plugins/withIosSetupNotice',
+              {
+                missing: [
+                  ...(IOS_FIREBASE.enabled ? [] : [`iPhone push — ${IOS_FIREBASE.problem}`]),
+                  ...(APPLE_TEAM_ID ? [] : ['invite links on iPhone (Associated Domains) — APPLE_TEAM_ID is not set']),
+                  ...(inviteHost ? [] : ['invite links — EXPO_PUBLIC_API_URL is not an https address']),
+                ],
+              },
+            ],
+          ]
+        : []),
       /**
        * The plain phone camera, for a registration's face photo (front camera) and for taking a
        * document photo where Google's ML Kit scanner is not there (iOS, or an Android phone
@@ -222,6 +322,9 @@ module.exports = {
             enableProguardInReleaseBuilds: true,
             enableShrinkResourcesInReleaseBuilds: false,
           },
+          // React Native Firebase's iOS pods (Swift) need static frameworks. Only in an iPhone build
+          // of the new app that actually has Firebase; every other build is unchanged.
+          ...(IOS_FIREBASE.enabled ? { ios: { useFrameworks: 'static' } } : {}),
         },
       ],
     ],
