@@ -99,6 +99,7 @@ import { BillingEntryEntity } from '../billing-engine/billing-entry.entity';
 import { AssayerInvoiceEntity } from '../billing-engine/assayer-invoice.entity';
 import { BillingState, AssayerInvoiceStatus, AssayerPayableStatus, AssignmentAction, ValidationStatus } from '@fapoms/shared';
 import * as crypto from 'crypto';
+import { pendingOfferReadiness } from './packet-readiness';
 
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
@@ -2207,6 +2208,9 @@ export class AssignmentService {
      */
     if (targetStatus === AssignmentStatus.ACCEPTED) {
       await this.assayerService.enableLiveTrackingForActiveWork(saved.assayerId, userId);
+      // The packet may already be out (dispatched while this was an unanswered offer, or before a
+      // reassignment): this assayer has not been told. Once per packet per assayer; never throws.
+      await this.tellAcceptedAssayerAboutPacket(saved, userId);
     } else if (
       saved.assayerId
       && (targetStatus === AssignmentStatus.COMPLETED
@@ -2253,6 +2257,23 @@ export class AssignmentService {
     this.jobChanged(saved.assayerId, saved.id, userId);
 
     return { saved, event };
+  }
+
+  /**
+   * After an acceptance commits: if the branch's packet is already out, tell the assayer who now
+   * holds the job (see `DocumentService.notifyAcceptedAssayerOfDispatchedPacket`). Never throws.
+   */
+  private async tellAcceptedAssayerAboutPacket(
+    saved: Pick<AssignmentEntity, 'id' | 'assayerId' | 'projectBranchId'>,
+    userId: string,
+  ): Promise<void> {
+    try {
+      await this.documentService?.notifyAcceptedAssayerOfDispatchedPacket?.(saved, userId);
+    } catch (err) {
+      AssignmentService.logger.warn(
+        `Accepted ${saved.id}, but the packet notice did not go out: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async acceptOffer(
@@ -3647,6 +3668,8 @@ export class AssignmentService {
         // Accepted work turns location sharing on, exactly as a desk acceptance does.
         if (accepting) {
           await this.assayerService.enableLiveTrackingForActiveWork(persistedAssayerId, userId);
+          // The packet went out to the previous assayer; the one who now holds the job is told.
+          await this.tellAcceptedAssayerAboutPacket(saved, userId);
         }
 
         /**
@@ -4569,9 +4592,12 @@ export class AssignmentService {
     );
 
     for (const assignment of assignments) {
-      (assignment as any).documentReadiness =
+      const branchReadiness =
         readiness[assignment.projectBranchId as string] ??
         { state: 'NONE', dispatchedCount: 0, message: 'No audit paperwork has been prepared for this branch yet.' };
+      // An offer not yet accepted cannot open the packet (see `assertAssayerMayDownload`), so it
+      // must not be told the packet is ready to download.
+      (assignment as any).documentReadiness = pendingOfferReadiness(assignment.status, branchReadiness);
 
       // Named distinctly from proposedFee/agreedFee (the actual negotiated total for this
       // assignment, immutable once set) — this is only the assayer's CURRENT going rate,

@@ -1123,7 +1123,8 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP_AND_EMAIL,
     title: 'Approval needed: ${assayerName}',
     body: '${sentBy} sent ${assayerName} up for approval before training.${noteLine} Approve, reject with a reason, or ask HR for more.',
-    link: '/hr/roster/${assayerId}',
+    // The approver's review — the whole file and the decision on one screen (2026-09-24).
+    link: '/hr/approvals/${assayerId}',
     skipActor: true,
   },
   /** HR answered what the approver asked — it is back with them. Same audience as above. */
@@ -1135,7 +1136,8 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP_AND_EMAIL,
     title: 'HR answered on ${assayerName}',
     body: '${answeredBy} answered what was asked before approving ${assayerName}: "${answer}". It is back with you to decide.',
-    link: '/hr/roster/${assayerId}',
+    // The approver's review — the whole file and the decision on one screen (2026-09-24).
+    link: '/hr/approvals/${assayerId}',
     skipActor: true,
   },
   /*
@@ -1160,7 +1162,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     roles: [],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
-    title: '${assayerName} approved — on to training',
+    title: '${assayerName} approved — ${outcome}',
     body: '${decidedBy} approved ${assayerName}.${noteLine}',
     link: '/hr/roster/${assayerId}',
     skipActor: true,

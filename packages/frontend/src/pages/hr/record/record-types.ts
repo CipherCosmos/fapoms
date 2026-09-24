@@ -81,6 +81,8 @@ export interface BackgroundCheck {
   checkedByName?: string | null;
   findings?: string | null;
   createdAt: string;
+  /** The report files this check was read from — sent all along, declared now the review reads them. */
+  reportFiles?: Array<{ documentId: string; versionId: string | null; path: string; uploadedAt: string | null }>;
 }
 
 export interface AssayerDossier {

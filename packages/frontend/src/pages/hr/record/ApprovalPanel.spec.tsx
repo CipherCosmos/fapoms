@@ -34,7 +34,7 @@ describe('the approval panel', () => {
 
     expect(await screen.findByText('All checks clear.')).toBeInTheDocument();
     expect(screen.getByText(/Asha Menon/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Approve — on to training' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve — send to training' }));
 
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(posts()[0][0]).toBe('/assayers/a-1/approval/approve');
@@ -92,4 +92,105 @@ describe('the approval panel', () => {
     await waitFor(() => expect(mockRequest).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
   });
+
+  /**
+   * 24 SEP 2026: an approver asked HR for more, was shown HR's "Send back for approval" box right
+   * beside his own buttons, answered himself — and with the only other approver being the one who
+   * sent the person up, nobody could decide. The answer box is HR's side of the round only.
+   */
+  describe('while HR is asked for more', () => {
+    const asked = round({
+      status: 'INFO_REQUESTED',
+      events: [
+        { kind: 'SUBMITTED', byId: 'hr-1', byName: 'Asha Menon', at: '2026-09-23T10:00:00Z', text: 'All checks clear.' },
+        { kind: 'INFO_REQUESTED', byId: 'boss-1', byName: 'Rao', at: '2026-09-23T11:00:00Z', text: 'Where is the police certificate?' },
+      ],
+    });
+
+    it('shows the approver who asked only their decision — no answer box to answer themselves', async () => {
+      serve([asked]);
+      draw({ currentUserId: 'boss-1', canManage: true, canApprove: true });
+
+      expect(await screen.findByText(/You asked HR for more/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Approve — send to training' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
+      expect(screen.queryByRole('button', { name: 'Send back for approval' })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Your answer to the approver')).not.toBeInTheDocument();
+    });
+
+    it('does not offer another approver the answer box either — they decide, HR answers', async () => {
+      serve([asked]);
+      draw({ currentUserId: 'boss-2', canManage: true, canApprove: true });
+
+      expect(await screen.findByText(/HR has been asked for more/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Send back for approval' })).not.toBeInTheDocument();
+    });
+
+    it('gives the answer box to HR', async () => {
+      serve([asked]);
+      draw({ currentUserId: 'hr-2', canManage: true, canApprove: false });
+
+      expect(await screen.findByLabelText('Your answer to the approver')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Send back for approval' })).toBeInTheDocument();
+    });
+
+    /** An Admin who sent the person up is on HR's side of this round, so the answer is theirs to give. */
+    it('gives it to the admin who sent them up, who may not decide it anyway', async () => {
+      serve([asked]);
+      draw({ currentUserId: 'hr-1', canManage: true, canApprove: true });
+
+      expect(await screen.findByRole('button', { name: 'Send back for approval' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Approve — send to training' })).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * TWO WAYS TO APPROVE (owner, 2026-09-24): "after approving the approver can also send them to
+   * training or make them active". Where it sent them is the decision, so it travels with it and
+   * is on the round's conversation afterwards.
+   */
+  describe('approving to training, or straight to work', () => {
+    it('sends them to training by the first button, saying so', async () => {
+      serve([round()]);
+      draw({ activationBlockers: [] });
+      fireEvent.click(await screen.findByRole('button', { name: 'Approve — send to training' }));
+      await waitFor(() => expect(posts()).toHaveLength(1));
+      expect(JSON.parse(posts()[0][1].body)).toEqual({ to: 'TRAINING' });
+    });
+
+    it('makes them Active by the second, when nothing activation needs is missing', async () => {
+      serve([round()]);
+      draw({ activationBlockers: [] });
+      fireEvent.click(await screen.findByRole('button', { name: 'Approve — make Active' }));
+      await waitFor(() => expect(posts()).toHaveLength(1));
+      expect(posts()[0][0]).toBe('/assayers/a-1/approval/approve');
+      expect(JSON.parse(posts()[0][1].body)).toEqual({ to: 'ACTIVE' });
+    });
+
+    /** A button the server will refuse is a trap; say what is missing instead. */
+    it('will not offer Make Active while something it needs is missing, and says what', async () => {
+      serve([round()]);
+      draw({ activationBlockers: ['Bank account number', 'Home location pinned'] });
+      expect(await screen.findByRole('button', { name: 'Approve — make Active' })).toBeDisabled();
+      expect(screen.getByTestId('make-active-blockers')).toHaveTextContent('Bank account number, Home location pinned');
+      // Training is still there — it does not wait for the bank details.
+      expect(screen.getByRole('button', { name: 'Approve — send to training' })).toBeEnabled();
+    });
+
+    it('shows where each approval sent them, and training for the ones from before the choice', async () => {
+      serve([
+        round({ status: 'APPROVED', events: [
+          { kind: 'SUBMITTED', byId: 'hr-1', byName: 'Asha', at: '2026-09-24T10:00:00Z', text: null },
+          { kind: 'APPROVED', byId: 'boss-2', byName: 'Rao', at: '2026-09-24T11:00:00Z', text: null, to: 'ACTIVE' },
+        ] }),
+        round({ id: 'r-0', round: 0, status: 'APPROVED', events: [
+          { kind: 'APPROVED', byId: 'boss-2', byName: 'Rao', at: '2026-09-20T11:00:00Z', text: null },
+        ] }),
+      ]);
+      draw({ lifecycleStatus: AssayerLifecycleStatus.ACTIVE });
+      expect(await screen.findByText(/Approved — now Active — ready for work/)).toBeInTheDocument();
+      expect(screen.getByText(/Approved — on to training/)).toBeInTheDocument();
+    });
+  });
 });
+

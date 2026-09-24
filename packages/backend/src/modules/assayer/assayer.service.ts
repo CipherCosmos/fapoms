@@ -3518,11 +3518,26 @@ export class AssayerService implements OnModuleInit {
           await runBackgroundGate('leave-bgv');
           event = AssayerStateMachine.startTraining(assayer, userId);
         } else if (targetStatus === AssayerLifecycleStatus.ACTIVE) {
+          /*
+            Straight from approval to work (2026-09-24) is the approver's decision and nobody else's:
+            not a stage button, not a bulk move, not the API. Without this, the new edge would be a
+            road around the approval — the thing the approval exists to stop.
+          */
+          if (fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL && approval?.decision !== 'APPROVED') {
+            throw withCode(
+              new BadRequestException(
+                `${assayer.displayName} is made Active by being approved — open their approval to decide it.`,
+              ),
+              ASSAYER_ERROR_CODES.BACKGROUND_NOT_CLEAR,
+            );
+          }
           AssayerStateMachine.assertCanActivate(assayer);
-          // Adverse-verdict arm for a working return; the whole gate for somebody parked inactive
-          // mid-onboarding — see `assessBackgroundGate`'s decision table.
+          // Adverse-verdict arm for a working return; the whole gate for somebody finishing
+          // onboarding — parked inactive mid-way, or approved straight to work, which skips the
+          // training stage but none of what joining requires. See `assessBackgroundGate`.
           await runBackgroundGate(
-            fromStatus === AssayerLifecycleStatus.INACTIVE && await parkedMidOnboarding()
+            fromStatus === AssayerLifecycleStatus.FINAL_APPROVAL
+              || (fromStatus === AssayerLifecycleStatus.INACTIVE && await parkedMidOnboarding())
               ? 'finish-onboarding'
               : 'activate',
           );
@@ -5460,8 +5475,12 @@ export class AssayerService implements OnModuleInit {
     userId: string,
     reason: string,
     inTransaction: (manager: EntityManager | undefined, saved: AssayerEntity) => Promise<void>,
+    /** Where approving sends them — training (the default, and the only way before 2026-09-24) or straight to work. */
+    destination: 'TRAINING' | 'ACTIVE' = 'TRAINING',
   ): Promise<AssayerEntity> {
-    const target = decision === 'APPROVED' ? AssayerLifecycleStatus.TRAINING : AssayerLifecycleStatus.INACTIVE;
+    const target = decision === 'REJECTED'
+      ? AssayerLifecycleStatus.INACTIVE
+      : destination === 'ACTIVE' ? AssayerLifecycleStatus.ACTIVE : AssayerLifecycleStatus.TRAINING;
     const { saved, event } = await this.doTransitionLifecycle(
       id, target, userId, reason, SystemRole.ADMIN, undefined, { decision, inTransaction },
     );

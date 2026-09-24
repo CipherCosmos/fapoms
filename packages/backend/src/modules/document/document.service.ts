@@ -7,6 +7,7 @@ import { DerivedFileIntegrity } from './document-integrity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { ENGAGED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
@@ -1490,9 +1491,10 @@ export class DocumentService {
       .innerJoin('project_branches', 'pb', 'pb.id = a.project_branch_id')
       .where('a.assayer_id = :assayerId', { assayerId })
       .andWhere('a.is_active = true')
-      .andWhere('a.status NOT IN (:...deadStatuses)', {
-        deadStatuses: [AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED],
-      })
+      // Accepted, under way, or delivered (a reopened redo still needs its packet). Not a
+      // cancelled/declined job — and not an offer still awaiting an answer: the packet is released
+      // to the assayer who took the job, and they are told when they accept.
+      .andWhere('a.status IN (:...engagedStatuses)', { engagedStatuses: ENGAGED_ASSIGNMENT_STATUSES })
       .andWhere('pb.project_id = :projectId', { projectId: assessment.projectId })
       .andWhere('pb.branch_id = :branchId', { branchId: assessment.branchId })
       .getCount();
@@ -1527,9 +1529,10 @@ export class DocumentService {
       .where('a.project_branch_id = :projectBranchId', { projectBranchId })
       .andWhere('a.assayer_id = :assayerId', { assayerId })
       .andWhere('a.is_active = true')
-      .andWhere('a.status NOT IN (:...deadStatuses)', {
-        deadStatuses: [AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED],
-      })
+      // Accepted, under way, or delivered (a reopened redo still needs its packet). Not a
+      // cancelled/declined job — and not an offer still awaiting an answer: the packet is released
+      // to the assayer who took the job, and they are told when they accept.
+      .andWhere('a.status IN (:...engagedStatuses)', { engagedStatuses: ENGAGED_ASSIGNMENT_STATUSES })
       .getCount();
 
     if (linked === 0) {
@@ -1668,10 +1671,20 @@ export class DocumentService {
       return saved;
     }
 
-    const assignment = await this.assignmentRepository.findOne({
+    /**
+     * The branch's CURRENT job, not whichever row the database returns first. A cancelled or
+     * declined row keeps `isActive: true`, so a branch that was cancelled and then re-staffed has
+     * two rows on the same assessment; `findOne` could pick the dead one and the live assayer was
+     * never told. Prefer a live row, newest first; fall back to any row only for the log line.
+     */
+    const candidates = await this.assignmentRepository.find({
       where: { assessmentId: doc.assessmentId, isActive: true },
       relations: ['assayer'],
+      order: { createdAt: 'DESC' },
     });
+    const assignment = candidates.find(
+      (a) => a.status !== AssignmentStatus.CANCELLED && a.status !== AssignmentStatus.REJECTED,
+    ) ?? candidates[0] ?? null;
 
     if (!assignment) {
       // Before the Assessment backfill this was the silent failure mode: assignments carried
@@ -1703,7 +1716,21 @@ export class DocumentService {
       );
     }
 
-    if (assignment?.assayer && assignmentIsLive) {
+    /**
+     * Only an assayer who has said yes is told (and only they can open it — see
+     * `assertAssayerMayDownload`). An offer still waiting for an answer is not their job yet; they
+     * are told the moment they accept (`notifyAcceptedAssayerOfDispatchedPacket`), under the same
+     * once-only key, so nobody hears twice.
+     */
+    const assayerHasAccepted = !!assignment && ENGAGED_ASSIGNMENT_STATUSES.includes(assignment.status);
+    if (assignment && assignmentIsLive && !assayerHasAccepted) {
+      this.logger.log(
+        `Document ${id} dispatched while assignment ${assignment.id} is ${assignment.status} — `
+        + 'the assayer will be told when they accept.',
+      );
+    }
+
+    if (assignment?.assayer && assignmentIsLive && assayerHasAccepted) {
       try {
         // Was `notificationService.create({ userId: assignment.assayerId })`, which passed an
         // assayer id into a column that foreign-keys to `users` — a FK violation swallowed by
@@ -1713,13 +1740,10 @@ export class DocumentService {
           assignment.assayerId,
           assignment.assayer.email,
           {
-            title: branchEmail ? 'Audit paperwork sent to the branch' : 'New Audit PDF',
             // What the assayer is told to *do* is the point. Telling somebody to download a file
             // that was posted to a branch sends them looking for something that is not there.
-            message: branchEmail
-              ? `The audit paperwork for "${doc.fileName}" has been sent to the branch at `
-                + `${branchEmail}. Collect it from them when you arrive.`
-              : `Audit PDF "${doc.fileName}" has been dispatched to you. Open your schedule to view and download.`,
+            ...DocumentService.packetNoticeText(doc.fileName, branchEmail),
+            dedupeKey: DocumentService.packetNoticeKey(doc.id, assignment.assayerId),
             // Kept as a hand-rolled notifyAssayer rather than migrated to a catalog emit: no
             // catalog entry covers "pre-field PDF dispatched to the assayer" (DOCUMENT_UPLOADED
             // targets the office desk), and inventing
@@ -1743,6 +1767,68 @@ export class DocumentService {
     }
 
     return saved;
+  }
+
+  /** The words of the "your paperwork is out" notice — one wording for dispatch and acceptance. */
+  private static packetNoticeText(fileName: string, branchEmail: string | null): { title: string; message: string } {
+    return branchEmail
+      ? {
+          title: 'Audit paperwork sent to the branch',
+          message: `The audit paperwork for "${fileName}" has been sent to the branch at `
+            + `${branchEmail}. Collect it from them when you arrive.`,
+        }
+      : {
+          title: 'New Audit PDF',
+          message: `Audit PDF "${fileName}" has been dispatched to you. Open your schedule to view and download.`,
+        };
+  }
+
+  /** Once per packet per assayer, whichever of dispatch or acceptance gets there first. */
+  static packetNoticeKey(documentId: string, assayerId: string): string {
+    return `PRE_FIELD_PACKET_RELEASED:${documentId}:a:${assayerId}`;
+  }
+
+  /**
+   * An assayer has just accepted a job (in the app, by the desk on their behalf, or on a
+   * reassignment confirmed on the call). If the branch's packet already went out — dispatched
+   * while the offer was still unanswered, or to the assayer this job was taken from — nobody has
+   * told THIS assayer, and dispatch cannot run again (only UPLOADED dispatches). Tell them now.
+   *
+   * Called after the acceptance has committed. Best-effort: never throws, because a missed notice
+   * must not undo an acceptance — the packet is on their job card either way.
+   */
+  async notifyAcceptedAssayerOfDispatchedPacket(
+    assignment: Pick<AssignmentEntity, 'id' | 'assayerId' | 'projectBranchId'>,
+    userId: string,
+  ): Promise<number> {
+    try {
+      if (!assignment.assayerId || !assignment.projectBranchId) return 0;
+      const docs = (await this.findByProjectBranch(assignment.projectBranchId)).filter(
+        (d) => d.type === DocumentType.PRE_FIELD_AUDIT_PDF && d.status === DocumentStatus.DISPATCHED,
+      );
+      let told = 0;
+      for (const doc of docs) {
+        const { inAppDelivered } = await this.notificationService.notifyAssayer(
+          assignment.assayerId,
+          null,
+          {
+            ...DocumentService.packetNoticeText(doc.fileName, doc.dispatchedToEmail ?? null),
+            link: `/assignments?id=${assignment.id}`,
+            data: { documentId: doc.id, assignmentId: assignment.id, type: 'document_dispatched' },
+            dedupeKey: DocumentService.packetNoticeKey(doc.id, assignment.assayerId),
+          },
+          userId,
+        );
+        if (inAppDelivered) told++;
+      }
+      return told;
+    } catch (err) {
+      this.logger.error(
+        `Could not tell the assayer on ${assignment.id} that the branch's packet is already out: `
+        + `${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
+    }
   }
 
   /**

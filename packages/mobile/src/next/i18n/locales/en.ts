@@ -66,6 +66,15 @@ export const en = {
     actionNotAllowed: 'Not available right now.',
     opensAt: 'You can do this from %{when}.',
     opened: 'Opening this job',
+    papers: {
+      open: 'Papers for this branch',
+      opening: 'Opening the papers…',
+      preparing: 'The papers are being prepared. You will be told when they are sent.',
+      notSent: 'The papers have not been sent to you yet.',
+      notAvailable: 'These papers cannot be opened right now.',
+      sessionEnded: 'Your session has ended. Please sign in again.',
+      failed: 'Could not open the papers. Check your signal and try again.',
+    },
     steps: {
       reached: 'Reached',
       papers: 'Papers',

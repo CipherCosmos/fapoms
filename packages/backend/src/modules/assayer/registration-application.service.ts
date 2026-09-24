@@ -4,7 +4,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
-import { EventCategory, ApplicationStatus, APPLICATION_TERMINAL_STATUSES, applicationIsEditableByCandidate, EmploymentCategory, OnboardingDocument, ONBOARDING_DOCUMENT_LABELS, DocumentRejectionReason, DOCUMENT_REJECTION_GUIDANCE, ApplicationDocumentReviewStatus, APPLICATION_INFO_REQUESTABLE_FIELDS, readApplicationInfoRequests, type ApplicationInfoRequestItem, normalizeApplicationReferences, referenceSubmitProblem, AssayerLifecycleStatus, ApplicationSource, ASSAYER_ERROR_CODES, pickRegistrationRecordFields, groupRegistrationRecordFields, REGISTRATION_SECRET_FIELD_KEYS, CURRENT_CONSENT_NOTICE, CURRENT_CONSENT_VERSION, consentNoticeFor, type ConsentNotice, REGISTRATION_FIELD_GROUPS, maskRegistrationFields, looksMasked, pickEmploymentTermFields, mergedRegistrationView, missingRegistrationFields, isValidPan, isValidIfsc, isValidAadhaar, isBankAccountNumber, normaliseBankAccountNumber, BANK_ACCOUNT_NUMBER_RULE, REGISTRATION_REQUIRED_DOCUMENTS, normalisePhone, dateOfBirthProblem, maskTail, type OutboundMessageReceipt, businessDateKey, businessTodayDateKey, normalizeSourceReferral, candidateMayEditSourceReferral, type SourceReferral, type ReferralRecordedBy } from '@fapoms/shared';
+import { EventCategory, ApplicationStatus, APPLICATION_TERMINAL_STATUSES, applicationIsEditableByCandidate, EmploymentCategory, OnboardingDocument, ONBOARDING_DOCUMENT_LABELS, DocumentRejectionReason, DOCUMENT_REJECTION_GUIDANCE, ApplicationDocumentReviewStatus, APPLICATION_INFO_REQUESTABLE_FIELDS, readApplicationInfoRequests, type ApplicationInfoRequestItem, normalizeApplicationReferences, referenceSubmitProblem, AssayerLifecycleStatus, ApplicationSource, ASSAYER_ERROR_CODES, pickRegistrationRecordFields, groupRegistrationRecordFields, REGISTRATION_SECRET_FIELD_KEYS, CURRENT_CONSENT_NOTICE, CURRENT_CONSENT_VERSION, consentNoticeFor, type ConsentNotice, REGISTRATION_FIELD_GROUPS, maskRegistrationFields, looksMasked, pickEmploymentTermFields, mergedRegistrationView, missingRegistrationFields, isValidPan, isValidIfsc, isValidAadhaar, isBankAccountNumber, normaliseBankAccountNumber, BANK_ACCOUNT_NUMBER_RULE, REGISTRATION_REQUIRED_DOCUMENTS, normalisePhone, dateOfBirthProblem, maskTail, type OutboundMessageReceipt, businessDateKey, businessTodayDateKey, normalizeSourceReferral, candidateMayEditSourceReferral, type SourceReferral, type ReferralRecordedBy, VERIFIED_DOCUMENTS, candidateJourneyStage, type CandidateJourneyProgress } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AssayerApplicationEntity } from './assayer-application.entity';
 import { AssayerApplicationDocumentEntity } from './assayer-application-document.entity';
@@ -512,6 +512,38 @@ function submittedApplicationView(application: AssayerApplicationEntity): Assaye
     extendedProfile: null,
   } as unknown as AssayerApplicationEntity;
 }
+
+/** The one sentence an expired link is refused with. */
+const LINK_EXPIRED_MESSAGE = 'This registration link has expired. Ask HR to resend it.';
+
+/** Whether a link is past its expiry — the one rule every use of the link reads. */
+function linkHasExpired(application: AssayerApplicationEntity): boolean {
+  return !application.tokenExpiresAt || application.tokenExpiresAt.getTime() < Date.now();
+}
+
+/**
+ * Where a link past its expiry may still show the candidate's progress: every status after the form
+ * was sent. A DRAFT has nothing to report, and stays refused.
+ */
+const PROGRESS_AFTER_EXPIRY: readonly ApplicationStatus[] = [
+  ApplicationStatus.PENDING_VALIDATION,
+  ApplicationStatus.AWAITING_INFO,
+  ApplicationStatus.APPROVED,
+  ApplicationStatus.REJECTED,
+  ApplicationStatus.WITHDRAWN,
+];
+
+/**
+ * The documents an approved candidate's link may say HR has asked for again: their photograph and
+ * the papers a reviewer verifies (identity documents and the passbook) — the only rows HR can send
+ * back, through review or "Ask to re-upload". Named rather than "every sent-back row" so the
+ * company's own paperwork about a person, above all the background-verification report, can never
+ * surface on an unauthenticated page even if one were one day marked as sent back.
+ */
+const CANDIDATE_RESENDABLE_DOCUMENTS: readonly OnboardingDocument[] = [
+  OnboardingDocument.PHOTOGRAPH,
+  ...VERIFIED_DOCUMENTS,
+];
 
 /** Which channel carried a registration verification code, and where, masked for the page to show. */
 export interface RegistrationOtpDelivery {
@@ -1028,14 +1060,25 @@ export class RegistrationApplicationService {
 
   // ── Token resolution ─────────────────────────────────────────────────────
 
-  private async findByRawToken(rawToken: string): Promise<AssayerApplicationEntity> {
+  /** The application a link belongs to, whether or not the link has expired. Unknown is a 404. */
+  private async resolveRawToken(rawToken: string): Promise<AssayerApplicationEntity> {
     const tokenHash = hashCode(rawToken);
     const application = await this.applications.findOne({ where: { tokenHash } });
     if (!application) {
       throw new NotFoundException('This registration link is not valid. Ask HR to resend it.');
     }
-    if (!application.tokenExpiresAt || application.tokenExpiresAt.getTime() < Date.now()) {
-      throw new BadRequestException('This registration link has expired. Ask HR to resend it.');
+    return application;
+  }
+
+  /**
+   * The application a link belongs to — for anything that reads the form or changes it. An expired
+   * link is refused here, for every write and for the full form; only `hydrate` looks past the
+   * expiry, and then only to say how the candidate is getting on (`statusOnlyView`).
+   */
+  private async findByRawToken(rawToken: string): Promise<AssayerApplicationEntity> {
+    const application = await this.resolveRawToken(rawToken);
+    if (linkHasExpired(application)) {
+      throw new BadRequestException(LINK_EXPIRED_MESSAGE);
     }
     return application;
   }
@@ -1052,8 +1095,22 @@ export class RegistrationApplicationService {
      * form renders instead of one free-text banner. Empty on a first fill and once submitted.
      */
     infoRequests: ApplicationInfoRequestItem[];
+    /**
+     * Where an APPROVED candidate has got to since — the step, whether they are paused, and what HR
+     * has asked them to send again. Null for every other status. See `approvedJourney`.
+     */
+    journey: CandidateJourneyProgress | null;
+    /**
+     * True when the link has expired and this is only the candidate's progress — no form, nothing
+     * of what they gave, no way to change anything. See `statusOnlyView`.
+     */
+    statusOnly: boolean;
   }> {
-    const application = await this.findByRawToken(rawToken);
+    const application = await this.resolveRawToken(rawToken);
+    if (linkHasExpired(application)) {
+      if (!PROGRESS_AFTER_EXPIRY.includes(application.status)) throw new BadRequestException(LINK_EXPIRED_MESSAGE);
+      return this.statusOnlyView(application);
+    }
     if (!application.tokenConsumedAt) {
       application.tokenConsumedAt = new Date();
       await this.applications.save(application);
@@ -1089,6 +1146,8 @@ export class RegistrationApplicationService {
         // offers withdrawal from here until a decision is made.
         consentNotice: await this.consentNotice(),
         infoRequests: [],
+        journey: await this.approvedJourney(application),
+        statusOnly: false,
       };
     }
 
@@ -1101,7 +1160,88 @@ export class RegistrationApplicationService {
       otpVerified: Boolean(verified),
       consentNotice: await this.consentNotice(),
       infoRequests: readApplicationInfoRequests(application.infoRequests),
+      journey: null,
+      statusOnly: false,
     };
+  }
+
+  /**
+   * AN EXPIRED LINK STILL SAYS HOW THE CANDIDATE IS GETTING ON (owner, 2026-09-24: "status-only after
+   * expiry").
+   *
+   * The link lives 72 hours from when it was sent or HR last asked for more, and joining takes longer
+   * than that — so the steps after approval were, for most people, behind "this link has expired".
+   * Past its expiry the link now answers one question: where have I got to, and is anything asked
+   * of me. Nothing else. No name, no contact details, no answers, no scans, no consent text — a
+   * forwarded or leaked link says at most that somebody is at a step and which papers HR wants
+   * again. And no way to change anything: every write still goes through `findByRawToken`, which
+   * refuses the expired link exactly as before, and this writes nothing either.
+   *
+   * Only for a form that was sent. An expired link to an unsent draft has no progress to show,
+   * and is refused as it always was.
+   */
+  private async statusOnlyView(application: AssayerApplicationEntity) {
+    return {
+      application: { id: application.id, status: application.status } as unknown as AssayerApplicationEntity,
+      documents: [] as AssayerApplicationDocumentEntity[],
+      documentsRequested: [] as readonly OnboardingDocument[],
+      otpVerified: false,
+      consentNotice: null as unknown as ConsentNotice & { grievanceContact: string },
+      // What HR asked for when it sent the form back — so they know what to ask HR for a new link to fix.
+      infoRequests: application.status === ApplicationStatus.AWAITING_INFO
+        ? readApplicationInfoRequests(application.infoRequests)
+        : [],
+      journey: await this.approvedJourney(application),
+      statusOnly: true,
+    };
+  }
+
+  /**
+   * WHAT THE LINK MAY SAY ABOUT SOMEBODY AFTER THEY ARE HIRED.
+   *
+   * The candidate's page used to stop at "Approved" while four more steps lay ahead — documents,
+   * background check, final approval, training if needed — and HR could ask for a document again
+   * with nothing on the page to say so. This is that, and only that.
+   *
+   * The link is unauthenticated, so what it may carry is decided here, field by field:
+   *  - the step, mapped by `candidateJourneyStage` — never the lifecycle value itself, and never the
+   *    unavailable reason, so a failed background check and a refused approval read identically as
+   *    "paused"; no verdict, finding, agency, approver or comment is read at all;
+   *  - the documents HR has sent back (`evaluateSelfDocumentChange` via `selfDocumentGates`, the same
+   *    rule the phone app is told), limited to `CANDIDATE_RESENDABLE_DOCUMENTS`, each with its name
+   *    and the sentence written FOR the candidate — HR's own "Ask to re-upload" note, or the
+   *    send-back guidance the rejection notice already sent them. Nothing else about the file.
+   * A paused person is asked for nothing here: HR will be talking to them anyway.
+   *
+   * Read-only by design. Answering an ask stays behind the assayer's own sign-in, in the app; this
+   * adds no way to change the record through a link.
+   *
+   * Best effort: the page still says "Approved" if this cannot be read, which is better than a
+   * status page that fails to open over a decoration.
+   */
+  private async approvedJourney(application: AssayerApplicationEntity): Promise<CandidateJourneyProgress | null> {
+    if (application.status !== ApplicationStatus.APPROVED || !application.promotedAssayerId) return null;
+    try {
+      const person = await this.assayers.findOne({
+        where: { id: application.promotedAssayerId },
+        select: { id: true, lifecycleStatus: true },
+      });
+      if (!person) return null;
+      const { stage, paused } = candidateJourneyStage(person.lifecycleStatus);
+      if (paused) return { stage: null, paused: true, asks: [] };
+      const gates = await this.rosterRecords.selfDocumentGates(person.id, CANDIDATE_RESENDABLE_DOCUMENTS);
+      const asks = gates
+        .filter((gate) => gate.mode === 'reopened')
+        .map((gate) => ({
+          requirement: gate.requirement,
+          label: ONBOARDING_DOCUMENT_LABELS[gate.requirement as OnboardingDocument] ?? gate.requirement,
+          note: gate.hrNote?.trim() || null,
+        }));
+      return { stage, paused: false, asks };
+    } catch (err) {
+      this.logger.warn(`Application ${application.id}: the journey after approval could not be read: ${(err as Error)?.message ?? err}`);
+      return null;
+    }
   }
 
   // ── OTP ──────────────────────────────────────────────────────────────────

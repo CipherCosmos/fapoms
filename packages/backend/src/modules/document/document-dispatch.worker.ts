@@ -5,9 +5,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { DocumentService } from './document.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
-import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod, businessDateKey } from '@fapoms/shared';
+import { DocumentStatus, DocumentType, DispatchMethod, businessDateKey } from '@fapoms/shared';
 import { progressReporter } from '../../infrastructure/queue/queued-job';
 import { runAsJobActor } from '../../infrastructure/queue/job-actor';
 import {
@@ -157,7 +158,10 @@ export class DocumentDispatchWorker {
       const accepted = await this.assignmentRepository.find({
         where: {
           assessmentId: In([...new Set(due.map((d) => d.assessmentId))]),
-          status: AssignmentStatus.ACCEPTED,
+          // Accepted and not yet finished. ACCEPTED alone missed a packet still unsent when the
+          // assayer had already checked in (or started): the scan skipped it every night, so the
+          // assayer stood at the branch with no paperwork unless someone sent it by hand.
+          status: In(COMMITTED_ASSIGNMENT_STATUSES),
           isActive: true,
         },
         select: { id: true, assessmentId: true },

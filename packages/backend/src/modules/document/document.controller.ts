@@ -1125,6 +1125,10 @@ export class DocumentController {
   // header — that constraint is why this endpoint was fully public, exposing bank customer
   // paperwork to anyone who could reach the API.
   @Public()
+  // The token mint (`download-token`) records WHO asked; this records that the file was actually
+  // fetched — from which address, and how often (a range resume is its own fetch). A bad or
+  // expired token is logged as a failed attempt.
+  @AuditRead({ resource: 'DOCUMENT', idParam: 'id', eventType: 'DOCUMENT_DOWNLOADED' })
   @ApiOperation({ summary: 'Download a document using a short-lived signed token' })
   async downloadFile(
     @Param('id', ParseUUIDPipe) id: string,
@@ -1401,6 +1405,9 @@ export class DocumentController {
 
   @Get('project-branch/:projectBranchId/download-pdf')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
+  // Streams the file through an internal call to `downloadFile`, which bypasses that route's own
+  // access record — so this route records it, against the branch it was addressed by.
+  @AuditRead({ resource: 'PROJECT_BRANCH', idParam: 'projectBranchId', eventType: 'PRE_FIELD_PACKET_DOWNLOADED' })
   @ApiOperation({ summary: 'Directly download the Pre-Audit PDF file for a project branch' })
   async downloadBranchPdf(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,

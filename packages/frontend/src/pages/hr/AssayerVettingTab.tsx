@@ -283,7 +283,7 @@ interface Dossier {
 }
 
 /** One file of a background check's report, as the dossier gives it. */
-interface ReportFile {
+export interface ReportFile {
   documentId: string;
   versionId: string | null;
   path: string;
@@ -407,7 +407,7 @@ const VerificationChip: React.FC<{ status?: string | null }> = ({ status }) => {
  * become an object URL. They are revoked when the viewer closes, or when the row goes away, or
  * the tab keeps a copy of every identity document somebody opened.
  */
-const Attachments: React.FC<{
+export const Attachments: React.FC<{
   documentId: string | null;
   filePaths: string[];
   canManage: boolean;
@@ -513,7 +513,7 @@ const Attachments: React.FC<{
  * failed check's report stays viewable after a new report arrives for the next check. Never
  * removable: the check cannot be edited or deleted, and neither can its evidence.
  */
-const CheckReport: React.FC<{
+export const CheckReport: React.FC<{
   files: ReportFile[];
   /** The report document's current file list — where a file with no recorded upload is found. */
   documentPaths: string[];

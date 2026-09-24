@@ -18,8 +18,8 @@ const quote = (text: string | null | undefined, max = 140) => {
 };
 
 const Person: React.FC<{ row: QueuedApproval }> = ({ row }) => (
-  // The record's Summary tab is where the approval panel sits — the same place the bell links to.
-  <Link to={`/hr/roster/${row.assayerId}`} style={{ color: 'var(--accent)', fontWeight: 600 }}>
+  // The review: their whole file on one screen, with the decision beside it — where the bell links too.
+  <Link to={`/hr/approvals/${row.assayerId}`} style={{ color: 'var(--accent)', fontWeight: 600 }}>
     {row.displayName}
     {(row.assayerCode || row.region) && (
       <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
@@ -115,8 +115,8 @@ export const HrApprovalsPage: React.FC = () => {
   return (
     <Page>
       <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.55, maxWidth: '760px' }}>
-        People HR has finished with, waiting for a senior&rsquo;s approval before training. Open a person to
-        approve them, reject them with a reason, or ask HR for more — it is decided on their record.
+        People HR has finished with, waiting for a senior&rsquo;s approval. Open a person to see their whole
+        file and decide: approve them to training or straight to work, ask HR for more, or reject with a reason.
       </p>
 
       {loadFailed(query) ? (

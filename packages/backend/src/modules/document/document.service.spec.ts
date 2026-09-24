@@ -200,7 +200,7 @@ describe('DocumentService', () => {
      * itself carries the exclusion — not just that some mocked `getCount` happens to return 0 —
      * so a future edit that drops the predicate fails here rather than only against real data.
      */
-    it('excludes CANCELLED/REJECTED assignments from counting as a branch link', async () => {
+    it('counts only accepted-or-later assignments as a branch link (not CANCELLED/REJECTED, not PENDING)', async () => {
       mockDocumentRepo.findOne.mockResolvedValue(
         branchDoc(DocumentType.PRE_FIELD_AUDIT_PDF, DocumentStatus.DISPATCHED),
       );
@@ -219,10 +219,12 @@ describe('DocumentService', () => {
       await expect(service.assertAssayerMayDownload('doc-1', 'assayer-cancelled'))
         .rejects.toThrow(BadRequestException);
 
-      const statusFilter = andWhereCalls.find(([clause]) => String(clause).includes('a.status NOT IN'));
+      // Only a job the assayer has said yes to links them: CANCELLED/REJECTED never, and an
+      // unanswered offer (PENDING) not yet.
+      const statusFilter = andWhereCalls.find(([clause]) => String(clause).includes('a.status IN'));
       expect(statusFilter).toBeDefined();
-      expect(statusFilter![1].deadStatuses).toEqual(
-        expect.arrayContaining([AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED]),
+      expect([...statusFilter![1].engagedStatuses].sort()).toEqual(
+        [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.COMPLETED, AssignmentStatus.IN_PROGRESS].sort(),
       );
     });
   });
@@ -251,7 +253,7 @@ describe('DocumentService', () => {
       await expect(service.assertAssayerAssignedToBranch('pb-mine', 'assayer-1')).resolves.toBeUndefined();
     });
 
-    it('keys on the project branch and excludes CANCELLED/REJECTED and soft-deleted assignments', async () => {
+    it('keys on the project branch and admits only accepted-or-later, non-deleted assignments', async () => {
       const whereCalls: any[] = [];
       const andWhereCalls: any[] = [];
       mockAssignmentRepo.createQueryBuilder = jest.fn(() => ({
@@ -265,10 +267,10 @@ describe('DocumentService', () => {
 
       // Keyed on the branch, not walked through an assessment — the whole point of the by-branch route.
       expect(whereCalls.some(([c]) => String(c).includes('a.project_branch_id'))).toBe(true);
-      const status = andWhereCalls.find(([c]) => String(c).includes('a.status NOT IN'));
+      const status = andWhereCalls.find(([c]) => String(c).includes('a.status IN'));
       expect(status).toBeDefined();
-      expect(status![1].deadStatuses).toEqual(
-        expect.arrayContaining([AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED]),
+      expect([...status![1].engagedStatuses].sort()).toEqual(
+        [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.COMPLETED, AssignmentStatus.IN_PROGRESS].sort(),
       );
       expect(andWhereCalls.some(([c]) => String(c).includes('a.is_active'))).toBe(true);
     });

@@ -47,7 +47,8 @@ describe('the approval before training', () => {
     const { service, rounds, assayerService, auditService } = setup();
     const view = await service.approve('a-1', 'Good file.', BOSS);
 
-    expect(assayerService.decideFinalApproval).toHaveBeenCalledWith('a-1', 'APPROVED', BOSS.id, 'Approved to join: Good file.', expect.any(Function));
+    // Training when nothing else is said — what approving always did before the choice existed.
+    expect(assayerService.decideFinalApproval).toHaveBeenCalledWith('a-1', 'APPROVED', BOSS.id, 'Approved to join: Good file.', expect.any(Function), 'TRAINING');
     expect(rounds[0]).toMatchObject({ status: S.APPROVED, decidedBy: BOSS.id });
     expect(view.events.map((e) => e.kind)).toEqual([K.SUBMITTED, K.APPROVED]);
     // The name the lifecycle could not know is filled in on the way out.
@@ -57,6 +58,34 @@ describe('the approval before training', () => {
     }));
   });
 
+  /**
+   * Approving can send them straight to work (owner, 2026-09-24). Where it sent them is part of the
+   * decision: on the round's conversation, on the audit trail, and in what HR is told.
+   */
+  it('approves straight to work when the approver says so, and says so everywhere it is recorded', async () => {
+    const { service, rounds, assayerService, auditService, notifications } = setup();
+    await service.approve('a-1', 'Experienced; no training needed.', BOSS, 'ACTIVE');
+
+    expect(assayerService.decideFinalApproval).toHaveBeenCalledWith(
+      'a-1', 'APPROVED', BOSS.id, expect.any(String), expect.any(Function), 'ACTIVE',
+    );
+    expect(rounds[0].events.at(-1)).toMatchObject({ kind: K.APPROVED, to: 'ACTIVE' });
+    expect(auditService.recordEventSafe).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'ASSAYER_APPROVAL_APPROVED', newState: AssayerLifecycleStatus.ACTIVE,
+      metadata: expect.objectContaining({ to: 'ACTIVE' }),
+    }));
+    expect(notifications.emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'ASSAYER_APPROVAL_APPROVED',
+      payload: expect.objectContaining({ outcome: 'now Active — ready for work' }),
+    }));
+  });
+
+  it('refuses a destination that is neither training nor work', async () => {
+    const { service, assayerService } = setup();
+    await expect(service.approve('a-1', null, BOSS, 'SUSPENDED' as never)).rejects.toThrow(/training or makes them Active/);
+    expect(assayerService.decideFinalApproval).not.toHaveBeenCalled();
+  });
+
   it('rejects only with a reason, and keeps it', async () => {
     const { service, rounds, assayerService } = setup();
     await expect(service.reject('a-1', 'no', BOSS)).rejects.toThrow(/Say why/);
@@ -64,7 +93,8 @@ describe('the approval before training', () => {
 
     await service.reject('a-1', 'Declared experience could not be confirmed with two employers.', BOSS);
     expect(assayerService.decideFinalApproval).toHaveBeenCalledWith(
-      'a-1', 'REJECTED', BOSS.id, expect.stringMatching(/Not approved: Declared experience/), expect.any(Function),
+      // No destination: a rejection always parks them inactive.
+      'a-1', 'REJECTED', BOSS.id, expect.stringMatching(/Not approved: Declared experience/), expect.any(Function), undefined,
     );
     expect(rounds[0].status).toBe(S.REJECTED);
     expect(rounds[0].events.at(-1)).toMatchObject({ kind: K.REJECTED, text: expect.stringMatching(/two employers/) });
@@ -91,6 +121,45 @@ describe('the approval before training', () => {
 
     await expect(service.approve('a-1', null, other)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(service.approve('a-1', null, BOSS)).resolves.toMatchObject({ status: S.APPROVED });
+  });
+
+  /**
+   * 24 SEP 2026: `admin` sent the candidate up, `shivam.kumar` asked HR for more and then answered
+   * his own question from the box the panel wrongly offered him — and, answering counting as
+   * preparing, both approvers were left standing aside with nobody able to decide.
+   */
+  describe('an approver answering their own question', () => {
+    it('is refused — HR answers what the approver asked', async () => {
+      const { service, rounds } = setup();
+      await service.requestInfo('a-1', 'Upload the previous employer\'s relieving letter.', BOSS);
+
+      await expect(service.answer('a-1', 'Never mind, it is fine as it is.', BOSS)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(rounds[0].status).toBe(S.INFO_REQUESTED);
+      expect(rounds[0].events.map((e: any) => e.kind)).toEqual([K.SUBMITTED, K.INFO_REQUESTED]);
+    });
+
+    it('leaves them free to decide on what the file already holds', async () => {
+      const { service } = setup();
+      await service.requestInfo('a-1', 'Upload the previous employer\'s relieving letter.', BOSS);
+      await expect(service.approve('a-1', 'Seen enough; approving.', BOSS)).resolves.toMatchObject({ status: S.APPROVED });
+    });
+
+    /** The round as it stands on the live system: already self-answered before the refusal existed. */
+    it('does not keep a round stuck where it already happened', async () => {
+      const { service } = setup({
+        round: {
+          events: [
+            { kind: K.SUBMITTED, byId: HR.id, byName: 'admin', at: '2026-09-24T07:37:00Z', text: 'Sent for approval before training' },
+            { kind: K.INFO_REQUESTED, byId: BOSS.id, byName: 'shivam kumar', at: '2026-09-24T07:38:00Z', text: 'need more detail' },
+            { kind: K.ANSWERED, byId: BOSS.id, byName: 'shivam kumar', at: '2026-09-24T07:39:00Z', text: 'need more info' },
+          ],
+        },
+      });
+      // The person who sent it up still may not decide it...
+      await expect(service.approve('a-1', null, HR)).rejects.toBeInstanceOf(ForbiddenException);
+      // ...but the approver who only talked to himself may.
+      await expect(service.approve('a-1', 'Approving.', BOSS)).resolves.toMatchObject({ status: S.APPROVED });
+    });
   });
 
   it('tells the approvers when HR has answered — it is back with them', async () => {

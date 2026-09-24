@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  AssayerLifecycleStatus, ONBOARDING_APPROVAL_STATUS_LABELS, OnboardingApprovalEventKind as Kind,
-  OnboardingApprovalStatus as Status, approvalTextProblem, type OnboardingApprovalEvent,
+  APPROVAL_DESTINATION_WORDS, AssayerLifecycleStatus, ONBOARDING_APPROVAL_STATUS_LABELS, OnboardingApprovalEventKind as Kind,
+  OnboardingApprovalStatus as Status, approvalTextProblem, openQuestionAsker, type ApprovalDestination, type OnboardingApprovalEvent,
 } from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
@@ -48,7 +48,11 @@ const Thread: React.FC<{ events: OnboardingApprovalEvent[] }> = ({ events }) => 
     {events.map((e, i) => (
       <li key={`${e.kind}-${e.at}-${i}`} style={{ fontSize: 'var(--text-sm)', lineHeight: 1.5 }}>
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          <strong style={{ color: 'var(--text-secondary)' }}>{EVENT_WORDS[e.kind] ?? e.kind}</strong>
+          <strong style={{ color: 'var(--text-secondary)' }}>
+            {EVENT_WORDS[e.kind] ?? e.kind}
+            {/* Approvals before the choice existed went to training — the only way on then. */}
+            {e.kind === Kind.APPROVED ? ` — ${APPROVAL_DESTINATION_WORDS[e.to ?? 'TRAINING']}` : ''}
+          </strong>
           {e.byName ? ` · ${e.byName}` : ''} · {fmtWhen(e.at)}
         </div>
         {e.text && <div style={{ whiteSpace: 'pre-line', overflowWrap: 'anywhere' }}>{e.text}</div>}
@@ -73,7 +77,13 @@ export const ApprovalPanel: React.FC<{
   currentUserId: string | null;
   /** After a decision or an answer — the person's stage may have moved. */
   onChanged: () => void;
-}> = ({ assayerId, lifecycleStatus, canManage, canApprove, currentUserId, onChanged }) => {
+  /**
+   * What making them Active is still waiting on (`activationBlockers`), when the screen knows. Empty
+   * means ready; not given means unknown — the button is offered, and the server says what is
+   * missing if anything is.
+   */
+  activationBlockers?: string[] | null;
+}> = ({ assayerId, lifecycleStatus, canManage, canApprove, currentUserId, onChanged, activationBlockers }) => {
   const [rounds, setRounds] = useState<ApprovalRound[] | null>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -94,15 +104,26 @@ export const ApprovalPanel: React.FC<{
   const awaiting = open && lifecycleStatus === AssayerLifecycleStatus.FINAL_APPROVAL;
   const preparer = !!currentUserId && current.preparers.includes(currentUserId);
   const mayDecide = awaiting && canApprove && !preparer;
-  const mayAnswer = awaiting && current.status === Status.INFO_REQUESTED && canManage;
+  /*
+    HR's answer box, for the people on HR's side of the round — never for somebody who may decide it.
 
-  const act = async (kind: Kind, path: string) => {
+    It was offered to anyone who manages assayers, and every Admin does, so an approver saw "Send
+    back for approval" beside Approve and Reject. On 24 Sep 2026 one used it to answer his own
+    question, and (answering counting as preparing) lost his right to decide; the other approver had
+    sent the person up, so nobody could decide at all. Somebody who may decide decides — Approve and
+    Reject stay open while HR is asked — and the server refuses the asker's answer regardless.
+  */
+  const asker = openQuestionAsker(current.events);
+  const mayAnswer = awaiting && current.status === Status.INFO_REQUESTED && canManage
+    && !mayDecide && currentUserId !== asker;
+
+  const act = async (kind: Kind, path: string, to?: ApprovalDestination) => {
     const problem = approvalTextProblem(kind, text);
     if (problem) { setError(problem); return; }
     setBusy(true); setError(null);
     try {
       await api.request(`/assayers/${assayerId}/approval/${path}`, {
-        method: 'POST', body: JSON.stringify({ text: text.trim() || undefined }),
+        method: 'POST', body: JSON.stringify({ text: text.trim() || undefined, ...(to ? { to } : {}) }),
       });
       setText('');
       load();
@@ -117,7 +138,7 @@ export const ApprovalPanel: React.FC<{
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
         <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-          Approval before training{rounds.length > 1 ? ` — round ${current.round}` : ''}
+          Final approval{rounds.length > 1 ? ` — round ${current.round}` : ''}
         </div>
         <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: STATUS_TONE[current.status] }}>
           {ONBOARDING_APPROVAL_STATUS_LABELS[current.status]}
@@ -128,21 +149,42 @@ export const ApprovalPanel: React.FC<{
 
       {mayDecide && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {current.status === Status.INFO_REQUESTED && (
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {asker === currentUserId ? 'You asked HR for more' : 'HR has been asked for more'} — HR answers it here.
+              {' '}You can still approve or reject on what the file already holds.
+            </div>
+          )}
           <label htmlFor="approval-text" style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--text-secondary)' }}>
             Your note — needed to ask for more or to reject; optional to approve
           </label>
           <textarea id="approval-text" style={box} value={text} disabled={busy} maxLength={2000}
             onChange={(e) => { setText(e.target.value); setError(null); }}
             placeholder="What you need from HR, or why they are not approved" />
+          {/*
+            TWO WAYS TO APPROVE (owner, 2026-09-24): "after approving the approver can also send them
+            to training or make them active". Training stays first — it is what approving did until
+            now. Make Active asks everything activation asks; when the screen already knows what is
+            missing it says so here rather than letting the approver press into a refusal.
+          */}
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button type="button" className="btn btn-primary" style={btn('primary')} disabled={busy}
-              onClick={() => void act(Kind.APPROVED, 'approve')}>Approve — on to training</button>
+              onClick={() => void act(Kind.APPROVED, 'approve', 'TRAINING')}>Approve — send to training</button>
+            <button type="button" className="btn btn-primary" style={btn('primary')}
+              disabled={busy || (activationBlockers?.length ?? 0) > 0}
+              title={(activationBlockers?.length ?? 0) > 0 ? `Not yet: ${activationBlockers!.join(', ')}` : 'Skip training — they can be offered work at once'}
+              onClick={() => void act(Kind.APPROVED, 'approve', 'ACTIVE')}>Approve — make Active</button>
             <button type="button" className="btn btn-secondary" style={btn('secondary')} disabled={busy || current.status !== Status.PENDING}
               title={current.status !== Status.PENDING ? 'Waiting for HR to answer what was asked' : undefined}
               onClick={() => void act(Kind.INFO_REQUESTED, 'request-info')}>Ask HR for more</button>
             <button type="button" className="btn" style={btn('danger')} disabled={busy}
               onClick={() => void act(Kind.REJECTED, 'reject')}>Reject</button>
           </div>
+          {(activationBlockers?.length ?? 0) > 0 && (
+            <div data-testid="make-active-blockers" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              <strong>Make Active</strong> needs: {activationBlockers!.join(', ')}. Send them to training, or ask HR to fill these in first.
+            </div>
+          )}
         </div>
       )}
 

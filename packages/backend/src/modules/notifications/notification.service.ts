@@ -106,10 +106,30 @@ export class NotificationService {
   async notifyAssayer(
     assayerId: string,
     assayerEmail: string | null | undefined,
-    payload: { title: string; message: string; link?: string; data?: Record<string, string> },
+    payload: {
+      title: string;
+      message: string;
+      link?: string;
+      data?: Record<string, string>;
+      /**
+       * Optional once-only key. When set, a second call with the same key for this assayer writes
+       * nothing and sends no push (the partial unique index on `dedupe_key` refuses the row), so
+       * two paths that may both announce the same event — a packet dispatched to an assayer who
+       * has accepted, and that same assayer's acceptance of a job whose packet was already out —
+       * tell them once.
+       */
+      dedupeKey?: string;
+    },
     systemUser?: string,
-  ): Promise<{ inAppDelivered: boolean }> {
+  ): Promise<{ inAppDelivered: boolean; duplicate?: boolean }> {
     let inAppDelivered = false;
+
+    if (payload.dedupeKey) {
+      const already = await this.notificationRepository
+        .count({ where: { assayerId, dedupeKey: payload.dedupeKey } })
+        .catch(() => 0);
+      if (already > 0) return { inAppDelivered: false, duplicate: true };
+    }
 
     // Addressed directly to the assayer. An earlier attempt matched the assayer's email to a
     // `users` row and wrote that user's id, but no assayer has a user account at all, so it
@@ -123,12 +143,17 @@ export class NotificationService {
           title: payload.title,
           message: payload.message,
           link: payload.link ?? null,
+          ...(payload.dedupeKey ? { dedupeKey: payload.dedupeKey } : {}),
           createdBy: systemUser ?? 'SYSTEM',
           updatedBy: systemUser ?? 'SYSTEM',
         }),
       );
       inAppDelivered = true;
     } catch (err: any) {
+      // Lost a race with a concurrent call carrying the same key: that one told them.
+      if (payload.dedupeKey && (err?.code === '23505' || err?.driverError?.code === '23505')) {
+        return { inAppDelivered: false, duplicate: true };
+      }
       console.error(`Failed to create in-app notification for assayer ${assayerId}:`, err?.message);
     }
 

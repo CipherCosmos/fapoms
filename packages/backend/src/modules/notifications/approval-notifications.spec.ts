@@ -13,7 +13,8 @@ describe('notifications for the approvers', () => {
     expect(def.fallbackPermissions).toEqual(['ASSAYER:APPROVE:ORGANIZATION', 'ASSAYER:VIEW:ORGANIZATION']);
     expect(def.skipActor).toBe(true);
     expect(def.channels).toEqual(expect.arrayContaining(['IN_APP', 'EMAIL']));
-    expect(def.link).toBe('/hr/roster/${assayerId}');
+    // The approver's review: their whole file and the decision on one screen (2026-09-24).
+    expect(def.link).toBe('/hr/approvals/${assayerId}');
   });
 });
 

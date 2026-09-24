@@ -1,7 +1,8 @@
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException, Optional } from '@nestjs/common';
 import {
   AssayerLifecycleStatus, EventCategory, OnboardingApprovalEventKind as Kind, OnboardingApprovalStatus as Status,
-  approvalPreparers, approvalTextProblem, type OnboardingApprovalEvent,
+  APPROVAL_DESTINATIONS, APPROVAL_DESTINATION_WORDS, approvalPreparers, approvalTextProblem, openQuestionAsker,
+  type ApprovalDestination, type OnboardingApprovalEvent,
 } from '@fapoms/shared';
 import { AssayerOnboardingApprovalEntity } from './assayer-onboarding-approval.entity';
 import { AssayerEntity } from './assayer.entity';
@@ -53,6 +54,36 @@ export class OnboardingApprovalService {
     const rows = await this.unitOfWork.run((m) => m.getRepository(AssayerOnboardingApprovalEntity)
       .find({ where: { assayerId }, order: { round: 'DESC' } }));
     return this.withNames(rows);
+  }
+
+  /**
+   * The interview this person joined through — what the approver's review shows beside the rest of
+   * the file. Found the way joining created them: the application that was promoted into this
+   * record, and the interview that application came from. Null for somebody added directly or
+   * imported, who never had one on this system.
+   *
+   * The result, when and by whom — not the interviewer's notes, which stay on the Hiring page.
+   */
+  async interviewFor(assayerId: string): Promise<{ outcome: string; interviewedAt: string; interviewedByName: string | null } | null> {
+    // Tenant- and existence-checked like `history`: somebody else's record is a 404, not an empty answer.
+    await this.assayerService.findOne(assayerId);
+    const rows: Array<{ outcome: string; interviewed_at: Date | string; interviewed_by_name: string | null }> =
+      await this.unitOfWork.run((m) => m.query(
+        `SELECT i.outcome, i.interviewed_at, i.interviewed_by_name
+           FROM assayer_applications a
+           JOIN assayer_interviews i ON i.id = a.interview_id
+          WHERE a.promoted_assayer_id = $1
+          ORDER BY a.created_at DESC
+          LIMIT 1`,
+        [assayerId],
+      ));
+    const row = rows?.[0];
+    if (!row) return null;
+    return {
+      outcome: row.outcome,
+      interviewedAt: new Date(row.interviewed_at).toISOString(),
+      interviewedByName: row.interviewed_by_name ?? null,
+    };
   }
 
   /** The approver's queue: everybody with an open round, oldest first. */
@@ -107,6 +138,18 @@ export class OnboardingApprovalService {
       if (round.status !== Status.INFO_REQUESTED) {
         throw new ConflictException('Nothing has been asked on this approval — there is nothing to answer.');
       }
+      /*
+        HR answers what the approver asked — not the approver. On 24 Sep 2026 an approver was
+        offered HR's answer box, answered his own question, and (answering counting as preparing
+        the file) lost his right to decide; the only other approver had sent the person up, so
+        nobody could decide at all. An approver who no longer needs the answer simply decides on
+        what the file already holds — Approve and Reject stay open while HR is asked.
+      */
+      if (openQuestionAsker(round.events ?? []) === actor.id) {
+        throw new ForbiddenException(
+          'You asked HR for this, so HR answers it. If you no longer need it, approve or reject on what the file already holds.',
+        );
+      }
       round.status = Status.PENDING;
       this.append(round, Kind.ANSWERED, actor, text);
       return { eventType: 'ASSAYER_APPROVAL_ANSWERED', remarks: `HR answered the approver: ${text.trim()}` };
@@ -132,9 +175,19 @@ export class OnboardingApprovalService {
   }
 
   /** Approve: on to training, in the same transaction as the round's decision. */
-  async approve(assayerId: string, note: string | null | undefined, actor: ApprovalActor): Promise<ApprovalRoundView> {
+  /**
+   * Approve — on to training, or straight to work (owner, 2026-09-24). Straight to work still has to
+   * pass everything activation asks: the lifecycle refuses it, naming what is missing, when the bank
+   * details, the map pin or the identity documents are not there yet.
+   */
+  async approve(
+    assayerId: string, note: string | null | undefined, actor: ApprovalActor, to: ApprovalDestination = 'TRAINING',
+  ): Promise<ApprovalRoundView> {
+    if (!APPROVAL_DESTINATIONS.includes(to)) {
+      throw new BadRequestException('Approving sends somebody to training or makes them Active — say which.');
+    }
     this.assertText(Kind.APPROVED, note);
-    return this.decide(assayerId, 'APPROVED', note ?? '', actor);
+    return this.decide(assayerId, 'APPROVED', note ?? '', actor, to);
   }
 
   /** Reject, with the reason: parked inactive as APPROVAL_REJECTED, and re-openable. */
@@ -145,7 +198,9 @@ export class OnboardingApprovalService {
 
   // ── internals ─────────────────────────────────────────────────────────
 
-  private async decide(assayerId: string, decision: 'APPROVED' | 'REJECTED', text: string, actor: ApprovalActor) {
+  private async decide(
+    assayerId: string, decision: 'APPROVED' | 'REJECTED', text: string, actor: ApprovalActor, to: ApprovalDestination = 'TRAINING',
+  ) {
     const person = await this.assayerService.findOne(assayerId);
     if (person.lifecycleStatus !== AssayerLifecycleStatus.FINAL_APPROVAL) {
       throw new ConflictException(`${person.displayName} is not awaiting approval.`);
@@ -167,10 +222,13 @@ export class OnboardingApprovalService {
         fresh.status = decision === 'APPROVED' ? Status.APPROVED : Status.REJECTED;
         fresh.decidedBy = actor.id;
         fresh.decidedAt = new Date();
-        this.append(fresh, kind, actor, text);
+        this.append(fresh, kind, actor, text, decision === 'APPROVED' ? to : undefined);
         decided = await repo.save(fresh);
       },
+      // Only an approval goes somewhere; a rejection's destination is always inactive.
+      decision === 'APPROVED' ? to : undefined,
     );
+    const approvedTo = to === 'ACTIVE' ? AssayerLifecycleStatus.ACTIVE : AssayerLifecycleStatus.TRAINING;
     await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: decision === 'APPROVED' ? 'ASSAYER_APPROVAL_APPROVED' : 'ASSAYER_APPROVAL_REJECTED',
@@ -178,11 +236,11 @@ export class OnboardingApprovalService {
       entityId: assayerId,
       userId: actor.id,
       previousState: AssayerLifecycleStatus.FINAL_APPROVAL,
-      newState: decision === 'APPROVED' ? AssayerLifecycleStatus.TRAINING : AssayerLifecycleStatus.INACTIVE,
+      newState: decision === 'APPROVED' ? approvedTo : AssayerLifecycleStatus.INACTIVE,
       remarks: decision === 'APPROVED'
-        ? `Approved to join (round ${round.round})${text.trim() ? `: ${text.trim()}` : ''}.`
+        ? `Approved to join (round ${round.round}) — ${APPROVAL_DESTINATION_WORDS[to]}${text.trim() ? `: ${text.trim()}` : ''}.`
         : `Not approved (round ${round.round}): ${text.trim()}`,
-      metadata: { approvalId: round.id, round: round.round },
+      metadata: { approvalId: round.id, round: round.round, ...(decision === 'APPROVED' ? { to } : {}) },
     });
     const view = (await this.withNames([decided!]))[0];
     await this.tellPreparers(
@@ -193,6 +251,8 @@ export class OnboardingApprovalService {
         decidedBy: actor.name?.trim() || 'The approver',
         reason: text.trim().slice(0, 300),
         noteLine: decision === 'APPROVED' && text.trim() ? ` Their note: "${text.trim().slice(0, 300)}".` : '',
+        // "on to training" or "now Active — ready for work": the title says where approving sent them.
+        outcome: APPROVAL_DESTINATION_WORDS[to],
       }),
       person.displayName,
     );
@@ -278,9 +338,12 @@ export class OnboardingApprovalService {
     if (problem) throw new BadRequestException(problem);
   }
 
-  private append(round: AssayerOnboardingApprovalEntity, kind: Kind, actor: ApprovalActor, text: string | null | undefined): void {
+  private append(
+    round: AssayerOnboardingApprovalEntity, kind: Kind, actor: ApprovalActor, text: string | null | undefined, to?: ApprovalDestination,
+  ): void {
     round.events = [...(round.events ?? []), {
       kind, byId: actor.id, byName: actor.name?.trim() || null, at: new Date().toISOString(), text: text?.trim() || null,
+      ...(to ? { to } : {}),
     }];
     round.updatedBy = actor.id;
   }

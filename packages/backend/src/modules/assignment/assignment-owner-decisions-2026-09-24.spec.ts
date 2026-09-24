@@ -176,6 +176,7 @@ describe('reassign is atomic with the desk\'s fee, date and confirmation', () =>
     svc.constraintEvaluator = { checkDateAvailability: jest.fn(async () => ({ passed: true })) };
     svc.autoScheduleOnAcceptance = jest.fn(async () => ({ scheduleId: 'sch-1', scheduledDate: '2026-10-05' }));
     svc.dayTravel = { rebalanceMany: jest.fn(async () => undefined) };
+    svc.documentService = { notifyAcceptedAssayerOfDispatchedPacket: jest.fn(async () => 0) };
     return { svc: svc as AssignmentService, raw: svc, saved, audits, emits, pbSaves, manager };
   };
   const types = (raw: any) => raw.notificationDispatch.emitSafe.mock.calls.map((c: any[]) => c[0].type);
@@ -195,6 +196,10 @@ describe('reassign is atomic with the desk\'s fee, date and confirmation', () =>
     expect(types(raw)).toEqual(expect.arrayContaining(['ASSIGNMENT_REASSIGNED_AWAY', 'ASSIGNMENT_DESK_CONFIRMED', 'SCHEDULE_DISPATCHED', 'ASSIGNMENT_REASSIGNED']));
     expect(types(raw)).not.toContain('ASSIGNMENT_OFFERED');
     expect(raw.assayerService.enableLiveTrackingForActiveWork).toHaveBeenCalledWith('as-new', 'ops-1');
+    // The branch's packet went to the previous assayer; the one who now holds the job is told.
+    expect(raw.documentService.notifyAcceptedAssayerOfDispatchedPacket).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'asn-1', assayerId: 'as-new' }), 'ops-1',
+    );
   });
 
   it('a fee over twice the new assayer\'s quote is refused before anything moves', async () => {
@@ -232,6 +237,8 @@ describe('reassign is atomic with the desk\'s fee, date and confirmation', () =>
     expect(saved[0]).toMatchObject({ status: AssignmentStatus.PENDING, proposedFee: 1500, agreedFee: 1500 });
     expect(types(raw)).toContain('ASSIGNMENT_OFFERED');
     expect(types(raw)).not.toContain('ASSIGNMENT_DESK_CONFIRMED');
+    // Still an offer: the packet notice waits for their acceptance.
+    expect(raw.documentService.notifyAcceptedAssayerOfDispatchedPacket).not.toHaveBeenCalled();
   });
 
   it('a new date is written in the same write, and priced for that day', async () => {

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
-import { SystemRole } from '@fapoms/shared';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { APPROVAL_DESTINATIONS, SystemRole, type ApprovalDestination } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AllowPermissionFallback } from '../auth/guards';
 import { OnboardingApprovalService } from './onboarding-approval.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -11,6 +11,12 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
 class ApprovalTextRequestDto {
   @IsOptional() @IsString() @MaxLength(2000)
   text?: string;
+}
+
+/** Approving also says where to: training (the default) or straight to work (2026-09-24). */
+class ApproveRequestDto extends ApprovalTextRequestDto {
+  @IsOptional() @IsIn(APPROVAL_DESTINATIONS as unknown as string[])
+  to?: ApprovalDestination;
 }
 
 /**
@@ -59,6 +65,17 @@ export class OnboardingApprovalController {
     return await this.approvals.history(assayerId);
   }
 
+  /** The interview they joined through, for the approver's review of the whole file. */
+  @Get(':assayerId/approval/interview')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @AllowPermissionFallback()
+  @RequirePermissions('assayer:view:organization')
+  @ApiOperation({ summary: 'The interview a person joined through: result, when, by whom' })
+  async interview(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    return await this.approvals.interviewFor(assayerId);
+  }
+
   @Post(':assayerId/approval/answer')
   @HttpCode(200)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
@@ -87,9 +104,9 @@ export class OnboardingApprovalController {
   @AllowPermissionFallback()
   @RequirePermissions('assayer:approve:organization')
   @ApiOperation({ summary: 'Approve: the person goes on to training' })
-  async approve(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Body() body: ApprovalTextRequestDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+  async approve(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Body() body: ApproveRequestDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
-    return await this.approvals.approve(assayerId, body.text, this.actor(req));
+    return await this.approvals.approve(assayerId, body.text, this.actor(req), body.to ?? 'TRAINING');
   }
 
   @Post(':assayerId/approval/reject')

@@ -69,8 +69,8 @@ describe('Awaiting my approval', () => {
     const heading = await screen.findByRole('heading', { name: /Waiting for your decision/ });
     expect(heading).toHaveTextContent('(1)');
     const link = screen.getByRole('link', { name: /Shivam Kumar/ });
-    // The record's Summary tab carries the approval panel — the same place the notification goes.
-    expect(link).toHaveAttribute('href', '/hr/roster/a-1');
+    // The approver's review: the whole file and the decision on one screen — where the bell goes too.
+    expect(link).toHaveAttribute('href', '/hr/approvals/a-1');
     expect(link).toHaveTextContent('AS0420');
     expect(screen.getByText('Uploaded to Documents.')).toBeInTheDocument();
     expect(screen.getByText(/HR answered:/)).toBeInTheDocument();

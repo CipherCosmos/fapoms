@@ -111,3 +111,35 @@ describe('the approval queue', () => {
     });
   });
 });
+
+/**
+ * THE INTERVIEW ON THE APPROVER'S REVIEW — found the way joining made the person: the application
+ * promoted into their record, and the interview that application came from.
+ */
+describe('the interview a person joined through', () => {
+  const serviceWith = (rows: unknown[]) => {
+    const query = jest.fn(async (_sql: string, _params: unknown[]) => rows);
+    const unitOfWork = { run: jest.fn(async (work: any) => work({ query }, jest.fn())) };
+    const assayerService = { findOne: jest.fn(async () => ({ id: 'a-1' })) };
+    return { service: new OnboardingApprovalService(assayerService as never, {} as never, unitOfWork as never), query, assayerService };
+  };
+
+  it('gives the result, when, and who interviewed them — and nothing of their notes', async () => {
+    const { service, query } = serviceWith([{ outcome: 'PASS', interviewed_at: '2026-09-24T06:23:00Z', interviewed_by_name: 'System Admin', notes: 'private' }]);
+    await expect(service.interviewFor('a-1')).resolves.toEqual({
+      outcome: 'PASS', interviewedAt: '2026-09-24T06:23:00.000Z', interviewedByName: 'System Admin',
+    });
+    expect(query.mock.calls[0][0]).not.toMatch(/notes/);
+  });
+
+  it('is nothing at all for somebody who joined without one — added directly, or imported', async () => {
+    const { service } = serviceWith([]);
+    await expect(service.interviewFor('a-1')).resolves.toBeNull();
+  });
+
+  it('checks the person is one the reader may see before looking', async () => {
+    const { service, assayerService } = serviceWith([]);
+    assayerService.findOne.mockRejectedValueOnce(new Error('Not found'));
+    await expect(service.interviewFor('a-other')).rejects.toThrow(/Not found/);
+  });
+});

@@ -5,7 +5,7 @@ import {
   Check, CheckCircle2, Circle, ExternalLink, FileCheck, Landmark, MapPin, Phone, ShieldCheck,
 } from 'lucide-react';
 import {
-  AssayerLifecycleStatus, assayerLifecycleLabel, nextAssayerLifecycleStates, payoutBlockingGaps,
+  AssayerLifecycleStatus, assayerLifecycleLabel, nextAssayerLifecycleStates,
   IDENTITY_GATE_DOCUMENTS, ONBOARDING_DOCUMENT_LABELS, type OnboardingDocument,
 } from '@fapoms/shared';
 
@@ -22,8 +22,9 @@ import { GeoPrecisionBadge, geoNeedsFixing } from '../../components/GeoPrecision
 import { AssayerVettingTab, ADVERSE_BACKGROUND_VERDICTS, VERDICT_LABELS } from './AssayerVettingTab';
 import { STAGE_CONSEQUENCE } from './AssayerRecord';
 import { QuickRecordForm, PAYOUT_BOXES, CONTACT_BOXES } from './record/QuickRecordForm';
-import { missingCriticalFields, type Assayer } from './assayer-shared';
-import type { AssayerDossier, PaperworkDocument } from './record/record-types';
+import { type Assayer } from './assayer-shared';
+import type { AssayerDossier } from './record/record-types';
+import { activationChecklist, activationBlockers, hasScan, identityItem, type ChecklistItem, type WorkArea } from './joining-readiness';
 
 export interface OnboardingVerificationDrawerProps {
   candidateId: string | null;
@@ -40,7 +41,6 @@ const STEPS: Array<{ key: AssayerLifecycleStatus; title: string }> = [
   { key: AssayerLifecycleStatus.ACTIVE, title: 'Active' },
 ];
 
-type WorkArea = 'documents' | 'background' | 'bank';
 
 const WORK_AREAS: Array<{ key: WorkArea; label: string; icon: React.ElementType }> = [
   { key: 'documents', label: 'Documents', icon: FileCheck },
@@ -57,14 +57,6 @@ const AREA_FOR_STAGE: Partial<Record<string, WorkArea>> = {
   [AssayerLifecycleStatus.ACTIVE]: 'bank',
 };
 
-interface ChecklistItem {
-  label: string;
-  done: boolean;
-  /** When false the item is shown for information and never holds the button back. */
-  blocking: boolean;
-  /** Where the clerk fixes it. */
-  area?: WorkArea;
-}
 
 interface StepPlan {
   next: AssayerLifecycleStatus | null;
@@ -72,14 +64,7 @@ interface StepPlan {
   items: ChecklistItem[];
 }
 
-const hasScan = (d?: PaperworkDocument) => !!d && (d.filePaths ?? []).length > 0;
 
-/** "Checked" for one identity document, in the words the checklist uses. */
-function identityItem(label: string, doc: PaperworkDocument | undefined): ChecklistItem {
-  if (!doc || !hasScan(doc)) return { label: `${label}: scan uploaded and checked`, done: false, blocking: true, area: 'documents' };
-  if (doc.verificationStatus === 'REJECTED') return { label: `${label}: sent back — a new scan is needed`, done: false, blocking: true, area: 'documents' };
-  return { label: `${label}: checked against the original`, done: doc.verificationStatus === 'VERIFIED', blocking: true, area: 'documents' };
-}
 
 /**
  * What the current step needs before its button will be accepted.
@@ -163,41 +148,8 @@ export function planStep(candidate: Assayer, dossier: AssayerDossier | undefined
           },
         ],
       };
-    case AssayerLifecycleStatus.TRAINING: {
-      const gaps = payoutBlockingGaps(candidate as unknown as Record<string, unknown>).map((f) => f.key);
-      /*
-        ONE PAN, IN ONE PLACE.
-
-        This list used to open with a bare "PAN" that sent the desk to a PAN box in the bank form,
-        while the Documents step had its own PAN — the card, its number, its verification. Same
-        number, two forms, two steps, two different things both called "PAN". The number now lives
-        with the card it is printed on, and the one item here says which half is still missing.
-      */
-      const identityItems: ChecklistItem[] = IDENTITY_GATE_DOCUMENTS.map((requirement) => {
-        const row = docs.find((d) => d.requirement === requirement);
-        const label = row?.label ?? ONBOARDING_DOCUMENT_LABELS[requirement as OnboardingDocument] ?? requirement;
-        if (requirement === 'PAN_CARD' && gaps.includes('panNumber')) {
-          return { label: `${label}: its number is not recorded yet`, done: false, blocking: true, area: 'documents' };
-        }
-        return identityItem(label, row);
-      });
-      const items: ChecklistItem[] = [
-        ...identityItems,
-        { label: 'Bank account number', done: !gaps.includes('bankAccountNumber'), blocking: true, area: 'bank' },
-        { label: 'IFSC', done: !gaps.includes('ifscCode'), blocking: true, area: 'bank' },
-        { label: 'Home location pinned', done: candidate.latitude != null && candidate.longitude != null, blocking: true, area: 'bank' },
-      ];
-      if (adverse) {
-        items.push({ label: `Background check result: ${VERDICT_LABELS[verdict!] ?? verdict} — a new check must clear them`, done: false, blocking: true, area: 'background' });
-      }
-      // The rest of the record's key fields. Activation does not wait for them, but the roster
-      // lists a trainee as "ready to activate" only once they are in — so say which are missing.
-      for (const f of missingCriticalFields(candidate)) {
-        if (['panNumber', 'bankAccountNumber', 'ifscCode', 'latitude'].includes(String(f.key))) continue;
-        items.push({ label: f.label, done: false, blocking: false, area: 'bank' });
-      }
-      return { next: AssayerLifecycleStatus.ACTIVE, actionLabel: 'Make them Active', items };
-    }
+    case AssayerLifecycleStatus.TRAINING:
+      return { next: AssayerLifecycleStatus.ACTIVE, actionLabel: 'Make them Active', items: activationChecklist(candidate, dossier) };
     default:
       return { next: null, actionLabel: '', items: [] };
   }
@@ -468,6 +420,8 @@ export const OnboardingVerificationDrawer: React.FC<OnboardingVerificationDrawer
               canApprove={canApprove}
               currentUserId={currentUserId}
               onChanged={() => { onSuccess(); void refreshAll(); }}
+              // What "Approve — make Active" still needs, from the same list the Training step uses.
+              activationBlockers={dossier ? activationBlockers(candidate, dossier) : undefined}
             />
           </div>
         )}

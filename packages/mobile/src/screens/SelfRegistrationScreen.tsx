@@ -3,8 +3,8 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, View } f
 import {
   ApplicationStatus, EmploymentCategory, REGISTRATION_STEP_COUNT,
   applicationFieldStep, inferRegistrationStep, normaliseIdentifierOnBlur, readApplicationInfoRequests, referenceSubmitProblem, registrationStepProblems,
-  resumableRegistrationStep,
-  type ApplicationInfoRequestItem, type RegistrationFormField, type RegistrationFormValues,
+  resumableRegistrationStep, readCandidateJourneyProgress,
+  type ApplicationInfoRequestItem, type CandidateJourneyProgress, type RegistrationFormField, type RegistrationFormValues,
 } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AmbientGlow, AppText, Button, Card, Icon, IconButton, Input, ProgressBar } from '../components/ui/primitives';
@@ -74,6 +74,8 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   const [referencesError, setReferencesError] = useState<string | null>(null);
   /** Exactly what HR asked for — rendered as the to-do list, not one free-text note. */
   const [infoRequests, setInfoRequests] = useState<ApplicationInfoRequestItem[]>([]);
+  /** Where an approved candidate has got to since, and what HR has asked of them — the status screen's. */
+  const [journey, setJourney] = useState<CandidateJourneyProgress | null>(null);
   const [consentNotice, setConsentNotice] = useState<RegistrationHydration['consentNotice'] | null>(null);
 
   const [form, setForm] = useState<RegistrationFormValues | null>(null);
@@ -131,6 +133,8 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
     setDocuments(data.documents);
     setDocumentsRequested(data.documentsRequested);
     setInfoRequests(data.infoRequests ?? []);
+    // Not on the service's declared shape: the shared reader answers null for a server that sends none.
+    setJourney(readCandidateJourneyProgress((data as { journey?: unknown }).journey));
     setReferences(readReferences(data.application));
     setReferencesError(null);
     setConsentNotice(data.consentNotice);
@@ -465,7 +469,7 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
   // ── Render: finished ─────────────────────────────────────────────────────
 
   if (FINISHED_STATUSES.has(application.status)) {
-    return <RegistrationStatus application={application} onExit={onExit} />;
+    return <RegistrationStatus application={application} journey={journey} onExit={onExit} />;
   }
 
   // ── Render: the notice, then the four steps ──────────────────────────────
@@ -529,9 +533,11 @@ export const SelfRegistrationScreen: React.FC<SelfRegistrationScreenProps> = ({ 
               <Card level={1} style={{ gap: t.space.sm, borderColor: t.colors.warning, borderWidth: 1 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
                   <Icon name="information-circle" size={20} color={t.colors.warning} />
+                  {/* HR's ask in HR's voice — the web link's form says the same words. */}
                   <AppText variant="bodyStrong" style={{ flex: 1 }}>
-                    {tr('selfRegistration.status.awaitingInfoTitle')}
-                    {infoRequests.length > 0 ? ` (${infoRequests.length})` : ''}
+                    {infoRequests.length > 0
+                      ? tr('selfRegistration.journey.fixHeading')
+                      : tr('selfRegistration.status.awaitingInfoTitle')}
                   </AppText>
                 </View>
                 {infoRequests.length > 0 ? (

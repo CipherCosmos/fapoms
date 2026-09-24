@@ -19,6 +19,9 @@
  * key union — a mistyped plural branch is then a compile error rather than a sentence that
  * renders as `[missing …]` only when a count happens to be 1.
  */
+import {
+  CANDIDATE_JOURNEY_NEXT_WORDS, CANDIDATE_JOURNEY_STEP_WORDS, CANDIDATE_JOURNEY_WORDS,
+} from '@fapoms/shared';
 import type { CatalogueNode } from '../catalogue';
 
 export const en = {
@@ -573,7 +576,6 @@ export const en = {
     status: {
       pendingTitle: 'Submitted. HR will call you.',
       approvedTitle: 'Approved.',
-      approvedBody: 'Your coordinator will call you about work.',
       rejectedTitle: 'Not approved.',
       reviewNote: 'Review note: %{note}',
       withdrawnTitle: 'Withdrawn.',
@@ -584,6 +586,17 @@ export const en = {
       refLabel: 'Your reference',
       help: 'Questions? Contact the HR person who invited you.',
     },
+
+    /**
+     * The road after the form: the steps, the one "what happens next" sentence, the paused line and
+     * the headings of HR's asks. The English is not written out here — it is `candidate-journey.ts`
+     * in @fapoms/shared, which the web link draws the same page from, so the phone and the browser
+     * cannot drift into saying different things. A translation still goes under these keys in its
+     * own locale file, like any other.
+     */
+    journeySteps: CANDIDATE_JOURNEY_STEP_WORDS,
+    journeyNext: CANDIDATE_JOURNEY_NEXT_WORDS,
+    journey: CANDIDATE_JOURNEY_WORDS,
   },
 
   /**

@@ -55,6 +55,7 @@ import {
 } from '../../services/queryInvalidation';
 
 // Domain and modular command center components
+import { activationBlockers as joiningReadinessGaps } from './joining-readiness';
 import type { AssayerDossier, FrozenPayableItem, ActiveAssignment } from './record/record-types';
 import { DeploymentReadinessCard } from './record/DeploymentReadinessCard';
 import { KycReadinessCard } from './record/KycReadinessCard';
@@ -1083,6 +1084,9 @@ export const AssayerRecord: React.FC<{
                     loadActivity();
                     onChanged();
                   }}
+                  // What "Approve — make Active" still needs — the rule the joining drawer and the
+                  // approver's review use (`joining-readiness.ts`), identity documents included.
+                  activationBlockers={dossier ? joiningReadinessGaps(a as Assayer, dossier) : undefined}
                 />
 
                 {canManage && transitions.length > 0 && (

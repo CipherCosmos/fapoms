@@ -40,7 +40,7 @@ import { AssayerUnavailableReason } from './assayer-roster-vocabulary';
  * illegal and are the pairs a naive `includes` check is most likely to get wrong.
  */
 
-/** The 27 edges the business actually permits, keyed `FROM->TO`. */
+/** The 28 edges the business actually permits, keyed `FROM->TO`. */
 const LEGAL_EDGES: ReadonlySet<string> = new Set([
   // Joining. One way in, one stage at a time; the chain cannot be short-circuited.
   'INVITED->DOCUMENT_VERIFICATION',
@@ -56,6 +56,8 @@ const LEGAL_EDGES: ReadonlySet<string> = new Set([
   // reached only through it.
   'BACKGROUND_VERIFICATION->FINAL_APPROVAL',
   'FINAL_APPROVAL->TRAINING',
+  // Or straight to work, when the approver decides training is not needed (2026-09-24).
+  'FINAL_APPROVAL->ACTIVE',
   'TRAINING->ACTIVE',
 
   // Abandoning the joining chain part-way. Every stage after INVITED can be parked.
@@ -122,13 +124,13 @@ describe('the assayer lifecycle graph', () => {
     ]);
   });
 
-  it('permits exactly twenty-seven edges and no others', () => {
+  it('permits exactly twenty-eight edges and no others', () => {
     const actual = new Set<string>();
     for (const from of ALL_STATES) {
       for (const to of ASSAYER_LIFECYCLE_TRANSITIONS[from] ?? []) actual.add(`${from}->${to}`);
     }
     expect([...actual].sort()).toEqual([...LEGAL_EDGES].sort());
-    expect(actual.size).toBe(27);
+    expect(actual.size).toBe(28);
   });
 
   /**
@@ -142,7 +144,8 @@ describe('the assayer lifecycle graph', () => {
       // Offered as the map says, except the four edges that are decisions or re-opens, which
       // `offered edges` below pins one by one.
       const conditional = [
-        'FINAL_APPROVAL->TRAINING', 'FINAL_APPROVAL->INACTIVE', 'INACTIVE->BACKGROUND_VERIFICATION', 'INACTIVE->FINAL_APPROVAL',
+        'FINAL_APPROVAL->TRAINING', 'FINAL_APPROVAL->ACTIVE', 'FINAL_APPROVAL->INACTIVE',
+        'INACTIVE->BACKGROUND_VERIFICATION', 'INACTIVE->FINAL_APPROVAL',
       ].includes(`${from}->${to}`);
       if (!conditional) expect(nextAssayerLifecycleStates(from).includes(to)).toBe(expected);
     });
@@ -324,9 +327,14 @@ describe('the shape of the joining chain', () => {
       if (stage === AssayerLifecycleStatus.INVITED) continue;
       expect(canTransitionAssayerLifecycle(stage, AssayerLifecycleStatus.INACTIVE)).toBe(true);
     }
-    // ACTIVE is reachable from the last joining stage and from nowhere earlier in the chain.
+    /*
+      ACTIVE is reachable from training, and from the approver's decision (2026-09-24: "after
+      approving the approver can also send them to training or make them active") — and from nowhere
+      earlier. HR's checks — documents, background — can never be skipped on the way to work; only
+      training can, and only by the senior who approves them.
+    */
     for (const stage of ONBOARDING_STAGES) {
-      const expected = stage === AssayerLifecycleStatus.TRAINING;
+      const expected = stage === AssayerLifecycleStatus.TRAINING || stage === AssayerLifecycleStatus.FINAL_APPROVAL;
       expect(canTransitionAssayerLifecycle(stage, AssayerLifecycleStatus.ACTIVE)).toBe(expected);
     }
   });

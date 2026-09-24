@@ -116,3 +116,6 @@ export * from './onboarding-approval';
 export * from './periodic-checks';
 export * from './record-capabilities';
 export * from './check-in-rules';
+// The candidate's road from the registration form to their first job — the one step list, and the
+// words for it, that the web link and the phone app both show after the form is sent.
+export * from './candidate-journey';

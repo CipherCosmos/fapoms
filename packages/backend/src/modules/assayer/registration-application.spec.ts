@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import {
   ApplicationStatus, EmploymentCategory, OnboardingDocument, ApplicationSource, ASSAYER_ERROR_CODES,
+  AssayerLifecycleStatus, AssayerUnavailableReason, ONBOARDING_DOCUMENT_LABELS,
 } from '@fapoms/shared';
 
 import {
@@ -350,6 +351,171 @@ describe('the registration link after the form is submitted', () => {
     const { service } = makeService({ application: withProfile(ApplicationStatus.APPROVED) });
     await expect(service.documentFileKeyForToken(RAW_TOKEN, 'PAN_CARD' as never, 0))
       .rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+/**
+ * WHAT THE LINK SAYS AFTER APPROVAL — the candidate's road on to their first job.
+ *
+ * The page stopped at "Approved" while documents, a background check, a final approval and perhaps
+ * training still lay ahead, and HR could ask for a document again with nothing there to say so.
+ * The link now says where they are and what is asked. It is unauthenticated, so the second half of
+ * this block matters more than the first: it pins what the link must NOT say.
+ */
+describe('the registration link after approval', () => {
+  const approved = () => ({
+    id: 'app-1', mobile: '9822014455', email: 'candidate@example.com', fullName: 'Ramesh Kulkarni',
+    status: ApplicationStatus.APPROVED, tokenHash: TOKEN_HASH, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+    tokenConsumedAt: new Date(), employmentCategory: 'FREELANCER', organizationId: 'org-1',
+    promotedAssayerId: 'assayer-1',
+  });
+
+  /**
+   * The person as the database could hand them back, and then some. The service asks for two
+   * columns; this double answers with everything, so a service that copied the row through would
+   * show it here rather than getting away with it because a real `select` happened to trim it.
+   */
+  const person = (lifecycleStatus: AssayerLifecycleStatus, extra: Record<string, unknown> = {}) => ({
+    id: 'assayer-1', lifecycleStatus, assayerCode: 'AS0009', displayName: 'Ramesh Kulkarni',
+    panNumber: 'ABCDE1234F', ...extra,
+  });
+
+  const open = async (who: Row | null, gates: Row[] = []) => {
+    const ctx = makeService({ application: approved() }) as any;
+    ctx.assayers.findOne.mockResolvedValue(who);
+    ctx.rosterRecords.selfDocumentGates = jest.fn(async () => gates);
+    const view = await ctx.service.hydrate(RAW_TOKEN);
+    return { ...ctx, view };
+  };
+
+  it('says which step the record is at, in the candidate\'s terms', async () => {
+    const { view } = await open(person(AssayerLifecycleStatus.BACKGROUND_VERIFICATION));
+    expect(view.journey).toEqual({ stage: 'BACKGROUND', paused: false, asks: [] });
+  });
+
+  it('names what HR has asked them to send again, in HR\'s words', async () => {
+    const { view, rosterRecords } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION), [
+      { requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: '  The number is cut off at the bottom, please retake.  ' },
+      { requirement: OnboardingDocument.AADHAAR_FRONT, mode: 'locked', code: 'DOCUMENT_VERIFIED_LOCKED', reason: 'HR has verified this.' },
+      { requirement: OnboardingDocument.PHOTOGRAPH, mode: 'direct' },
+      { requirement: OnboardingDocument.BANK_PASSBOOK, mode: 'reopened', hrNote: null },
+    ]);
+
+    expect(view.journey.asks).toEqual([
+      { requirement: 'PAN_CARD', label: ONBOARDING_DOCUMENT_LABELS.PAN_CARD, note: 'The number is cut off at the bottom, please retake.' },
+      { requirement: 'BANK_PASSBOOK', label: ONBOARDING_DOCUMENT_LABELS.BANK_PASSBOOK, note: null },
+    ]);
+    // The same rule the phone app is told (`GET /assayers/me/capabilities`), for this person.
+    expect(rosterRecords.selfDocumentGates).toHaveBeenCalledWith('assayer-1', expect.arrayContaining([
+      OnboardingDocument.PHOTOGRAPH, OnboardingDocument.PAN_CARD, OnboardingDocument.BANK_PASSBOOK,
+    ]));
+  });
+
+  it('shows nothing past approval for an application that was never approved', async () => {
+    for (const status of [ApplicationStatus.PENDING_VALIDATION, ApplicationStatus.REJECTED, ApplicationStatus.DRAFT]) {
+      const ctx = makeService({ application: { ...approved(), status } }) as any;
+      const view = await ctx.service.hydrate(RAW_TOKEN);
+      expect(view.journey).toBeNull();
+      expect(ctx.assayers.findOne).not.toHaveBeenCalled();
+    }
+  });
+
+  /** A status page that will not open is worse than one that only says "Approved". */
+  it('still opens when the record cannot be read', async () => {
+    const ctx = makeService({ application: approved() }) as any;
+    ctx.assayers.findOne.mockResolvedValue(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION));
+    ctx.rosterRecords.selfDocumentGates = jest.fn(async () => { throw new Error('connection reset'); });
+    const view = await ctx.service.hydrate(RAW_TOKEN);
+    expect(view.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(view.journey).toBeNull();
+  });
+
+  describe('what it must not say', () => {
+    /**
+     * A failed background check and a refused approval are HR's to explain, by phone. Whoever
+     * holds the link — a forwarded message, a shared phone, a proxy log — must learn nothing from
+     * it, so the two, and every other way of being parked, answer byte for byte the same.
+     */
+    it('answers identically for a failed background check, a refused approval and any other pause', async () => {
+      const answers = [];
+      for (const [lifecycle, reason] of [
+        [AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.BGV_FAILED],
+        [AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.APPROVAL_REJECTED],
+        [AssayerLifecycleStatus.INACTIVE, AssayerUnavailableReason.NOT_INTERESTED],
+        [AssayerLifecycleStatus.SUSPENDED, null],
+      ] as const) {
+        const { view } = await open(person(lifecycle, { unavailableReason: reason }), [
+          { requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: 'Retake it.' },
+        ]);
+        answers.push(JSON.stringify(view.journey));
+      }
+      expect(new Set(answers)).toEqual(new Set([JSON.stringify({ stage: null, paused: true, asks: [] })]));
+    });
+
+    it('leaks no verdict, finding, agency, approver, reason or raw lifecycle through the page', async () => {
+      const { view } = await open(person(AssayerLifecycleStatus.INACTIVE, {
+        unavailableReason: AssayerUnavailableReason.BGV_FAILED,
+        backgroundCheckVerdict: 'CRIMINAL_CASE',
+        bgvAgency: 'Sentinel Verifications Pvt Ltd',
+        bgvFindings: 'Two criminal cases pending in Pune.',
+        approvedByName: 'Shivam Kumar',
+        approvalComment: 'Not suitable for the branch network.',
+        remarks: 'Internal: do not re-engage.',
+      }));
+      const text = JSON.stringify(view);
+      for (const secret of [
+        'BGV_FAILED', 'INACTIVE', 'CRIMINAL_CASE', 'Sentinel', 'criminal cases', 'Shivam', 'Not suitable',
+        'do not re-engage', 'ABCDE1234F', 'AS0009',
+      ]) {
+        expect(text).not.toContain(secret);
+      }
+    });
+
+    /** The step goes out as the candidate's word for it, not as the lifecycle value. */
+    it('sends the step, never the lifecycle value itself', async () => {
+      const { view } = await open(person(AssayerLifecycleStatus.FINAL_APPROVAL));
+      expect(Object.keys(view.journey).sort()).toEqual(['asks', 'paused', 'stage']);
+      expect(view.journey.stage).toBe('APPROVAL');
+      expect(JSON.stringify(view)).not.toContain('FINAL_APPROVAL');
+    });
+
+    /**
+     * Of a sent-back document, the link carries its key, its name and the sentence written for the
+     * candidate. Nothing else the gate or the row holds — codes, file keys, the reviewer's remarks.
+     */
+    it('says only which document and what to do about it', async () => {
+      const { view } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION), [{
+        requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: 'Retake it in daylight.',
+        code: 'SOMETHING_INTERNAL', reason: 'internal reason', filePaths: ['uploads/pan.jpg'], remarks: 'reviewer remark',
+      }]);
+      expect(view.journey.asks).toEqual([{ requirement: 'PAN_CARD', label: ONBOARDING_DOCUMENT_LABELS.PAN_CARD, note: 'Retake it in daylight.' }]);
+    });
+
+    /**
+     * The company's own paperwork about a person is never asked for through the link — above all
+     * the background-verification report and the re-checks filed like it. The service asks only
+     * about documents the candidate holds, so such a row cannot reach the page even if one were
+     * ever marked as sent back.
+     */
+    it('never asks about the background report or any other company paperwork', async () => {
+      const { rosterRecords } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION));
+      const asked: string[] = rosterRecords.selfDocumentGates.mock.calls[0][1];
+      for (const internal of [
+        OnboardingDocument.BGV_REPORT, OnboardingDocument.POLICE_CERTIFICATE, OnboardingDocument.CREDIT_REPORT,
+        OnboardingDocument.REFERENCE_CHECK, OnboardingDocument.GOVERNANCE_AUDIT, OnboardingDocument.APPOINTMENT_LETTER,
+      ]) {
+        expect(asked).not.toContain(internal);
+      }
+    });
+
+    /** Read-only: answering an ask stays behind the assayer's own sign-in, in the app. */
+    it('changes nothing on the record by being opened', async () => {
+      const { assayers, rosterRecords } = await open(person(AssayerLifecycleStatus.DOCUMENT_VERIFICATION), [
+        { requirement: OnboardingDocument.PAN_CARD, mode: 'reopened', hrNote: 'Retake it.' },
+      ]);
+      expect(assayers.update).not.toHaveBeenCalled();
+      expect(rosterRecords.attachFile).not.toHaveBeenCalled();
+    });
   });
 });
 

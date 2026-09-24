@@ -356,6 +356,7 @@ const mockNotificationService = {
             findByProjectBranch: jest.fn().mockResolvedValue([]),
             findDispatchedForAssayer: jest.fn().mockResolvedValue({ documents: [], readiness: {} }),
             dispatchDocument: jest.fn(),
+            notifyAcceptedAssayerOfDispatchedPacket: jest.fn().mockResolvedValue(0),
           },
         },
         { provide: FeePolicyService, useValue: mockFeePolicyService },
@@ -665,6 +666,11 @@ const mockNotificationService = {
       const result = await service.acceptOffer('asn-1', 'user-1', 2000);
       expect(result.status).toBe(AssignmentStatus.ACCEPTED);
       expect(result.agreedFee).toBe(2000);
+      // A packet already dispatched to the branch is announced to whoever just accepted.
+      const docs = (service as any).documentService;
+      expect(docs.notifyAcceptedAssayerOfDispatchedPacket).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'asn-1' }), 'user-1',
+      );
       expect(assignment.projectBranch.status).toBe(ProjectBranchStatus.ASSIGNMENT_CONFIRMED);
       // Confirming via the real ProjectBranchStateMachine (not a raw status mutation) must
       // also publish the domain event so real-time subscribers get notified.

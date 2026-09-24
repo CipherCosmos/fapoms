@@ -19,12 +19,15 @@ describe('background verification is mandatory to finish onboarding', () => {
     parkedFrom?: AssayerLifecycleStatus | null;
     mode?: string;
     unavailableReason?: AssayerUnavailableReason | null;
+    /** Fields to change on the person — a missing bank account, a missing map pin. */
+    record?: Record<string, unknown>;
   }) => {
     const row = () => ({
       id: 'asr-1', displayName: 'Ramesh Kumar', lifecycleStatus: opts.from, version: 3,
       unavailableReason: opts.unavailableReason ?? null,
       panNumber: 'ABCDE1234F', bankAccountNumber: '123456789012', ifscCode: 'HDFC0001234',
       latitude: 19.076, longitude: 72.877,
+      ...opts.record,
     });
     const svc: any = Object.create(AssayerService.prototype);
     svc.logger = { warn: jest.fn(), log: jest.fn() };
@@ -205,6 +208,62 @@ describe('background verification is mandatory to finish onboarding', () => {
       const { saved } = await d.run();
       expect(saved.lifecycleStatus).toBe(AssayerLifecycleStatus.TRAINING);
       expect(d.inTransaction).toHaveBeenCalled();
+    });
+
+    /**
+     * STRAIGHT TO WORK (owner, 2026-09-24: "after approving the approver can also send them to
+     * training or make them active"). Training may be skipped — by the approver, and only by the
+     * approver — but nothing joining requires is: the background check with its report, the
+     * identity documents, the bank account and the map pin are all asked for on this road too.
+     */
+    describe('approved straight to work', () => {
+      it('is not reached by a plain move — only by the approval', async () => {
+        const svc = serviceWith({ from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true });
+        await expect(move(svc, AssayerLifecycleStatus.ACTIVE)).rejects.toThrow(/made Active by being approved/);
+      });
+
+      it('makes them Active when approved that way, recording the decision in the same transaction', async () => {
+        const svc = serviceWith({ from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true });
+        const d = decide(svc, AssayerLifecycleStatus.ACTIVE, 'APPROVED');
+        const { saved } = await d.run();
+        expect(saved.lifecycleStatus).toBe(AssayerLifecycleStatus.ACTIVE);
+        expect(d.inTransaction).toHaveBeenCalled();
+      });
+
+      /** The approver's choice is what decides where they go — through the one door the approval uses. */
+      it('sends them where the approver chose: straight to work, or training when nothing else is said', async () => {
+        const svc = serviceWith({ from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true });
+        svc.cache = { del: jest.fn().mockResolvedValue(undefined) };
+        const record = jest.fn(async () => undefined);
+
+        const active = await svc.decideFinalApproval('asr-1', 'APPROVED', 'boss-1', 'Approved to join', record, 'ACTIVE');
+        expect(active.lifecycleStatus).toBe(AssayerLifecycleStatus.ACTIVE);
+
+        const trained = await svc.decideFinalApproval('asr-1', 'APPROVED', 'boss-1', 'Approved to join', record);
+        expect(trained.lifecycleStatus).toBe(AssayerLifecycleStatus.TRAINING);
+      });
+
+      it('still needs a bank account — and records no decision when it is refused', async () => {
+        const svc = serviceWith({ from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true, record: { bankAccountNumber: null } });
+        const d = decide(svc, AssayerLifecycleStatus.ACTIVE, 'APPROVED');
+        await expect(d.run()).rejects.toThrow(/cannot be activated yet/);
+        expect(d.inTransaction).not.toHaveBeenCalled();
+      });
+
+      it('still needs the map pin', async () => {
+        const svc = serviceWith({ from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: true, record: { latitude: null } });
+        await expect(decide(svc, AssayerLifecycleStatus.ACTIVE, 'APPROVED').run()).rejects.toThrow(/no map coordinates/);
+      });
+
+      /**
+       * The joining gate, not the working-return one. Somebody coming back from leave is only
+       * refused on an adverse check; somebody joining needs a clear check AND its report — and
+       * skipping training must not be a way round the second half.
+       */
+      it('still needs the background check\'s report, as joining does', async () => {
+        const svc = serviceWith({ from, verdict: BackgroundCheckVerdict.CLEAR, reportOnFile: false });
+        await expect(decide(svc, AssayerLifecycleStatus.ACTIVE, 'APPROVED').run()).rejects.toThrow(/report has not been uploaded/);
+      });
     });
 
     it('is parked as not approved when rejected', async () => {

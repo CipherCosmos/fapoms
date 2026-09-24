@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check, Loader2, Phone, ShieldCheck, ArrowLeft, CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck, MapPin, Landmark, Users, Info, HelpCircle, Award, UserPlus, MinusCircle, ChevronRight,
+  Check, Loader2, Phone, ShieldCheck, ArrowLeft, CheckCircle2, AlertCircle, User, Briefcase, CreditCard, FileCheck, MapPin, Landmark, Users, Info, HelpCircle, Award, UserPlus, MinusCircle, ChevronRight, PauseCircle,
 } from 'lucide-react';
 import {
   ApplicationStatus, EmploymentCategory, ONBOARDING_DOCUMENT_LABELS,
@@ -11,6 +11,7 @@ import {
   type ApplicationInfoRequestItem, readApplicationInfoRequests, applicationFieldStep,
   type RegistrationFormField, type RegistrationFormValues, type RegistrationProblem,
   normalizeSourceReferral, candidateMayEditSourceReferral, sourceReferralLine, type SourceReferral,
+  CANDIDATE_JOURNEY_WORDS, candidateJourney, readCandidateJourneyProgress, type CandidateJourneyProgress,
 } from '@fapoms/shared';
 import {
   SourceReferralFields, EMPTY_REFERRAL, referralDraftFrom, referralPayload, type SourceReferralDraft,
@@ -47,6 +48,7 @@ import PrimaryButton from './registration/PrimaryButton';
 import { FORM_CSS, PublicMasthead } from './registration/PublicShell';
 import ConsentGate from './registration/ConsentGate';
 import { DocumentThumb } from './registration/DocumentThumb';
+import { CandidateAsks, CandidateJourneySteps } from './registration/CandidateJourney';
 import { blobBytes } from '../components/scanner/jpeg-pages-to-pdf';
 
 /**
@@ -475,9 +477,12 @@ const CATEGORY_CARDS: Array<{
 ];
 
 /**
- * What a finished application says — one heading and one line (owner, 2026-09-24: "keep things
- * simple"). The same four outcomes, in the same words where they carry weight, as the phone app's
- * `RegistrationStatus`; withdrawn is neutral there too, not a green tick.
+ * What a finished application says — one heading and at most one line (owner, 2026-09-24: "keep
+ * things simple"). The same four outcomes, in the same words where they carry weight, as the phone
+ * app's `RegistrationStatus`; withdrawn is neutral there too, not a green tick.
+ *
+ * Submitted and approved say no more than their heading here: the road ahead — the steps and the
+ * one sentence about what happens next — is `candidateJourney`'s, drawn under the heading.
  */
 const STATUS_VIEW: Partial<Record<ApplicationStatus, (app: RegistrationApplication) => {
   tone: 'success' | 'danger' | 'neutral';
@@ -490,7 +495,7 @@ const STATUS_VIEW: Partial<Record<ApplicationStatus, (app: RegistrationApplicati
   [ApplicationStatus.APPROVED]: (app) => ({
     tone: 'success',
     title: `Approved${app.fullName ? ` — welcome, ${app.fullName}` : ''}.`,
-    body: 'HR will call you about your first work.',
+    body: null,
   }),
   [ApplicationStatus.REJECTED]: (app) => ({
     tone: 'danger',
@@ -618,6 +623,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
    * banner. Entries clear themselves as the candidate fixes each item.
    */
   const [infoRequests, setInfoRequests] = useState<ApplicationInfoRequestItem[]>([]);
+  /** Where an approved candidate has got to since, and what HR has asked of them — from the server. */
+  const [journeyProgress, setJourneyProgress] = useState<CandidateJourneyProgress | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
 
   /*
@@ -725,6 +732,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       setDocumentsRequested(result.documentsRequested);
       setDocuments(result.documents);
       setInfoRequests(result.infoRequests ?? []);
+      // Not on the service's declared shape: read through the shared reader, which answers null
+      // for a server that sends none.
+      setJourneyProgress(readCandidateJourneyProgress((result as { journey?: unknown }).journey));
       const seeded = seedForm(result.application);
       setForm(seeded);
       setReferences(readCandidateReferences(result.application));
@@ -893,7 +903,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
       const saved = await updateRegistrationDraft(token, patch);
       setApplication(saved);
       // The server drops an ask the moment its field actually changes; read the list back so the
-      // "Action needed" box shrinks as they fix things, the same way a re-uploaded scan does.
+      // "HR has asked you to fix these" box shrinks as they fix things, the same way a re-uploaded scan does.
       if ('infoRequests' in (saved as object)) {
         setInfoRequests(readApplicationInfoRequests((saved as { infoRequests?: unknown }).infoRequests));
       }
@@ -1401,7 +1411,8 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
   // ── Loading, a link that does not work, and a finished application ────────
   //
   // Each is one heading and at most one line (owner, 2026-09-24: "keep things simple and
-  // straightforward"). The phone app's `RegistrationStatus` says the same things.
+  // straightforward") — plus, for a submitted or approved application, the short list of steps
+  // still ahead. The phone app's `RegistrationStatus` says the same things.
   const shortScreen = (body: React.ReactNode, tone?: 'success' | 'danger' | 'neutral') => (
     <div className="pub-reg-root">
       <style>{FORM_CSS}</style>
@@ -1446,15 +1457,29 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
     );
   }
 
-  const statusView = STATUS_VIEW[application.status]?.(application);
+  /*
+    THE ROAD AHEAD, UNDER THE HEADING.
+
+    Submitted and approved applications also show the steps still to come and the one sentence
+    about what happens next (`candidateJourney`, shared with the phone app). Anything HR has asked
+    of an approved candidate goes first. A paused joiner is told only that, in the same words
+    whatever paused them — the link is not the place to learn how a check or an approval went.
+  */
+  const journey = candidateJourney(application.status, journeyProgress);
+  const baseStatusView = STATUS_VIEW[application.status]?.(application);
+  const statusView = baseStatusView && journey?.paused
+    ? { tone: 'neutral' as const, title: CANDIDATE_JOURNEY_WORDS.pausedTitle, body: CANDIDATE_JOURNEY_WORDS.pausedBody }
+    : baseStatusView;
   if (statusView) {
     const withdrawn = application.status === ApplicationStatus.WITHDRAWN;
     const colour = statusView.tone === 'danger' ? 'var(--danger)' : statusView.tone === 'success' ? 'var(--success)' : 'var(--text-muted)';
     const Icon = statusView.tone === 'danger' ? AlertCircle
       : withdrawn ? MinusCircle
-        : application.status === ApplicationStatus.APPROVED ? Award : CheckCircle2;
+        : journey?.paused ? PauseCircle
+          : application.status === ApplicationStatus.APPROVED ? Award : CheckCircle2;
     return shortScreen(
       <>
+        {journey && journey.asks.length > 0 && <CandidateAsks asks={journey.asks} />}
         <Icon size={40} style={{ color: colour }} />
         <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
           {statusView.title}
@@ -1464,6 +1489,7 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
             {statusView.body}
           </p>
         )}
+        {journey && !journey.paused && <CandidateJourneySteps view={journey} />}
         {/* A withdrawn application has nothing left to quote: its details were deleted. */}
         {!withdrawn && (
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
@@ -1628,8 +1654,9 @@ export const PublicRegistration: React.FC<{ token: string }> = ({ token }) => {
                   }}>
                     {infoRequests.length > 0 ? infoRequests.length : '!'}
                   </span>
+                  {/* HR's ask in HR's voice — the phone app's form says the same words. */}
                   <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                    Action needed
+                    {infoRequests.length > 0 ? CANDIDATE_JOURNEY_WORDS.fixHeading : 'Action needed'}
                   </span>
                 </div>
                 {infoRequests.length > 0 ? (

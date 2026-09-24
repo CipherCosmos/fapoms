@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Linking, Platform, StyleSheet, View } from 'react-native';
 import { useRoute, type RouteProp } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
 import type { AssayerAssignment } from '../../types/mobile-app';
@@ -9,6 +9,8 @@ import { permissionStep, type PermissionStep } from '../background/permission-fl
 import { declineArrivalPermission, ensureForegroundLocation, requestArrivalPermission } from '../background/permission-request';
 import { actionsFor, jobStep, partitionToday, type ActionView } from '../data/job-view';
 import { useJobs } from '../data/useJobs';
+import { canOpenPapers, openBranchPapers, papersBeingPrepared } from '../data/packet';
+import { MobileApiService } from '../../services/api.service';
 import { useT } from '../i18n/I18nProvider';
 import { formatDay, formatDayTime } from '../i18n/format';
 import type { TranslationKey } from '../i18n/catalogues';
@@ -83,6 +85,57 @@ export const TodayScreen: React.FC = () => {
     },
     [refresh, t, toast],
   );
+
+  /**
+   * The branch's audit papers, once the assayer has reached the branch and operations has sent
+   * them — the old app's "Download packet", through the same two calls.
+   */
+  const [openingPapersFor, setOpeningPapersFor] = useState<string | null>(null);
+  const onOpenPapers = useCallback(
+    async (job: AssayerAssignment) => {
+      if (openingPapersFor) return;
+      setOpeningPapersFor(job.id);
+      try {
+        const outcome = await openBranchPapers(job.projectBranchId, {
+          getBranchDocuments: (id) => MobileApiService.getBranchDocuments(id),
+          getDocumentDownloadUrl: (id) => MobileApiService.getDocumentDownloadUrl(id),
+          openURL: (url) => Linking.openURL(url),
+        });
+        if (outcome.kind === 'not-sent') toast.show('error', t('today.papers.notSent'));
+        else if (outcome.kind === 'not-available') toast.show('error', t('today.papers.notAvailable'));
+        else if (outcome.kind === 'session-ended') toast.show('error', t('today.papers.sessionEnded'));
+        else if (outcome.kind === 'failed') toast.show('error', t('today.papers.failed'));
+      } finally {
+        setOpeningPapersFor(null);
+      }
+    },
+    [openingPapersFor, t, toast],
+  );
+
+  const papersBlock = (job: AssayerAssignment) => {
+    if (canOpenPapers(job)) {
+      return (
+        <Button
+          label={openingPapersFor === job.id ? t('today.papers.opening') : t('today.papers.open')}
+          icon="document-text-outline"
+          variant="quiet"
+          disabled={openingPapersFor !== null}
+          onPress={() => void onOpenPapers(job)}
+        />
+      );
+    }
+    if (papersBeingPrepared(job)) {
+      return (
+        <View style={styles.why}>
+          <Icon name="time-outline" size={20} color="inkSecondary" />
+          <Text variant="secondary" style={styles.flex}>
+            {t('today.papers.preparing')}
+          </Text>
+        </View>
+      );
+    }
+    return null;
+  };
 
   const actionsBlock = (job: AssayerAssignment) => {
     const views = actionsFor(job);
@@ -187,6 +240,7 @@ export const TodayScreen: React.FC = () => {
           {jobHeader(parts.now)}
           {jobStep(parts.now) != null ? <StepBar steps={stepLabels} current={jobStep(parts.now) ?? 0} /> : null}
           {actionsBlock(parts.now)}
+          {papersBlock(parts.now)}
           {permission === 'fallback' && parts.now.status === 'ACCEPTED' && !parts.now.checkedInAt ? (
             <Text variant="secondary">{t('arrival.offNote')}</Text>
           ) : null}
@@ -209,6 +263,7 @@ export const TodayScreen: React.FC = () => {
             <View key={job.id} style={[styles.laterRow, highlighted === job.id && styles.highlight]}>
               {jobHeader(job)}
               {actionsBlock(job)}
+              {papersBlock(job)}
             </View>
           ))}
         </View>

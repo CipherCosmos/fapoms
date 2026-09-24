@@ -50,13 +50,17 @@ export const ASSAYER_LIFECYCLE_TRANSITIONS: Record<string, AssayerLifecycleStatu
     AssayerLifecycleStatus.INACTIVE,
   ],
   /**
-   * The senior's decision (2026-09-23). Both ways out are the approver's: TRAINING by approving,
-   * INACTIVE by rejecting with a reason (stamped APPROVAL_REJECTED). The service refuses either move
-   * from anywhere else, and neither is offered as a stage button (`nextAssayerLifecycleStates`).
+   * The senior's decision (2026-09-23). Every way out is the approver's: approving sends them to
+   * TRAINING or — the owner's call on 2026-09-24, "after approving the approver can also send them to
+   * training or make them active" — straight to ACTIVE; rejecting with a reason parks them INACTIVE
+   * (stamped APPROVAL_REJECTED). The service refuses each move from anywhere but the decision, and
+   * none is offered as a stage button (`nextAssayerLifecycleStates`). Straight to ACTIVE still has to
+   * pass everything activation asks — the background check, identity documents, bank, location.
    * Somebody who withdraws while awaiting approval is rejected with that as the reason.
    */
   [AssayerLifecycleStatus.FINAL_APPROVAL]: [
     AssayerLifecycleStatus.TRAINING,
+    AssayerLifecycleStatus.ACTIVE,
     AssayerLifecycleStatus.INACTIVE,
   ],
   [AssayerLifecycleStatus.TRAINING]: [
@@ -166,7 +170,7 @@ export const ONBOARDING_NEXT_STEP: Record<string, string> = {
   [AssayerLifecycleStatus.INVITED]: 'invited — start document verification on the HR roster',
   [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'in document verification — complete it on the HR roster',
   [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'in background verification — complete it on the HR roster',
-  [AssayerLifecycleStatus.FINAL_APPROVAL]: 'awaiting approval — a senior approves them on the HR roster before training',
+  [AssayerLifecycleStatus.FINAL_APPROVAL]: 'awaiting approval — a senior approves them on the HR roster, on to training or straight to active',
   [AssayerLifecycleStatus.TRAINING]: 'in training — mark training complete on the HR roster to activate',
 };
 
