@@ -16,6 +16,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, '..', '..', 'docs', 'reorganization', 'snapshots');
 const CHECKS = [
   ['G1', 'backend-routes.txt', 'snapshot-backend-routes.mjs'],
+  ['G3', 'entity-schema.txt', 'snapshot-schema.cjs'],
   ['G4', 'web-routes.txt', 'snapshot-web-routes.mjs'],
   ['G5', 'shared-exports.txt', 'snapshot-shared-exports.mjs'],
 ];

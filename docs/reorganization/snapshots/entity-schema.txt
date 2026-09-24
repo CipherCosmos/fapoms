@@ -1,0 +1,2170 @@
+# Entity schema — 92 tables
+
+TABLE activity_telemetry
+  col event_type: varchar(len=24) not-null
+  col id: uuid PK not-null gen:uuid
+  col ip_address: varchar(len=50) null
+  col label: varchar(len=160) null
+  col metadata: jsonb null
+  col occurred_at: timestamptz not-null default=fn:now() createDate
+  col path: varchar(len=300) null
+  col session_id: uuid null
+  col user_id: uuid not-null
+  index IDX_activity_telemetry_occurred (occurred_at)
+  index IDX_activity_telemetry_user (user_id)
+
+TABLE assayer_activities
+  col assayer_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col event_type: string(len=100) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col metadata: jsonb null
+  col new_state: varchar(len=50) null
+  col occurred_at: timestamptz not-null default=fn:NOW()
+  col performed_by: uuid not-null
+  col performed_by_name: varchar(len=200) null
+  col previous_state: varchar(len=50) null
+  col remarks: text null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_51c604e01dda8b8b509e5ab18d (assayer_id)
+  index IDX_b4868c3ef09a06c4a7295b1684 (occurred_at)
+  fk FK_51c604e01dda8b8b509e5ab18da (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_application_documents
+  col application_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col file_paths: jsonb not-null default=fn:'[]'::jsonb
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col rejection_note: text null
+  col rejection_reason: varchar(len=40) null
+  col requirement: varchar(len=40) not-null
+  col review_status: varchar(len=20) not-null default=PENDING
+  col reviewed_at: timestamptz null
+  col reviewed_by: uuid null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_32724a6e3a3c6b096d43de209e (application_id)
+  unique UQ_application_document_requirement (application_id, requirement)
+  fk FK_32724a6e3a3c6b096d43de209e8 (application_id) -> assayer_applications(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_applications
+  col address: text null
+  col availability: varchar(len=200) null
+  col city: varchar(len=100) null
+  col consent_accepted_at: timestamptz null
+  col consent_notice: jsonb null
+  col consent_version: varchar(len=20) null
+  col consent_withdrawal_reason: text null
+  col consent_withdrawn_at: timestamptz null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col current_employer: varchar(len=200) null
+  col date_of_birth: date null
+  col email: varchar(len=255) null
+  col employment_category: varchar(len=20) null
+  col experience_years: int null
+  col expertise: varchar(len=300) null
+  col extended_profile: jsonb null
+  col full_name: varchar(len=200) null
+  col gender: varchar(len=30) null
+  col id: uuid PK not-null gen:uuid
+  col info_requests: jsonb null
+  col interview_id: uuid null
+  col is_active: boolean not-null default=true
+  col mobile: varchar(len=20) not-null
+  col organization_id: uuid null
+  col personal_data_erased_at: timestamptz null
+  col pincode: varchar(len=20) null
+  col promoted_assayer_id: uuid null
+  col review_notes: text null
+  col reviewed_at: timestamptz null
+  col reviewed_by: uuid null
+  col source: varchar(len=20) not-null default=SELF_SERVICE
+  col state: varchar(len=100) null
+  col status: varchar(len=20) not-null default=DRAFT
+  col token_consumed_at: timestamptz null
+  col token_expires_at: timestamptz null
+  col token_hash: varchar(len=128) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_2530280cec767efcb4946f68e8 (status)
+  index IDX_961be9b6c294b68c89ddfe4fa6 (token_hash)
+  index IDX_d95073d0ad19beabf15ce3a70a (organization_id)
+
+TABLE assayer_background_checks
+  col address_check_method: varchar(len=10) null
+  col address_check_result: varchar(len=20) null
+  col assayer_id: uuid not-null
+  col check_type: varchar(len=20) not-null default=BGV
+  col checked_by_name: varchar(len=200) null
+  col checked_on: date null
+  col cibil_band: varchar(len=30) null
+  col cibil_score: int null
+  col court_check_result: varchar(len=20) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col findings: text null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col report_files: jsonb not-null default=fn:'[]'::jsonb
+  col review_reason: text null
+  col review_status: varchar(len=20) null
+  col reviewed_at: timestamptz null
+  col reviewed_by: uuid null
+  col risk_grade: varchar(len=20) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col verdict: varchar(len=30) not-null default=NOT_CHECKED
+  col version: int4 not-null version
+  index IDX_7a964f04dcc786897ab623f3ff (verdict)
+  index IDX_d492d0dacca33726936ded23ad (assayer_id)
+  fk FK_d492d0dacca33726936ded23ad2 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_client_empanelments
+  col assayer_id: uuid not-null
+  col client_id: uuid not-null
+  col client_reference_code: varchar(len=60) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col decided_at: timestamptz null
+  col documents_outstanding: text null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col remarks: text null
+  col status: varchar(len=30) not-null default=RECOMMENDED
+  col status_reason: text null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_14225d2d71f202c10ce763a0b5 (client_id)
+  index IDX_a7630b72c0f43c340c5e45a2a7 (assayer_id)
+  index IDX_b3f75a8aebf0e0bdff97a1a091 (status)
+  unique UQ_assayer_client_empanelment (assayer_id, client_id)
+  fk FK_14225d2d71f202c10ce763a0b5d (client_id) -> clients(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_a7630b72c0f43c340c5e45a2a7e (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_commercial_profiles
+  col accommodation_allowance: decimal(p=12,s=2) not-null default=0
+  col assayer_id: uuid not-null
+  col base_fee: decimal(p=12,s=2) not-null default=0
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: varchar(len=10) not-null default=INR
+  col daily_rate: decimal(p=12,s=2) not-null default=0
+  col effective_end_date: timestamptz null
+  col effective_start_date: timestamptz not-null
+  col hourly_rate: decimal(p=12,s=2) not-null default=0
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col meal_allowance: decimal(p=12,s=2) not-null default=0
+  col travel_reimbursement: decimal(p=12,s=2) not-null default=0
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_c9e358977735413db0d1a928df (assayer_id)
+  index IDX_d8816e90be8612e215b6621d37 (effective_start_date, effective_end_date)
+  fk FK_c9e358977735413db0d1a928df6 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_document_versions
+  col assayer_id: uuid not-null
+  col content_sha256: varchar(len=64) null
+  col document_id: uuid not-null
+  col evidence_released_at: timestamptz null
+  col file_checksum: varchar(len=64) null
+  col file_path: text not-null
+  col file_size: bigint null
+  col id: uuid PK not-null gen:uuid
+  col mime_type: varchar(len=100) null
+  col rejection_reason: varchar(len=40) null
+  col requirement: varchar(len=40) not-null
+  col storage_object_id: text null
+  col superseded_at: timestamptz null
+  col superseded_by_version_id: uuid null
+  col uploaded_at: timestamptz not-null default=fn:now() createDate
+  col uploaded_by: uuid null
+  col verification_status: varchar(len=20) not-null default=PENDING
+  col verified_at: timestamptz null
+  col verified_by: uuid null
+  col version: int not-null
+  index IDX_c101c0b018d1c866fff8b04d85 (document_id)
+  index IDX_e5dc6140eb26fe245774f8616e (assayer_id, requirement)
+  unique UQ_ad30eff01932c73ae4d292175e1 (document_id, version)
+  fk FK_c101c0b018d1c866fff8b04d85f (document_id) -> assayer_documents(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_de7e11b033f96784d872e8329bf (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_documents
+  col assayer_id: uuid not-null
+  col courier_reference: varchar(len=200) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col current_version_id: uuid null
+  col document_number: text null
+  col expiry_date: date null
+  col file_paths: jsonb not-null default=fn:'[]'::jsonb
+  col hard_copy_location: varchar(len=120) null
+  col hard_copy_received: boolean null
+  col holder_address: text null
+  col holder_date_of_birth: date null
+  col holder_gender: varchar(len=20) null
+  col holder_guardian_name: varchar(len=200) null
+  col holder_name: varchar(len=200) null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col issued_by: varchar(len=200) null
+  col name_match_grade: varchar(len=10) null
+  col name_match_note: text null
+  col received_at: date null
+  col rejection_reason: varchar(len=40) null
+  col remarks: text null
+  col requirement: varchar(len=40) not-null
+  col reupload_note: text null
+  col soft_copy_received: boolean null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col verification_status: varchar(len=20) null
+  col verified_at: timestamptz null
+  col verified_by: uuid null
+  col version: int4 not-null version
+  index IDX_030a13a6558057d6e664604733 (requirement)
+  index IDX_ac29f62dfb2ca8c62b241b641c (assayer_id)
+  unique UQ_assayer_document_requirement (assayer_id, requirement)
+  fk FK_ac29f62dfb2ca8c62b241b641c9 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_idempotency_records
+  col actor_id: uuid null
+  col assayer_id: uuid not-null
+  col client_request_id: varchar(len=100) not-null
+  col command: varchar(len=50) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col id: uuid PK not-null gen:uuid
+  col organization_id: uuid null
+  col request_hash: varchar(len=64) not-null
+  col response_payload: jsonb not-null
+  index IDX_77143e9219cd73b22680b3f4b0 (assayer_id)
+  index IDX_a81c988b3a74136efd8f154ce8 UNIQUE (organization_id, client_request_id)
+  fk FK_77143e9219cd73b22680b3f4b01 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_import_issues
+  col assayer_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col raw_value: text not-null
+  col reason: text not-null
+  col resolution: text null
+  col resolved_at: timestamptz null
+  col resolved_by: uuid null
+  col source_assayer_code: varchar(len=60) null
+  col source_column: varchar(len=120) not-null
+  col source_row: int not-null
+  col source_sheet: varchar(len=60) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_39567ad27d9df0129ec310f030 (assayer_id)
+  index IDX_4ccec7fe2d09e08d8605029791 (resolved_at)
+  fk FK_39567ad27d9df0129ec310f030d (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_interviews
+  col attachments: jsonb not-null default=fn:'[]'::jsonb
+  col candidate_name: varchar(len=200) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col email: varchar(len=255) null
+  col id: uuid PK not-null gen:uuid
+  col interviewed_at: timestamptz not-null
+  col interviewed_by_name: varchar(len=200) null
+  col interviewed_by_user_id: uuid null
+  col is_active: boolean not-null default=true
+  col mobile: varchar(len=20) not-null
+  col notes: text null
+  col organization_id: uuid null
+  col outcome: varchar(len=10) not-null
+  col previous_interview_id: uuid null
+  col source_referral: jsonb null
+  col spawned_application_id: uuid null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_c96aebda52b7961d963c7d206e (organization_id)
+
+TABLE assayer_invoices
+  col approved_at: timestamptz null
+  col approved_by: uuid null
+  col assayer_id: uuid not-null
+  col cancel_reason: text null
+  col cancelled_at: timestamptz null
+  col cancelled_by: uuid null
+  col confirmed_version: integer null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: string(len=3) not-null default=INR
+  col hod_approved_at: timestamptz null
+  col hod_approved_by: uuid null
+  col hod_reject_reason: text null
+  col hod_rejected_at: timestamptz null
+  col hod_rejected_by: uuid null
+  col id: uuid PK not-null gen:uuid
+  col invited_at: timestamptz null
+  col invited_by: uuid null
+  col invoice_number: string(len=50) not-null
+  col is_active: boolean not-null default=true
+  col line_count: integer not-null default=0
+  col notes: text null
+  col paid_at: timestamptz null
+  col paid_by: uuid null
+  col revision: integer not-null default=1
+  col status: varchar(len=20) not-null default=INVITED
+  col submitted_at: timestamptz null
+  col submitted_request_id: uuid null
+  col subtotal_base: decimal(p=14,s=2) not-null default=0
+  col subtotal_travel: decimal(p=14,s=2) not-null default=0
+  col superseded_by_invoice_id: uuid null
+  col supersedes_invoice_id: uuid null
+  col tds_amount: decimal(p=14,s=2) not-null default=0
+  col total_amount: decimal(p=14,s=2) not-null default=0
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_85590961ada52ed14eb0327ece (status)
+  index IDX_b4fe5e201a40e6cd9e2448e6c9 (assayer_id)
+  index UQ_assayer_invoices_one_active_per_assayer UNIQUE (assayer_id) WHERE "status" IN ('INVITED','SUBMITTED')
+  unique UQ_b5c4e960fbda71baebe10730d08 (invoice_number)
+
+TABLE assayer_location_pings
+  col accuracy_meters: int null
+  col assayer_id: uuid not-null
+  col assignment_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_mocked: boolean not-null default=false
+  col latitude: decimal(p=10,s=7) not-null
+  col location: geometry null spatial=Point srid=4326
+  col longitude: decimal(p=10,s=7) not-null
+  col received_at: timestamptz not-null default=fn:now()
+  col recorded_at: timestamptz PK not-null
+  col source: varchar(len=20) not-null default=APP_TRACKING
+  col speed_mps: decimal(p=8,s=2) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index idx_location_pings_assignment (assignment_id)
+  index uq_location_pings_assayer_instant UNIQUE (assayer_id, recorded_at)
+  fk FK_d135c71491886f7dc0aa8f400f4 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_onboarding_approvals
+  col assayer_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col decided_at: timestamptz null
+  col decided_by: uuid null
+  col events: jsonb not-null default=fn:'[]'::jsonb
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col round: int not-null
+  col status: varchar(len=20) not-null
+  col submitted_by: uuid null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_85c588297768eca28fec864d80 (assayer_id)
+  unique UQ_assayer_onboarding_approvals_round (assayer_id, round)
+  fk FK_85c588297768eca28fec864d80a (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_payables
+  col approved_at: timestamptz null
+  col approved_by: uuid null
+  col assayer_id: uuid not-null
+  col assayer_invoice_id: uuid null
+  col assignment_id: uuid not-null
+  col base_amount: decimal(p=14,s=2) not-null default=0
+  col client_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: string(len=3) not-null default=INR
+  col destination_account_holder_name: varchar(len=200) null
+  col destination_bank_account_number: text null
+  col destination_bank_name: varchar(len=150) null
+  col destination_ifsc: varchar(len=20) null
+  col destination_verified_at: timestamptz null
+  col destination_verified_source: varchar(len=30) null
+  col expense_id: uuid null
+  col hod_approved_at: timestamptz null
+  col hod_approved_by: uuid null
+  col hod_reject_reason: text null
+  col hod_rejected_at: timestamptz null
+  col hod_rejected_by: uuid null
+  col hold_reason: text null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col on_hold: boolean not-null default=false
+  col paid_amount: decimal(p=14,s=2) not-null default=0
+  col paid_at: timestamptz null
+  col paid_by: uuid null
+  col payable_number: string(len=50) not-null
+  col payout_evidence_version_id: uuid null
+  col pre_invoicing_era: boolean not-null default=false
+  col project_id: uuid null
+  col rate_snapshot: jsonb null
+  col remarks: text null
+  col status: varchar(len=20) not-null default=PENDING
+  col tax_amount: decimal(p=14,s=2) not-null default=0
+  col tds_amount: decimal(p=14,s=2) not-null default=0
+  col total_amount: decimal(p=14,s=2) not-null default=0
+  col travel_amount: decimal(p=14,s=2) not-null default=0
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_1ee6d1efe4525c614d56b7306f (status)
+  index IDX_35c088b5e3499861df82c13fe8 (client_id)
+  index IDX_8b054019e75531b50191d45d33 (assayer_id)
+  index IDX_c15fcac553f8541a70558b8248 (assayer_invoice_id)
+  index IDX_f7b26fa1afb0107c51c11a0459 (project_id)
+  index UQ_assayer_payables_expense UNIQUE (expense_id) WHERE "expense_id" IS NOT NULL
+  index UQ_assayer_payables_fee_per_assignment UNIQUE (assignment_id) WHERE "expense_id" IS NULL AND "status" NOT IN ('VOIDED')
+  index idx_assayer_payables_awaiting_hod (approved_at) WHERE "status" = 'APPROVED' AND "hod_approved_at" IS NULL
+  unique UQ_829b0ef23f83c165ecf3e6718a8 (payable_number)
+
+TABLE assayer_references
+  col assayer_id: uuid not-null
+  col checked_at: timestamptz null
+  col checked_by: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col email: varchar(len=255) null
+  col full_name: varchar(len=200) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col notice_problem: varchar(len=300) null
+  col notified_at: timestamptz null
+  col notified_via: varchar(len=40) null
+  col phone: varchar(len=20) null
+  col relationship: varchar(len=100) null
+  col remarks: text null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_b69f07a88a4cb1497e36024490 (assayer_id)
+  fk FK_b69f07a88a4cb1497e360244905 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_remarks
+  col assayer_id: uuid not-null
+  col assignment_id: uuid null
+  col attachment_paths: jsonb not-null default=[]
+  col author_id: uuid not-null
+  col author_name: string(len=200) not-null
+  col author_role: varchar(len=50) null
+  col category: string(len=50) not-null default=GENERAL
+  col content: text not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col rating: smallint null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col visibility: string(len=50) not-null default=PUBLIC
+  index IDX_2784fd924995f8b808f6a250a9 (category)
+  index IDX_2f130019c97be751122b72c380 (assayer_id)
+  index idx_assayer_remarks_assayer_recent (assayer_id, created_at) WHERE "is_active" = true
+  fk FK_2f130019c97be751122b72c3801 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assayer_score_overrides
+  col assayer_id: uuid not-null
+  col client_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col dimension: varchar(len=40) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col reason: text not-null
+  col set_at: timestamptz not-null default=fn:now()
+  col set_by: uuid null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col value: int not-null
+  col version: int4 not-null version
+  index IDX_bf96a6bd78fa8d70c6ef88da17 (assayer_id)
+  index IDX_ecd2a1c151d85b8e65344d6df9 (assayer_id, client_id)
+
+TABLE assayers
+  col aadhaar_fingerprint: varchar(len=64) null
+  col aadhaar_number: text null
+  col address: text not-null
+  col alternate_phone: varchar(len=20) null
+  col assayer_code: string(len=50) not-null
+  col average_rating: decimal(p=3,s=2) not-null default=0
+  col bank_account_fingerprint: varchar(len=64) null
+  col bank_account_number: text null
+  col bank_name: varchar(len=150) null
+  col cancelled_assignments: int not-null default=0
+  col city: string(len=100) not-null
+  col completed_assignments: int not-null default=0
+  col compliance_hold: jsonb null
+  col consent_accepted_at: timestamptz null
+  col consent_version: varchar(len=20) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col current_employer: varchar(len=200) null
+  col date_of_birth: date null
+  col department: varchar(len=100) null
+  col display_name: string(len=200) not-null
+  col district: string(len=100) not-null
+  col documents_link: text null
+  col eligible_clients: jsonb null
+  col email: varchar(len=255) null
+  col emergency_contact_name: varchar(len=200) null
+  col emergency_contact_phone: varchar(len=20) null
+  col emergency_contact_relation: varchar(len=100) null
+  col employee_code: varchar(len=50) null
+  col employee_id: varchar(len=50) null
+  col employment_category: varchar(len=20) null
+  col employment_type: varchar(len=50) not-null default=INTERNAL
+  col engagement_type: varchar(len=30) null
+  col exit_date: date null
+  col experience_years: int not-null default=0
+  col failed_login_attempts: int not-null default=0
+  col first_name: string(len=100) not-null
+  col gender: varchar(len=30) null
+  col geo_accuracy_meters: integer null
+  col geo_matched_name: varchar(len=500) null
+  col geo_resolved_at: timestamptz null
+  col geo_source: varchar(len=20) null
+  col hr_owner_name: varchar(len=120) null
+  col id: uuid PK not-null gen:uuid
+  col identity_verified_at: timestamptz null
+  col ifsc_code: varchar(len=20) null
+  col is_active: boolean not-null default=true
+  col is_live_enabled: boolean not-null default=false
+  col joining_date: date null
+  col last_assignment_date: timestamptz null
+  col last_name: string(len=100) not-null
+  col latitude: decimal(p=10,s=7) null
+  col leaves: jsonb null
+  col legal_name: varchar(len=200) null
+  col legal_name_source: varchar(len=40) null
+  col lifecycle_status: enum not-null enum[INVITED|DOCUMENT_VERIFICATION|BACKGROUND_VERIFICATION|FINAL_APPROVAL|TRAINING|ACTIVE|ON_LEAVE|SUSPENDED|INACTIVE|RESIGNED|TERMINATED|ARCHIVED] default=INVITED
+  col live_latitude: decimal(p=10,s=7) null
+  col live_location: geometry null spatial=Point srid=4326
+  col live_longitude: decimal(p=10,s=7) null
+  col location: geometry null spatial=Point srid=4326
+  col locked_until: timestamptz null
+  col longitude: decimal(p=10,s=7) null
+  col manager_id: uuid null
+  col max_weekly_workload: int not-null default=15
+  col must_change_password: boolean not-null default=false
+  col notes: text null
+  col on_time_completions: int not-null default=0
+  col organization_id: uuid null
+  col pan_fingerprint: varchar(len=64) null
+  col pan_number: text null
+  col password_hash: varchar(len=255) null
+  col performance_rating: decimal(p=3,s=2) null
+  col phone: varchar(len=20) null
+  col photograph: varchar(len=500) null
+  col pincode: varchar(len=20) null
+  col preferred_contact_channel: varchar(len=10) not-null default=AUTO
+  col preferred_regions: jsonb null
+  col qualification: varchar(len=150) null
+  col region: varchar(len=100) null
+  col source_referral: jsonb null
+  col state: string(len=100) not-null
+  col status: enum not-null enum[ACTIVE|INACTIVE|SUSPENDED] default=ACTIVE
+  col temp_password_expires_at: timestamptz null
+  col termination_date: date null
+  col total_assignments: int not-null default=0
+  col unavailable_reason: varchar(len=40) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col vsts_code: varchar(len=60) null
+  col work_done_by_someone_else: boolean not-null default=false
+  col working_hours: jsonb null
+  index IDX_0dff65957a13ec73746787b645 (state)
+  index IDX_27f9874ff56cd899060a9f2819 (pan_fingerprint) WHERE "pan_fingerprint" IS NOT NULL
+  index IDX_40271cf4d07407f77527423f86 (employee_id)
+  index IDX_5193d94095c300b8ac5d69c54f (aadhaar_fingerprint) WHERE "aadhaar_fingerprint" IS NOT NULL
+  index IDX_719f463c7996b212e17d1dbe65 (status)
+  index IDX_aa579396537ad5dae151616061 (lifecycle_status)
+  index IDX_ac38fe8dfe44eb1ad3310e29fb (assayer_code)
+  index IDX_d3ebee0f092c731a50fc43199e (organization_id)
+  index IDX_e12a47006c59a934a43a18565e SPATIAL (location)
+  index IDX_ef49ab6a9dadb489ce0196237b (manager_id)
+  index IDX_f8d76e845fa4dd486d0a5ac5a8 SPATIAL (live_location)
+  index idx_assayers_bank_account_fingerprint (bank_account_fingerprint) WHERE "bank_account_fingerprint" IS NOT NULL
+  index idx_assayers_recent_page (created_at, id) WHERE "is_active" = true
+  unique UQ_40271cf4d07407f77527423f86f (employee_id)
+  unique UQ_ac38fe8dfe44eb1ad3310e29fb0 (assayer_code)
+
+TABLE assessments
+  col branch_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col project_id: uuid not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_54d31f8e2afb3703d668b6aa6c (project_id)
+  index IDX_6577096b5a1206636f32c5dfb8 (branch_id)
+  fk FK_54d31f8e2afb3703d668b6aa6c4 (project_id) -> projects(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_6577096b5a1206636f32c5dfb81 (branch_id) -> branches(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assignment_comments
+  col assignment_id: uuid not-null
+  col comment: text not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col user_id: uuid not-null
+  col user_name: varchar(len=255) not-null
+  col version: int4 not-null version
+  index IDX_0903a7b0ed62fb4399c32004dd (assignment_id)
+  fk FK_0903a7b0ed62fb4399c32004dd0 (assignment_id) -> assignments(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assignment_expenses
+  col amount: decimal(p=12,s=2) not-null
+  col approval_override_codes: simple-array null
+  col approval_override_reason: text null
+  col assayer_id: uuid not-null
+  col assignment_id: uuid not-null
+  col category: varchar(len=20) not-null
+  col client_request_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col description: text null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col receipt_url: text null
+  col reimbursement_payable_id: uuid null
+  col review_notes: text null
+  col reviewed_at: timestamptz null
+  col reviewed_by: uuid null
+  col status: varchar(len=20) not-null default=PENDING
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_3f0b2a7273d9b321ce6d7a2a48 UNIQUE (reimbursement_payable_id) WHERE reimbursement_payable_id IS NOT NULL
+  index IDX_c435f7555a7868a6cb0034b279 (assignment_id)
+  index IDX_e6dee4c7df64b1b110f466d44c (assayer_id, status)
+  index UQ_expense_assayer_client_request UNIQUE (assayer_id, client_request_id) WHERE client_request_id IS NOT NULL
+  fk FK_4a5697a8c998da889a69bfb81c3 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_c435f7555a7868a6cb0034b2795 (assignment_id) -> assignments(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assignment_idempotency_records
+  col actor_id: uuid null
+  col assignment_id: uuid not-null
+  col client_request_id: varchar(len=100) not-null
+  col command: varchar(len=50) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col entity_version: int not-null
+  col id: uuid PK not-null gen:uuid
+  col request_hash: varchar(len=64) not-null
+  col response_payload: jsonb not-null
+  index IDX_b8689aeb6aa1e645f13e884dd1 (assignment_id)
+  index IDX_fd8d27251e08f1f794c07ebeee UNIQUE (client_request_id)
+  unique UQ_fd8d27251e08f1f794c07ebeee0 (client_request_id)
+  fk FK_b8689aeb6aa1e645f13e884dd10 (assignment_id) -> assignments(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE assignment_reassignments
+  col assignment_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: uuid null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col new_assayer_id: uuid not-null
+  col ownership_ended_at: timestamptz null
+  col ownership_started_at: timestamptz not-null
+  col previous_assayer_id: uuid null
+  col reason: text null
+  col reassigned_by: uuid not-null
+  col request_id: varchar(len=100) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: uuid null
+  index IDX_2ae567a6826a5c8baebdfb2af7 (assignment_id, created_at)
+  fk FK_520148f73ffac64de9827e0a2d3 (new_assayer_id) -> assayers(id) onDelete=RESTRICT onUpdate=NO ACTION
+  fk FK_95a259c46f7f854f0f7f1b64e72 (assignment_id) -> assignments(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_ba0947a0c9943c2bb7b1f85caac (previous_assayer_id) -> assayers(id) onDelete=SET NULL onUpdate=NO ACTION
+
+TABLE assignments
+  col agreed_fee: decimal(p=12,s=2) null
+  col assayer_id: uuid not-null
+  col assessment_id: uuid null
+  col assignment_number: string(len=50) not-null
+  col auto_schedule: boolean not-null default=true
+  col cancel_reason: text null
+  col check_in_accuracy_meters: integer null
+  col check_in_claimed_arrival_at: timestamptz null
+  col check_in_distance_meters: integer null
+  col check_in_latitude: decimal(p=10,s=7) null
+  col check_in_longitude: decimal(p=10,s=7) null
+  col check_in_office_reason: text null
+  col check_in_received_at: timestamptz null
+  col check_in_time_outcome: varchar(len=32) null
+  col check_in_time_source: varchar(len=16) null
+  col check_out_accuracy_meters: integer null
+  col check_out_distance_meters: integer null
+  col check_out_latitude: decimal(p=10,s=7) null
+  col check_out_longitude: decimal(p=10,s=7) null
+  col checked_in_at: timestamptz null
+  col checked_out_at: timestamptz null
+  col completed_without_check_in_reason: text null
+  col completed_without_check_out_reason: text null
+  col completion_date: date null
+  col counter_travel_fee: decimal(p=12,s=2) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col current_ownership_started_at: timestamptz null
+  col empanelment_effective_at: timestamptz null
+  col empanelment_id: uuid null
+  col empanelment_override_by: uuid null
+  col empanelment_override_reason: text null
+  col empanelment_override_used: boolean not-null default=false
+  col empanelment_standing_at_creation: varchar(len=50) null
+  col empanelment_verified_at: timestamptz null
+  col empanelment_version_at_creation: integer null
+  col entity_version: integer not-null default=1
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col last_counter_request_id: uuid null
+  col negotiation_count: integer not-null default=0
+  col priority: enum not-null enum[LOW|MEDIUM|HIGH|CRITICAL] default=MEDIUM
+  col project_branch_id: uuid null
+  col project_id: uuid not-null
+  col proposed_fee: decimal(p=12,s=2) null
+  col quoted_base_fee: decimal(p=12,s=2) null
+  col quoted_distance_km: decimal(p=8,s=2) null
+  col quoted_distance_source: varchar(len=10) null
+  col quoted_transport_mode: varchar(len=30) null
+  col quoted_travel_fee: decimal(p=12,s=2) null
+  col reject_reason: text null
+  col remarks: text null
+  col scheduled_date: date null
+  col sla_due_date: timestamptz null
+  col sla_status: varchar(len=50) not-null default=COMPLIANT
+  col status: enum not-null enum[PENDING|ACCEPTED|CHECKED_IN|IN_PROGRESS|COMPLETED|REJECTED|CANCELLED] default=PENDING
+  col sync_token: varchar(len=100) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_18b8aab3ad95fc3377bb998688 (project_id)
+  index IDX_60e677583d6072e2f924fb4a11 (assessment_id)
+  index IDX_66969a729f0c24ff71d5ba18c4 (project_branch_id)
+  index IDX_7c08693fc11883cd6b712a1fed (assignment_number)
+  index IDX_ce6fc1fcaf3f268efa288ff5a7 (assayer_id)
+  index idx_assignments_active_status_created (is_active, status, created_at)
+  index idx_assignments_assayer_day (assayer_id, scheduled_date, status) WHERE "is_active" = true
+  index idx_assignments_assayer_feed (assayer_id, created_at, id) WHERE "is_active" = true
+  index idx_assignments_branch_recent (project_branch_id, created_at)
+  index idx_assignments_completed_reconcile (completion_date, created_at) WHERE "status" = 'COMPLETED'
+  index idx_assignments_open_offers (sla_due_date) WHERE "status" = 'PENDING' AND "is_active" = true
+  index idx_assignments_recent_page (created_at, id) WHERE "is_active" = true
+  index idx_assignments_single_active_branch UNIQUE (project_branch_id) WHERE "is_active" = true AND "project_branch_id" IS NOT NULL AND "status" IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')
+  index idx_assignments_sla_status_status_active (sla_status, status) WHERE "is_active" = true
+  unique UQ_7c08693fc11883cd6b712a1fed2 (assignment_number)
+  fk FK_18b8aab3ad95fc3377bb9986882 (project_id) -> projects(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_60e677583d6072e2f924fb4a119 (assessment_id) -> assessments(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_66969a729f0c24ff71d5ba18c43 (project_branch_id) -> project_branches(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_ce6fc1fcaf3f268efa288ff5a7a (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE audit_chain
+  col audit_event_id: uuid not-null
+  col prev_hash: char(len=64) not-null
+  col row_hash: char(len=64) not-null
+  col sealed_at: timestamptz not-null default=fn:now() createDate
+  col seq: bigint PK not-null gen:increment
+  index IDX_audit_chain_event UNIQUE (audit_event_id)
+
+TABLE audit_events
+  col actor_role: varchar(len=100) null
+  col after: jsonb null
+  col before: jsonb null
+  col category: varchar(len=50) not-null
+  col entity_id: uuid not-null
+  col entity_type: varchar(len=100) not-null
+  col event_type: varchar(len=100) not-null
+  col id: uuid PK not-null gen:uuid
+  col ip_address: varchar(len=50) null
+  col metadata: jsonb null
+  col new_state: varchar(len=50) null
+  col occurred_at: timestamptz not-null default=fn:now() createDate
+  col outcome: varchar(len=20) null
+  col previous_state: varchar(len=50) null
+  col remarks: text null
+  col request_id: varchar(len=100) null
+  col session_id: varchar(len=64) null
+  col user_agent: text null
+  col user_display_name: varchar(len=200) null
+  col user_id: uuid null
+  index IDX_4e139cc590fd5127ecc451472e (occurred_at)
+  index IDX_5c7623cfe8d008e1c1fd758fbc (entity_type, entity_id)
+  index IDX_audit_events_event_type_occurred (event_type, occurred_at)
+  index IDX_audit_events_session_id (session_id)
+  index IDX_db2468e1574cba4f38f44083d1 (category)
+  index IDX_e1c246079d669576b847df55d9 (user_id)
+
+TABLE background_jobs
+  col actor: jsonb not-null
+  col attempts: int not-null default=0
+  col bull_job_id: varchar(len=128) null
+  col cancel_requested_at: timestamptz null
+  col cancel_requested_by: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col dedupe_key: varchar(len=128) null
+  col error: text null
+  col exclusive_key: varchar(len=200) null
+  col finished_at: timestamptz null
+  col id: uuid PK not-null gen:uuid
+  col input_file_name: varchar(len=255) null
+  col input_mime_type: varchar(len=128) null
+  col input_object_key: text null
+  col input_objects: jsonb null
+  col input_sha256: char(len=64) null
+  col input_size: bigint null
+  col kind: varchar(len=64) not-null
+  col organization_id: uuid null
+  col params: jsonb null
+  col parent_job_id: uuid null
+  col progress: jsonb not-null
+  col regions: text null array
+  col requested_by: uuid not-null
+  col result: jsonb null
+  col result_file_name: varchar(len=255) null
+  col result_mime_type: varchar(len=128) null
+  col result_object_key: text null
+  col runner_queue: varchar(len=64) null
+  col scope_id: varchar(len=64) null
+  col scope_type: varchar(len=32) null
+  col started_at: timestamptz null
+  col status: varchar(len=24) not-null default=QUEUED
+  col title: varchar(len=300) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  index idx_background_jobs_finished (finished_at) WHERE "finished_at" IS NOT NULL
+  index idx_background_jobs_open (status, updated_at) WHERE "status" IN ('QUEUED', 'RUNNING', 'AWAITING_REVIEW')
+  index idx_background_jobs_requester (requested_by, created_at)
+  index uq_background_jobs_dedupe_open UNIQUE (dedupe_key) WHERE "status" IN ('QUEUED', 'RUNNING', 'AWAITING_REVIEW') AND "dedupe_key" IS NOT NULL
+  index uq_background_jobs_exclusive_running UNIQUE (exclusive_key) WHERE "status" = 'RUNNING' AND "exclusive_key" IS NOT NULL
+
+TABLE billing_entries
+  col adjustment_amount: decimal(p=14,s=2) not-null default=0
+  col adjustment_reason: text null
+  col assayer_id: uuid null
+  col assignment_id: uuid not-null
+  col base_amount: decimal(p=14,s=2) not-null default=0
+  col client_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: string(len=3) not-null default=INR
+  col description: text null
+  col entry_number: string(len=50) not-null
+  col hold_reason: text null
+  col id: uuid PK not-null gen:uuid
+  col invoice_id: uuid null
+  col is_active: boolean not-null default=true
+  col on_hold: boolean not-null default=false
+  col outstanding_amount: decimal(p=14,s=2) not-null default=0
+  col paid_amount: decimal(p=14,s=2) not-null default=0
+  col project_id: uuid null
+  col service_date: date null
+  col state: varchar(len=30) not-null default=UNBILLED
+  col tax_amount: decimal(p=14,s=2) not-null default=0
+  col tax_rate: decimal(p=6,s=2) not-null default=0
+  col taxable_amount: decimal(p=14,s=2) not-null default=0
+  col tds_amount: decimal(p=14,s=2) not-null default=0
+  col tds_rate: decimal(p=6,s=2) not-null default=0
+  col total_amount: decimal(p=14,s=2) not-null default=0
+  col travel_amount: decimal(p=14,s=2) not-null default=0
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_115fd6f187df6b472bffa010d6 (project_id)
+  index IDX_32045c34a0bb890201c0bab25c (client_id)
+  index IDX_96463186d30836b893db822f58 (state)
+  index IDX_96d333aba805cd4ba8fe2978d3 (assayer_id)
+  index IDX_billing_entries_invoice_id (invoice_id)
+  index UQ_billing_entries_root_per_assignment UNIQUE (assignment_id) WHERE "state" NOT IN ('CANCELLED')
+  unique UQ_0be5e4e1089f8c9712d045cbb7d (entry_number)
+  fk FK_115fd6f187df6b472bffa010d6c (project_id) -> projects(id) onDelete=SET NULL onUpdate=NO ACTION
+  fk FK_32045c34a0bb890201c0bab25c2 (client_id) -> clients(id) onDelete=RESTRICT onUpdate=NO ACTION
+  fk FK_e6e444ecd4064f06f43a926712b (invoice_id) -> billing_invoices(id) onDelete=SET NULL onUpdate=NO ACTION
+  fk FK_fbfd558dd94f3f65e86803e7fe9 (assignment_id) -> assignments(id) onDelete=RESTRICT onUpdate=NO ACTION
+
+TABLE billing_history
+  col action: varchar(len=100) not-null
+  col assayer_id: uuid null
+  col assignment_id: uuid null
+  col client_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col entity_id: uuid not-null
+  col entity_type: varchar(len=20) not-null
+  col from_state: varchar(len=30) null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col new_value: jsonb null
+  col previous_value: jsonb null
+  col project_id: uuid null
+  col reason: text null
+  col to_state: varchar(len=30) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col user_name: varchar(len=255) null
+  col version: int4 not-null version
+  index IDX_44323ed694ee4242b7ffe65320 (assignment_id)
+  index IDX_52beb2467b495c0e237a6b5e51 (project_id)
+  index IDX_5bb6e02cbacdaa373751581ddd (client_id)
+  index IDX_a9cd9e9f57b31664785a0f3cfa (assayer_id)
+  index IDX_billing_history_entity_created (entity_type, entity_id, created_at)
+  index IDX_df0c82e06b9c20d7ebe1b1a232 (entity_type, entity_id)
+  index IDX_e9ac901a7381b56e9f0c762463 (created_at)
+
+TABLE billing_invoices
+  col client_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: string(len=3) not-null default=INR
+  col due_date: date null
+  col hod_approved_at: timestamptz null
+  col hod_approved_by: uuid null
+  col hod_reject_reason: text null
+  col hod_rejected_at: timestamptz null
+  col hod_rejected_by: uuid null
+  col hod_requested_at: timestamptz null
+  col hod_requested_by: uuid null
+  col id: uuid PK not-null gen:uuid
+  col invoice_number: string(len=50) not-null
+  col is_active: boolean not-null default=true
+  col issue_date: date null
+  col notes: text null
+  col outstanding_amount: decimal(p=14,s=2) not-null default=0
+  col paid_amount: decimal(p=14,s=2) not-null default=0
+  col project_id: uuid null
+  col status: varchar(len=20) not-null default=DRAFT
+  col subtotal: decimal(p=14,s=2) not-null default=0
+  col tax_amount: decimal(p=14,s=2) not-null default=0
+  col tds_amount: decimal(p=14,s=2) not-null default=0
+  col total: decimal(p=14,s=2) not-null default=0
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_25c8eda59aef6d24e246bfe017 (client_id)
+  index IDX_2c42294ef0e01015cc1979cdf7 (status)
+  index IDX_ee63dae13edda63dced3c53955 (project_id)
+  unique UQ_536125305a544fe830cb6001869 (invoice_number)
+  fk FK_25c8eda59aef6d24e246bfe0177 (client_id) -> clients(id) onDelete=RESTRICT onUpdate=NO ACTION
+  fk FK_ee63dae13edda63dced3c539555 (project_id) -> projects(id) onDelete=SET NULL onUpdate=NO ACTION
+
+TABLE billing_payments
+  col amount: decimal(p=14,s=2) not-null
+  col assayer_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: string(len=3) not-null default=INR
+  col destination_account_holder_name: varchar(len=200) null
+  col destination_bank_account_number: text null
+  col destination_bank_name: varchar(len=150) null
+  col destination_ifsc: varchar(len=20) null
+  col destination_verified_at: timestamptz null
+  col destination_verified_source: varchar(len=30) null
+  col direction: varchar(len=10) not-null default=INBOUND
+  col id: uuid PK not-null gen:uuid
+  col invoice_id: uuid null
+  col is_active: boolean not-null default=true
+  col method: varchar(len=20) not-null
+  col notes: text null
+  col payable_id: uuid null
+  col payment_reference: string(len=100) not-null
+  col payout_evidence_version_id: uuid null
+  col received_date: date null
+  col running_balance: decimal(p=14,s=2) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_0ba3fc5b72aea38f4689c53e58 (payable_id)
+  index IDX_9746d1392f63a8fa87b71240e3 (assayer_id)
+  index IDX_ce3b086e1757a604547dff5d36 (direction)
+  index IDX_dac5d7acd8006ead52ea1767bb (invoice_id)
+  index IDX_e5bd1d73c4f6cf99eef3348668 (payment_reference)
+  fk FK_0ba3fc5b72aea38f4689c53e588 (payable_id) -> assayer_payables(id) onDelete=SET NULL onUpdate=NO ACTION
+  fk FK_dac5d7acd8006ead52ea1767bb6 (invoice_id) -> billing_invoices(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE branch_contacts
+  col branch_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col department: varchar(len=200) null
+  col designation: string(len=200) not-null
+  col email: string(len=255) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_primary: boolean not-null default=false
+  col name: string(len=200) not-null
+  col notes: text null
+  col phone: string(len=20) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_daf1f626f9f30ced8991cdc179 (branch_id)
+  fk FK_daf1f626f9f30ced8991cdc179d (branch_id) -> branches(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE branch_documents
+  col branch_id: uuid not-null
+  col category: string(len=50) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col file_name: string(len=255) not-null
+  col file_path: text not-null
+  col file_size: integer not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col mime_type: varchar(len=100) null
+  col remarks: text null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_185983b933c14a781d441cb3ac (branch_id)
+  fk FK_185983b933c14a781d441cb3acc (branch_id) -> branches(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE branches
+  col address: text not-null
+  col branch_type: varchar(len=50) null
+  col city: string(len=100) not-null
+  col client_id: uuid null
+  col complexity: varchar(len=50) not-null default=STANDARD
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col district: string(len=100) not-null
+  col email: varchar(len=255) null
+  col estimated_duration_hours: decimal(p=5,s=2) not-null default=8
+  col geo_accuracy_meters: integer null
+  col geo_matched_name: varchar(len=500) null
+  col geo_resolved_at: timestamptz null
+  col geo_source: varchar(len=20) null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col last_audit_date: date null
+  col latitude: decimal(p=10,s=7) null
+  col location: geometry null spatial=Point srid=4326
+  col longitude: decimal(p=10,s=7) null
+  col manager_name: varchar(len=200) null
+  col name: string(len=255) not-null
+  col opening_date: date null
+  col operating_hours: jsonb null
+  col organization_id: uuid null
+  col phone: varchar(len=20) null
+  col pincode: varchar(len=20) null
+  col region: varchar(len=100) null
+  col required_competencies: jsonb null
+  col risk_category: varchar(len=20) null
+  col risk_score: decimal(p=5,s=2) not-null default=0
+  col sol_id: varchar(len=50) not-null
+  col state: string(len=100) not-null
+  col territory: varchar(len=100) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col zone_id: uuid null
+  index IDX_181a8cdaff4e1db94ff147163e (client_id)
+  index IDX_42d97150eb00982d34c088749b SPATIAL (location)
+  index IDX_9ebaccbd26bb5f330e0d550ee7 (region)
+  index IDX_df27f46f3230f2a790d405536e (zone_id)
+  index IDX_ed88203149dc0c61c57fc27da5 (sol_id)
+  fk FK_181a8cdaff4e1db94ff147163e2 (client_id) -> clients(id) onDelete=SET NULL onUpdate=NO ACTION
+
+TABLE business_rules
+  col actions: jsonb null
+  col conditions: jsonb not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: varchar(len=150) not-null
+  col rule_type: varchar(len=100) not-null
+  col scope: varchar(len=50) not-null
+  col target_id: uuid null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_77a151718caaddd3dafe3be8b1 (scope, target_id)
+
+TABLE call_logs
+  col assessment_id: uuid not-null
+  col assessor_id: uuid not-null
+  col called_by: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col negotiated_fee: decimal(p=12,s=2) null
+  col notes: text null
+  col outcome: varchar(len=50) not-null
+  col timestamp: timestamptz not-null default=fn:CURRENT_TIMESTAMP
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_557615b6faa9a5062da37b6433 (assessment_id)
+  index IDX_5e53679ddba47fd76f462f7a0b (assessor_id)
+  index IDX_640446f3b62db5ddf89cb7bfdf (called_by)
+  fk FK_557615b6faa9a5062da37b6433e (assessment_id) -> assessments(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_5e53679ddba47fd76f462f7a0b1 (assessor_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_640446f3b62db5ddf89cb7bfdf5 (called_by) -> users(id) onDelete=SET NULL onUpdate=NO ACTION
+
+TABLE capabilities
+  col category: string(len=50) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col description: text null
+  col display_name: string(len=100) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=100) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  unique UQ_87bf22fad6cc44a310239c17f63 (name)
+
+TABLE capability_permissions (junction)
+  col capability_id: uuid PK not-null
+  col permission_id: uuid PK not-null
+  index IDX_817a16e738499eea4b9805c535 (capability_id)
+  index IDX_9cff1b5aaef83a219dd4bb7d6a (permission_id)
+  fk FK_817a16e738499eea4b9805c535f (capability_id) -> capabilities(id) onDelete=CASCADE onUpdate=CASCADE
+  fk FK_9cff1b5aaef83a219dd4bb7d6a0 (permission_id) -> permissions(id) onDelete=CASCADE onUpdate=CASCADE
+
+TABLE client_billing
+  col bank_account: varchar(len=50) null
+  col bank_name: varchar(len=200) null
+  col billing_address: text not-null
+  col client_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: string(len=3) not-null default=INR
+  col gst_rate: decimal(p=6,s=2) not-null default=18
+  col id: uuid PK not-null gen:uuid
+  col ifsc_code: varchar(len=20) null
+  col invoice_cycle: string(len=50) not-null
+  col is_active: boolean not-null default=true
+  col notes: text null
+  col payment_terms: string(len=200) not-null
+  col tax_identifier: varchar(len=100) null
+  col tds_rate: decimal(p=6,s=2) not-null default=10
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  unique REL_1b6a53cf635ea9e3e9327442a1 (client_id)
+  unique UQ_1b6a53cf635ea9e3e9327442a13 (client_id)
+  fk FK_1b6a53cf635ea9e3e9327442a13 (client_id) -> clients(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE client_configurations
+  col client_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col default_base_fee: decimal(p=10,s=2) null
+  col default_radius: decimal(p=5,s=2) not-null default=50
+  col effective_from: timestamptz not-null
+  col effective_to: timestamptz null
+  col free_travel_allowance_km: decimal(p=6,s=2) null
+  col id: uuid PK not-null gen:uuid
+  col import_mapping: jsonb null
+  col is_active: boolean not-null default=true
+  col max_response_time_hours: int null
+  col penalty_rate: decimal(p=5,s=2) null
+  col service_hours: jsonb null
+  col service_level: varchar(len=50) null
+  col sla_rules: jsonb null
+  col travel_fee_per_km: decimal(p=10,s=2) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col working_days: jsonb null
+  index IDX_client_configurations_client_effective (client_id, effective_from)
+  unique REL_8997ef77f905e17348c021608f (client_id)
+  fk FK_8997ef77f905e17348c021608fc (client_id) -> clients(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE client_contacts
+  col client_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col department: varchar(len=200) null
+  col designation: string(len=200) not-null
+  col email: string(len=255) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_primary: boolean not-null default=false
+  col name: string(len=200) not-null
+  col notes: text null
+  col phone: string(len=20) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_ef47f3aae4b36f0aaedbfc0416 (client_id)
+  fk FK_ef47f3aae4b36f0aaedbfc04161 (client_id) -> clients(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE client_contracts
+  col client_id: uuid not-null
+  col contract_number: string(len=50) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col currency: string(len=3) not-null default=INR
+  col description: text null
+  col document_url: varchar(len=500) null
+  col effective_from: date not-null
+  col effective_to: date null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col signed_date: date null
+  col status: varchar(len=50) not-null default=DRAFT
+  col terms: jsonb null
+  col title: string(len=255) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col value: decimal(p=14,s=2) null
+  col version: int4 not-null version
+  index IDX_b887356704b214c8c27a424f8c (client_id)
+  unique UQ_2f460572acbe646d21ba615cb0b (contract_number)
+  fk FK_b887356704b214c8c27a424f8cb (client_id) -> clients(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE clients
+  col address: text null
+  col budget: decimal(p=12,s=2) null
+  col client_code: string(len=50) not-null
+  col client_type: string(len=50) not-null default=OTHER
+  col contact_email: varchar(len=255) null
+  col contact_person: varchar(len=200) null
+  col contact_phone: varchar(len=20) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col display_name: string(len=255) not-null
+  col id: uuid PK not-null gen:uuid
+  col industry: varchar(len=100) null
+  col is_active: boolean not-null default=true
+  col lifecycle_status: string(len=50) not-null default=PROSPECT
+  col name: string(len=255) not-null
+  col organization_id: uuid null
+  col planning_preferences: jsonb null
+  col preferred_assayers: jsonb null
+  col priority: varchar(len=50) not-null default=MEDIUM
+  col registration_number: varchar(len=100) null
+  col restricted_assayers: jsonb null
+  col tax_id: varchar(len=100) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col website: varchar(len=500) null
+  index IDX_clients_lifecycle_status (lifecycle_status)
+  index IDX_clients_organization (organization_id)
+  unique UQ_7874e3c6cbb791a3bc75c9dcd71 (client_code)
+
+TABLE coverage_plan_versions
+  col changeJustification: text null
+  col coverage_plan_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col overrides: jsonb null
+  col planData: jsonb not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col versionNumber: integer not-null
+  index IDX_a2074879da19ccd2e8cd1bc489 (coverage_plan_id)
+  fk FK_a2074879da19ccd2e8cd1bc4890 (coverage_plan_id) -> coverage_plans(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE coverage_plans
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col current_version: integer not-null default=1
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col project_id: uuid not-null
+  col status: enum not-null enum[DRAFT|GENERATED|UNDER_REVIEW|APPROVED|LOCKED|DEPLOYED|ARCHIVED] default=DRAFT
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_cc850f1a11cf8064c9b51a398b (project_id)
+
+TABLE customer_master_versions
+  col approved_at: timestamptz null
+  col approved_by: uuid null
+  col audit_date: date null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col duplicate_accounts: integer not-null default=0
+  col file_name: varchar(len=255) not-null
+  col file_path: text not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col project_id: uuid not-null
+  col status: enum not-null enum[DRAFT|RECONCILED|APPROVED|SUPERSEDED|REJECTED] default=DRAFT
+  col total_rows: integer not-null default=0
+  col unique_accounts: integer not-null default=0
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col version_number: integer not-null
+  index IDX_443e5a24093230ca29133854d4 (status)
+  index IDX_4c14973824629aa19493141de4 (version_number)
+  index IDX_752ae72a520e96e2169c4163b8 (project_id)
+  index uq_customer_master_approved_per_project UNIQUE (project_id) WHERE status = 'APPROVED' AND is_active = true
+  fk FK_752ae72a520e96e2169c4163b85 (project_id) -> projects(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE customer_records
+  col account_number: varchar(len=100) not-null
+  col branch_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col customer_master_version_id: uuid not-null
+  col customer_name: varchar(len=255) not-null
+  col declared_weight_grams: numeric(p=10,s=2) null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col packet_count: integer not-null default=1
+  col previous_record_id: uuid null
+  col raw_data: jsonb null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_89525f08c4404e13510846ee63 (branch_id)
+  index IDX_8f3271787126b935872fd8cc3e (account_number)
+  index IDX_d8af4b51ced8cc4961dd1f3fb5 (customer_master_version_id)
+  fk FK_89525f08c4404e13510846ee63a (branch_id) -> branches(id) onDelete=SET NULL onUpdate=NO ACTION
+  fk FK_d8af4b51ced8cc4961dd1f3fb57 (customer_master_version_id) -> customer_master_versions(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE data_rights_requests
+  col completed_at: timestamptz null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: uuid null
+  col details: text null
+  col id: uuid PK not-null gen:uuid
+  col legal_hold_applied: boolean not-null default=false
+  col received_at: timestamptz not-null
+  col request_type: varchar(len=24) not-null
+  col requester_contact: varchar(len=200) null
+  col requester_name: varchar(len=160) null
+  col resolution_notes: text null
+  col status: varchar(len=24) not-null default=RECEIVED
+  col subject_id: uuid null
+  col subject_ref: varchar(len=160) null
+  col subject_type: varchar(len=16) not-null default=ASSAYER
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  index IDX_data_rights_received (received_at)
+  index IDX_data_rights_status (status)
+
+TABLE destructive_action_requests
+  col action_type: varchar(len=32) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col decided_at: timestamptz null
+  col decided_by: uuid null
+  col decision_reason: text null
+  col executed_at: timestamptz null
+  col expires_at: timestamptz null
+  col id: uuid PK not-null gen:uuid
+  col payload: jsonb not-null
+  col requested_at: timestamptz not-null
+  col requested_by: uuid not-null
+  col status: varchar(len=16) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  index IDX_destructive_action_requests_requested_by (requested_by)
+  index IDX_destructive_action_requests_status (status)
+
+TABLE device_tokens
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col platform: varchar(len=10) not-null
+  col token: varchar(len=500) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col user_id: uuid not-null
+  col version: int4 not-null version
+  index IDX_977e24c520c49436d08e5eeea8 (token)
+  index IDX_c47f7966fb8af1fbfa916e2561 UNIQUE (user_id, platform)
+
+TABLE documents
+  col assessment_id: uuid null
+  col assigned_at: timestamptz null
+  col assigned_by: uuid null
+  col assigned_to_user_id: uuid null
+  col content_sha256: char(len=64) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col customer_master_version_id: uuid null
+  col data_entry_completed_at: timestamptz null
+  col declared_mime_type: varchar(len=255) null
+  col dispatch_method: varchar(len=20) null
+  col dispatched_at: timestamptz null
+  col dispatched_by: uuid null
+  col dispatched_to_email: varchar(len=320) null
+  col doc_version: integer not-null default=1
+  col file_name: string(len=255) not-null
+  col file_path: text not-null
+  col file_size: integer not-null
+  col id: uuid PK not-null gen:uuid
+  col integrity_recorded_at: timestamptz null
+  col is_active: boolean not-null default=true
+  col mime_type: varchar(len=100) null
+  col mime_type_mismatch: boolean not-null default=false
+  col project_branch_id: uuid null
+  col received_at: timestamptz null
+  col sent_to_data_entry_at: timestamptz null
+  col sent_to_external_ocr_at: timestamptz null
+  col sniffed_mime_type: varchar(len=255) null
+  col status: enum not-null enum[UPLOADED|DISPATCHED|RECEIVED|SENT_TO_DATA_ENTRY|SENT_TO_EXTERNAL_OCR|EXCEL_GENERATED|PROCESSED|COMPLETED|ARCHIVED] default=UPLOADED
+  col type: enum not-null enum[BRANCH_LIST|CUSTOMER_MASTER_DATA|PRE_FIELD_AUDIT_PDF|AUDITED_RETURN_PDF|GENERATED_EXCEL|FINAL_REPORT]
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_15ddaded9b846811dfdd45b618 (assessment_id)
+  index IDX_66f0789287cc73ca31dcefd5e4 (type)
+  index IDX_709389d904fa03bdf5ec84998d (status)
+  index IDX_98d558b1357496cd28e94bff5a (project_branch_id)
+  index IDX_documents_assigned_to_user (assigned_to_user_id) WHERE "is_active" = true AND "assigned_to_user_id" IS NOT NULL
+  index IDX_documents_type_status_received (type, status, received_at) WHERE "is_active" = true
+  index idx_documents_recent_page (created_at, id) WHERE "is_active" = true
+  fk FK_15ddaded9b846811dfdd45b618d (assessment_id) -> assessments(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_98d558b1357496cd28e94bff5a6 (project_branch_id) -> project_branches(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE feedback_messages
+  col attachments: jsonb null
+  col author_assayer_id: uuid null
+  col author_name: varchar(len=200) null
+  col author_type: enum not-null enum[REPORTER|TEAM|SYSTEM]
+  col author_user_id: uuid null
+  col body: text null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col feedback_thread_id: uuid not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_internal: boolean not-null default=false
+  col is_read: boolean not-null default=false
+  col read_at: timestamptz null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_6053a9ad067aee7ee49398c6d4 (feedback_thread_id, created_at)
+  fk FK_507018aa39793da3e76ce0df2ae (feedback_thread_id) -> feedback_threads(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE feedback_threads
+  col ai_meta: jsonb null
+  col app_context: jsonb null
+  col area: varchar(len=100) null
+  col assigned_to_user_id: uuid null
+  col category: enum not-null enum[BUG|ENHANCEMENT|PROCESS|QUESTION|OTHER] default=OTHER
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col duplicate_of_id: uuid null
+  col first_responded_at: timestamptz null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col last_message_at: timestamptz null
+  col reporter_assayer_id: uuid null
+  col reporter_name: varchar(len=200) not-null
+  col reporter_role: varchar(len=64) null
+  col reporter_user_id: uuid null
+  col resolved_at: timestamptz null
+  col resolved_by_user_id: uuid null
+  col severity: enum not-null enum[LOW|MEDIUM|HIGH|CRITICAL] default=MEDIUM
+  col status: enum not-null enum[OPEN|ACKNOWLEDGED|IN_PROGRESS|RESOLVED|CLOSED] default=OPEN
+  col title: varchar(len=200) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col vote_count: int not-null default=1
+  index IDX_330b3d83baddd4173e45d9dd85 (category)
+  index IDX_52ace6e55dadd062918f7a9e68 (reporter_assayer_id)
+  index IDX_5b189e5fc3526a056ac8e1e5f1 (reporter_user_id)
+  index IDX_a03c57137e91195420fa47ebf4 (status)
+  index IDX_a2ecd9f5c60abf41a4ac500a7b (assigned_to_user_id)
+  index IDX_e4ec9835700157ff4ffcc0398f (last_message_at)
+
+TABLE feedback_votes
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col feedback_thread_id: uuid not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col voter_assayer_id: uuid null
+  col voter_user_id: uuid null
+  index IDX_b11b81cc209c261ed3b2c8c240 (feedback_thread_id)
+  unique uq_feedback_vote_assayer (feedback_thread_id, voter_assayer_id)
+  unique uq_feedback_vote_user (feedback_thread_id, voter_user_id)
+  fk FK_b11b81cc209c261ed3b2c8c2408 (feedback_thread_id) -> feedback_threads(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE geo_cities
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col district_id: uuid not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=100) not-null
+  col pincode: varchar(len=10) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_c794a324eee38eb5b63a2fbe34 (district_id)
+  fk FK_c794a324eee38eb5b63a2fbe344 (district_id) -> geo_districts(id) onDelete=NO ACTION onUpdate=NO ACTION
+
+TABLE geo_districts
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=100) not-null
+  col state_id: uuid not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_00425d099a7654c37e7faffff0 (state_id)
+  fk FK_00425d099a7654c37e7faffff02 (state_id) -> geo_states(id) onDelete=NO ACTION onUpdate=NO ACTION
+
+TABLE geo_states
+  col code: string(len=10) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=100) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  unique UQ_1052a8dd51ed7ea3757e2309902 (code)
+  unique UQ_43835a378d8336cd6817539f050 (name)
+
+TABLE holidays
+  col applicable_states: jsonb null
+  col client_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col date: date not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=150) not-null
+  col type: varchar(len=20) not-null default=NATIONAL
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col year: int not-null
+  index IDX_3c166450c737779ebaab2bf408 (year)
+  index IDX_40dfddee0c0d7125c767d8962b (date)
+
+TABLE mfa_recovery_codes
+  col code_hash: varchar(len=64) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col id: uuid PK not-null gen:uuid
+  col used_at: timestamptz null
+  col user_id: uuid not-null
+  index IDX_mfa_recovery_user (user_id)
+  unique UQ_f4a1e4b067c0c278b69ed5f23b9 (code_hash)
+
+TABLE notification_preferences
+  col assayer_id: uuid null
+  col category: varchar(len=32) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col email: boolean not-null default=true
+  col id: uuid PK not-null gen:uuid
+  col in_app: boolean not-null default=true
+  col is_active: boolean not-null default=true
+  col push: boolean not-null default=true
+  col sms: boolean not-null default=true
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col user_id: uuid null
+  col version: int4 not-null version
+  index UQ_notif_pref_assayer_cat UNIQUE (assayer_id, category) WHERE "assayer_id" IS NOT NULL
+  index UQ_notif_pref_user_cat UNIQUE (user_id, category) WHERE "user_id" IS NOT NULL
+
+TABLE notification_settings
+  col body_template: text null
+  col channels: jsonb null
+  col collapse_window_seconds: integer null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col email_body_template: text null
+  col email_subject_template: text null
+  col enabled: boolean not-null default=true
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col link_template: varchar(len=255) null
+  col notes: text null
+  col priority: varchar(len=16) null
+  col roles: jsonb null
+  col title_template: text null
+  col type: varchar(len=64) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index uq_notification_settings_type UNIQUE (type)
+
+TABLE notifications
+  col actor_user_id: uuid null
+  col assayer_id: uuid null
+  col attempts: integer not-null default=0
+  col category: varchar(len=32) not-null default=SYSTEM
+  col channels: jsonb not-null default=fn:'["IN_APP"]'::jsonb
+  col collapsed_count: integer not-null default=1
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col dedupe_key: varchar(len=200) null
+  col delivered_at: timestamptz null
+  col email_failure_reason: text null
+  col email_status: varchar(len=16) null
+  col emailed_at: timestamptz null
+  col entity_id: uuid null
+  col entity_type: varchar(len=64) null
+  col failed_at: timestamptz null
+  col failure_reason: text null
+  col group_key: varchar(len=200) null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_read: boolean not-null default=false
+  col link: varchar(len=255) null
+  col message: text not-null
+  col organization_id: uuid null
+  col payload: jsonb null
+  col priority: varchar(len=16) not-null default=NORMAL
+  col read_at: timestamptz null
+  col sent_at: timestamptz null
+  col sms_failure_reason: text null
+  col sms_status: varchar(len=16) null
+  col source_event_id: uuid null
+  col status: varchar(len=16) not-null default=PENDING
+  col texted_at: timestamptz null
+  col title: string(len=255) not-null
+  col type: varchar(len=64) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col user_id: uuid null
+  col version: int4 not-null version
+  index IDX_0f57a0c3adbbfd460935b7b046 (user_id, is_read, created_at)
+  index IDX_7839fac2ab3deda259a96f8ada (category)
+  index IDX_92f5d3a7779be163cbea7916c6 (status)
+  index IDX_9a8a82462cab47c73d25f49261 (user_id)
+  index IDX_d5ace4f24abe554acb1a919656 (entity_type, entity_id)
+  index IDX_f12148ce379462ebbb4d06cc13 (is_read)
+  index IDX_fbe89aad2c76db0a5365283d86 (assayer_id)
+  index IDX_notifications_assayer_created (assayer_id, created_at)
+  index IDX_notifications_group_key (group_key) WHERE "group_key" IS NOT NULL
+  index UQ_notifications_dedupe UNIQUE (dedupe_key) WHERE "dedupe_key" IS NOT NULL
+  index idx_notifications_email_pending (created_at) WHERE "email_status" = 'PENDING'
+  index idx_notifications_organization_id (organization_id)
+  index idx_notifications_sms_pending (created_at) WHERE "sms_status" = 'PENDING'
+  fk FK_9a8a82462cab47c73d25f49261f (user_id) -> users(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_fbe89aad2c76db0a5365283d866 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE ocr_jobs
+  col callback_received_at: timestamptz null
+  col completed_at: timestamptz null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col document_id: uuid not-null
+  col external_correlation_id: varchar(len=150) null
+  col external_job_id: varchar(len=150) null
+  col failure_reason: text null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col last_attempt_at: timestamptz null
+  col next_retry_at: timestamptz null
+  col ocr_payload: jsonb null
+  col retry_count: integer not-null default=0
+  col status: enum not-null enum[PENDING|PROCESSING|COMPLETED|FAILED|DEAD_LETTER] default=PENDING
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_06773ea0f2d7b15d52f8427886 (status)
+  index IDX_3983a5b63b73ffa78f41131eb5 (document_id)
+  fk FK_3983a5b63b73ffa78f41131eb58 (document_id) -> documents(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE organizations
+  col address: text null
+  col code: string(len=50) not-null
+  col contact_email: varchar(len=150) null
+  col contact_phone: varchar(len=20) null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col description: text null
+  col display_name: varchar(len=200) null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=200) not-null
+  col registration_number: varchar(len=50) null
+  col tax_id: varchar(len=50) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  unique UQ_7e27c3b62c681fbe3e2322535f2 (code)
+
+TABLE outbound_messages
+  col attempts: int not-null default=0
+  col channel: varchar(len=8) not-null default=EMAIL
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col entity_id: varchar(len=64) null
+  col entity_type: varchar(len=64) null
+  col failed_at: timestamptz null
+  col id: uuid PK not-null gen:uuid
+  col kind: varchar(len=48) not-null
+  col last_error: text null
+  col payload: text null
+  col recipient: varchar(len=320) not-null
+  col requested_by: uuid null
+  col retry_after: timestamptz null
+  col sent_at: timestamptz null
+  col status: varchar(len=16) not-null default=QUEUED
+  col subject: varchar(len=500) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  index idx_outbound_messages_entity (entity_type, entity_id)
+  index idx_outbound_messages_unsettled (status, created_at) WHERE "status" IN ('QUEUED', 'SENDING')
+
+TABLE outbox_events
+  col attempts: int not-null default=0
+  col dispatched_at: timestamptz null
+  col event_name: varchar(len=200) not-null
+  col failed_at: timestamptz null
+  col id: uuid PK not-null
+  col last_error: text null
+  col occurred_at: timestamptz not-null default=fn:now() createDate
+  col payload: jsonb not-null
+  col replayed_at: timestamptz null
+  col replayed_by: uuid null
+  index IDX_e58bf63cc50ef5e4503d6836df (dispatched_at, occurred_at)
+
+TABLE permissions
+  col action: string(len=50) not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col description: text null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col resource: string(len=50) not-null
+  col scope: string(len=50) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_d577922d963695c90b61c67f3d UNIQUE (resource, action, scope)
+
+TABLE platform_settings
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_secret: boolean not-null default=false
+  col key: varchar(len=100) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col value: jsonb null
+  col version: int4 not-null version
+  index uq_platform_settings_key UNIQUE (key)
+
+TABLE project_branches
+  col branch_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col packet_count: int null
+  col priority: enum not-null enum[LOW|MEDIUM|HIGH|CRITICAL] default=MEDIUM
+  col project_id: uuid not-null
+  col remarks: text null
+  col scheduled_date: date null
+  col status: enum not-null enum[IMPORTED|PLANNING|CANDIDATE_SEARCH|CONTACT_INITIATED|NEGOTIATION|ASSIGNMENT_CONFIRMED|SCHEDULED|AUDIT_COMPLETED|VALIDATION_COMPLETED|CLOSED|UNABLE_TO_COVER|ON_HOLD|CANCELLED] default=IMPORTED
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  col zone_id: uuid null
+  index IDX_55cbe3e92921e38a60ccc2926e (project_id)
+  index IDX_d893541df1e35cef989cc4bed9 (branch_id)
+  index IDX_e536b9d53cc6c920bdbcb94d06 (status)
+  index IDX_project_branches_scheduled_date_active (scheduled_date) WHERE "is_active" = true AND "scheduled_date" IS NOT NULL
+  fk FK_55cbe3e92921e38a60ccc2926e2 (project_id) -> projects(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_d893541df1e35cef989cc4bed99 (branch_id) -> branches(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE projects
+  col budget: decimal(p=12,s=2) null
+  col client_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col dependencies: jsonb null
+  col description: text null
+  col end_date: date null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col milestones: jsonb null
+  col name: string(len=255) not-null
+  col organization_id: uuid null
+  col priority: enum not-null enum[LOW|MEDIUM|HIGH|CRITICAL] default=MEDIUM
+  col project_number: string(len=50) not-null
+  col required_certifications: jsonb null
+  col required_skills: jsonb null
+  col risks: jsonb null
+  col scope: text null
+  col sla: jsonb null
+  col start_date: date null
+  col status: enum not-null enum[DRAFT|PLANNING|SCHEDULING|EXECUTION|VALIDATION|COMPLETED|ARCHIVED|CANCELLED|ON_HOLD] default=DRAFT
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_a77b19582f25838ea68bbd4ffd (project_number)
+  index IDX_ca29f959102228649e71482747 (client_id)
+  unique UQ_a77b19582f25838ea68bbd4ffdf (project_number)
+  fk FK_ca29f959102228649e714827478 (client_id) -> clients(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE refresh_tokens
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col expires_at: timestamptz not-null
+  col id: uuid PK not-null gen:uuid
+  col ip_address: varchar(len=50) null
+  col is_revoked: boolean not-null default=false
+  col replaced_by: uuid null
+  col revoked_at: timestamptz null
+  col session_id: uuid null
+  col token_hash: string(len=255) not-null
+  col user_agent: text null
+  col user_id: uuid not-null
+  index IDX_3ddc983c5f7bcf132fd8732c3f (user_id)
+  index IDX_ba3bd69c8ad1e799c0256e9e50 (expires_at)
+  index IDX_refresh_tokens_token_hash UNIQUE (token_hash)
+
+TABLE responsibilities
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col description: text null
+  col display_name: string(len=100) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=100) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  unique UQ_f45353b6f25f81bea6ad271f85a (name)
+
+TABLE responsibility_capabilities (junction)
+  col capability_id: uuid PK not-null
+  col responsibility_id: uuid PK not-null
+  index IDX_a34540305eda79ea4b512da51b (capability_id)
+  index IDX_be848e2770b2ca06dbe008366a (responsibility_id)
+  fk FK_a34540305eda79ea4b512da51be (capability_id) -> capabilities(id) onDelete=CASCADE onUpdate=CASCADE
+  fk FK_be848e2770b2ca06dbe008366a5 (responsibility_id) -> responsibilities(id) onDelete=CASCADE onUpdate=CASCADE
+
+TABLE role_permissions (junction)
+  col permission_id: uuid PK not-null
+  col role_id: uuid PK not-null
+  index IDX_17022daf3f885f7d35423e9971 (permission_id)
+  index IDX_178199805b901ccd220ab7740e (role_id)
+  fk FK_17022daf3f885f7d35423e9971e (permission_id) -> permissions(id) onDelete=CASCADE onUpdate=CASCADE
+  fk FK_178199805b901ccd220ab7740ec (role_id) -> roles(id) onDelete=CASCADE onUpdate=CASCADE
+
+TABLE role_responsibilities (junction)
+  col responsibility_id: uuid PK not-null
+  col role_id: uuid PK not-null
+  index IDX_7b01c9df6d8b4ac90ee21fc8d3 (responsibility_id)
+  index IDX_82e3f80ec1ce0a8e2d9d70b189 (role_id)
+  fk FK_7b01c9df6d8b4ac90ee21fc8d3c (responsibility_id) -> responsibilities(id) onDelete=CASCADE onUpdate=CASCADE
+  fk FK_82e3f80ec1ce0a8e2d9d70b189a (role_id) -> roles(id) onDelete=CASCADE onUpdate=CASCADE
+
+TABLE roles
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col description: text null
+  col display_name: string(len=100) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=50) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  unique UQ_648e3f5447f725579d7d4ffdfb7 (name)
+
+TABLE rule_bypass_windows
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col enabled_by: uuid not-null
+  col enabled_by_name: varchar(len=200) null
+  col expires_at: timestamptz not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col reason: text not-null
+  col revoked_at: timestamptz null
+  col revoked_by: uuid null
+  col rules: jsonb not-null
+  col starts_at: timestamptz not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col usage_counts: jsonb not-null default=fn:'{}'::jsonb
+  col version: int4 not-null version
+
+TABLE schedules
+  col assayer_id: uuid not-null
+  col assignment_id: uuid not-null
+  col completed_at: timestamptz null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col project_id: uuid not-null
+  col remarks: text null
+  col scheduled_date: date not-null
+  col status: enum not-null enum[TENTATIVE|CONFIRMED|RESCHEDULED|COMPLETED] default=TENTATIVE
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_967a409cbb41310788ae903514 (assayer_id)
+  index IDX_c76954510b334df511e6011461 (status)
+  index IDX_cff8d47d6171818e64aca8779a (project_id)
+  unique REL_1b1bb2cd81f25ee4761f4b1e0e (assignment_id)
+  fk FK_1b1bb2cd81f25ee4761f4b1e0e3 (assignment_id) -> assignments(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_967a409cbb41310788ae903514a (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_cff8d47d6171818e64aca8779af (project_id) -> projects(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE security_incidents
+  col affected_data_principals: integer null
+  col board_notified_at: timestamptz null
+  col category: varchar(len=32) not-null
+  col cert_in_reported_at: timestamptz null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: uuid null
+  col description: text null
+  col detected_at: timestamptz not-null
+  col id: uuid PK not-null gen:uuid
+  col personal_data_involved: boolean not-null default=false
+  col principals_notified_at: timestamptz null
+  col remediation: text null
+  col resolved_at: timestamptz null
+  col severity: varchar(len=16) not-null
+  col status: varchar(len=24) not-null default=OPEN
+  col title: varchar(len=200) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  index IDX_security_incidents_detected (detected_at)
+  index IDX_security_incidents_status (status)
+
+TABLE transport_rates
+  col base_fare: decimal(p=10,s=2) not-null default=0
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col effective_from: date not-null
+  col effective_to: date null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_preferred: boolean not-null default=false
+  col mode: varchar(len=30) not-null
+  col notes: text null
+  col per_km_rate: decimal(p=10,s=4) not-null
+  col scope_type: varchar(len=20) not-null
+  col scope_value: varchar(len=60) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index idx_transport_rates_mode (mode)
+  index idx_transport_rates_scope (scope_type, scope_value)
+
+TABLE user_mfa
+  col confirmed_at: timestamptz null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col failed_attempts: int not-null default=0
+  col id: uuid PK not-null gen:uuid
+  col locked_until: timestamptz null
+  col secret_encrypted: text not-null
+  col type: varchar(len=16) not-null default=TOTP
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col user_id: uuid not-null
+  index UQ_user_mfa_user_type UNIQUE (user_id, type)
+
+TABLE user_roles (junction)
+  col role_id: uuid PK not-null
+  col user_id: uuid PK not-null
+  index IDX_87b8888186ca9769c960e92687 (user_id)
+  index IDX_b23c65e50a758245a33ee35fda (role_id)
+  fk FK_87b8888186ca9769c960e926870 (user_id) -> users(id) onDelete=CASCADE onUpdate=CASCADE
+  fk FK_b23c65e50a758245a33ee35fda1 (role_id) -> roles(id) onDelete=CASCADE onUpdate=CASCADE
+
+TABLE user_sessions
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col device_browser: varchar(len=80) null
+  col device_label: varchar(len=160) null
+  col device_os: varchar(len=80) null
+  col expires_at: timestamptz not-null
+  col id: uuid PK not-null gen:uuid
+  col ip_address: varchar(len=50) null
+  col last_seen_at: timestamptz not-null
+  col login_method: varchar(len=20) not-null
+  col principal_type: varchar(len=20) not-null
+  col revoked_at: timestamptz null
+  col revoked_by_user_id: uuid null
+  col revoked_reason: varchar(len=60) null
+  col user_agent: text null
+  col user_id: uuid not-null
+  index IDX_user_sessions_user (user_id)
+  index IDX_user_sessions_user_active (user_id, revoked_at)
+
+TABLE users
+  col client_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col department_id: uuid null
+  col display_name: string(len=200) not-null
+  col email: string(len=255) not-null
+  col failed_login_attempts: int not-null default=0
+  col first_name: string(len=100) not-null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col last_login_at: timestamptz null
+  col last_name: string(len=100) not-null
+  col locked_until: timestamptz null
+  col must_change_password: boolean not-null default=false
+  col organization_id: uuid null
+  col password_hash: string(len=255) not-null
+  col password_setup_expires_at: timestamptz null
+  col password_setup_sent_at: timestamptz null
+  col password_setup_token_hash: varchar(len=64) null
+  col phone: varchar(len=20) null
+  col regions: text null array
+  col status: varchar(len=20) not-null default=ACTIVE
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col username: string(len=100) not-null
+  col version: int4 not-null version
+  index IDX_97672ac88f789774dd47f7c8be (email)
+  unique UQ_97672ac88f789774dd47f7c8be3 (email)
+  unique UQ_fe0bb3f6520ee0469504521e710 (username)
+
+TABLE validation_cases
+  col assessment_id: uuid null
+  col correction_notes: text null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col ocr_result: jsonb null
+  col project_branch_id: uuid not-null
+  col remarks: text null
+  col reviewed_at: timestamp with time zone null
+  col reviewer_id: uuid null
+  col status: enum not-null enum[PENDING|ASSIGNED|OCR_PROCESSING|HUMAN_REVIEW|CORRECTION_REQUIRED|APPROVED|SUBMITTED] default=PENDING
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_3b7b6f62b3e3eddbdb96ad306d (status)
+  index IDX_8e9beb6c37bfcfbcf682527494 (project_branch_id)
+  index IDX_d034b39e07d216d3d428796882 (assessment_id)
+  fk FK_8e9beb6c37bfcfbcf6825274947 (project_branch_id) -> project_branches(id) onDelete=CASCADE onUpdate=NO ACTION
+  fk FK_d034b39e07d216d3d4287968822 (assessment_id) -> assessments(id) onDelete=SET NULL onUpdate=NO ACTION
+
+TABLE validation_queries
+  col assayer_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col document_id: uuid null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col last_message_at: timestamptz null
+  col query_text: text not-null
+  col raised_by_user_id: uuid null
+  col responded_at: timestamptz null
+  col sla_due_date: timestamptz null
+  col status: enum not-null enum[OPEN|RESPONDED|RESOLVED] default=OPEN
+  col target_field: varchar(len=150) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col validation_case_id: uuid not-null
+  col version: int4 not-null version
+  index IDX_51484015f2521fa95496cf61bf (validation_case_id)
+  index IDX_58d63563a5b476c04dcda2d228 (assayer_id)
+  index IDX_7dcc7ff8e228a213d17c0038c3 (status)
+  index idx_validation_queries_sla_page (sla_due_date, created_at, id) WHERE "is_active" = true
+  fk FK_51484015f2521fa95496cf61bf7 (validation_case_id) -> validation_cases(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE validation_query_messages
+  col annotations: jsonb null
+  col attachments: jsonb null
+  col author_id: uuid not-null
+  col author_name: varchar(len=200) null
+  col author_type: enum not-null enum[STAFF|ASSAYER]
+  col body: text null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col is_read: boolean not-null default=false
+  col is_starred: boolean not-null default=false
+  col page_number: int null
+  col reactions: jsonb null
+  col read_at: timestamptz null
+  col region: jsonb null
+  col reply_to_message_id: uuid null
+  col reply_to_summary: jsonb null
+  col snapshot_path: varchar(len=500) null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col validation_query_id: uuid not-null
+  col version: int4 not-null version
+  col voice_note: jsonb null
+  index IDX_8803b09002afad57b0df09c941 (validation_query_id, created_at)
+  fk FK_4b4593ccd4297c1ea44834524ce (validation_query_id) -> validation_queries(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE workflow_history
+  col command: string not-null
+  col correlationId: string not-null
+  col entityId: string not-null
+  col id: uuid PK not-null gen:uuid
+  col newState: string not-null
+  col previousState: string not-null
+  col timestamp: timestamp not-null default=fn:now() createDate
+  col userId: string not-null
+  col workflowKey: string not-null
+  index IDX_workflow_history_entity_timestamp (entityId, timestamp)
+
+TABLE workforce_attributes
+  col assayer_id: uuid not-null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col expiry_date: timestamptz null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col level: varchar(len=50) null
+  col metadata: jsonb null
+  col name: varchar(len=150) not-null
+  col type: varchar(len=50) not-null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_20b3a9b5fc1907cbcaf7852e5c (type, name)
+  index IDX_4766c7ea16f11eceb3da201281 (assayer_id)
+  index IDX_workforce_attributes_vocabulary (type, name, assayer_id) WHERE "is_active" = true
+  fk FK_4766c7ea16f11eceb3da2012818 (assayer_id) -> assayers(id) onDelete=CASCADE onUpdate=NO ACTION
+
+TABLE zones
+  col client_id: uuid null
+  col created_at: timestamptz not-null default=fn:now() createDate
+  col created_by: string null
+  col description: text null
+  col districts: jsonb null
+  col id: uuid PK not-null gen:uuid
+  col is_active: boolean not-null default=true
+  col name: string(len=150) not-null
+  col states: jsonb null
+  col updated_at: timestamptz not-null default=fn:now() updateDate
+  col updated_by: string null
+  col version: int4 not-null version
+  index IDX_fe93525d97616feb04ceec8765 (client_id)
+  fk FK_fe93525d97616feb04ceec87658 (client_id) -> clients(id) onDelete=SET NULL onUpdate=NO ACTION

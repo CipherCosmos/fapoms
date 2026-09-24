@@ -18,7 +18,9 @@ name: CI
 # still cheap to fix, instead of discovering it in the pull request that ships it.
 on:
   push:
-    branches: [main, test]
+    # `refactor/**` is the reorganization branch (docs/reorganization/PLAN.md). It deploys nowhere,
+    # so CI is the only place its "nothing changed" gate can run before a phase merges into test.
+    branches: [main, test, 'refactor/**']
   pull_request:
     branches: [main, test]
 
@@ -52,6 +54,14 @@ jobs:
       # stale dist would let a breaking change in shared pass unnoticed.
       - name: Build shared
         run: npm run build:shared
+
+      # The reorganization gate (docs/reorganization/PLAN.md §3): the backend HTTP surface with every
+      # guard and permission, the entity schema, the web routes with each role's access, and the
+      # shared package's exports, each compared with its committed snapshot. Moving files must leave
+      # all four unchanged; any other change fails here with the exact lines, and is only accepted by
+      # re-running `npm run reorg:snapshot` in the same commit — which makes it visible in review.
+      - name: Nothing the reorganization gate covers changed
+        run: npm run reorg:verify
 
       # Types catch a class of breakage tests never reach — a renamed field, a changed signature,
       # a null that is now possible. Mobile is typechecked here and nowhere else: it has no build
@@ -149,6 +159,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # Only for the boot check at the end of this job: the app refuses to start without a queue
+      # broker. (Its object store is started in that step: a service container cannot be given
+      # MinIO's `server` command.)
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
 
     env:
       DB_ADMIN_URL: postgres://pgadmin:pgadmin_ci@127.0.0.1:5432/postgres
@@ -205,3 +227,27 @@ jobs:
         run: |
           npm run migration:run
           npx jest --ci -w 1 --testPathIgnorePatterns --testRegex '(assignment-postgres-concurrency|assignment-reassignment-lineage|billing-overview-region-scope|payout-destination-evidence|notification-tenant-isolation|assayer-postgres-concurrency|aggregate-write-orphans|attendance-integrity|money-state-authority)\.db\.spec\.ts$'
+
+      # G2 of the reorganization gate. Nest wires dependencies when it boots, not when tsc runs, so a
+      # provider moved out of reach compiles cleanly and then fails to start. This boots the compiled
+      # API against the database migrated above, waits for /health, and requires the routes it
+      # actually mapped to equal the committed G1 snapshot, one for one.
+      - name: The compiled backend boots and serves exactly the committed routes
+        env:
+          DB_USERNAME: pgadmin
+          DB_PASSWORD: pgadmin_ci
+          DB_DATABASE: fapoms_ci
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+          S3_ENDPOINT: http://127.0.0.1:9000
+          S3_FORCE_PATH_STYLE: 'true'
+          AWS_ACCESS_KEY_ID: bootcheck
+          AWS_SECRET_ACCESS_KEY: bootcheck-secret
+          AWS_REGION: us-east-1
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=bootcheck -e MINIO_ROOT_PASSWORD=bootcheck-secret \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          npm run build:backend
+          timeout 60 sh -c 'until curl -fsS http://127.0.0.1:9000/minio/health/live; do sleep 2; done'
+          node scripts/reorg/boot-check.mjs
